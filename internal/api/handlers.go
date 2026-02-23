@@ -25,6 +25,7 @@ var allowedGitFetchFlags = map[string]bool{
 	"--remote":      true,
 	"--all-remotes": true,
 	"--branch":      true,
+	"--tracked":     true,
 }
 
 // validateFlags checks that every element in flags is either an allowed flag

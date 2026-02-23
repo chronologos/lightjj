@@ -4,6 +4,7 @@
   export interface PaletteCommand {
     label: string
     shortcut?: string
+    category?: string
     action: () => void
     when?: () => boolean
   }
@@ -19,12 +20,33 @@
   let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
 
-  let filteredCommands = $derived.by(() => {
+  let availableCommands = $derived.by(() => {
     if (!open) return []
-    const available = commands.filter(c => !c.when || c.when())
-    if (!query) return available
-    return available.filter(c => fuzzyMatch(query, c.label))
+    return commands.filter(c => !c.when || c.when())
   })
+
+  let filteredCommands = $derived.by(() => {
+    if (!query) return availableCommands
+    return availableCommands.filter(c => fuzzyMatch(query, c.label))
+  })
+
+  let groupedCommands = $derived.by(() => {
+    if (query) return []
+    const groups: Map<string, PaletteCommand[]> = new Map()
+    for (const cmd of availableCommands) {
+      if (!cmd.shortcut) continue
+      const cat = cmd.category ?? 'Other'
+      let list = groups.get(cat)
+      if (!list) {
+        list = []
+        groups.set(cat, list)
+      }
+      list.push(cmd)
+    }
+    return [...groups.entries()]
+  })
+
+  let isCheatsheet = $derived(!query && groupedCommands.length > 0)
 
   // Focus input when palette opens
   $effect(() => {
@@ -53,6 +75,14 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (isCheatsheet) {
+      // In cheatsheet mode, only handle Escape
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        close()
+      }
+      return
+    }
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
@@ -80,33 +110,49 @@
 
 {#if open}
   <div class="palette-backdrop" onclick={close} role="presentation"></div>
-  <div class="palette">
+  <div class="palette" class:palette-wide={isCheatsheet}>
     <input
       bind:this={inputEl}
       bind:value={query}
       class="palette-input"
       type="text"
-      placeholder="Type a command..."
+      placeholder={isCheatsheet ? 'Filter commands...' : 'Type a command...'}
       onkeydown={handleKeydown}
       oninput={() => { index = 0 }}
     />
-    <div class="palette-results">
-      {#each filteredCommands as cmd, i}
-        <button
-          class="palette-item"
-          class:palette-item-active={i === index}
-          onclick={() => execute(cmd)}
-          onmouseenter={() => { index = i }}
-        >
-          <span class="palette-label">{cmd.label}</span>
-          {#if cmd.shortcut}
-            <kbd class="palette-shortcut">{cmd.shortcut}</kbd>
-          {/if}
-        </button>
-      {:else}
-        <div class="palette-empty">No matching commands</div>
-      {/each}
-    </div>
+    {#if isCheatsheet}
+      <div class="cheatsheet">
+        {#each groupedCommands as [category, cmds]}
+          <div class="cheatsheet-group">
+            <div class="cheatsheet-header">{category}</div>
+            {#each cmds as cmd}
+              <button class="cheatsheet-item" onclick={() => execute(cmd)}>
+                <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
+                <span class="cheatsheet-label">{cmd.label}</span>
+              </button>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="palette-results">
+        {#each filteredCommands as cmd, i}
+          <button
+            class="palette-item"
+            class:palette-item-active={i === index}
+            onclick={() => execute(cmd)}
+            onmouseenter={() => { index = i }}
+          >
+            <span class="palette-label">{cmd.label}</span>
+            {#if cmd.shortcut}
+              <kbd class="palette-shortcut">{cmd.shortcut}</kbd>
+            {/if}
+          </button>
+        {:else}
+          <div class="palette-empty">No matching commands</div>
+        {/each}
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -135,6 +181,11 @@
     overflow: hidden;
   }
 
+  .palette-wide {
+    width: min(90vw, 720px);
+    max-height: 70vh;
+  }
+
   .palette-input {
     width: 100%;
     background: var(--mantle);
@@ -151,6 +202,72 @@
     color: var(--surface2);
   }
 
+  /* --- Cheatsheet grid --- */
+  .cheatsheet {
+    overflow-y: auto;
+    padding: 12px 16px;
+    columns: 3;
+    column-gap: 16px;
+  }
+
+  @media (max-width: 600px) {
+    .cheatsheet {
+      columns: 2;
+    }
+  }
+
+  .cheatsheet-group {
+    break-inside: avoid;
+    margin-bottom: 12px;
+  }
+
+  .cheatsheet-header {
+    color: var(--green);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0 4px 4px;
+    border-bottom: 1px solid var(--surface0);
+    margin-bottom: 2px;
+  }
+
+  .cheatsheet-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 3px 4px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 3px;
+  }
+
+  .cheatsheet-item:hover {
+    background: var(--surface0);
+  }
+
+  .cheatsheet-key {
+    color: var(--yellow);
+    min-width: 36px;
+    font-family: inherit;
+    font-size: 11px;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+
+  .cheatsheet-label {
+    color: var(--subtext0);
+    font-size: 12px;
+  }
+
+  /* --- Filtered list (existing) --- */
   .palette-results {
     overflow-y: auto;
     padding: 4px 0;

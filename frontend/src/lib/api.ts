@@ -1,4 +1,4 @@
-// API client for jj-web backend
+// API client for lightjj backend
 
 export interface GraphLine {
   gutter: string

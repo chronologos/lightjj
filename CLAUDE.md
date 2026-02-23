@@ -1,4 +1,4 @@
-# jj-web
+# lightjj
 
 Browser-based UI for Jujutsu (jj) version control. See [ARCHITECTURE.md](ARCHITECTURE.md) for system design and diagrams, [BACKLOG.md](BACKLOG.md) for planned features.
 
@@ -15,10 +15,10 @@ go vet ./...
 cd frontend && pnpm install && pnpm run build
 
 # Build binary (requires frontend build first — output embeds static files)
-go build ./cmd/jj-web
+go build ./cmd/lightjj
 
 # Development mode (two terminals):
-#   Terminal 1: go run ./cmd/jj-web --addr localhost:3000 --no-browser
+#   Terminal 1: go run ./cmd/lightjj --addr localhost:3000 --no-browser
 #   Terminal 2: cd frontend && pnpm run dev
 # Vite proxies /api/* to localhost:3000
 ```
@@ -26,7 +26,7 @@ go build ./cmd/jj-web
 ## Project Structure
 
 ```
-cmd/jj-web/main.go     — CLI entry point, flag parsing, embeds frontend-dist/
+cmd/lightjj/main.go     — CLI entry point, flag parsing, embeds frontend-dist/
 internal/
   jj/                  — Command builders + data models (PURE — no I/O, no side effects)
     commands.go        — Functions that return []string args for jj subcommands
@@ -48,7 +48,7 @@ testutil/              — Test infrastructure
 frontend/              — Svelte 5 SPA (Vite + TypeScript + pnpm)
   src/App.svelte       — Main UI: graph view, diff viewer (unified+split), collapsible files
   src/lib/api.ts       — Typed API client (mirrors Go endpoints 1:1)
-  vite.config.ts       — Dev proxy + build output to ../cmd/jj-web/frontend-dist/
+  vite.config.ts       — Dev proxy + build output to ../cmd/lightjj/frontend-dist/
 ```
 
 ## Code Conventions
@@ -117,11 +117,11 @@ func TestHandleAbandon(t *testing.T) {
 ## Usage
 
 ```bash
-jj-web                          # serve current jj repo, open browser
-jj-web -R /path/to/repo        # explicit repo path
-jj-web --remote user@host:/path # SSH proxy mode
-jj-web --no-browser             # don't auto-open browser
-jj-web --addr localhost:8080    # specify port
+lightjj                          # serve current jj repo, open browser
+lightjj -R /path/to/repo        # explicit repo path
+lightjj --remote user@host:/path # SSH proxy mode
+lightjj --no-browser             # don't auto-open browser
+lightjj --addr localhost:8080    # specify port
 ```
 
 ## Svelte Frontend Performance

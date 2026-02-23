@@ -48,19 +48,20 @@
   let bookmarkModalOpen: boolean = $state(false)
   let bookmarkModalFilter: string = $state('')
   let bookmarkInputOpen: boolean = $state(false)
+  let gitModalOpen: boolean = $state(false)
 
   // --- Theme ---
-  let darkMode: boolean = $state(localStorage.getItem('jj-web-theme') !== 'light')
+  let darkMode: boolean = $state(localStorage.getItem('lightjj-theme') !== 'light')
 
   function toggleTheme() {
     darkMode = !darkMode
     document.documentElement.classList.toggle('light', !darkMode)
-    localStorage.setItem('jj-web-theme', darkMode ? 'dark' : 'light')
+    localStorage.setItem('lightjj-theme', darkMode ? 'dark' : 'light')
     diffPanelRef?.rehighlight()
   }
 
   // Apply saved theme on load
-  if (localStorage.getItem('jj-web-theme') === 'light') document.documentElement.classList.add('light')
+  if (localStorage.getItem('lightjj-theme') === 'light') document.documentElement.classList.add('light')
 
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
@@ -134,29 +135,45 @@
   }
 
   // --- Command palette ---
+  const noop = () => {}
   let commands: PaletteCommand[] = $derived.by(() => [
-    { label: 'Refresh revisions', shortcut: 'r', action: () => loadLog() },
-    { label: 'Undo last operation', shortcut: 'u', action: () => handleUndo() },
-    { label: 'Git fetch', action: () => handleGitFetch() },
-    { label: 'Git push', action: () => handleGitPush() },
-    { label: 'Focus revset filter', shortcut: '/', action: () => revisionGraphRef?.focusRevsetInput() },
-    { label: 'Clear revset filter', action: () => clearRevsetFilter(), when: () => revsetFilter !== '' },
-    { label: 'Edit description', shortcut: 'e', action: () => startDescriptionEdit(), when: () => !!selectedRevision && checkedRevisions.size <= 1 },
-    { label: 'New revision from selected', shortcut: 'n', action: () => {
+    // Navigation
+    { label: 'Move down', shortcut: 'j', category: 'Navigation', action: noop },
+    { label: 'Move up', shortcut: 'k', category: 'Navigation', action: noop },
+    { label: 'Toggle check', shortcut: 'Space', category: 'Navigation', action: noop },
+    { label: 'Load diff', shortcut: 'Enter', category: 'Navigation', action: noop },
+    { label: 'Focus revset filter', shortcut: '/', category: 'Navigation', action: () => revisionGraphRef?.focusRevsetInput() },
+    { label: 'Clear revset filter', category: 'Navigation', action: () => clearRevsetFilter(), when: () => revsetFilter !== '' },
+
+    // Revisions
+    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: () => loadLog() },
+    { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(selectedRevision.commit.change_id)
     }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
-    { label: 'Edit selected revision', action: () => handleEdit(selectedRevision!.commit.change_id), when: () => !!selectedRevision },
-    { label: 'Abandon selected revision', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
-    { label: `Abandon ${checkedRevisions.size} checked revisions`, action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
-    { label: `New from ${checkedRevisions.size} checked revisions`, action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
-    { label: 'Clear all checked revisions', shortcut: 'Esc', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
-    { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
-    { label: 'Toggle operation log', action: () => toggleOplog() },
-    { label: 'Toggle evolution log for selected revision', action: () => toggleEvolog(), when: () => !!selectedRevision },
-    { label: darkMode ? 'Switch to light theme' : 'Switch to dark theme', action: () => toggleTheme() },
-    { label: 'Set bookmark on revision', shortcut: 'B', action: () => { bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
-    { label: 'Bookmark operations', shortcut: 'b', action: () => openBookmarkModal() },
+    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: () => startDescriptionEdit(), when: () => !!selectedRevision && checkedRevisions.size <= 1 },
+    { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(selectedRevision!.commit.change_id), when: () => !!selectedRevision },
+    { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
+    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
+
+    // Git
+    { label: 'Git operations (push/fetch)', category: 'Git', action: () => { gitModalOpen = true } },
+
+    // Bookmarks
+    { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: () => openBookmarkModal() },
+    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
+
+    // View
+    { label: 'Toggle split/unified diff', category: 'View', action: () => { splitView = !splitView } },
+    { label: 'Toggle operation log', category: 'View', action: () => toggleOplog() },
+    { label: 'Toggle evolution log', category: 'View', action: () => toggleEvolog(), when: () => !!selectedRevision },
+    { label: darkMode ? 'Light theme' : 'Dark theme', category: 'View', action: () => toggleTheme() },
+
+    // Actions
+    { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: () => handleUndo() },
+    { label: 'Clear checked revisions', shortcut: 'Esc', category: 'Actions', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
+    { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop },
   ])
 
   // --- API actions ---
@@ -352,21 +369,10 @@
     }
   }
 
-  async function handleGitPush() {
+  async function handleGitOp(type: 'push' | 'fetch', flags: string[]) {
     try {
-      const result = await api.gitPush()
-      lastAction = 'Git push complete'
-      commandOutput = result.output
-      await loadLog() // push may update remote tracking bookmarks
-    } catch (e) {
-      showError(e)
-    }
-  }
-
-  async function handleGitFetch() {
-    try {
-      const result = await api.gitFetch()
-      lastAction = 'Git fetch complete'
+      const result = type === 'push' ? await api.gitPush(flags) : await api.gitFetch(flags)
+      lastAction = `Git ${type} complete`
       commandOutput = result.output
       await loadLog()
     } catch (e) {
@@ -588,8 +594,8 @@
   <Toolbar
     onrefresh={loadLog}
     onundo={handleUndo}
-    onfetch={handleGitFetch}
-    onpush={handleGitPush}
+    onfetch={() => { gitModalOpen = true }}
+    onpush={() => { gitModalOpen = true }}
     onopenpalette={() => { paletteOpen = true }}
   />
 
@@ -668,6 +674,13 @@
   {/if}
 
   <CommandPalette bind:open={paletteOpen} {commands} />
+
+  <GitModal
+    bind:open={gitModalOpen}
+    currentChangeId={selectedRevision?.commit.change_id ?? null}
+    onexecute={handleGitOp}
+    onclose={() => { gitModalOpen = false }}
+  />
 
   <BookmarkInput
     bind:open={bookmarkInputOpen}
