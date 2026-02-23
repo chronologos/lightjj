@@ -127,8 +127,11 @@ func Abandon(revisions SelectedRevisions, ignoreImmutable bool) CommandArgs {
 	return args
 }
 
-func Diff(revision string, fileName string, extraArgs ...string) CommandArgs {
-	args := []string{"diff", "-r", revision, "--color", "always", "--ignore-working-copy"}
+func Diff(revision string, fileName string, color string, extraArgs ...string) CommandArgs {
+	if color == "" {
+		color = "always"
+	}
+	args := []string{"diff", "-r", revision, "--color", color, "--ignore-working-copy"}
 	if fileName != "" {
 		args = append(args, EscapeFileName(fileName))
 	}

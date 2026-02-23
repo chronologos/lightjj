@@ -1,17 +1,113 @@
 <script lang="ts">
   import { api, type LogEntry } from './lib/api'
 
+  // --- State ---
   let revisions: LogEntry[] = $state([])
-  let selectedRevision: LogEntry | null = $state(null)
+  let selectedIndex: number = $state(-1)
   let diffContent: string = $state('')
   let error: string = $state('')
   let loading: boolean = $state(true)
+  let diffLoading: boolean = $state(false)
+  let lastAction: string = $state('')
+  let descriptionEditing: boolean = $state(false)
+  let descriptionDraft: string = $state('')
+  let commandOutput: string = $state('')
 
+  // --- Derived ---
+  let selectedRevision: LogEntry | null = $derived(
+    selectedIndex >= 0 && selectedIndex < revisions.length
+      ? revisions[selectedIndex]
+      : null
+  )
+
+  let parsedDiff = $derived(parseDiffContent(diffContent))
+
+  let statusText = $derived.by(() => {
+    if (loading) return 'Loading revisions...'
+    if (diffLoading) return 'Loading diff...'
+    if (lastAction) return lastAction
+    const count = revisions.length
+    const wc = revisions.find(r => r.is_working_copy)
+    return `${count} revisions${wc ? ` | @ ${wc.change_id.slice(0, 8)}` : ''}`
+  })
+
+  // --- Types ---
+  interface DiffFile {
+    header: string
+    hunks: DiffHunk[]
+  }
+
+  interface DiffHunk {
+    header: string
+    lines: DiffLine[]
+  }
+
+  interface DiffLine {
+    type: 'add' | 'remove' | 'context' | 'header'
+    content: string
+  }
+
+  // --- Diff parser ---
+  function parseDiffContent(raw: string): DiffFile[] {
+    if (!raw) return []
+
+    const files: DiffFile[] = []
+    const lines = raw.split('\n')
+    let currentFile: DiffFile | null = null
+    let currentHunk: DiffHunk | null = null
+
+    for (const line of lines) {
+      if (line.startsWith('diff --git') || line.startsWith('=== ') || line.startsWith('Modified ') || line.startsWith('Added ') || line.startsWith('Deleted ') || line.startsWith('Copied ') || line.startsWith('Renamed ')) {
+        // jj uses different diff headers than git
+        currentFile = { header: line, hunks: [] }
+        files.push(currentFile)
+        currentHunk = null
+      } else if (line.startsWith('@@')) {
+        currentHunk = { header: line, lines: [] }
+        if (currentFile) {
+          currentFile.hunks.push(currentHunk)
+        } else {
+          currentFile = { header: '(unknown file)', hunks: [currentHunk] }
+          files.push(currentFile)
+        }
+      } else if (line.startsWith('---') || line.startsWith('+++')) {
+        // file markers — attach to current file header
+        if (currentFile) {
+          currentFile.header += '\n' + line
+        }
+      } else if (currentHunk) {
+        if (line.startsWith('+')) {
+          currentHunk.lines.push({ type: 'add', content: line })
+        } else if (line.startsWith('-')) {
+          currentHunk.lines.push({ type: 'remove', content: line })
+        } else {
+          currentHunk.lines.push({ type: 'context', content: line })
+        }
+      } else if (currentFile && line.trim()) {
+        // Lines between file header and first hunk (e.g. "Binary file..." or index lines)
+        currentFile.header += '\n' + line
+      }
+    }
+
+    return files
+  }
+
+  // --- API actions ---
   async function loadLog() {
     loading = true
     error = ''
     try {
       revisions = await api.log()
+      // Preserve selection if possible, otherwise select working copy
+      if (selectedIndex >= revisions.length) {
+        selectedIndex = revisions.findIndex(r => r.is_working_copy)
+      }
+      if (selectedIndex === -1) {
+        selectedIndex = revisions.findIndex(r => r.is_working_copy)
+      }
+      if (selectedIndex >= 0) {
+        await loadDiff(revisions[selectedIndex])
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     } finally {
@@ -19,22 +115,33 @@
     }
   }
 
-  async function selectRevision(entry: LogEntry) {
-    selectedRevision = entry
+  async function loadDiff(entry: LogEntry) {
+    diffLoading = true
     try {
       const result = await api.diff(entry.change_id)
       diffContent = result.diff
     } catch (e) {
       diffContent = e instanceof Error ? e.message : String(e)
+    } finally {
+      diffLoading = false
+    }
+  }
+
+  async function selectRevision(index: number) {
+    selectedIndex = index
+    const entry = revisions[index]
+    if (entry) {
+      descriptionEditing = false
+      await loadDiff(entry)
     }
   }
 
   async function handleAbandon(changeId: string) {
     try {
-      await api.abandon([changeId])
+      const result = await api.abandon([changeId])
+      lastAction = `Abandoned ${changeId.slice(0, 8)}`
+      commandOutput = result.output
       await loadLog()
-      selectedRevision = null
-      diffContent = ''
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
@@ -42,7 +149,20 @@
 
   async function handleNew(changeId: string) {
     try {
-      await api.newRevision([changeId])
+      const result = await api.newRevision([changeId])
+      lastAction = `Created new revision from ${changeId.slice(0, 8)}`
+      commandOutput = result.output
+      await loadLog()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleEdit(changeId: string) {
+    try {
+      const result = await api.edit(changeId)
+      lastAction = `Editing ${changeId.slice(0, 8)}`
+      commandOutput = result.output
       await loadLog()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -51,219 +171,1039 @@
 
   async function handleUndo() {
     try {
-      await api.undo()
+      const result = await api.undo()
+      lastAction = 'Undo successful'
+      commandOutput = result.output
       await loadLog()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
   }
 
+  async function handleDescribe() {
+    if (!selectedRevision) return
+    try {
+      const result = await api.describe(selectedRevision.change_id, descriptionDraft)
+      lastAction = `Updated description for ${selectedRevision.change_id.slice(0, 8)}`
+      commandOutput = result.output
+      descriptionEditing = false
+      await loadLog()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleGitPush() {
+    try {
+      const result = await api.gitPush()
+      lastAction = 'Git push complete'
+      commandOutput = result.output
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleGitFetch() {
+    try {
+      const result = await api.gitFetch()
+      lastAction = 'Git fetch complete'
+      commandOutput = result.output
+      await loadLog()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  function startDescriptionEdit() {
+    if (!selectedRevision) return
+    descriptionDraft = selectedRevision.description
+    descriptionEditing = true
+    // Focus the textarea after DOM update
+    requestAnimationFrame(() => {
+      const el = document.querySelector('.desc-editor textarea') as HTMLTextAreaElement
+      el?.focus()
+    })
+  }
+
+  function dismissError() {
+    error = ''
+  }
+
+  // --- Keyboard shortcuts ---
+  function handleKeydown(e: KeyboardEvent) {
+    // Don't capture when typing in inputs
+    const target = e.target as HTMLElement
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+
+    switch (e.key) {
+      case 'j':
+        e.preventDefault()
+        if (selectedIndex < revisions.length - 1) {
+          selectRevision(selectedIndex + 1)
+        }
+        break
+      case 'k':
+        e.preventDefault()
+        if (selectedIndex > 0) {
+          selectRevision(selectedIndex - 1)
+        }
+        break
+      case 'Enter':
+        if (selectedRevision) {
+          e.preventDefault()
+          loadDiff(selectedRevision)
+        }
+        break
+      case 'u':
+        e.preventDefault()
+        handleUndo()
+        break
+      case 'r':
+        e.preventDefault()
+        loadLog()
+        break
+      case 'e':
+        if (selectedRevision) {
+          e.preventDefault()
+          startDescriptionEdit()
+        }
+        break
+      case 'n':
+        if (selectedRevision) {
+          e.preventDefault()
+          handleNew(selectedRevision.change_id)
+        }
+        break
+      case 'Escape':
+        if (descriptionEditing) {
+          descriptionEditing = false
+        } else if (error) {
+          dismissError()
+        }
+        break
+    }
+  }
+
+  // Scroll selected revision into view
+  function scrollSelectedIntoView() {
+    requestAnimationFrame(() => {
+      const el = document.querySelector('.revision-item.selected')
+      el?.scrollIntoView({ block: 'nearest' })
+    })
+  }
+
+  $effect(() => {
+    // Re-run when selectedIndex changes
+    selectedIndex;
+    scrollSelectedIntoView()
+  })
+
   loadLog()
 </script>
 
-<main>
-  <header>
-    <h1>jj-web</h1>
-    <div class="actions">
-      <button onclick={loadLog}>Refresh</button>
-      <button onclick={handleUndo}>Undo</button>
+<svelte:window onkeydown={handleKeydown} />
+
+<div class="app">
+  <!-- Title bar -->
+  <header class="titlebar">
+    <div class="titlebar-left">
+      <span class="app-name">jj-web</span>
+      <span class="separator">|</span>
+      <div class="toolbar">
+        <button class="toolbar-btn" onclick={loadLog} title="Refresh (r)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M13.5 2a.5.5 0 0 0-.5.5V5h-2.5a.5.5 0 0 0 0 1H14a.5.5 0 0 0 .5-.5V2.5a.5.5 0 0 0-.5-.5z"/>
+            <path d="M13.36 4.05A6 6 0 1 0 14 8a.5.5 0 0 1 1 0 7 7 0 1 1-1.75-4.63l.11.68z"/>
+          </svg>
+          Refresh
+        </button>
+        <button class="toolbar-btn" onclick={handleUndo} title="Undo (u)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2 5.5a.5.5 0 0 1 .5-.5h9a3.5 3.5 0 0 1 0 7H7a.5.5 0 0 1 0-1h4.5a2.5 2.5 0 0 0 0-5h-9a.5.5 0 0 1-.5-.5z"/>
+            <path d="M4.854 3.146a.5.5 0 0 1 0 .708L2.707 6l2.147 2.146a.5.5 0 1 1-.708.708l-2.5-2.5a.5.5 0 0 1 0-.708l2.5-2.5a.5.5 0 0 1 .708 0z"/>
+          </svg>
+          Undo
+        </button>
+        <div class="toolbar-divider"></div>
+        <button class="toolbar-btn" onclick={handleGitFetch} title="Git fetch">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 1a.5.5 0 0 1 .5.5v10.793l3.146-3.147a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 0 1 .708-.708L7.5 12.293V1.5A.5.5 0 0 1 8 1z"/>
+          </svg>
+          Fetch
+        </button>
+        <button class="toolbar-btn" onclick={handleGitPush} title="Git push">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 15a.5.5 0 0 0 .5-.5V3.707l3.146 3.147a.5.5 0 0 0 .708-.708l-4-4a.5.5 0 0 0-.708 0l-4 4a.5.5 0 0 0 .708.708L7.5 3.707V14.5a.5.5 0 0 0 .5.5z"/>
+          </svg>
+          Push
+        </button>
+      </div>
+    </div>
+    <div class="titlebar-right">
+      <kbd class="shortcut-hint">j/k</kbd> navigate
+      <kbd class="shortcut-hint">e</kbd> describe
+      <kbd class="shortcut-hint">n</kbd> new
+      <kbd class="shortcut-hint">u</kbd> undo
     </div>
   </header>
 
   {#if error}
-    <div class="error">{error}</div>
+    <div class="error-bar" role="alert">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 10.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5zM8.75 4.5v4a.75.75 0 0 1-1.5 0v-4a.75.75 0 0 1 1.5 0z"/>
+      </svg>
+      <span class="error-text">{error}</span>
+      <button class="error-dismiss" onclick={dismissError}>Dismiss</button>
+    </div>
   {/if}
 
-  <div class="layout">
-    <section class="revisions">
-      <h2>Revisions</h2>
-      {#if loading}
-        <p class="muted">Loading...</p>
-      {:else if revisions.length === 0}
-        <p class="muted">No revisions</p>
-      {:else}
-        <ul>
-          {#each revisions as entry}
-            <li
-              class:selected={selectedRevision?.change_id === entry.change_id}
-              class:working-copy={entry.is_working_copy}
-              class:hidden-rev={entry.hidden}
-            >
-              <button class="revision-row" onclick={() => selectRevision(entry)}>
-                <span class="change-id">{entry.change_id}</span>
-                <span class="description">{entry.description || '(no description)'}</span>
-                {#if entry.bookmarks?.length}
-                  <span class="bookmarks">
-                    {#each entry.bookmarks as bm}
-                      <span class="bookmark">{bm}</span>
-                    {/each}
-                  </span>
-                {/if}
-                {#if entry.is_working_copy}
-                  <span class="badge wc">@</span>
-                {/if}
-              </button>
-              <div class="revision-actions">
-                <button onclick={() => handleNew(entry.change_id)} title="New child">+</button>
-                <button onclick={() => handleAbandon(entry.change_id)} title="Abandon">×</button>
+  <!-- Main content -->
+  <div class="workspace">
+    <!-- Left panel: revision list -->
+    <div class="panel revisions-panel">
+      <div class="panel-header">
+        <span class="panel-title">Revisions</span>
+        {#if !loading}
+          <span class="panel-badge">{revisions.length}</span>
+        {/if}
+      </div>
+      <div class="panel-content">
+        {#if loading}
+          <div class="empty-state">
+            <div class="spinner"></div>
+            <span>Loading revisions...</span>
+          </div>
+        {:else if revisions.length === 0}
+          <div class="empty-state">No revisions found</div>
+        {:else}
+          <div class="revision-list" role="listbox">
+            {#each revisions as entry, i}
+              <div
+                class="revision-item"
+                class:selected={selectedIndex === i}
+                class:working-copy={entry.is_working_copy}
+                class:hidden-rev={entry.hidden}
+                onclick={() => selectRevision(i)}
+                onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') selectRevision(i) }}
+                role="option"
+                tabindex="0"
+                aria-selected={selectedIndex === i}
+              >
+                <div class="rev-indicator">
+                  {#if entry.is_working_copy}
+                    <span class="wc-marker">@</span>
+                  {:else}
+                    <span class="rev-dot"></span>
+                  {/if}
+                  <div class="rev-line"></div>
+                </div>
+                <div class="rev-content">
+                  <div class="rev-top-row">
+                    <span class="change-id">{entry.change_id.slice(0, 12)}</span>
+                    {#if entry.bookmarks?.length}
+                      {#each entry.bookmarks as bm}
+                        <span class="bookmark-badge">{bm}</span>
+                      {/each}
+                    {/if}
+                    {#if entry.is_working_copy}
+                      <span class="wc-badge">working copy</span>
+                    {/if}
+                  </div>
+                  <div class="rev-bottom-row">
+                    <span class="description-text">
+                      {entry.description || '(no description)'}
+                    </span>
+                  </div>
+                  <div class="rev-meta">
+                    <span class="commit-id">{entry.commit_id.slice(0, 8)}</span>
+                  </div>
+                </div>
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions, a11y_no_noninteractive_element_interactions -->
+                <div class="rev-actions" role="group" onclick={(e: MouseEvent) => e.stopPropagation()}>
+                  <button
+                    class="action-btn"
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); handleEdit(entry.change_id) }}
+                    title="Edit (set as working copy)"
+                  >edit</button>
+                  <button
+                    class="action-btn"
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); handleNew(entry.change_id) }}
+                    title="New child revision (n)"
+                  >new</button>
+                  <button
+                    class="action-btn danger"
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); handleAbandon(entry.change_id) }}
+                    title="Abandon revision"
+                  >abandon</button>
+                </div>
               </div>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
 
-    <section class="detail">
-      {#if selectedRevision}
-        <h2>
-          {selectedRevision.change_id}
-          <span class="commit-id">{selectedRevision.commit_id}</span>
-        </h2>
-        <pre class="diff">{diffContent || '(no changes)'}</pre>
-      {:else}
-        <p class="muted">Select a revision to view its diff</p>
-      {/if}
-    </section>
+    <!-- Right panel: diff viewer -->
+    <div class="panel diff-panel">
+      <div class="panel-header">
+        {#if selectedRevision}
+          <span class="panel-title">
+            Changes in
+            <span class="header-change-id">{selectedRevision.change_id.slice(0, 12)}</span>
+          </span>
+          <div class="panel-actions">
+            <button class="header-btn" onclick={startDescriptionEdit} title="Edit description (e)">
+              Describe
+            </button>
+          </div>
+        {:else}
+          <span class="panel-title">Diff Viewer</span>
+        {/if}
+      </div>
+      <div class="panel-content">
+        {#if descriptionEditing && selectedRevision}
+          <div class="desc-editor">
+            <!-- svelte-ignore a11y_label_has_associated_control -->
+            <label class="desc-label">Description for {selectedRevision.change_id.slice(0, 12)}</label>
+            <textarea
+              bind:value={descriptionDraft}
+              rows="4"
+              placeholder="Enter commit description..."
+              onkeydown={(e: KeyboardEvent) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  handleDescribe()
+                }
+                if (e.key === 'Escape') {
+                  descriptionEditing = false
+                }
+              }}
+            ></textarea>
+            <div class="desc-actions">
+              <button class="btn-primary" onclick={handleDescribe}>
+                Save
+                <kbd>Cmd+Enter</kbd>
+              </button>
+              <button class="btn-secondary" onclick={() => descriptionEditing = false}>Cancel</button>
+            </div>
+          </div>
+        {/if}
+
+        {#if diffLoading}
+          <div class="empty-state">
+            <div class="spinner"></div>
+            <span>Loading diff...</span>
+          </div>
+        {:else if !selectedRevision}
+          <div class="empty-state">
+            <span class="empty-hint">Select a revision to view changes</span>
+            <span class="empty-subhint">Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to select</span>
+          </div>
+        {:else if parsedDiff.length === 0}
+          <div class="empty-state">
+            <span class="empty-hint">No changes in this revision</span>
+          </div>
+        {:else}
+          <div class="diff-content">
+            {#each parsedDiff as file}
+              <div class="diff-file">
+                <div class="diff-file-header">
+                  {#each file.header.split('\n') as headerLine}
+                    <div>{headerLine}</div>
+                  {/each}
+                </div>
+                {#each file.hunks as hunk}
+                  <div class="diff-hunk-header">{hunk.header}</div>
+                  <div class="diff-lines">
+                    {#each hunk.lines as line}
+                      <div
+                        class="diff-line"
+                        class:diff-add={line.type === 'add'}
+                        class:diff-remove={line.type === 'remove'}
+                        class:diff-context={line.type === 'context'}
+                      >{line.content}</div>
+                    {/each}
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
   </div>
-</main>
+
+  <!-- Status bar -->
+  <footer class="statusbar">
+    <div class="statusbar-left">
+      <span class="status-item">{statusText}</span>
+    </div>
+    <div class="statusbar-right">
+      {#if commandOutput}
+        <span class="status-item output">{commandOutput.trim().split('\n').pop()}</span>
+      {/if}
+      <span class="status-item">jj-web</span>
+    </div>
+  </footer>
+</div>
 
 <style>
+  /* --- Reset & Globals --- */
+  :global(*) {
+    box-sizing: border-box;
+  }
+
   :global(body) {
     margin: 0;
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    background: #1a1a2e;
-    color: #e0e0e0;
+    padding: 0;
+    font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+    font-size: 13px;
+    background: #1e1e2e;
+    color: #cdd6f4;
+    overflow: hidden;
   }
 
-  main {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 1rem;
+  /* --- Layout --- */
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
   }
 
-  header {
+  /* --- Titlebar --- */
+  .titlebar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid #333;
-    padding-bottom: 0.5rem;
-    margin-bottom: 1rem;
+    height: 40px;
+    padding: 0 12px;
+    background: #181825;
+    border-bottom: 1px solid #313244;
+    flex-shrink: 0;
+    user-select: none;
   }
 
-  h1 { margin: 0; font-size: 1.2rem; color: #7c8dff; }
-  h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+  .titlebar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
 
-  .actions { display: flex; gap: 0.5rem; }
+  .app-name {
+    font-weight: 700;
+    font-size: 14px;
+    color: #89b4fa;
+    letter-spacing: -0.02em;
+  }
 
-  button {
-    background: #2a2a4a;
-    color: #e0e0e0;
-    border: 1px solid #444;
-    padding: 0.3rem 0.6rem;
+  .separator {
+    color: #45475a;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .toolbar-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #bac2de;
+    padding: 4px 8px;
     border-radius: 4px;
     cursor: pointer;
     font-family: inherit;
-    font-size: 0.85rem;
-  }
-  button:hover { background: #3a3a5a; }
-
-  .error {
-    background: #4a1a1a;
-    color: #ff6b6b;
-    padding: 0.5rem;
-    border-radius: 4px;
-    margin-bottom: 1rem;
+    font-size: 12px;
+    transition: all 0.15s ease;
   }
 
-  .layout {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    height: calc(100vh - 8rem);
+  .toolbar-btn:hover {
+    background: #313244;
+    border-color: #45475a;
+    color: #cdd6f4;
   }
 
-  .revisions, .detail {
-    overflow-y: auto;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 0.5rem;
+  .toolbar-btn:active {
+    background: #45475a;
   }
 
-  ul { list-style: none; padding: 0; margin: 0; }
+  .toolbar-divider {
+    width: 1px;
+    height: 18px;
+    background: #45475a;
+    margin: 0 4px;
+  }
 
-  li {
+  .titlebar-right {
     display: flex;
     align-items: center;
-    border-bottom: 1px solid #222;
+    gap: 6px;
+    font-size: 11px;
+    color: #6c7086;
   }
-  li:hover { background: #2a2a3a; }
-  li.selected { background: #2a2a4a; }
-  li.working-copy .change-id { color: #4ade80; }
-  li.hidden-rev { opacity: 0.5; }
 
-  .revision-row {
+  .shortcut-hint {
+    display: inline-block;
+    background: #313244;
+    color: #a6adc8;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: inherit;
+    border: 1px solid #45475a;
+  }
+
+  /* --- Error bar --- */
+  .error-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #45171a;
+    border-bottom: 1px solid #f38ba8;
+    color: #f38ba8;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  .error-text {
     flex: 1;
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    background: none;
-    border: none;
-    text-align: left;
-    padding: 0.4rem;
-    color: inherit;
   }
-  .revision-row:hover { background: none; }
+
+  .error-dismiss {
+    background: transparent;
+    border: 1px solid #f38ba8;
+    color: #f38ba8;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .error-dismiss:hover {
+    background: #f38ba822;
+  }
+
+  /* --- Workspace (main panels) --- */
+  .workspace {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .revisions-panel {
+    width: 420px;
+    min-width: 320px;
+    border-right: 1px solid #313244;
+    flex-shrink: 0;
+  }
+
+  .diff-panel {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 34px;
+    padding: 0 12px;
+    background: #1e1e2e;
+    border-bottom: 1px solid #313244;
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  .panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #a6adc8;
+  }
+
+  .header-change-id {
+    color: #89b4fa;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 700;
+  }
+
+  .panel-badge {
+    background: #313244;
+    color: #a6adc8;
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .panel-actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .header-btn {
+    background: transparent;
+    border: 1px solid #45475a;
+    color: #a6adc8;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    transition: all 0.15s ease;
+  }
+
+  .header-btn:hover {
+    background: #313244;
+    color: #cdd6f4;
+  }
+
+  .panel-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* --- Revision list --- */
+  .revision-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .revision-item {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #21212e;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font-family: inherit;
+    font-size: 13px;
+    width: 100%;
+    transition: background 0.1s ease;
+  }
+
+  .revision-item:hover {
+    background: #262637;
+  }
+
+  .revision-item.selected {
+    background: #2a2a40;
+    border-left: 2px solid #89b4fa;
+  }
+
+  .revision-item.hidden-rev {
+    opacity: 0.45;
+  }
+
+  /* Graph-like indicator column */
+  .rev-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 32px;
+    padding-top: 12px;
+    flex-shrink: 0;
+  }
+
+  .wc-marker {
+    font-size: 16px;
+    font-weight: 800;
+    color: #a6e3a1;
+    line-height: 1;
+  }
+
+  .rev-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #585b70;
+    flex-shrink: 0;
+  }
+
+  .rev-line {
+    width: 1px;
+    flex: 1;
+    background: #313244;
+    margin-top: 4px;
+  }
+
+  .rev-content {
+    flex: 1;
+    padding: 8px 6px 8px 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .rev-top-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 2px;
+  }
 
   .change-id {
-    color: #7c8dff;
-    font-weight: bold;
-    min-width: 8ch;
+    font-weight: 700;
+    color: #89b4fa;
+    font-size: 12px;
+    letter-spacing: 0.02em;
   }
 
-  .commit-id {
-    color: #888;
-    font-size: 0.85rem;
-    font-weight: normal;
+  .working-copy .change-id {
+    color: #a6e3a1;
   }
 
-  .description {
-    flex: 1;
+  .bookmark-badge {
+    display: inline-flex;
+    align-items: center;
+    background: #1e3a2a;
+    color: #a6e3a1;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid #2d5a3d;
+    line-height: 18px;
+    letter-spacing: 0.02em;
+  }
+
+  .wc-badge {
+    display: inline-flex;
+    align-items: center;
+    background: #1e3a2a;
+    color: #a6e3a1;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 18px;
+    border: 1px solid #2d5a3d;
+  }
+
+  .rev-bottom-row {
+    margin-bottom: 2px;
+  }
+
+  .description-text {
+    color: #cdd6f4;
+    font-size: 12px;
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .bookmark {
-    background: #3a5a3a;
-    color: #8fffaa;
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
+  .revision-item.working-copy .description-text {
+    color: #e0e0e0;
   }
 
-  .badge.wc {
-    color: #4ade80;
-    font-weight: bold;
-  }
-
-  .revision-actions {
+  .rev-meta {
     display: flex;
-    gap: 0.2rem;
-  }
-  .revision-actions button {
-    padding: 0.2rem 0.4rem;
-    font-size: 0.8rem;
+    gap: 8px;
+    align-items: center;
   }
 
-  .diff {
-    background: #111;
-    padding: 1rem;
+  .commit-id {
+    color: #585b70;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+
+  /* Revision action buttons (on hover) */
+  .rev-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .revision-item:hover .rev-actions,
+  .revision-item.selected .rev-actions {
+    opacity: 1;
+  }
+
+  .action-btn {
+    background: #313244;
+    border: 1px solid #45475a;
+    color: #a6adc8;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+  }
+
+  .action-btn:hover {
+    background: #45475a;
+    color: #cdd6f4;
+  }
+
+  .action-btn.danger:hover {
+    background: #45171a;
+    border-color: #f38ba8;
+    color: #f38ba8;
+  }
+
+  /* --- Description editor --- */
+  .desc-editor {
+    padding: 12px;
+    border-bottom: 1px solid #313244;
+    background: #181825;
+  }
+
+  .desc-label {
+    display: block;
+    font-size: 11px;
+    color: #a6adc8;
+    margin-bottom: 6px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .desc-editor textarea {
+    width: 100%;
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
     border-radius: 4px;
-    overflow: auto;
-    white-space: pre-wrap;
-    font-size: 0.85rem;
-    line-height: 1.4;
+    padding: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s ease;
   }
 
-  .muted { color: #666; }
+  .desc-editor textarea:focus {
+    border-color: #89b4fa;
+  }
+
+  .desc-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .btn-primary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #89b4fa;
+    color: #1e1e2e;
+    border: none;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .btn-primary:hover {
+    background: #b4d0fb;
+  }
+
+  .btn-primary kbd {
+    background: #1e1e2e33;
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-family: inherit;
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: #a6adc8;
+    border: 1px solid #45475a;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+
+  .btn-secondary:hover {
+    background: #313244;
+  }
+
+  /* --- Diff viewer --- */
+  .diff-content {
+    padding: 0;
+  }
+
+  .diff-file {
+    margin-bottom: 0;
+    border-bottom: 1px solid #313244;
+  }
+
+  .diff-file:last-child {
+    border-bottom: none;
+  }
+
+  .diff-file-header {
+    padding: 8px 12px;
+    background: #181825;
+    color: #cdd6f4;
+    font-weight: 600;
+    font-size: 12px;
+    border-bottom: 1px solid #313244;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .diff-hunk-header {
+    padding: 4px 12px;
+    background: #1a1a2e;
+    color: #74c7ec;
+    font-size: 12px;
+    border-bottom: 1px solid #21212e;
+    font-style: italic;
+  }
+
+  .diff-lines {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .diff-line {
+    padding: 0 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .diff-add {
+    background: #a6e3a112;
+    color: #a6e3a1;
+    border-left: 3px solid #a6e3a1;
+  }
+
+  .diff-remove {
+    background: #f38ba812;
+    color: #f38ba8;
+    border-left: 3px solid #f38ba8;
+  }
+
+  .diff-context {
+    color: #6c7086;
+    border-left: 3px solid transparent;
+  }
+
+  /* --- Empty states --- */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 24px;
+    color: #585b70;
+    font-size: 13px;
+  }
+
+  .empty-hint {
+    color: #6c7086;
+    font-size: 14px;
+  }
+
+  .empty-subhint {
+    color: #45475a;
+    font-size: 12px;
+  }
+
+  .empty-subhint kbd {
+    background: #313244;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    border: 1px solid #45475a;
+    color: #6c7086;
+  }
+
+  /* --- Spinner --- */
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #313244;
+    border-top-color: #89b4fa;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* --- Status bar --- */
+  .statusbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 24px;
+    padding: 0 10px;
+    background: #181825;
+    border-top: 1px solid #313244;
+    flex-shrink: 0;
+    user-select: none;
+    font-size: 11px;
+    color: #6c7086;
+  }
+
+  .statusbar-left,
+  .statusbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .status-item.output {
+    color: #a6adc8;
+    max-width: 500px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* --- Scrollbar --- */
+  .panel-content::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .panel-content::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .panel-content::-webkit-scrollbar-thumb {
+    background: #313244;
+    border-radius: 4px;
+  }
+
+  .panel-content::-webkit-scrollbar-thumb:hover {
+    background: #45475a;
+  }
 </style>
