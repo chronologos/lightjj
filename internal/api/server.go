@@ -25,6 +25,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/bookmarks", s.handleBookmarks)
 	s.Mux.HandleFunc("GET /api/diff", s.handleDiff)
 	s.Mux.HandleFunc("GET /api/status", s.handleStatus)
+	s.Mux.HandleFunc("GET /api/files", s.handleFiles)
 	s.Mux.HandleFunc("GET /api/description", s.handleGetDescription)
 	s.Mux.HandleFunc("GET /api/remotes", s.handleRemotes)
 
@@ -38,6 +39,8 @@ func (s *Server) routes() {
 
 	s.Mux.HandleFunc("POST /api/bookmark/set", s.handleBookmarkSet)
 	s.Mux.HandleFunc("POST /api/bookmark/delete", s.handleBookmarkDelete)
+	s.Mux.HandleFunc("POST /api/bookmark/move", s.handleBookmarkMove)
+	s.Mux.HandleFunc("POST /api/bookmark/forget", s.handleBookmarkForget)
 
 	s.Mux.HandleFunc("POST /api/git/push", s.handleGitPush)
 	s.Mux.HandleFunc("POST /api/git/fetch", s.handleGitFetch)
@@ -54,6 +57,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func decodeBody(r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // 1 MB limit
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
 }
