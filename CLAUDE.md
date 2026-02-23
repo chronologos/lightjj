@@ -110,6 +110,10 @@ func TestHandleAbandon(t *testing.T) {
 6. Add the API call to `frontend/src/lib/api.ts`
 7. Wire it into the Svelte UI
 
+## Requirements
+
+- **jj ≥ 0.38** — older versions may lack template/CLI flags the backend depends on.
+
 ## Usage
 
 ```bash
