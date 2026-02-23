@@ -59,7 +59,7 @@
   }
 
   // Apply saved theme on load
-  if (!darkMode) document.documentElement.classList.add('light')
+  if (localStorage.getItem('jj-web-theme') === 'light') document.documentElement.classList.add('light')
 
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
@@ -387,9 +387,11 @@
   }
 
   async function handleBookmarkOp(op: BookmarkOp) {
+    if (op.action === 'move' && !selectedRevision) return
     try {
+      const changeId = selectedRevision?.commit.change_id ?? ''
       const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
-        move: () => api.bookmarkMove(op.bookmark, selectedRevision!.commit.change_id),
+        move: () => api.bookmarkMove(op.bookmark, changeId),
         delete: () => api.bookmarkDelete(op.bookmark),
         forget: () => api.bookmarkForget(op.bookmark),
         track: () => api.bookmarkTrack(op.bookmark, op.remote!),
@@ -674,7 +676,7 @@
 
   <BookmarkModal
     bind:open={bookmarkModalOpen}
-    currentChangeId={selectedRevision?.commit.change_id ?? null}
+    currentCommitId={selectedRevision?.commit.commit_id ?? null}
     filterBookmark={bookmarkModalFilter}
     onexecute={handleBookmarkOp}
     onclose={() => { bookmarkModalOpen = false }}

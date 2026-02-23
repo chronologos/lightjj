@@ -456,7 +456,7 @@ func (s *Server) handleBookmarkMove(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revision and name are required")
 		return
 	}
-	args := jj.BookmarkMove(req.Revision, req.Name)
+	args := jj.BookmarkMove(req.Revision, req.Name, "--allow-backwards")
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
