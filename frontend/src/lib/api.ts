@@ -183,6 +183,18 @@ export const api = {
   bookmarkDelete: (name: string) =>
     post<{ output: string }>('/api/bookmark/delete', { name }),
 
+  bookmarkMove: (name: string, revision: string) =>
+    post<{ output: string }>('/api/bookmark/move', { name, revision }),
+
+  bookmarkForget: (name: string) =>
+    post<{ output: string }>('/api/bookmark/forget', { name }),
+
+  bookmarkTrack: (name: string, remote: string) =>
+    post<{ output: string }>('/api/bookmark/track', { name, remote }),
+
+  bookmarkUntrack: (name: string, remote: string) =>
+    post<{ output: string }>('/api/bookmark/untrack', { name, remote }),
+
   gitPush: (flags?: string[]) =>
     post<{ output: string }>('/api/git/push', { flags }),
 
