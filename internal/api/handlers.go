@@ -342,6 +342,38 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
 }
 
+func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	args := jj.OpLog(limit)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	entries := jj.ParseOpLog(string(output))
+	writeJSON(w, http.StatusOK, entries)
+}
+
+func (s *Server) handleEvolog(w http.ResponseWriter, r *http.Request) {
+	revision := r.URL.Query().Get("revision")
+	if revision == "" {
+		writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	args := jj.Evolog(revision)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
+}
+
 type bookmarkRevisionRequest struct {
 	Revision string `json:"revision"`
 	Name     string `json:"name"`
