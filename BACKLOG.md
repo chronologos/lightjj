@@ -58,10 +58,10 @@
 - [x] Change type badges (M blue, A green, D red)
 - [x] Pinned file list + toolbar (outside scroll container)
 - [x] Multi-select revisions for batch operations
-- [ ] Command palette (Cmd+K / Ctrl+K)
-- [ ] Inline diff (word-level highlighting)
-- [ ] Operation log viewer
-- [ ] Evolog viewer
+- [x] Command palette (Cmd+K / Ctrl+K)
+- [x] Inline diff (word-level highlighting)
+- [x] Operation log viewer
+- [x] Evolog viewer
 
 ### P3 — Advanced
 - [ ] Branch/remote sidebar (like Sublime Merge left panel)
