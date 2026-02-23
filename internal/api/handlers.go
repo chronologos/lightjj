@@ -1,33 +1,78 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/iant/jj-web/internal/jj"
+	"github.com/iant/jj-web/internal/parser"
 )
+
+// Whitelisted flags for git push/fetch to prevent injection of arbitrary jj flags.
+var allowedGitPushFlags = map[string]bool{
+	"--bookmark": true,
+	"--change":   true,
+	"--all":      true,
+	"--deleted":  true,
+	"--remote":   true,
+	"--dry-run":  true,
+	"--tracked":  true,
+}
+
+var allowedGitFetchFlags = map[string]bool{
+	"--remote":      true,
+	"--all-remotes": true,
+	"--branch":      true,
+}
+
+// validateFlags checks that every element in flags starts with "--" and matches
+// the allowed set. Flags using "=" syntax (e.g. "--remote=origin") are matched
+// by the key portion before "=". Bare values (flag arguments like "main" after
+// "--bookmark") are passed through unchecked because they are positional args
+// to a preceding flag.
+func validateFlags(flags []string, allowed map[string]bool) error {
+	for _, f := range flags {
+		if !strings.HasPrefix(f, "--") {
+			// Bare value (argument to a preceding flag), not a flag itself.
+			continue
+		}
+		key := f
+		if idx := strings.Index(f, "="); idx > 0 {
+			key = f[:idx]
+		}
+		if !allowed[key] {
+			return fmt.Errorf("flag not allowed: %s", f)
+		}
+	}
+	return nil
+}
 
 // --- Read handlers ---
 
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	revset := r.URL.Query().Get("revset")
 	limitStr := r.URL.Query().Get("limit")
-	limit, _ := strconv.Atoi(limitStr)
+	var limit int
+	if limitStr != "" {
+		var err error
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "limit must be an integer")
+			return
+		}
+	}
 
-	args := jj.LogJSON(revset, limit)
+	args := jj.LogGraph(revset, limit)
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	revisions, err := parseLogOutput(string(output))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, revisions)
+	rows := parser.ParseGraphLog(string(output))
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
@@ -46,9 +91,6 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bookmarks := jj.ParseBookmarkListOutput(string(output))
-	if bookmarks == nil {
-		bookmarks = []jj.Bookmark{}
-	}
 	writeJSON(w, http.StatusOK, bookmarks)
 }
 
@@ -60,8 +102,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	file := r.URL.Query().Get("file")
 
-	// For web, request without color so we can syntax-highlight in the frontend
-	args := jj.Diff(revision, file, "--color", "never")
+	args := jj.Diff(revision, file, "never", "--tool", ":git")
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -84,6 +125,24 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": string(output)})
+}
+
+func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	revision := r.URL.Query().Get("revision")
+	if revision == "" {
+		writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+
+	args := jj.DiffSummary(revision)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	files := jj.ParseDiffSummary(string(output))
+	writeJSON(w, http.StatusOK, files)
 }
 
 func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +205,10 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.Revision == "" {
+		writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
 	args := jj.Edit(req.Revision, req.IgnoreImmutable)
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
@@ -187,6 +250,10 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.Revision == "" {
+		writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
 	args, stdin := jj.SetDescription(req.Revision, req.Description)
 	output, err := s.Runner.RunWithInput(r.Context(), args, stdin)
 	if err != nil {
@@ -207,6 +274,14 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 	var req rebaseRequest
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Revisions) == 0 {
+		writeError(w, http.StatusBadRequest, "revisions is required")
+		return
+	}
+	if req.Destination == "" {
+		writeError(w, http.StatusBadRequest, "destination is required")
 		return
 	}
 	revs := commitsFromIds(req.Revisions)
@@ -233,6 +308,14 @@ func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if len(req.Revisions) == 0 {
+		writeError(w, http.StatusBadRequest, "revisions is required")
+		return
+	}
+	if req.Destination == "" {
+		writeError(w, http.StatusBadRequest, "destination is required")
+		return
+	}
 	revs := commitsFromIds(req.Revisions)
 	args := jj.Squash(revs, req.Destination, nil, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable)
 	output, err := s.Runner.Run(r.Context(), args)
@@ -252,15 +335,27 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
 }
 
-type bookmarkSetRequest struct {
+type bookmarkRevisionRequest struct {
 	Revision string `json:"revision"`
 	Name     string `json:"name"`
 }
 
+type bookmarkNameRequest struct {
+	Name string `json:"name"`
+}
+
+type gitFlagsRequest struct {
+	Flags []string `json:"flags,omitempty"`
+}
+
 func (s *Server) handleBookmarkSet(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkSetRequest
+	var req bookmarkRevisionRequest
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" || req.Name == "" {
+		writeError(w, http.StatusBadRequest, "revision and name are required")
 		return
 	}
 	args := jj.BookmarkSet(req.Revision, req.Name)
@@ -272,14 +367,14 @@ func (s *Server) handleBookmarkSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
 }
 
-type bookmarkDeleteRequest struct {
-	Name string `json:"name"`
-}
-
 func (s *Server) handleBookmarkDelete(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkDeleteRequest
+	var req bookmarkNameRequest
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	args := jj.BookmarkDelete(req.Name)
@@ -291,13 +386,51 @@ func (s *Server) handleBookmarkDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
 }
 
-type gitPushRequest struct {
-	Flags []string `json:"flags,omitempty"`
+func (s *Server) handleBookmarkMove(w http.ResponseWriter, r *http.Request) {
+	var req bookmarkRevisionRequest
+	if err := decodeBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" || req.Name == "" {
+		writeError(w, http.StatusBadRequest, "revision and name are required")
+		return
+	}
+	args := jj.BookmarkMove(req.Revision, req.Name)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
+}
+
+func (s *Server) handleBookmarkForget(w http.ResponseWriter, r *http.Request) {
+	var req bookmarkNameRequest
+	if err := decodeBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	args := jj.BookmarkForget(req.Name)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
 }
 
 func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
-	var req gitPushRequest
+	var req gitFlagsRequest
 	if err := decodeBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateFlags(req.Flags, allowedGitPushFlags); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -310,13 +443,13 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
 }
 
-type gitFetchRequest struct {
-	Flags []string `json:"flags,omitempty"`
-}
-
 func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
-	var req gitFetchRequest
+	var req gitFlagsRequest
 	if err := decodeBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateFlags(req.Flags, allowedGitFetchFlags); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -330,42 +463,6 @@ func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Helpers ---
-
-// parseLogOutput parses tab-delimited output from LogJSON into Revision structs.
-func parseLogOutput(output string) ([]LogEntry, error) {
-	var entries []LogEntry
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) < 5 {
-			continue
-		}
-		entry := LogEntry{
-			ChangeId:     parts[0],
-			CommitId:     parts[1],
-			IsWorkingCopy: parts[2] == "true",
-			Hidden:       parts[3] == "true",
-			Description:  parts[4],
-		}
-		if len(parts) > 5 && parts[5] != "" {
-			entry.Bookmarks = strings.Fields(parts[5])
-		}
-		entries = append(entries, entry)
-	}
-	return entries, nil
-}
-
-// LogEntry is the JSON response for a revision from `jj log`.
-type LogEntry struct {
-	ChangeId      string   `json:"change_id"`
-	CommitId      string   `json:"commit_id"`
-	IsWorkingCopy bool     `json:"is_working_copy"`
-	Hidden        bool     `json:"hidden"`
-	Description   string   `json:"description"`
-	Bookmarks     []string `json:"bookmarks,omitempty"`
-}
 
 // commitsFromIds builds a SelectedRevisions from a list of change/commit IDs.
 func commitsFromIds(ids []string) jj.SelectedRevisions {

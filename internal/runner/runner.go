@@ -8,12 +8,6 @@ import (
 	"io"
 )
 
-// Result holds the output of a completed command.
-type Result struct {
-	Output string
-	Err    error
-}
-
 // CommandRunner abstracts jj command execution.
 // This is the key seam between the web API layer and the jj CLI.
 type CommandRunner interface {

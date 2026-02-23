@@ -6,37 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLog(t *testing.T) {
-	tests := []struct {
-		name     string
-		revset   string
-		limit    int
-		template string
-		want     []string
-	}{
-		{
-			name: "default",
-			want: []string{"log", "--color", "always", "--quiet"},
-		},
-		{
-			name:   "with revset",
-			revset: "@",
-			want:   []string{"log", "--color", "always", "--quiet", "-r", "@"},
-		},
-		{
-			name:  "with limit",
-			limit: 10,
-			want:  []string{"log", "--color", "always", "--quiet", "--limit", "10"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := Log(tt.revset, tt.limit, tt.template)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestLogJSON(t *testing.T) {
 	args := LogJSON("@", 5)
 	assert.Contains(t, args, "--no-graph")
@@ -72,12 +41,17 @@ func TestAbandon_IgnoreImmutable(t *testing.T) {
 }
 
 func TestDiff(t *testing.T) {
-	got := Diff("abc", "")
+	got := Diff("abc", "", "")
 	assert.Equal(t, []string{"diff", "-r", "abc", "--color", "always", "--ignore-working-copy"}, got)
 }
 
+func TestDiff_NoColor(t *testing.T) {
+	got := Diff("abc", "", "never")
+	assert.Equal(t, []string{"diff", "-r", "abc", "--color", "never", "--ignore-working-copy"}, got)
+}
+
 func TestDiff_WithFile(t *testing.T) {
-	got := Diff("abc", "src/main.go")
+	got := Diff("abc", "src/main.go", "")
 	assert.Contains(t, got, `file:"src/main.go"`)
 }
 
@@ -150,4 +124,60 @@ func TestSplit(t *testing.T) {
 func TestUndoRedo(t *testing.T) {
 	assert.Equal(t, []string{"undo"}, Undo())
 	assert.Equal(t, []string{"redo"}, Redo())
+}
+
+func TestDiffSummary(t *testing.T) {
+	got := DiffSummary("abc")
+	assert.Equal(t, []string{"diff", "--summary", "--color", "never", "-r", "abc", "--ignore-working-copy"}, got)
+}
+
+func TestParseDiffSummary(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []FileChange
+	}{
+		{
+			name:  "mixed changes",
+			input: "M src/main.go\nA new_file.go\nD old_file.go\n",
+			want: []FileChange{
+				{Type: "M", Path: "src/main.go"},
+				{Type: "A", Path: "new_file.go"},
+				{Type: "D", Path: "old_file.go"},
+			},
+		},
+		{
+			name:  "empty output",
+			input: "",
+			want:  []FileChange{},
+		},
+		{
+			name:  "whitespace only",
+			input: "  \n  \n",
+			want:  []FileChange{},
+		},
+		{
+			name:  "renamed file",
+			input: "R {old_name.go => new_name.go}\n",
+			want: []FileChange{
+				{Type: "R", Path: "{old_name.go => new_name.go}"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseDiffSummary(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBookmarkMove(t *testing.T) {
+	got := BookmarkMove("abc", "feature")
+	assert.Equal(t, []string{"bookmark", "move", "feature", "--to", "abc"}, got)
+}
+
+func TestBookmarkForget(t *testing.T) {
+	got := BookmarkForget("feature")
+	assert.Equal(t, []string{"bookmark", "forget", "feature"}, got)
 }

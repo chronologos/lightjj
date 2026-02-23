@@ -21,23 +21,19 @@ func NewLocalRunner(repoDir string) *LocalRunner {
 }
 
 func (r *LocalRunner) Run(ctx context.Context, args []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, r.Binary, args...)
-	cmd.Dir = r.RepoDir
-	output, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, errors.New(string(exitErr.Stderr))
-		}
-		return nil, err
-	}
-	return bytes.TrimRight(output, "\n"), nil
+	return r.run(ctx, args, "")
 }
 
 func (r *LocalRunner) RunWithInput(ctx context.Context, args []string, stdin string) ([]byte, error) {
+	return r.run(ctx, args, stdin)
+}
+
+func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
-	cmd.Stdin = bytes.NewReader([]byte(stdin))
+	if stdin != "" {
+		cmd.Stdin = bytes.NewReader([]byte(stdin))
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
