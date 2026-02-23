@@ -1,12 +1,23 @@
 // API client for jj-web backend
 
+export interface GraphLine {
+  gutter: string
+  content?: string
+  is_node?: boolean
+}
+
 export interface LogEntry {
-  change_id: string
-  commit_id: string
-  is_working_copy: boolean
-  hidden: boolean
+  commit: {
+    change_id: string
+    commit_id: string
+    change_prefix: number
+    commit_prefix: number
+    is_working_copy: boolean
+    hidden: boolean
+  }
   description: string
   bookmarks?: string[]
+  graph_lines: GraphLine[]
 }
 
 export interface Bookmark {
@@ -58,6 +69,11 @@ export const api = {
   description: (revision: string) => {
     const params = new URLSearchParams({ revision })
     return request<{ description: string }>(`/api/description?${params}`)
+  },
+
+  status: (revision: string) => {
+    const params = new URLSearchParams({ revision })
+    return request<{ status: string }>(`/api/status?${params}`)
   },
 
   remotes: () => request<string[]>('/api/remotes'),

@@ -16,7 +16,7 @@ func TestParseBookmarkListOutput(t *testing.T) {
 		{
 			name: "empty",
 			input: "",
-			want: nil,
+			want: []Bookmark{},
 		},
 		{
 			name: "single local",

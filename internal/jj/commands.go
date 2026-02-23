@@ -19,12 +19,8 @@ type CommandArgs = []string
 
 // EscapeFileName wraps a filename for safe use in jj file: arguments.
 func EscapeFileName(fileName string) string {
-	if strings.Contains(fileName, "\\") {
-		fileName = strings.ReplaceAll(fileName, "\\", "\\\\")
-	}
-	if strings.Contains(fileName, "\"") {
-		fileName = strings.ReplaceAll(fileName, "\"", "\\\"")
-	}
+	fileName = strings.ReplaceAll(fileName, "\\", "\\\\")
+	fileName = strings.ReplaceAll(fileName, "\"", "\\\"")
 	return fmt.Sprintf("file:\"%s\"", fileName)
 }
 
@@ -36,27 +32,7 @@ func escapeFiles(files []string) []string {
 	return escaped
 }
 
-// Log builds args for `jj log`.
-// template is the jj template expression for formatting output.
-func Log(revset string, limit int, template string) CommandArgs {
-	args := []string{"log", "--color", "always", "--quiet"}
-	if revset != "" {
-		args = append(args, "-r", revset)
-	}
-	if limit > 0 {
-		args = append(args, "--limit", strconv.Itoa(limit))
-	}
-	if template != "" {
-		prefix := fmt.Sprintf(
-			"stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent))",
-			JJUIPrefix, JJUIPrefix)
-		template = fmt.Sprintf("%s ++ ' ' ++ %s", prefix, template)
-		args = append(args, "-T", template)
-	}
-	return args
-}
-
-// LogJSON builds args for `jj log` with JSON output — preferred for web.
+// LogJSON builds args for `jj log` with flat (no graph) output.
 func LogJSON(revset string, limit int) CommandArgs {
 	args := []string{"log", "--no-graph", "--color", "never", "--quiet"}
 	if revset != "" {
@@ -66,6 +42,26 @@ func LogJSON(revset string, limit int) CommandArgs {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
 	tmpl := `change_id.shortest() ++ "\t" ++ commit_id.shortest() ++ "\t" ++ if(working_copies, "true", "false") ++ "\t" ++ if(hidden, "true", "false") ++ "\t" ++ description.first_line() ++ "\t" ++ bookmarks ++ "\n"`
+	args = append(args, "-T", tmpl)
+	return args
+}
+
+// LogGraph builds args for `jj log` WITH graph topology.
+// Output includes graph characters (│, ○, @, ├─╮, etc.) and _PREFIX: markers
+// for extracting commit data. The graph characters encode the DAG topology
+// which jj computes for us — we just parse it.
+func LogGraph(revset string, limit int) CommandArgs {
+	args := []string{"log", "--color", "never", "--quiet"}
+	if revset != "" {
+		args = append(args, "-r", revset)
+	}
+	if limit > 0 {
+		args = append(args, "--limit", strconv.Itoa(limit))
+	}
+	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \t fullShortChangeId \t fullShortCommitId \t description \t bookmarks
+	tmpl := fmt.Sprintf(
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\t" ++ change_id.short() ++ "\t" ++ commit_id.short() ++ "\t" ++ description.first_line() ++ "\t" ++ bookmarks ++ "\n"`,
+		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args
 }
@@ -127,8 +123,11 @@ func Abandon(revisions SelectedRevisions, ignoreImmutable bool) CommandArgs {
 	return args
 }
 
-func Diff(revision string, fileName string, extraArgs ...string) CommandArgs {
-	args := []string{"diff", "-r", revision, "--color", "always", "--ignore-working-copy"}
+func Diff(revision string, fileName string, color string, extraArgs ...string) CommandArgs {
+	if color == "" {
+		color = "always"
+	}
+	args := []string{"diff", "-r", revision, "--color", color, "--ignore-working-copy"}
 	if fileName != "" {
 		args = append(args, EscapeFileName(fileName))
 	}
@@ -218,14 +217,14 @@ func Squash(from SelectedRevisions, destination string, files []string, keepEmpt
 	return args
 }
 
+const bookmarkListTemplate = `separate(";", name, if(remote, remote, "."), tracked, conflict, 'false', normal_target.commit_id().shortest(1)) ++ "\n"`
+
 func BookmarkList(revset string) CommandArgs {
-	const template = `separate(";", name, if(remote, remote, "."), tracked, conflict, 'false', normal_target.commit_id().shortest(1)) ++ "\n"`
-	return []string{"bookmark", "list", "-a", "-r", revset, "--template", template, "--color", "never", "--ignore-working-copy"}
+	return []string{"bookmark", "list", "-a", "-r", revset, "--template", bookmarkListTemplate, "--color", "never", "--ignore-working-copy"}
 }
 
 func BookmarkListAll() CommandArgs {
-	const template = `separate(";", name, if(remote, remote, "."), tracked, conflict, 'false', normal_target.commit_id().shortest(1)) ++ "\n"`
-	return []string{"bookmark", "list", "-a", "--template", template, "--color", "never", "--ignore-working-copy"}
+	return []string{"bookmark", "list", "-a", "--template", bookmarkListTemplate, "--color", "never", "--ignore-working-copy"}
 }
 
 func GitFetch(flags ...string) CommandArgs {
@@ -268,6 +267,12 @@ func Absorb(changeId string, files ...string) CommandArgs {
 	args := []string{"absorb", "--from", changeId, "--color", "never"}
 	args = append(args, escapeFiles(files)...)
 	return args
+}
+
+// DiffSummary builds args for `jj diff --summary` which outputs one line per
+// changed file with a status prefix (A/M/D/R).
+func DiffSummary(revision string) CommandArgs {
+	return []string{"diff", "--summary", "--color", "never", "-r", revision, "--ignore-working-copy"}
 }
 
 func Evolog(revision string) CommandArgs {

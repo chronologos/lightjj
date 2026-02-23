@@ -82,10 +82,6 @@ func ParseBookmarkListOutput(output string) []Bookmark {
 		}
 	}
 
-	if len(orderedNames) == 0 {
-		return nil
-	}
-
 	bookmarks := make([]Bookmark, len(orderedNames))
 	for i, name := range orderedNames {
 		bookmarks[i] = *bookmarkMap[name]
