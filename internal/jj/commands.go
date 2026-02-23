@@ -278,7 +278,7 @@ func DiffSummary(revision string) CommandArgs {
 }
 
 func Evolog(revision string) CommandArgs {
-	return []string{"evolog", "-r", revision, "--color", "always", "--quiet", "--ignore-working-copy"}
+	return []string{"evolog", "-r", revision, "--no-graph", "--color", "never", "--quiet", "--ignore-working-copy"}
 }
 
 func OpLog(limit int) CommandArgs {
@@ -299,7 +299,7 @@ type OpEntry struct {
 }
 
 func ParseOpLog(output string) []OpEntry {
-	var entries []OpEntry
+	entries := []OpEntry{}
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if line == "" {
 			continue
@@ -314,9 +314,6 @@ func ParseOpLog(output string) []OpEntry {
 			Time:        parts[2],
 			IsCurrent:   parts[3] == "true",
 		})
-	}
-	if entries == nil {
-		entries = []OpEntry{}
 	}
 	return entries
 }
