@@ -9,18 +9,18 @@ import (
 
 func TestParseBookmarkListOutput(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
-		want []Bookmark
+		want  []Bookmark
 	}{
 		{
-			name: "empty",
+			name:  "empty",
 			input: "",
-			want: []Bookmark{},
+			want:  []Bookmark{},
 		},
 		{
-			name: "single local",
-			input: "feat-1;.;false;false;false;9",
+			name:  "single local",
+			input: "feat-1\x1f.\x1ffalse\x1ffalse\x1ffalse\x1f9",
 			want: []Bookmark{
 				{
 					Name:    "feat-1",
@@ -35,8 +35,8 @@ func TestParseBookmarkListOutput(t *testing.T) {
 			},
 		},
 		{
-			name: "with remote",
-			input: "feature;.;false;false;false;b\nfeature;origin;true;false;false;b",
+			name:  "with remote",
+			input: "feature\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fb\nfeature\x1forigin\x1ftrue\x1ffalse\x1ffalse\x1fb",
 			want: []Bookmark{
 				{
 					Name: "feature",
@@ -51,8 +51,8 @@ func TestParseBookmarkListOutput(t *testing.T) {
 			},
 		},
 		{
-			name: "quoted bookmarks",
-			input: "\"test--bookmark\";.;false;false;false;7\n\"test--bookmark\";git;true;false;false;7\n\"test--bookmark\";origin;true;false;false;6",
+			name:  "quoted bookmarks",
+			input: "\"test--bookmark\"\x1f.\x1ffalse\x1ffalse\x1ffalse\x1f7\n\"test--bookmark\"\x1fgit\x1ftrue\x1ffalse\x1ffalse\x1f7\n\"test--bookmark\"\x1forigin\x1ftrue\x1ffalse\x1ffalse\x1f6",
 			want: []Bookmark{
 				{
 					Name: "test--bookmark",
@@ -66,6 +66,22 @@ func TestParseBookmarkListOutput(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "bookmark name with semicolon",
+			input: "feat;one\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fa",
+			want: []Bookmark{
+				{
+					Name:    "feat;one",
+					Remotes: nil,
+					Local: &BookmarkRemote{
+						Remote:   ".",
+						CommitId: "a",
+						Tracked:  false,
+					},
+					CommitId: "a",
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,7 +91,7 @@ func TestParseBookmarkListOutput(t *testing.T) {
 }
 
 func TestParseBookmarkListOutput_NonLocal(t *testing.T) {
-	output := "alpha;origin;false;false;false;2\nmain;.;false;false;false;b\nmain;git;true;false;false;b\nmain;origin;true;false;false;b\nzeta;origin;false;false;false;c"
+	output := "alpha\x1forigin\x1ffalse\x1ffalse\x1ffalse\x1f2\nmain\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fb\nmain\x1fgit\x1ftrue\x1ffalse\x1ffalse\x1fb\nmain\x1forigin\x1ftrue\x1ffalse\x1ffalse\x1fb\nzeta\x1forigin\x1ffalse\x1ffalse\x1ffalse\x1fc"
 	bookmarks := ParseBookmarkListOutput(output)
 	assert.Len(t, bookmarks, 3)
 

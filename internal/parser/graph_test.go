@@ -156,6 +156,46 @@ func TestParseGraphLog_ImmutableCommit(t *testing.T) {
 	assert.Equal(t, "immutable change", rows[0].Description)
 }
 
+func TestParseGraphLog_MutableCommit(t *testing.T) {
+	output := "○  _PREFIX:m_PREFIX:3_PREFIX:false\x1fmmmmmmmm\x1f33333333\x1fmutable change\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].Commit.Immutable)
+	assert.False(t, rows[0].Commit.IsWorkingCopy)
+	assert.Equal(t, "mmmmmmmm", rows[0].Commit.ChangeId)
+}
+
+func TestParseGraphLog_MixedImmutableAndMutable(t *testing.T) {
+	output := "○  _PREFIX:a_PREFIX:1_PREFIX:false\x1faaaaaaaa\x1f11111111\x1fmutable\x1f\n" +
+		"◆  _PREFIX:b_PREFIX:2_PREFIX:false\x1fbbbbbbbb\x1f22222222\x1fimmutable\x1f\n" +
+		"○  _PREFIX:c_PREFIX:3_PREFIX:false\x1fcccccccc\x1f33333333\x1falso mutable\x1f\n" +
+		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\n"
+
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 4)
+
+	assert.False(t, rows[0].Commit.Immutable)
+	assert.Equal(t, "aaaaaaaa", rows[0].Commit.ChangeId)
+
+	assert.True(t, rows[1].Commit.Immutable)
+	assert.Equal(t, "bbbbbbbb", rows[1].Commit.ChangeId)
+
+	assert.False(t, rows[2].Commit.Immutable)
+	assert.Equal(t, "cccccccc", rows[2].Commit.ChangeId)
+
+	assert.True(t, rows[3].Commit.Immutable)
+	assert.Equal(t, "zzzzzzzz", rows[3].Commit.ChangeId)
+}
+
+func TestParseGraphLog_WorkingCopyIsNotImmutable(t *testing.T) {
+	output := "@  _PREFIX:w_PREFIX:7_PREFIX:false\x1fwwwwwwww\x1f77777777\x1fworking copy\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].Commit.IsWorkingCopy)
+	assert.False(t, rows[0].Commit.Immutable)
+	assert.Equal(t, "wwwwwwww", rows[0].Commit.ChangeId)
+}
+
 func TestParseGraphLog_FallbackToShortest(t *testing.T) {
 	// Old format without full IDs — should fall back to shortest prefix
 	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\n"

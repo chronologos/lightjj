@@ -72,7 +72,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows := parser.ParseGraphLog(string(output))
-	s.refreshOpId(r) // seed/refresh cache on log fetch
+	s.refreshOpId() // seed/refresh cache on log fetch
 	s.writeJSON(w, r, http.StatusOK, rows)
 }
 
@@ -134,6 +134,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": string(output)})
 }
 
+// statResult holds the output of a background DiffStat call.
+type statResult struct {
+	output []byte
+	err    error
+}
+
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {
@@ -141,19 +147,25 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summaryArgs := jj.DiffSummary(revision)
-	summaryOutput, err := s.Runner.Run(r.Context(), summaryArgs)
+	// Run summary and stat in parallel to halve latency on this hot path.
+	statCh := make(chan statResult, 1)
+	go func() {
+		out, err := s.Runner.Run(r.Context(), jj.DiffStat(revision))
+		statCh <- statResult{out, err}
+	}()
+
+	summaryOutput, err := s.Runner.Run(r.Context(), jj.DiffSummary(revision))
 	if err != nil {
+		<-statCh // drain the goroutine
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	files := jj.ParseDiffSummary(string(summaryOutput))
 
-	// Fetch stat counts and merge into file list
-	statArgs := jj.DiffStat(revision)
-	statOutput, err := s.Runner.Run(r.Context(), statArgs)
-	if err == nil {
-		stats := jj.ParseDiffStat(string(statOutput))
+	// Collect stat result and merge if successful
+	sr := <-statCh
+	if sr.err == nil {
+		stats := jj.ParseDiffStat(string(sr.output))
 		jj.MergeStats(files, stats)
 	}
 
@@ -195,29 +207,26 @@ type newRequest struct {
 
 func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
 	var req newRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	revs := commitsFromIds(req.Revisions)
-	args := jj.New(revs)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+	if len(req.Revisions) == 0 {
+		s.writeError(w, http.StatusBadRequest, "revisions is required")
 		return
 	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	revs := commitsFromIds(req.Revisions)
+	s.runMutation(w, r, jj.New(revs))
 }
 
 type editRequest struct {
-	Revision         string `json:"revision"`
-	IgnoreImmutable  bool   `json:"ignore_immutable"`
+	Revision        string `json:"revision"`
+	IgnoreImmutable bool   `json:"ignore_immutable"`
 }
 
 func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	var req editRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -225,36 +234,26 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revision is required")
 		return
 	}
-	args := jj.Edit(req.Revision, req.IgnoreImmutable)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.Edit(req.Revision, req.IgnoreImmutable))
 }
 
 type abandonRequest struct {
-	Revisions        []string `json:"revisions"`
-	IgnoreImmutable  bool     `json:"ignore_immutable"`
+	Revisions       []string `json:"revisions"`
+	IgnoreImmutable bool     `json:"ignore_immutable"`
 }
 
 func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
 	var req abandonRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	revs := commitsFromIds(req.Revisions)
-	args := jj.Abandon(revs, req.IgnoreImmutable)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+	if len(req.Revisions) == 0 {
+		s.writeError(w, http.StatusBadRequest, "revisions is required")
 		return
 	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	revs := commitsFromIds(req.Revisions)
+	s.runMutation(w, r, jj.Abandon(revs, req.IgnoreImmutable))
 }
 
 type describeRequest struct {
@@ -264,7 +263,7 @@ type describeRequest struct {
 
 func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 	var req describeRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -278,7 +277,7 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.refreshOpId(r)
+	go s.refreshOpId()
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
 }
 
@@ -308,7 +307,7 @@ func defaultAndValidate(val, defaultVal string, allowed map[string]bool) (string
 
 func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 	var req rebaseRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -331,27 +330,20 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revs := commitsFromIds(req.Revisions)
-	args := jj.Rebase(revs, req.Destination, sourceMode, targetMode, req.SkipEmptied, req.IgnoreImmutable)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.Rebase(revs, req.Destination, sourceMode, targetMode, req.SkipEmptied, req.IgnoreImmutable))
 }
 
 type squashRequest struct {
-	Revisions              []string `json:"revisions"`
-	Destination            string   `json:"destination"`
-	KeepEmptied            bool     `json:"keep_emptied"`
-	UseDestinationMessage  bool     `json:"use_destination_message"`
-	IgnoreImmutable        bool     `json:"ignore_immutable"`
+	Revisions             []string `json:"revisions"`
+	Destination           string   `json:"destination"`
+	KeepEmptied           bool     `json:"keep_emptied"`
+	UseDestinationMessage bool     `json:"use_destination_message"`
+	IgnoreImmutable       bool     `json:"ignore_immutable"`
 }
 
 func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 	var req squashRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -364,24 +356,11 @@ func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revs := commitsFromIds(req.Revisions)
-	args := jj.Squash(revs, req.Destination, nil, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.Squash(revs, req.Destination, nil, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable))
 }
 
 func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
-	output, err := s.Runner.Run(r.Context(), jj.Undo())
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.Undo())
 }
 
 func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
@@ -436,7 +415,7 @@ type gitFlagsRequest struct {
 
 func (s *Server) handleBookmarkSet(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkRevisionRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -444,19 +423,12 @@ func (s *Server) handleBookmarkSet(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revision and name are required")
 		return
 	}
-	args := jj.BookmarkSet(req.Revision, req.Name)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.BookmarkSet(req.Revision, req.Name))
 }
 
 func (s *Server) handleBookmarkDelete(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkNameRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -464,19 +436,12 @@ func (s *Server) handleBookmarkDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	args := jj.BookmarkDelete(req.Name)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.BookmarkDelete(req.Name))
 }
 
 func (s *Server) handleBookmarkMove(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkRevisionRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -484,19 +449,12 @@ func (s *Server) handleBookmarkMove(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revision and name are required")
 		return
 	}
-	args := jj.BookmarkMove(req.Revision, req.Name, "--allow-backwards")
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.BookmarkMove(req.Revision, req.Name, "--allow-backwards"))
 }
 
 func (s *Server) handleBookmarkForget(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkNameRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -504,19 +462,12 @@ func (s *Server) handleBookmarkForget(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	args := jj.BookmarkForget(req.Name)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.BookmarkForget(req.Name))
 }
 
 func (s *Server) handleBookmarkTrack(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkRemoteRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -524,19 +475,12 @@ func (s *Server) handleBookmarkTrack(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	args := jj.BookmarkTrack(req.Name, req.Remote)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.BookmarkTrack(req.Name, req.Remote))
 }
 
 func (s *Server) handleBookmarkUntrack(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkRemoteRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -544,19 +488,12 @@ func (s *Server) handleBookmarkUntrack(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	args := jj.BookmarkUntrack(req.Name, req.Remote)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.BookmarkUntrack(req.Name, req.Remote))
 }
 
 func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 	var req gitFlagsRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -564,19 +501,12 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	args := jj.GitPush(req.Flags...)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.GitPush(req.Flags...))
 }
 
 func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 	var req gitFlagsRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -584,14 +514,7 @@ func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	args := jj.GitFetch(req.Flags...)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutation(w, r, jj.GitFetch(req.Flags...))
 }
 
 // --- Helpers ---

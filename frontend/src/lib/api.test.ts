@@ -134,6 +134,36 @@ describe('response cache', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 
+  it('rebase passes source_mode and target_mode in request body', async () => {
+    const result = { output: 'rebased' }
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op1'))
+
+    await api.rebase(['abc'], 'def', '-s', '--insert-after')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [, init] = mockFetch.mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(body.revisions).toEqual(['abc'])
+    expect(body.destination).toBe('def')
+    expect(body.source_mode).toBe('-s')
+    expect(body.target_mode).toBe('--insert-after')
+  })
+
+  it('rebase works without optional mode params', async () => {
+    const result = { output: 'rebased' }
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op1'))
+
+    await api.rebase(['abc'], 'def')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [, init] = mockFetch.mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(body.revisions).toEqual(['abc'])
+    expect(body.destination).toBe('def')
+    expect(body.source_mode).toBeUndefined()
+    expect(body.target_mode).toBeUndefined()
+  })
+
   it('clears cache when exceeding MAX_CACHE_SIZE', async () => {
     _testInternals.lastOpId = 'op1'
 

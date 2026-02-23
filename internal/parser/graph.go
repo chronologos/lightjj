@@ -51,7 +51,7 @@ func containsNodeRune(s string) bool {
 // ParseGraphLog parses the output of LogGraph into structured rows.
 func ParseGraphLog(output string) []GraphRow {
 	lines := strings.Split(output, "\n")
-	var rows []GraphRow
+	rows := []GraphRow{}
 	var current *GraphRow
 
 	for _, line := range lines {

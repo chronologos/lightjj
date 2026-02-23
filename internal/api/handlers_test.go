@@ -75,7 +75,7 @@ func TestHandleLog_Empty(t *testing.T) {
 
 func TestHandleBookmarks(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main;.;false;false;false;abc"))
+	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fabc"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -641,6 +641,126 @@ func TestHandleDiff_LargeContext(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp["diff"], "+full file")
+}
+
+// --- Rebase source_mode / target_mode tests ---
+
+func TestHandleRebase_SourceModeS(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-s", "-d", false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def", SourceMode: "-s"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRebase_SourceModeB(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-b", "-d", false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def", SourceMode: "-b"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRebase_TargetModeInsertAfter(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-r", "--insert-after", false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def", TargetMode: "--insert-after"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRebase_TargetModeInsertBefore(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-r", "--insert-before", false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def", TargetMode: "--insert-before"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRebase_InvalidSourceMode(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def", SourceMode: "--bad"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "invalid source_mode")
+}
+
+func TestHandleRebase_InvalidTargetMode(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def", TargetMode: "--bad"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "invalid target_mode")
+}
+
+func TestHandleRebase_EmptySourceModeDefaultsToR(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	// Omitting SourceMode — should default to "-r"
+	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRebase_EmptyTargetModeDefaultsToD(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	// Omitting TargetMode — should default to "-d"
+	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // parseLogOutput tests moved to internal/parser/graph_test.go
