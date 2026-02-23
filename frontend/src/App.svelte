@@ -112,6 +112,12 @@
     lastCheckedIndex = -1
   }
 
+  function clearChecksAndReload() {
+    clearChecks()
+    if (selectedRevision) loadDiffAndFiles(selectedRevision.commit.change_id)
+    else { diffContent = ''; changedFiles = [] }
+  }
+
   // --- Error helper ---
   function showError(e: unknown) {
     error = e instanceof Error ? e.message : String(e)
@@ -138,11 +144,7 @@
     { label: 'Abandon selected revision', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked revisions`, action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked revisions`, action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
-    { label: 'Clear all checked revisions', shortcut: 'Esc', action: () => {
-      clearChecks()
-      if (selectedRevision) { loadDiffAndFiles(selectedRevision.commit.change_id) }
-      else { diffContent = ''; changedFiles = [] }
-    }, when: () => checkedRevisions.size > 0 },
+    { label: 'Clear all checked revisions', shortcut: 'Esc', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
     { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
     { label: 'Toggle operation log', action: () => toggleOplog() },
     { label: 'Toggle evolution log for selected revision', action: () => toggleEvolog(), when: () => !!selectedRevision },
@@ -506,13 +508,7 @@
         if (descriptionEditing) {
           descriptionEditing = false
         } else if (checkedRevisions.size > 0) {
-          clearChecks()
-          if (selectedRevision) {
-            loadDiffAndFiles(selectedRevision.commit.change_id)
-          } else {
-            diffContent = ''
-            changedFiles = []
-          }
+          clearChecksAndReload()
         } else if (error) {
           dismissError()
         }
@@ -567,18 +563,11 @@
       onabandon={handleAbandon}
       onnewfromchecked={handleNewFromChecked}
       onabandonchecked={handleAbandonChecked}
-      onclearchecks={() => {
-        clearChecks()
-        if (selectedRevision) { loadDiffAndFiles(selectedRevision.commit.change_id) }
-        else { diffContent = ''; changedFiles = [] }
-      }}
+      onclearchecks={clearChecksAndReload}
       onrevsetsubmit={handleRevsetSubmit}
       onrevsetclear={clearRevsetFilter}
       onrevsetchange={(v) => { revsetFilter = v }}
-      onrevsetescaped={() => {
-        revsetFilter = ''
-        handleRevsetSubmit()
-      }}
+      onrevsetescaped={clearRevsetFilter}
     />
 
     <DiffPanel
@@ -662,9 +651,7 @@
     --bg-btn-kbd: #1e1e2e33;
     --wc-desc-color: #e0e0e0;
 
-    /* Diff line colors */
-    --diff-add-text: #a6e3a1;
-    --diff-remove-text: #f38ba8;
+    /* Diff line backgrounds */
     --diff-add-bg: #a6e3a112;
     --diff-remove-bg: #f38ba812;
     --diff-add-word: #a6e3a133;
@@ -717,8 +704,6 @@
     --bg-btn-kbd: #ffffff55;
     --wc-desc-color: #2a2d3a;
 
-    --diff-add-text: #2c7a1e;
-    --diff-remove-text: #b01030;
     --diff-add-bg: #40a02b15;
     --diff-remove-bg: #d20f3915;
     --diff-add-word: #40a02b30;

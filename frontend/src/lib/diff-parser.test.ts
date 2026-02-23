@@ -111,6 +111,119 @@ Binary file differs`
     const files = parseDiffContent(raw)
     expect(files[0].filePath).toBe('path with spaces/file.go')
   })
+
+  it('parses hunk line numbers from @@ header', () => {
+    const raw = `Modified regular file src/main.go:
+@@ -10,5 +12,8 @@
+ context
++added`
+    const files = parseDiffContent(raw)
+    expect(files[0].hunks[0].newStart).toBe(12)
+    expect(files[0].hunks[0].newCount).toBe(8)
+  })
+
+  it('parses hunk line numbers without count (defaults to 1)', () => {
+    const raw = `Modified regular file src/main.go:
+@@ -1 +1 @@
+-old
++new`
+    const files = parseDiffContent(raw)
+    expect(files[0].hunks[0].newStart).toBe(1)
+    expect(files[0].hunks[0].newCount).toBe(1)
+  })
+
+  it('parses new file hunk @@ -0,0 +1,5 @@', () => {
+    const raw = `Added regular file new.go:
+@@ -0,0 +1,5 @@
++line1
++line2
++line3
++line4
++line5`
+    const files = parseDiffContent(raw)
+    expect(files[0].hunks[0].newStart).toBe(1)
+    expect(files[0].hunks[0].newCount).toBe(5)
+  })
+
+  // --- Context expansion: hunk line number parsing ---
+
+  it('parses multiple hunks with gaps between them', () => {
+    const raw = `Modified regular file src/main.go:
+@@ -1,3 +1,4 @@
+ line1
++added1
+ line2
+ line3
+@@ -20,3 +21,4 @@
+ line20
++added2
+ line21
+ line22`
+    const files = parseDiffContent(raw)
+    expect(files).toHaveLength(1)
+    expect(files[0].hunks).toHaveLength(2)
+    // First hunk starts at line 1 in new file
+    expect(files[0].hunks[0].newStart).toBe(1)
+    expect(files[0].hunks[0].newCount).toBe(4)
+    // Second hunk starts at line 21 — gap of lines 5..20 between hunks
+    expect(files[0].hunks[1].newStart).toBe(21)
+    expect(files[0].hunks[1].newCount).toBe(4)
+  })
+
+  it('parses first hunk not starting at line 1 (gap above)', () => {
+    const raw = `Modified regular file src/main.go:
+@@ -10,3 +10,4 @@
+ line10
++added
+ line11
+ line12`
+    const files = parseDiffContent(raw)
+    expect(files[0].hunks).toHaveLength(1)
+    // Hunk starts at line 10 — lines 1..9 are not shown (gap above)
+    expect(files[0].hunks[0].newStart).toBe(10)
+    expect(files[0].hunks[0].newCount).toBe(4)
+  })
+
+  it('parses consecutive hunks with no gap (adjacent)', () => {
+    // First hunk: newStart=1, newCount=3 → covers lines 1..3
+    // Second hunk: newStart=4, newCount=3 → covers lines 4..6 (immediately adjacent)
+    const raw = `Modified regular file src/main.go:
+@@ -1,3 +1,3 @@
+-old1
++new1
+ line2
+ line3
+@@ -4,3 +4,3 @@
+ line4
+-old5
++new5
+ line6`
+    const files = parseDiffContent(raw)
+    expect(files[0].hunks).toHaveLength(2)
+    expect(files[0].hunks[0].newStart).toBe(1)
+    expect(files[0].hunks[0].newCount).toBe(3)
+    expect(files[0].hunks[1].newStart).toBe(4)
+    expect(files[0].hunks[1].newCount).toBe(3)
+    // No gap: hunk[0] ends at line 3, hunk[1] starts at line 4
+    const hunk0End = files[0].hunks[0].newStart + files[0].hunks[0].newCount
+    expect(hunk0End).toBe(files[0].hunks[1].newStart)
+  })
+
+  it('parses hunk with large newStart (e.g., line 500)', () => {
+    const raw = `Modified regular file src/big.go:
+@@ -498,5 +500,6 @@
+ line500
+ line501
++added
+ line502
+ line503
+ line504`
+    const files = parseDiffContent(raw)
+    expect(files[0].hunks).toHaveLength(1)
+    expect(files[0].hunks[0].newStart).toBe(500)
+    expect(files[0].hunks[0].newCount).toBe(6)
+    expect(files[0].hunks[0].lines).toHaveLength(6)
+  })
 })
 
 describe('filePathFromHeader', () => {

@@ -102,7 +102,13 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	file := r.URL.Query().Get("file")
 
-	args := jj.Diff(revision, file, "never", "--tool", ":git")
+	extraArgs := []string{"--tool", ":git"}
+	if ctx := r.URL.Query().Get("context"); ctx != "" {
+		if n, err := strconv.Atoi(ctx); err == nil && n > 0 && n <= 100000 {
+			extraArgs = append(extraArgs, "--context", ctx)
+		}
+	}
+	args := jj.Diff(revision, file, "never", extraArgs...)
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())

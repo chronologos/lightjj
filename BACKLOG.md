@@ -76,7 +76,7 @@
 - [ ] Live file watching (auto-refresh on working copy changes)
 - [ ] Git push/fetch with progress indication
 - [x] Diff syntax highlighting (language-aware, Shiki like antique)
-- [ ] Context expansion at hunk boundaries (like antique)
+- [x] Context expansion at hunk boundaries — "Show N hidden lines" buttons between hunks, click to expand full file context
 - [ ] Search across revisions
 - [x] Themes (light/dark) — Catppuccin Mocha (dark) + Latte (light), toggle via Cmd+K, persisted in localStorage
 - [ ] Lazy rendering for large diffs (IntersectionObserver, like antique)

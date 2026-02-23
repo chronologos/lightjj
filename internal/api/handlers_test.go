@@ -591,4 +591,56 @@ func TestHandleBookmarkDelete_MissingName(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// --- Context expansion tests ---
+
+func TestHandleDiff_WithContext(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git", "--context", "10")).SetOutput([]byte("+expanded"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/diff?revision=abc&context=10", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["diff"], "+expanded")
+}
+
+func TestHandleDiff_InvalidContext(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	// Invalid context "abc" should be silently ignored — no --context flag passed
+	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+normal"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/diff?revision=abc&context=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["diff"], "+normal")
+}
+
+func TestHandleDiff_LargeContext(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	// Large context value (10000) for full-file expansion — passed through as-is
+	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git", "--context", "10000")).SetOutput([]byte("+full file"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/diff?revision=abc&context=10000", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["diff"], "+full file")
+}
+
 // parseLogOutput tests moved to internal/parser/graph_test.go

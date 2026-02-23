@@ -374,11 +374,32 @@
     background: var(--bg-hover);
   }
 
-  /* Hovering the description row also highlights its node row, and vice versa */
+  /* Hovering any row in a revision group highlights all rows in that group.
+     DOM order is either: node → desc (no bookmarks) or node → bookmark → desc.
+     Use explicit sibling chains to avoid crossing revision boundaries. */
+
+  /* No bookmarks: node ↔ desc */
   .graph-row.node-row:not(.selected):has(+ .graph-row.desc-row:hover) {
     background: var(--bg-hover);
   }
   .graph-row.node-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
+    background: var(--bg-hover);
+  }
+
+  /* With bookmarks: node ↔ bookmark ↔ desc */
+  .graph-row.node-row:not(.selected):has(+ .graph-row.bookmark-row:hover) {
+    background: var(--bg-hover);
+  }
+  .graph-row.node-row:not(.selected):has(+ .graph-row.bookmark-row + .graph-row.desc-row:hover) {
+    background: var(--bg-hover);
+  }
+  .graph-row.node-row:hover:not(.selected) + .graph-row.bookmark-row:not(.selected) {
+    background: var(--bg-hover);
+  }
+  .graph-row.node-row:hover:not(.selected) + .graph-row.bookmark-row + .graph-row.desc-row:not(.selected) {
+    background: var(--bg-hover);
+  }
+  .graph-row.bookmark-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
     background: var(--bg-hover);
   }
 
@@ -422,31 +443,23 @@
     font-weight: 800;
   }
 
-  .node-line-content {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .bookmark-line-content {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    overflow: hidden;
-    min-width: 0;
-    flex: 1;
-  }
-
+  .node-line-content,
+  .bookmark-line-content,
   .desc-line-content {
     display: inline-flex;
     align-items: baseline;
     overflow: hidden;
     min-width: 0;
     flex: 1;
+  }
+
+  .node-line-content {
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .bookmark-line-content {
+    gap: 4px;
   }
 
   .change-id {
@@ -524,6 +537,8 @@
 
   .graph-row.node-row:hover .rev-actions,
   .graph-row.node-row:has(+ .graph-row.desc-row:hover) .rev-actions,
+  .graph-row.node-row:has(+ .graph-row.bookmark-row:hover) .rev-actions,
+  .graph-row.node-row:has(+ .graph-row.bookmark-row + .graph-row.desc-row:hover) .rev-actions,
   .graph-row.node-row.selected .rev-actions {
     opacity: 1;
   }

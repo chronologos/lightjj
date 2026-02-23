@@ -8,13 +8,15 @@
     file: DiffFile
     fileStats: FileChange | undefined
     isCollapsed: boolean
+    isExpanded: boolean
     splitView: boolean
     highlightedLines: Map<string, string>
     wordDiffMap: Map<string, Map<number, WordSpan[]>>
     ontoggle: (path: string) => void
+    onexpand: (path: string) => void
   }
 
-  let { file, fileStats, isCollapsed, splitView, highlightedLines, wordDiffMap, ontoggle }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffMap, ontoggle, onexpand }: Props = $props()
 
   let filePath = $derived(file.filePath)
 </script>
@@ -74,12 +76,17 @@
   {#if !isCollapsed}
     {#if splitView}
       <!-- Split (side-by-side) view -->
+      {#if !isExpanded && file.hunks.length > 1}
+        <button class="expand-btn" onclick={() => onexpand(filePath)}>
+          ↕ Expand full context
+        </button>
+      {/if}
       {@const splitLines = toSplitView(file.hunks)}
       <div class="split-view">
         <div class="split-col split-left">
           {#each splitLines as sl}
             {#if sl.left?.line.type === 'header'}
-              <div class="diff-hunk-header">{sl.left.line.content}</div>
+              {#if !isExpanded}<div class="diff-hunk-header">{sl.left.line.content}</div>{/if}
             {:else if sl.left}
               {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.left.hunkIdx}`)?.get(sl.left.lineIdx)}
@@ -92,7 +99,7 @@
         <div class="split-col split-right">
           {#each splitLines as sl}
             {#if sl.right?.line.type === 'header'}
-              <div class="diff-hunk-header">{sl.right.line.content}</div>
+              {#if !isExpanded}<div class="diff-hunk-header">{sl.right.line.content}</div>{/if}
             {:else if sl.right}
               {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.right.hunkIdx}`)?.get(sl.right.lineIdx)}
@@ -107,7 +114,23 @@
       <!-- Unified view -->
       {#each file.hunks as hunk, hunkIdx}
         {@const wordDiffs = wordDiffMap.get(`${filePath}:${hunkIdx}`) ?? new Map()}
-        <div class="diff-hunk-header">{hunk.header}</div>
+        {#if !isExpanded}
+          {#if hunkIdx === 0 && hunk.newStart > 1}
+            <button class="expand-btn" onclick={() => onexpand(filePath)}>
+              ↕ Show {hunk.newStart - 1} lines above
+            </button>
+          {/if}
+          {#if hunkIdx > 0}
+            {@const prev = file.hunks[hunkIdx - 1]}
+            {@const gap = hunk.newStart - (prev.newStart + prev.newCount)}
+            {#if gap > 0}
+              <button class="expand-btn" onclick={() => onexpand(filePath)}>
+                ↕ Show {gap} hidden lines
+              </button>
+            {/if}
+          {/if}
+          <div class="diff-hunk-header">{hunk.header}</div>
+        {/if}
         <div class="diff-lines">
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
@@ -122,7 +145,6 @@
 
 <style>
   .diff-file {
-    margin-bottom: 0;
     border-bottom: 1px solid var(--surface0);
   }
 
@@ -221,6 +243,25 @@
     color: var(--red);
   }
 
+  .expand-btn {
+    display: block;
+    width: 100%;
+    padding: 3px 12px;
+    background: var(--bg-hunk-header);
+    color: var(--overlay0);
+    border: none;
+    border-bottom: 1px solid var(--border-hunk-header);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: center;
+  }
+
+  .expand-btn:hover {
+    background: var(--bg-hover);
+    color: var(--teal);
+  }
+
   .diff-hunk-header {
     padding: 4px 12px;
     background: var(--bg-hunk-header);
@@ -243,13 +284,13 @@
 
   .diff-add {
     background: var(--diff-add-bg);
-    color: var(--diff-add-text);
+    color: var(--green);
     border-left: 3px solid var(--green);
   }
 
   .diff-remove {
     background: var(--diff-remove-bg);
-    color: var(--diff-remove-text);
+    color: var(--red);
     border-left: 3px solid var(--red);
   }
 
@@ -262,16 +303,7 @@
     color: var(--text);
   }
 
-  .diff-line.highlighted.diff-add {
-    color: inherit;
-  }
-
-  .diff-line.highlighted.diff-remove {
-    color: inherit;
-  }
-
   .diff-line.highlighted.diff-context {
-    color: inherit;
     opacity: 0.7;
   }
 
@@ -288,7 +320,6 @@
   :global(.diff-prefix) {
     user-select: none;
     opacity: 0.5;
-    margin-right: 0;
   }
 
   /* --- Split view --- */
