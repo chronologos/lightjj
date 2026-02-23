@@ -53,6 +53,13 @@ export interface FileChange {
   deletions: number
 }
 
+export interface OpEntry {
+  id: string
+  description: string
+  time: string
+  is_current: boolean
+}
+
 export const api = {
   log: (revset?: string, limit?: number) => {
     const params = new URLSearchParams()
@@ -84,6 +91,17 @@ export const api = {
   },
 
   remotes: () => request<string[]>('/api/remotes'),
+
+  oplog: (limit?: number) => {
+    const params = new URLSearchParams()
+    if (limit) params.set('limit', String(limit))
+    return request<OpEntry[]>(`/api/oplog?${params}`)
+  },
+
+  evolog: (revision: string) => {
+    const params = new URLSearchParams({ revision })
+    return request<{ output: string }>(`/api/evolog?${params}`)
+  },
 
   // Mutations
   newRevision: (revisions: string[]) =>

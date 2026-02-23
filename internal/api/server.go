@@ -28,6 +28,8 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/files", s.handleFiles)
 	s.Mux.HandleFunc("GET /api/description", s.handleGetDescription)
 	s.Mux.HandleFunc("GET /api/remotes", s.handleRemotes)
+	s.Mux.HandleFunc("GET /api/oplog", s.handleOpLog)
+	s.Mux.HandleFunc("GET /api/evolog", s.handleEvolog)
 
 	s.Mux.HandleFunc("POST /api/new", s.handleNew)
 	s.Mux.HandleFunc("POST /api/edit", s.handleEdit)

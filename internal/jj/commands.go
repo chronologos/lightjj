@@ -282,11 +282,43 @@ func Evolog(revision string) CommandArgs {
 }
 
 func OpLog(limit int) CommandArgs {
-	args := []string{"op", "log", "--color", "always", "--quiet", "--ignore-working-copy"}
+	args := []string{"op", "log", "--no-graph", "--color", "never", "--ignore-working-copy"}
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
+	tmpl := `self.id().short() ++ "\x1F" ++ self.description() ++ "\x1F" ++ self.time().start() ++ "\x1F" ++ if(self.current_operation(), "true", "false") ++ "\n"`
+	args = append(args, "-T", tmpl)
 	return args
+}
+
+type OpEntry struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Time        string `json:"time"`
+	IsCurrent   bool   `json:"is_current"`
+}
+
+func ParseOpLog(output string) []OpEntry {
+	var entries []OpEntry
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x1F", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		entries = append(entries, OpEntry{
+			ID:          parts[0],
+			Description: parts[1],
+			Time:        parts[2],
+			IsCurrent:   parts[3] == "true",
+		})
+	}
+	if entries == nil {
+		entries = []OpEntry{}
+	}
+	return entries
 }
 
 func OpRestore(operationId string) CommandArgs {

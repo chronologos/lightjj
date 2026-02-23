@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type LogEntry, type FileChange } from './lib/api'
+  import { api, type LogEntry, type FileChange, type OpEntry } from './lib/api'
   import { highlightLines, detectLanguage } from './lib/highlighter'
 
   // --- State ---
@@ -24,6 +24,9 @@
   let lastCheckedIndex: number = $state(-1)
   let diffGeneration: number = 0
   let filesGeneration: number = 0
+  let oplogOpen: boolean = $state(false)
+  let oplogEntries: OpEntry[] = $state([])
+  let oplogLoading: boolean = $state(false)
   let paletteOpen: boolean = $state(false)
   let paletteQuery: string = $state('')
   let paletteIndex: number = $state(0)
@@ -201,7 +204,6 @@
 
   // --- Command palette ---
   interface PaletteCommand {
-    id: string
     label: string
     shortcut?: string
     action: () => void
@@ -209,29 +211,30 @@
   }
 
   let commands: PaletteCommand[] = $derived.by(() => [
-    { id: 'refresh', label: 'Refresh revisions', shortcut: 'r', action: () => loadLog() },
-    { id: 'undo', label: 'Undo last operation', shortcut: 'u', action: () => handleUndo() },
-    { id: 'git-fetch', label: 'Git fetch', action: () => handleGitFetch() },
-    { id: 'git-push', label: 'Git push', action: () => handleGitPush() },
-    { id: 'filter', label: 'Focus revset filter', shortcut: '/', action: () => revsetInputEl?.focus() },
-    { id: 'clear-filter', label: 'Clear revset filter', action: () => clearRevsetFilter(), when: () => revsetFilter !== '' },
-    { id: 'describe', label: 'Edit description', shortcut: 'e', action: () => startDescriptionEdit(), when: () => !!selectedRevision && checkedRevisions.size <= 1 },
-    { id: 'new', label: 'New revision from selected', shortcut: 'n', action: () => {
+    { label: 'Refresh revisions', shortcut: 'r', action: () => loadLog() },
+    { label: 'Undo last operation', shortcut: 'u', action: () => handleUndo() },
+    { label: 'Git fetch', action: () => handleGitFetch() },
+    { label: 'Git push', action: () => handleGitPush() },
+    { label: 'Focus revset filter', shortcut: '/', action: () => revsetInputEl?.focus() },
+    { label: 'Clear revset filter', action: () => clearRevsetFilter(), when: () => revsetFilter !== '' },
+    { label: 'Edit description', shortcut: 'e', action: () => startDescriptionEdit(), when: () => !!selectedRevision && checkedRevisions.size <= 1 },
+    { label: 'New revision from selected', shortcut: 'n', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(selectedRevision.commit.change_id)
     }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
-    { id: 'edit', label: 'Edit selected revision', action: () => { if (selectedRevision) handleEdit(selectedRevision.commit.change_id) }, when: () => !!selectedRevision },
-    { id: 'abandon', label: 'Abandon selected revision', action: () => { if (selectedRevision) handleAbandon(selectedRevision.commit.change_id) }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
-    { id: 'abandon-checked', label: `Abandon ${checkedRevisions.size} checked revisions`, action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
-    { id: 'new-checked', label: `New from ${checkedRevisions.size} checked revisions`, action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
-    { id: 'clear-checks', label: 'Clear all checked revisions', shortcut: 'Esc', action: () => {
+    { label: 'Edit selected revision', action: () => handleEdit(selectedRevision!.commit.change_id), when: () => !!selectedRevision },
+    { label: 'Abandon selected revision', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { label: `Abandon ${checkedRevisions.size} checked revisions`, action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
+    { label: `New from ${checkedRevisions.size} checked revisions`, action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
+    { label: 'Clear all checked revisions', shortcut: 'Esc', action: () => {
       clearChecks()
       if (selectedRevision) { loadDiff(selectedRevision); loadFiles(selectedRevision) }
       else { diffContent = ''; changedFiles = [] }
     }, when: () => checkedRevisions.size > 0 },
-    { id: 'collapse-all', label: 'Collapse all file diffs', action: () => collapseAll(), when: () => parsedDiff.length > 0 },
-    { id: 'expand-all', label: 'Expand all file diffs', action: () => expandAll(), when: () => parsedDiff.length > 0 },
-    { id: 'split-view', label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
+    { label: 'Collapse all file diffs', action: () => collapseAll(), when: () => parsedDiff.length > 0 },
+    { label: 'Expand all file diffs', action: () => expandAll(), when: () => parsedDiff.length > 0 },
+    { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
+    { label: 'Toggle operation log', action: () => toggleOplog() },
   ])
 
   function fuzzyMatch(query: string, text: string): boolean {
@@ -658,6 +661,24 @@
       await loadLog()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function toggleOplog() {
+    oplogOpen = !oplogOpen
+    if (oplogOpen && oplogEntries.length === 0) {
+      await loadOplog()
+    }
+  }
+
+  async function loadOplog() {
+    oplogLoading = true
+    try {
+      oplogEntries = await api.oplog(50)
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    } finally {
+      oplogLoading = false
     }
   }
 
@@ -1197,6 +1218,37 @@
     </div>
   </div>
 
+  <!-- Operation log panel -->
+  {#if oplogOpen}
+    <div class="oplog-panel">
+      <div class="panel-header">
+        <span class="panel-title">Operation Log</span>
+        <div class="panel-actions">
+          <button class="header-btn" onclick={loadOplog}>Refresh</button>
+          <button class="header-btn" onclick={() => { oplogOpen = false }}>Close</button>
+        </div>
+      </div>
+      <div class="oplog-content">
+        {#if oplogLoading}
+          <div class="empty-state">
+            <div class="spinner"></div>
+            <span>Loading operations...</span>
+          </div>
+        {:else}
+          {#each oplogEntries as op}
+            <div class="oplog-entry" class:oplog-current={op.is_current}>
+              <span class="oplog-id">{op.id}</span>
+              <span class="oplog-desc">{op.description}</span>
+              <span class="oplog-time">{op.time}</span>
+            </div>
+          {:else}
+            <div class="empty-state">No operations</div>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   <!-- Command palette -->
   {#if paletteOpen}
     <div class="palette-backdrop" onclick={closePalette} role="presentation"></div>
@@ -1223,10 +1275,9 @@
               <kbd class="palette-shortcut">{cmd.shortcut}</kbd>
             {/if}
           </button>
-        {/each}
-        {#if filteredCommands.length === 0}
+        {:else}
           <div class="palette-empty">No matching commands</div>
-        {/if}
+        {/each}
       </div>
     </div>
   {/if}
@@ -2206,6 +2257,59 @@
     max-width: 500px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* --- Operation log panel --- */
+  .oplog-panel {
+    border-top: 1px solid #313244;
+    flex-shrink: 0;
+    max-height: 200px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .oplog-content {
+    overflow-y: auto;
+    font-size: 12px;
+  }
+
+  .oplog-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 12px;
+    border-bottom: 1px solid #1a1a2e;
+  }
+
+  .oplog-entry:hover {
+    background: #262637;
+  }
+
+  .oplog-entry.oplog-current {
+    background: #1e2a1e;
+  }
+
+  .oplog-id {
+    color: #89b4fa;
+    font-weight: 600;
+    font-size: 11px;
+    flex-shrink: 0;
+    width: 100px;
+  }
+
+  .oplog-desc {
+    flex: 1;
+    color: #cdd6f4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .oplog-time {
+    color: #585b70;
+    font-size: 11px;
+    flex-shrink: 0;
     white-space: nowrap;
   }
 
