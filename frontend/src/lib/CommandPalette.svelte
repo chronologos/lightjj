@@ -20,6 +20,7 @@
   let inputEl: HTMLInputElement | undefined = $state(undefined)
 
   let filteredCommands = $derived.by(() => {
+    if (!open) return []
     const available = commands.filter(c => !c.when || c.when())
     if (!query) return available
     return available.filter(c => fuzzyMatch(query, c.label))
