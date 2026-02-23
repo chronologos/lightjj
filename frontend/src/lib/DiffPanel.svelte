@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import type { LogEntry, FileChange } from './api'
-  import { parseDiffContent } from './diff-parser'
+  import { parseDiffContent, type DiffFile } from './diff-parser'
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
@@ -54,10 +54,18 @@
   let highlightedLines: Map<string, string> = $state(new Map())
   let highlightGeneration = 0
 
-  async function highlightDiff(files: import('./diff-parser').DiffFile[]) {
+  let lastHighlightedDiff = ''
+  let highlightTimer: number | undefined
+
+  async function highlightDiff(files: DiffFile[]) {
     const gen = ++highlightGeneration
     const newMap = new Map<string, string>()
-    for (const file of files) {
+    for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+      const file = files[fileIdx]
+      // Yield between files so the browser can paint and process input
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      if (gen !== highlightGeneration) return
+
       const filePath = file.filePath
       const lang = detectLanguage(filePath)
 
@@ -86,18 +94,31 @@
           })
         }
       }
-    }
-    if (gen === highlightGeneration) {
-      highlightedLines = newMap
+
+      // Progressive update every few files to avoid O(n²) Map copies
+      if (gen === highlightGeneration && (fileIdx % 3 === 2 || fileIdx === files.length - 1)) {
+        highlightedLines = new Map(newMap)
+      }
     }
   }
 
   $effect(() => {
     if (parsedDiff.length > 0) {
-      highlightDiff(parsedDiff)
+      if (diffContent === lastHighlightedDiff) return
+      lastHighlightedDiff = diffContent
+      // Clear stale highlights immediately to prevent wrong-color flicker
+      // when old and new diffs share the same file/hunk/line keys
+      highlightedLines = new Map()
+      // Defer Shiki so it doesn't block the keydown → paint path.
+      // Plain text + word-diff renders instantly; syntax colors appear ~150ms later.
+      clearTimeout(highlightTimer)
+      highlightTimer = setTimeout(() => highlightDiff(parsedDiff), 150)
     } else {
+      lastHighlightedDiff = ''
+      clearTimeout(highlightTimer)
       highlightedLines = new Map()
     }
+    return () => clearTimeout(highlightTimer)
   })
 
   // --- Collapse helpers ---
@@ -121,9 +142,7 @@
   }
 
   function scrollToFile(path: string) {
-    if (collapsedFiles.has(path)) {
-      toggleFile(path)
-    }
+    collapsedFiles.delete(path)
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-file-path="${CSS.escape(path)}"]`)
       el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
@@ -134,32 +153,59 @@
   export function resetCollapsed() {
     collapsedFiles.clear()
   }
+
+  export function rehighlight() {
+    lastHighlightedDiff = ''
+    highlightedLines = new Map()
+    clearTimeout(highlightTimer)
+    if (parsedDiff.length > 0) {
+      highlightTimer = setTimeout(() => highlightDiff(parsedDiff), 50)
+    }
+  }
 </script>
 
 <div class="panel diff-panel">
-  <div class="panel-header">
-    {#if checkedRevisions.size > 0}
+  {#if selectedRevision && checkedRevisions.size === 0}
+    <div class="revision-detail">
+      <div class="detail-header">
+        <div class="detail-ids">
+          <span class="detail-label">Change</span>
+          <span class="detail-change-id">{selectedRevision.commit.change_id}</span>
+          <span class="detail-label">Commit</span>
+          <span class="detail-commit-id">{selectedRevision.commit.commit_id}</span>
+        </div>
+        <div class="panel-actions">
+          {#if describeSaved}
+            <span class="describe-saved">Saved</span>
+          {/if}
+          <button class="header-btn" onclick={onstartdescribe} title="Edit description (e)">
+            Describe
+          </button>
+        </div>
+      </div>
+      {#if selectedRevision.bookmarks?.length}
+        <div class="detail-bookmarks">
+          {#each selectedRevision.bookmarks as bm}
+            <span class="detail-bookmark-badge">{bm}</span>
+          {/each}
+        </div>
+      {/if}
+      {#if selectedRevision.description}
+        <div class="detail-description">{selectedRevision.description}</div>
+      {/if}
+    </div>
+  {:else if checkedRevisions.size > 0}
+    <div class="panel-header">
       <span class="panel-title">
         Changes in
         <span class="header-change-id">{checkedRevisions.size === 1 ? [...checkedRevisions][0].slice(0, 12) : `${checkedRevisions.size} revisions`}</span>
       </span>
-    {:else if selectedRevision}
-      <span class="panel-title">
-        Changes in
-        <span class="header-change-id">{selectedRevision.commit.change_id.slice(0, 12)}</span>
-      </span>
-      <div class="panel-actions">
-        {#if describeSaved}
-          <span class="describe-saved">Saved</span>
-        {/if}
-        <button class="header-btn" onclick={onstartdescribe} title="Edit description (e)">
-          Describe
-        </button>
-      </div>
-    {:else}
+    </div>
+  {:else}
+    <div class="panel-header">
       <span class="panel-title">Diff Viewer</span>
-    {/if}
-  </div>
+    </div>
+  {/if}
   {#if descriptionEditing && selectedRevision}
     <DescriptionEditor
       revision={selectedRevision}
@@ -308,6 +354,79 @@
     overflow-x: hidden;
   }
 
+  /* --- Revision detail --- */
+  .revision-detail {
+    padding: 8px 12px;
+    background: var(--crust);
+    border-bottom: 1px solid var(--surface0);
+    flex-shrink: 0;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .detail-ids {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .detail-label {
+    color: var(--surface2);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .detail-change-id {
+    color: var(--blue);
+    font-weight: 600;
+    word-break: break-all;
+  }
+
+  .detail-commit-id {
+    color: var(--overlay0);
+    word-break: break-all;
+  }
+
+  .detail-bookmarks {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .detail-bookmark-badge {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg-bookmark);
+    color: var(--green);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid var(--border-bookmark);
+    line-height: 1.15;
+    letter-spacing: 0.02em;
+  }
+
+  .detail-description {
+    color: var(--subtext0);
+    white-space: pre-wrap;
+    line-height: 1.4;
+  }
+
   .describe-saved {
     color: var(--green);
     font-size: 11px;
@@ -422,7 +541,7 @@
   }
 
   .toolbar-btn-sm.active {
-    background: #89b4fa22;
+    background: var(--bg-active);
     border-color: var(--blue);
     color: var(--blue);
   }

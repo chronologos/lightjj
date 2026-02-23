@@ -5,11 +5,15 @@ let highlighterPromise: Promise<Highlighter> | null = null
 export async function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ['github-dark'],
+      themes: ['github-dark', 'github-light'],
       langs: [],  // load on demand
     })
   }
   return highlighterPromise
+}
+
+export function getShikiTheme(): string {
+  return document.documentElement.classList.contains('light') ? 'github-light' : 'github-dark'
 }
 
 // Detect language from file extension
@@ -35,6 +39,7 @@ export async function highlightLines(lines: string[], lang: string): Promise<str
   }
 
   const hl = await getHighlighter()
+  const theme = getShikiTheme()
 
   if (!loadedLangs.has(lang)) {
     try {
@@ -47,7 +52,7 @@ export async function highlightLines(lines: string[], lang: string): Promise<str
 
   const code = lines.join('\n')
   try {
-    const html = hl.codeToHtml(code, { lang, theme: 'github-dark' })
+    const html = hl.codeToHtml(code, { lang, theme })
     // Shiki wraps each line in <span class="line">...tokens...</span>.
     // Split on the line boundary marker to extract per-line HTML.
     const marker = '<span class="line">'

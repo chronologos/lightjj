@@ -129,7 +129,7 @@ export const api = {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
     const cacheId = 'diff:' + revision + (file ? ':' + file : '')
-    return cachedRequest<{ diff: string }>(`${cacheId}`, `/api/diff?${params}`)
+    return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`)
   },
 
   description: (revision: string) => {

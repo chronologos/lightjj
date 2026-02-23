@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DiffFile } from './diff-parser'
+  import type { DiffFile, DiffLine } from './diff-parser'
   import { toSplitView } from './split-view'
   import type { WordSpan } from './word-diff'
   import type { FileChange } from './api'
@@ -19,7 +19,7 @@
   let filePath = $derived(file.filePath)
 </script>
 
-{#snippet diffLine(line: import('./diff-parser').DiffLine, hlKey: string, spans: WordSpan[] | undefined)}
+{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined)}
   {#if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
@@ -149,7 +149,7 @@
   }
 
   .diff-file-header:hover {
-    background: #1e1e30;
+    background: var(--bg-diff-header-hover);
   }
 
   .collapse-toggle {
@@ -168,22 +168,22 @@
   }
 
   .badge-A {
-    background: #a6e3a120;
+    background: var(--badge-add-bg);
     color: var(--green);
   }
 
   .badge-M {
-    background: #89b4fa20;
+    background: var(--badge-modify-bg);
     color: var(--blue);
   }
 
   .badge-D {
-    background: #f38ba820;
+    background: var(--badge-delete-bg);
     color: var(--red);
   }
 
   .badge-R {
-    background: #f9e2af20;
+    background: var(--badge-other-bg);
     color: var(--yellow);
   }
 
@@ -223,10 +223,10 @@
 
   .diff-hunk-header {
     padding: 4px 12px;
-    background: #1a1a2e;
+    background: var(--bg-hunk-header);
     color: var(--teal);
     font-size: 12px;
-    border-bottom: 1px solid #21212e;
+    border-bottom: 1px solid var(--border-hunk-header);
     font-style: italic;
   }
 
@@ -242,19 +242,19 @@
   }
 
   .diff-add {
-    background: #a6e3a112;
-    color: var(--green);
+    background: var(--diff-add-bg);
+    color: var(--diff-add-text);
     border-left: 3px solid var(--green);
   }
 
   .diff-remove {
-    background: #f38ba812;
-    color: var(--red);
+    background: var(--diff-remove-bg);
+    color: var(--diff-remove-text);
     border-left: 3px solid var(--red);
   }
 
   .diff-context {
-    color: var(--overlay0);
+    color: var(--subtext0);
     border-left: 3px solid transparent;
   }
 
@@ -279,10 +279,10 @@
     border-radius: 2px;
   }
   .diff-add .word-change {
-    background: #a6e3a133;
+    background: var(--diff-add-word);
   }
   .diff-remove .word-change {
-    background: #f38ba833;
+    background: var(--diff-remove-word);
   }
 
   :global(.diff-prefix) {
@@ -307,7 +307,7 @@
   }
 
   .diff-empty {
-    background: #1a1a2a;
+    background: var(--bg-diff-empty);
     border-left: 3px solid transparent;
   }
 </style>

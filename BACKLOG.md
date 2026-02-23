@@ -71,13 +71,14 @@
 - [ ] Rebase modal (pick source + destination)
 - [ ] Squash modal
 - [ ] Conflict resolution UI
+- [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "jj-web -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
 - [ ] Live file watching (auto-refresh on working copy changes)
 - [ ] Git push/fetch with progress indication
 - [x] Diff syntax highlighting (language-aware, Shiki like antique)
 - [ ] Context expansion at hunk boundaries (like antique)
 - [ ] Search across revisions
-- [ ] Themes (light/dark)
+- [x] Themes (light/dark) — Catppuccin Mocha (dark) + Latte (light), toggle via Cmd+K, persisted in localStorage
 - [ ] Lazy rendering for large diffs (IntersectionObserver, like antique)
 - [ ] Draggable split view divider (resize ratio)
 

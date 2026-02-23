@@ -120,6 +120,21 @@ jj-web --no-browser             # don't auto-open browser
 jj-web --addr localhost:8080    # specify port
 ```
 
+## Svelte Frontend Performance
+
+Patterns learned from profiling j/k keyboard navigation:
+
+- **No CSS transitions on keyboard-navigated lists.** `transition: background 0.1s ease` on list rows makes selection feel sluggish. Instant background changes feel responsive.
+- **Scope `:hover` to exclude `.selected`.** Use `.row:hover:not(.selected)` to prevent visual artifacts when mouse hover and keyboard selection overlap.
+- **Debounce expensive work, not the selection state.** Update `selectedIndex` synchronously for instant visual feedback. Debounce network fetches and derived computations (diff loading, file loading) with a short timer (~50ms). Skip debounce on cache hits.
+- **Guard state assignments with equality checks.** `if (diffContent !== result.diff) diffContent = result.diff` prevents the entire `$derived` chain (`parsedDiff` → `wordDiffMap` → `highlightDiff`) from re-running when the value hasn't changed (e.g., cache hits returning the same reference).
+- **Guard `$derived` in hidden components.** `CommandPalette`'s `filteredCommands` uses `if (!open) return []` to avoid recomputing when the palette is closed but its `commands` prop changes.
+- **Defer Shiki highlighting.** `highlightDiff` is called via `setTimeout(fn, 150)` so syntax highlighting doesn't block the keydown → paint path. The diff renders immediately with plain text + word-diff spans; syntax colors appear progressively ~150ms later.
+- **Progressive highlighting.** `highlightDiff` yields between files (`setTimeout(0)`) and updates `highlightedLines` after each file. This prevents Shiki from blocking the main thread for large diffs (5000+ lines) and lets colors appear incrementally.
+- **`user-select: none`** on interactive lists prevents text selection artifacts during click/keyboard navigation.
+- **Svelte 5 effects run after DOM updates** — no need for `requestAnimationFrame` to query updated DOM in `$effect`.
+- **Fire-and-forget async in effects is fine** when the async function has its own error handling and generation counter for cancellation.
+
 ## Upstream Reference
 
 Core command builder and test patterns were ported from [jjui](https://github.com/idursun/jjui) (`internal/jj/commands.go`, `test/test_command_runner.go`). The ANSI parser and BubbleTea UI layers were intentionally not ported — we use structured jj output and a browser frontend instead.

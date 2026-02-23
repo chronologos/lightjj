@@ -95,11 +95,11 @@
   }
 
   .btn-primary:hover {
-    background: #b4d0fb;
+    background: var(--bg-btn-primary-hover);
   }
 
   .btn-primary kbd {
-    background: #1e1e2e33;
+    background: var(--bg-btn-kbd);
     padding: 0 4px;
     border-radius: 2px;
     font-size: 10px;
