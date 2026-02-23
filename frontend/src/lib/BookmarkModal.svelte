@@ -6,7 +6,6 @@
     action: 'move' | 'delete' | 'forget' | 'track' | 'untrack'
     bookmark: string
     remote?: string
-    label: string
   }
 
   interface Props {
@@ -25,22 +24,24 @@
   let bookmarks: Bookmark[] = $state([])
   let loading: boolean = $state(false)
 
+  function opLabel(op: BookmarkOp): string {
+    const suffix = op.remote ? `@${op.remote}` : ''
+    return `${op.action} ${op.bookmark}${suffix}`
+  }
+
   function buildOps(bms: Bookmark[], changeId: string | null): BookmarkOp[] {
     const ops: BookmarkOp[] = []
     for (const bm of bms) {
       if (changeId && bm.commit_id !== changeId) {
-        ops.push({ action: 'move', bookmark: bm.name, label: `move ${bm.name} → here` })
+        ops.push({ action: 'move', bookmark: bm.name })
       }
       if (bm.local) {
-        ops.push({ action: 'delete', bookmark: bm.name, label: `delete ${bm.name}` })
+        ops.push({ action: 'delete', bookmark: bm.name })
       }
-      ops.push({ action: 'forget', bookmark: bm.name, label: `forget ${bm.name}` })
+      ops.push({ action: 'forget', bookmark: bm.name })
       for (const remote of bm.remotes ?? []) {
-        if (!remote.tracked) {
-          ops.push({ action: 'track', bookmark: bm.name, remote: remote.remote, label: `track ${bm.name}@${remote.remote}` })
-        } else {
-          ops.push({ action: 'untrack', bookmark: bm.name, remote: remote.remote, label: `untrack ${bm.name}@${remote.remote}` })
-        }
+        const action = remote.tracked ? 'untrack' : 'track'
+        ops.push({ action, bookmark: bm.name, remote: remote.remote })
       }
     }
     return ops
@@ -55,7 +56,7 @@
       ops = ops.filter(op => op.bookmark === filterBookmark)
     }
     if (query) {
-      ops = ops.filter(op => fuzzyMatch(query, op.label))
+      ops = ops.filter(op => fuzzyMatch(query, opLabel(op)))
     }
     return ops
   })
@@ -91,17 +92,18 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    const inInput = document.activeElement === inputEl
     switch (e.key) {
       case 'ArrowDown':
       case 'j':
-        if (e.key === 'j' && document.activeElement === inputEl) break
+        if (e.key === 'j' && inInput) break
         e.preventDefault()
         index = Math.min(index + 1, filteredOps.length - 1)
         scrollActiveIntoView()
         break
       case 'ArrowUp':
       case 'k':
-        if (e.key === 'k' && document.activeElement === inputEl) break
+        if (e.key === 'k' && inInput) break
         e.preventDefault()
         index = Math.max(index - 1, 0)
         scrollActiveIntoView()

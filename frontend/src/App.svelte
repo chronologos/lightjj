@@ -388,17 +388,17 @@
 
   async function handleBookmarkOp(op: BookmarkOp) {
     try {
-      let result: { output: string }
-      switch (op.action) {
-        case 'move': result = await api.bookmarkMove(op.bookmark, selectedRevision!.commit.change_id); break
-        case 'delete': result = await api.bookmarkDelete(op.bookmark); break
-        case 'forget': result = await api.bookmarkForget(op.bookmark); break
-        case 'track': result = await api.bookmarkTrack(op.bookmark, op.remote!); break
-        case 'untrack': result = await api.bookmarkUntrack(op.bookmark, op.remote!); break
+      const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
+        move: () => api.bookmarkMove(op.bookmark, selectedRevision!.commit.change_id),
+        delete: () => api.bookmarkDelete(op.bookmark),
+        forget: () => api.bookmarkForget(op.bookmark),
+        track: () => api.bookmarkTrack(op.bookmark, op.remote!),
+        untrack: () => api.bookmarkUntrack(op.bookmark, op.remote!),
       }
+      const result = await actions[op.action]()
       bookmarkModalOpen = false
       lastAction = `${op.action} ${op.bookmark}`
-      commandOutput = result!.output
+      commandOutput = result.output
       await loadLog()
     } catch (e) {
       showError(e)
@@ -622,7 +622,7 @@
       onrevsetclear={clearRevsetFilter}
       onrevsetchange={(v) => { revsetFilter = v }}
       onrevsetescaped={clearRevsetFilter}
-      onbookmarkclick={(name) => openBookmarkModal(name)}
+      onbookmarkclick={openBookmarkModal}
     />
 
     <DiffPanel
@@ -641,7 +641,7 @@
       ondescribe={handleDescribe}
       oncanceldescribe={() => { descriptionEditing = false }}
       ondraftchange={(v) => { descriptionDraft = v }}
-      onbookmarkclick={(name) => openBookmarkModal(name)}
+      onbookmarkclick={openBookmarkModal}
     />
   </div>
 

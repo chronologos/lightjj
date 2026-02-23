@@ -32,9 +32,7 @@
   })
 
   function submit() {
-    const name = selectedSuggestion >= 0 && filtered[selectedSuggestion]
-      ? filtered[selectedSuggestion]
-      : value.trim()
+    const name = filtered[selectedSuggestion] ?? value.trim()
     if (name) onsave(name)
   }
 
