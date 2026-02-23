@@ -24,6 +24,9 @@
   let lastCheckedIndex: number = $state(-1)
   let diffGeneration: number = 0
   let filesGeneration: number = 0
+  let evologOpen: boolean = $state(false)
+  let evologContent: string = $state('')
+  let evologLoading: boolean = $state(false)
   let oplogOpen: boolean = $state(false)
   let oplogEntries: OpEntry[] = $state([])
   let oplogLoading: boolean = $state(false)
@@ -235,6 +238,7 @@
     { label: 'Expand all file diffs', action: () => expandAll(), when: () => parsedDiff.length > 0 },
     { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
     { label: 'Toggle operation log', action: () => toggleOplog() },
+    { label: 'Toggle evolution log for selected revision', action: () => toggleEvolog(), when: () => !!selectedRevision },
   ])
 
   function fuzzyMatch(query: string, text: string): boolean {
@@ -533,6 +537,9 @@
       if (checkedRevisions.size === 0) {
         await Promise.all([loadDiff(entry), loadFiles(entry)])
       }
+      if (evologOpen) {
+        loadEvolog(entry.commit.change_id)
+      }
     }
   }
 
@@ -679,6 +686,25 @@
       error = e instanceof Error ? e.message : String(e)
     } finally {
       oplogLoading = false
+    }
+  }
+
+  async function toggleEvolog() {
+    evologOpen = !evologOpen
+    if (evologOpen && selectedRevision) {
+      await loadEvolog(selectedRevision.commit.change_id)
+    }
+  }
+
+  async function loadEvolog(changeId: string) {
+    evologLoading = true
+    try {
+      const result = await api.evolog(changeId)
+      evologContent = result.output
+    } catch (e) {
+      evologContent = e instanceof Error ? e.message : String(e)
+    } finally {
+      evologLoading = false
     }
   }
 
@@ -1217,6 +1243,38 @@
       </div>
     </div>
   </div>
+
+  <!-- Evolution log panel -->
+  {#if evologOpen}
+    <div class="oplog-panel">
+      <div class="panel-header">
+        <span class="panel-title">
+          Evolution Log
+          {#if selectedRevision}
+            <span class="header-change-id">{selectedRevision.commit.change_id.slice(0, 12)}</span>
+          {/if}
+        </span>
+        <div class="panel-actions">
+          {#if selectedRevision}
+            <button class="header-btn" onclick={() => loadEvolog(selectedRevision!.commit.change_id)}>Refresh</button>
+          {/if}
+          <button class="header-btn" onclick={() => { evologOpen = false }}>Close</button>
+        </div>
+      </div>
+      <div class="oplog-content">
+        {#if evologLoading}
+          <div class="empty-state">
+            <div class="spinner"></div>
+            <span>Loading evolution log...</span>
+          </div>
+        {:else if evologContent}
+          <pre class="evolog-pre">{evologContent}</pre>
+        {:else}
+          <div class="empty-state">Select a revision to view its evolution</div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- Operation log panel -->
   {#if oplogOpen}
@@ -2311,6 +2369,17 @@
     font-size: 11px;
     flex-shrink: 0;
     white-space: nowrap;
+  }
+
+  .evolog-pre {
+    margin: 0;
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #cdd6f4;
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
   /* --- Command palette --- */
