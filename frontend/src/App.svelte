@@ -62,6 +62,12 @@
   let rebaseSourceMode: SourceMode = $state('-r')
   let rebaseTargetMode: TargetMode = $state('-d')
 
+  let squashMode: boolean = $state(false)
+  let squashSources: string[] = $state([])
+  let squashKeepEmptied: boolean = $state(false)
+  let squashUseDestMsg: boolean = $state(false)
+  let squashSelectedFiles = new SvelteSet<string>()
+
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
 
   // --- Theme ---
@@ -96,7 +102,7 @@
   })
 
   let statusText = $derived.by(() => {
-    if (rebaseMode) return ''
+    if (rebaseMode || squashMode) return ''
     if (loading) return 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
@@ -172,6 +178,7 @@
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !squashMode && (!!selectedRevision || checkedRevisions.size > 0) },
 
     // Git
     { label: 'Git operations (push/fetch)', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true } },
@@ -468,12 +475,74 @@
     }
   }
 
+  function enterSquashMode() {
+    const revs = effectiveRevisions
+    if (revs.length === 0) return
+    squashSources = revs
+    squashKeepEmptied = false
+    squashUseDestMsg = false
+    squashSelectedFiles.clear()
+    // Initialize with all current changed files (source's files)
+    for (const f of changedFiles) squashSelectedFiles.add(f.path)
+    squashMode = true
+    // Move cursor to parent of first source (default squash target)
+    // Don't use selectRevision() — we want to keep the source's diff/files visible
+    const sourceIdx = revisions.findIndex(r => r.commit.change_id === revs[0])
+    if (sourceIdx >= 0 && sourceIdx < revisions.length - 1) {
+      selectedIndex = sourceIdx + 1
+    }
+  }
+
+  async function executeSquash() {
+    if (!selectedRevision || squashSources.length === 0) return
+    const destination = selectedRevision.commit.change_id
+    if (squashSources.includes(destination)) {
+      lastAction = 'Cannot squash into source revision'
+      return
+    }
+    squashMode = false
+    try {
+      const files = squashSelectedFiles.size < changedFiles.length
+        ? [...squashSelectedFiles]
+        : undefined
+      const result = await api.squash(squashSources, destination, {
+        files,
+        keepEmptied: squashKeepEmptied || undefined,
+        useDestinationMessage: squashUseDestMsg || undefined,
+      })
+      lastAction = squashSources.length > 1
+        ? `Squashed ${squashSources.length} revisions into ${destination.slice(0, 8)}`
+        : `Squashed ${squashSources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
+      commandOutput = result.output
+      clearChecks()
+      squashSelectedFiles.clear()
+      await loadLog()
+    } catch (e) {
+      showError(e)
+    }
+  }
+
+  function toggleSquashFile(path: string) {
+    if (squashSelectedFiles.has(path)) {
+      squashSelectedFiles.delete(path)
+    } else {
+      squashSelectedFiles.add(path)
+    }
+  }
+
+  let squashFileCount = $derived.by(() => {
+    if (!squashMode || changedFiles.length === 0) return null
+    return { selected: squashSelectedFiles.size, total: changedFiles.length }
+  })
+
   function closeAllModals() {
     paletteOpen = false
     bookmarkModalOpen = false
     bookmarkInputOpen = false
     gitModalOpen = false
     rebaseMode = false
+    squashMode = false
+    squashSelectedFiles.clear()
   }
 
   function openBookmarkModal(filter?: string) {
@@ -576,6 +645,38 @@
 
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
+
+    // Squash mode: j/k navigate (cursor only, keep source diff), Enter executes, Escape cancels
+    if (squashMode) {
+      switch (e.key) {
+        case 'j':
+          e.preventDefault()
+          if (selectedIndex < revisions.length - 1) selectedIndex++
+          break
+        case 'k':
+          e.preventDefault()
+          if (selectedIndex > 0) selectedIndex--
+          break
+        case 'Enter':
+          e.preventDefault()
+          executeSquash()
+          break
+        case 'Escape':
+          e.preventDefault()
+          squashMode = false
+          squashSelectedFiles.clear()
+          break
+        case 'e':
+          e.preventDefault()
+          squashKeepEmptied = !squashKeepEmptied
+          break
+        case 'd':
+          e.preventDefault()
+          squashUseDestMsg = !squashUseDestMsg
+          break
+      }
+      return
+    }
 
     // Rebase mode: limited keyset — j/k navigate, Enter executes, Escape cancels, mode keys
     if (rebaseMode) {
@@ -684,6 +785,12 @@
           enterRebaseMode()
         }
         break
+      case 'S':
+        if (selectedRevision || checkedRevisions.size > 0) {
+          e.preventDefault()
+          enterSquashMode()
+        }
+        break
       case 'B':
         if (selectedRevision && checkedRevisions.size === 0) {
           e.preventDefault()
@@ -713,7 +820,7 @@
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
   onStale(() => {
-    if (!loading && !anyModalOpen) loadLog()
+    if (!loading && !anyModalOpen && !squashMode) loadLog()
   })
 
   loadLog()
@@ -769,6 +876,8 @@
       {rebaseSources}
       {rebaseSourceMode}
       {rebaseTargetMode}
+      {squashMode}
+      {squashSources}
     />
 
     <DiffPanel
@@ -788,6 +897,9 @@
       oncanceldescribe={() => { descriptionEditing = false }}
       ondraftchange={(v) => { descriptionDraft = v }}
       onbookmarkclick={openBookmarkModal}
+      {squashMode}
+      {squashSelectedFiles}
+      ontogglefile={toggleSquashFile}
     />
   </div>
 
@@ -839,6 +951,10 @@
     {rebaseMode}
     {rebaseSourceMode}
     {rebaseTargetMode}
+    {squashMode}
+    {squashKeepEmptied}
+    {squashUseDestMsg}
+    {squashFileCount}
   />
 </div>
 

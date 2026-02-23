@@ -23,12 +23,16 @@
     oncanceldescribe: () => void
     ondraftchange: (value: string) => void
     onbookmarkclick: (name: string) => void
+    squashMode: boolean
+    squashSelectedFiles: SvelteSet<string>
+    ontogglefile: (path: string) => void
   }
 
   let {
     diffContent, changedFiles, selectedRevision, checkedRevisions,
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
+    squashMode, squashSelectedFiles, ontogglefile,
   }: Props = $props()
 
   // --- Local state ---
@@ -293,6 +297,15 @@
             onclick={() => scrollToFile(file.path)}
             title={file.path}
           >
+            {#if squashMode}
+              <input
+                type="checkbox"
+                checked={squashSelectedFiles.has(file.path)}
+                onchange={() => ontogglefile(file.path)}
+                onclick={(e: MouseEvent) => e.stopPropagation()}
+                class="squash-file-check"
+              />
+            {/if}
             <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
             {file.path.split('/').pop()}
           </button>
@@ -553,6 +566,8 @@
   }
 
   .file-chip {
+    display: inline-flex;
+    align-items: center;
     background: var(--surface0);
     color: var(--subtext0);
     border: 1px solid var(--surface1);
@@ -568,6 +583,13 @@
   .file-chip:hover {
     background: var(--surface1);
     color: var(--text);
+  }
+
+  .squash-file-check {
+    margin: 0 2px 0 0;
+    cursor: pointer;
+    accent-color: var(--green);
+    vertical-align: middle;
   }
 
   .file-type-indicator {

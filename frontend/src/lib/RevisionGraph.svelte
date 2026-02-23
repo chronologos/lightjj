@@ -29,6 +29,8 @@
     rebaseSources: string[]
     rebaseSourceMode: string
     rebaseTargetMode: string
+    squashMode: boolean
+    squashSources: string[]
   }
 
   let {
@@ -37,6 +39,7 @@
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
     rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
+    squashMode, squashSources,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -216,17 +219,25 @@
               {@const entry = revisions[line.entryIndex]}
               {@const isRebaseSource = rebaseMode && rebaseSources.includes(entry.commit.change_id)}
               {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !isRebaseSource}
+              {@const isSquashSource = squashMode && squashSources.includes(entry.commit.change_id)}
+              {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !isSquashSource}
               {#if isRebaseSource}
                 <span class="rebase-badge rebase-source">&lt;&lt; {sourceModeLabel[rebaseSourceMode]} &gt;&gt;</span>
               {/if}
               {#if isRebaseTarget}
                 <span class="rebase-badge rebase-target">&lt;&lt; {targetModeLabel[rebaseTargetMode]} &gt;&gt;</span>
               {/if}
+              {#if isSquashSource}
+                <span class="rebase-badge rebase-source">&lt;&lt; from &gt;&gt;</span>
+              {/if}
+              {#if isSquashTarget}
+                <span class="rebase-badge rebase-target">&lt;&lt; into &gt;&gt;</span>
+              {/if}
               <span class="node-line-content">
                 <span class="change-id"><span class="id-prefix">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}</span><span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix)}</span></span>
                 <span class="commit-id"><span class="commit-id-prefix">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span><span class="commit-id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix)}</span></span>
               </span>
-              {#if !rebaseMode}
+              {#if !rebaseMode && !squashMode}
                 <span class="rev-actions" role="group">
                   <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(entry.commit.change_id) }} title="Edit">edit</button>
                   <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onnew(entry.commit.change_id) }} title="New (n)">new</button>
@@ -243,9 +254,12 @@
             {:else if line.isDescLine}
               {@const entry = revisions[line.entryIndex]}
               {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !rebaseSources.includes(entry.commit.change_id)}
+              {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !squashSources.includes(entry.commit.change_id)}
               <span class="desc-line-content">
                 {#if isRebaseTarget}
                   <span class="rebase-preview">rebase {rebaseSourceMode} {rebaseSources.map(s => s.slice(0, 8)).join(' ')} {rebaseTargetMode} {entry.commit.change_id.slice(0, 8)}</span>
+                {:else if isSquashTarget}
+                  <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}</span>
                 {:else}
                   <span class="description-text">{entry.description || '(no description)'}</span>
                 {/if}

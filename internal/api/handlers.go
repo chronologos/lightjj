@@ -336,6 +336,7 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 type squashRequest struct {
 	Revisions             []string `json:"revisions"`
 	Destination           string   `json:"destination"`
+	Files                 []string `json:"files"`
 	KeepEmptied           bool     `json:"keep_emptied"`
 	UseDestinationMessage bool     `json:"use_destination_message"`
 	IgnoreImmutable       bool     `json:"ignore_immutable"`
@@ -356,7 +357,7 @@ func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revs := commitsFromIds(req.Revisions)
-	s.runMutation(w, r, jj.Squash(revs, req.Destination, nil, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable))
+	s.runMutation(w, r, jj.Squash(revs, req.Destination, req.Files, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable))
 }
 
 func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
