@@ -14,6 +14,7 @@ export interface LogEntry {
     commit_prefix: number
     is_working_copy: boolean
     hidden: boolean
+    immutable: boolean
   }
   description: string
   bookmarks?: string[]
@@ -169,8 +170,8 @@ export const api = {
   describe: (revision: string, description: string) =>
     post<{ output: string }>('/api/describe', { revision, description }),
 
-  rebase: (revisions: string[], destination: string) =>
-    post<{ output: string }>('/api/rebase', { revisions, destination }),
+  rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string) =>
+    post<{ output: string }>('/api/rebase', { revisions, destination, source_mode: sourceMode, target_mode: targetMode }),
 
   squash: (revisions: string[], destination: string) =>
     post<{ output: string }>('/api/squash', { revisions, destination }),

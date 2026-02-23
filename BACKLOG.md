@@ -79,6 +79,7 @@
 - [x] Context expansion at hunk boundaries — "Show N hidden lines" buttons between hunks, click to expand full file context
 - [ ] Search across revisions
 - [x] Themes (light/dark) — Catppuccin Mocha (dark) + Latte (light), toggle via Cmd+K, persisted in localStorage
+- [ ] Syntax highlighting deadline / Web Worker — `codeToHtml` is synchronous and can freeze the UI for seconds on pathological files (e.g., 200-line CSS). Short-term: chunk input into ~30-line batches with yields between. Long-term: move Shiki into a Web Worker so `worker.terminate()` acts as a true cancellation primitive.
 - [ ] Lazy rendering for large diffs (IntersectionObserver, like antique)
 - [ ] Draggable split view divider (resize ratio)
 

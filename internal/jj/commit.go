@@ -11,6 +11,7 @@ type Commit struct {
 	CommitPrefix   int    `json:"commit_prefix"`
 	IsWorkingCopy  bool   `json:"is_working_copy"`
 	Hidden         bool   `json:"hidden"`
+	Immutable      bool   `json:"immutable"`
 }
 
 func (c Commit) IsRoot() bool {

@@ -25,6 +25,10 @@
     onrevsetescaped: () => void
     onviewmodechange: () => void
     onbookmarkclick: (name: string) => void
+    rebaseMode: boolean
+    rebaseSources: string[]
+    rebaseSourceMode: string
+    rebaseTargetMode: string
   }
 
   let {
@@ -32,6 +36,7 @@
     onselect, oncheck, onrangecheck, onedit, onnew, onabandon,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
+    rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -45,7 +50,11 @@
     isDescLine: boolean
     isWorkingCopy: boolean
     isHidden: boolean
+    isImmutable?: boolean
   }
+
+  const sourceModeLabel: Record<string, string> = { '-r': 'move', '-s': 'source', '-b': 'branch' }
+  const targetModeLabel: Record<string, string> = { '-d': 'onto', '--insert-after': 'after', '--insert-before': 'before' }
 
   // Build a continuation gutter: replace node symbols with │, keep pipes and spaces
   const nodeChars = new Set(['@', '○', '◆', '×', '◌'])
@@ -76,6 +85,7 @@
           isDescLine: false,
           isWorkingCopy: entry.commit.is_working_copy,
           isHidden: entry.commit.hidden,
+          isImmutable: entry.commit.immutable,
         })
         if (isNode) {
           const contGutter = continuationGutter(gl.gutter)
@@ -187,6 +197,7 @@
             class:checked={isChecked}
             class:wc={line.isWorkingCopy}
             class:hidden-rev={line.isHidden}
+            class:immutable={line.isImmutable}
             onclick={(e: MouseEvent) => {
               if (e.shiftKey && line.isNode && lastCheckedIndex >= 0) {
                 e.preventDefault()
@@ -200,18 +211,28 @@
             aria-selected={selectedIndex === line.entryIndex}
           >
             <span class="check-gutter">{#if line.isNode && isChecked}✓{/if}</span>
-            <span class="gutter" class:wc-gutter={line.isWorkingCopy}>{line.gutter}</span>
+            <span class="gutter" class:wc-gutter={line.isWorkingCopy} class:mutable-gutter={!line.isWorkingCopy && !line.isImmutable && !line.isHidden}>{line.gutter}</span>
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
+              {@const isRebaseSource = rebaseMode && rebaseSources.includes(entry.commit.change_id)}
+              {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !isRebaseSource}
+              {#if isRebaseSource}
+                <span class="rebase-badge rebase-source">&lt;&lt; {sourceModeLabel[rebaseSourceMode]} &gt;&gt;</span>
+              {/if}
+              {#if isRebaseTarget}
+                <span class="rebase-badge rebase-target">&lt;&lt; {targetModeLabel[rebaseTargetMode]} &gt;&gt;</span>
+              {/if}
               <span class="node-line-content">
                 <span class="change-id"><span class="id-prefix">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}</span><span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix)}</span></span>
                 <span class="commit-id"><span class="commit-id-prefix">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span><span class="commit-id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix)}</span></span>
               </span>
-              <span class="rev-actions" role="group">
-                <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(entry.commit.change_id) }} title="Edit">edit</button>
-                <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onnew(entry.commit.change_id) }} title="New (n)">new</button>
-                <button class="action-btn danger" onclick={(e: MouseEvent) => { e.stopPropagation(); onabandon(entry.commit.change_id) }} title="Abandon">abandon</button>
-              </span>
+              {#if !rebaseMode}
+                <span class="rev-actions" role="group">
+                  <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(entry.commit.change_id) }} title="Edit">edit</button>
+                  <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onnew(entry.commit.change_id) }} title="New (n)">new</button>
+                  <button class="action-btn danger" onclick={(e: MouseEvent) => { e.stopPropagation(); onabandon(entry.commit.change_id) }} title="Abandon">abandon</button>
+                </span>
+              {/if}
             {:else if line.isBookmarkLine}
               {@const entry = revisions[line.entryIndex]}
               <span class="bookmark-line-content">
@@ -221,8 +242,13 @@
               </span>
             {:else if line.isDescLine}
               {@const entry = revisions[line.entryIndex]}
+              {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !rebaseSources.includes(entry.commit.change_id)}
               <span class="desc-line-content">
-                <span class="description-text">{entry.description || '(no description)'}</span>
+                {#if isRebaseTarget}
+                  <span class="rebase-preview">rebase {rebaseSourceMode} {rebaseSources.map(s => s.slice(0, 8)).join(' ')} {rebaseTargetMode} {entry.commit.change_id.slice(0, 8)}</span>
+                {:else}
+                  <span class="description-text">{entry.description || '(no description)'}</span>
+                {/if}
               </span>
             {/if}
           </div>
@@ -459,6 +485,10 @@
     opacity: 0.45;
   }
 
+  .graph-row.immutable .description-text {
+    color: var(--overlay0);
+  }
+
   .check-gutter {
     width: 14px;
     flex-shrink: 0;
@@ -479,6 +509,10 @@
   .gutter.wc-gutter {
     color: var(--green);
     font-weight: 800;
+  }
+
+  .gutter.mutable-gutter {
+    color: var(--blue);
   }
 
   .node-line-content,
@@ -556,6 +590,32 @@
   .bookmark-badge:hover {
     border-color: var(--green);
     filter: brightness(1.2);
+  }
+
+  .rebase-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .rebase-source {
+    background: var(--badge-other-bg);
+    color: var(--yellow);
+    border: 1px solid var(--yellow);
+  }
+
+  .rebase-target {
+    background: var(--badge-modify-bg);
+    color: var(--blue);
+    border: 1px solid var(--blue);
+  }
+
+  .rebase-preview {
+    color: var(--overlay0);
+    font-size: 12px;
+    font-style: italic;
   }
 
   .description-text {

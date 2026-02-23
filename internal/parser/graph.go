@@ -136,9 +136,10 @@ func parseNodeLine(line string) GraphRow {
 		}
 	}
 
-	// Detect working copy and hidden from graph characters
+	// Detect working copy, hidden, and immutable from graph characters
 	row.Commit.IsWorkingCopy = strings.ContainsRune(gutter, '@')
 	row.Commit.Hidden = strings.ContainsRune(gutter, '◌')
+	row.Commit.Immutable = strings.ContainsRune(gutter, '◆')
 
 	// Build the graph line for this node
 	row.GraphLines = []GraphLine{{

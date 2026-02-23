@@ -285,8 +285,25 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 type rebaseRequest struct {
 	Revisions       []string `json:"revisions"`
 	Destination     string   `json:"destination"`
+	SourceMode      string   `json:"source_mode"`
+	TargetMode      string   `json:"target_mode"`
 	SkipEmptied     bool     `json:"skip_emptied"`
 	IgnoreImmutable bool     `json:"ignore_immutable"`
+}
+
+var validSourceModes = map[string]bool{"-r": true, "-s": true, "-b": true}
+var validTargetModes = map[string]bool{"-d": true, "--insert-after": true, "--insert-before": true}
+
+// defaultAndValidate returns val if non-empty, otherwise defaultVal. Returns an
+// error if the resolved value is not in the allowed set.
+func defaultAndValidate(val, defaultVal string, allowed map[string]bool) (string, error) {
+	if val == "" {
+		val = defaultVal
+	}
+	if !allowed[val] {
+		return "", fmt.Errorf("invalid value: %s", val)
+	}
+	return val, nil
 }
 
 func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
@@ -303,8 +320,18 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "destination is required")
 		return
 	}
+	sourceMode, err := defaultAndValidate(req.SourceMode, "-r", validSourceModes)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid source_mode")
+		return
+	}
+	targetMode, err := defaultAndValidate(req.TargetMode, "-d", validTargetModes)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid target_mode")
+		return
+	}
 	revs := commitsFromIds(req.Revisions)
-	args := jj.Rebase(revs, req.Destination, "-r", "-d", req.SkipEmptied, req.IgnoreImmutable)
+	args := jj.Rebase(revs, req.Destination, sourceMode, targetMode, req.SkipEmptied, req.IgnoreImmutable)
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
