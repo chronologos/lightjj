@@ -114,7 +114,7 @@
   .palette-backdrop {
     position: fixed;
     inset: 0;
-    background: #00000066;
+    background: var(--backdrop);
     z-index: 100;
   }
 
@@ -128,7 +128,7 @@
     background: var(--base);
     border: 1px solid var(--surface1);
     border-radius: 8px;
-    box-shadow: 0 16px 48px #00000088;
+    box-shadow: var(--shadow-heavy);
     z-index: 101;
     display: flex;
     flex-direction: column;

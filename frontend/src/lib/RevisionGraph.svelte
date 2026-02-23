@@ -38,23 +38,22 @@
     entryIndex: number
     lineSubIdx: number // index within this entry's lines (stable across list changes)
     isNode: boolean
+    isBookmarkLine: boolean
     isDescLine: boolean
     isWorkingCopy: boolean
     isHidden: boolean
   }
 
   // Build a continuation gutter: replace node symbols with │, keep pipes and spaces
+  const nodeChars = new Set(['@', '○', '◆', '×', '◌'])
+  const branchChars = new Set(['─', '╮', '╯', '╭', '╰', '├', '┤'])
+
   function continuationGutter(gutter: string): string {
-    const nodeChars = new Set(['@', '○', '◆', '×', '◌'])
     let result = ''
     for (const ch of gutter) {
-      if (nodeChars.has(ch)) {
-        result += '│'
-      } else if (ch === '─' || ch === '╮' || ch === '╯' || ch === '╭' || ch === '╰' || ch === '├' || ch === '┤') {
-        result += ' '
-      } else {
-        result += ch
-      }
+      if (nodeChars.has(ch)) result += '│'
+      else if (branchChars.has(ch)) result += ' '
+      else result += ch
     }
     return result
   }
@@ -70,16 +69,31 @@
           entryIndex: i,
           lineSubIdx: subIdx++,
           isNode,
+          isBookmarkLine: false,
           isDescLine: false,
           isWorkingCopy: entry.commit.is_working_copy,
           isHidden: entry.commit.hidden,
         })
         if (isNode) {
+          const contGutter = continuationGutter(gl.gutter)
+          if (entry.bookmarks?.length) {
+            lines.push({
+              gutter: contGutter,
+              entryIndex: i,
+              lineSubIdx: subIdx++,
+              isNode: false,
+              isBookmarkLine: true,
+              isDescLine: false,
+              isWorkingCopy: entry.commit.is_working_copy,
+              isHidden: entry.commit.hidden,
+            })
+          }
           lines.push({
-            gutter: continuationGutter(gl.gutter),
+            gutter: contGutter,
             entryIndex: i,
             lineSubIdx: subIdx++,
             isNode: false,
+            isBookmarkLine: false,
             isDescLine: true,
             isWorkingCopy: entry.commit.is_working_copy,
             isHidden: entry.commit.hidden,
@@ -159,6 +173,7 @@
           <div
             class="graph-row"
             class:node-row={line.isNode}
+            class:bookmark-row={line.isBookmarkLine}
             class:desc-row={line.isDescLine}
             class:selected={selectedIndex === line.entryIndex}
             class:checked={isChecked}
@@ -182,17 +197,19 @@
               {@const entry = revisions[line.entryIndex]}
               <span class="node-line-content">
                 <span class="change-id"><span class="id-prefix">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}</span><span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix)}</span></span>
-                {#if entry.bookmarks?.length}
-                  {#each entry.bookmarks as bm}
-                    <span class="bookmark-badge">{bm}</span>
-                  {/each}
-                {/if}
                 <span class="commit-id"><span class="commit-id-prefix">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span><span class="commit-id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix)}</span></span>
               </span>
               <span class="rev-actions" role="group">
                 <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(entry.commit.change_id) }} title="Edit">edit</button>
                 <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onnew(entry.commit.change_id) }} title="New (n)">new</button>
                 <button class="action-btn danger" onclick={(e: MouseEvent) => { e.stopPropagation(); onabandon(entry.commit.change_id) }} title="Abandon">abandon</button>
+              </span>
+            {:else if line.isBookmarkLine}
+              {@const entry = revisions[line.entryIndex]}
+              <span class="bookmark-line-content">
+                {#each entry.bookmarks ?? [] as bm}
+                  <span class="bookmark-badge">{bm}</span>
+                {/each}
               </span>
             {:else if line.isDescLine}
               {@const entry = revisions[line.entryIndex]}
@@ -269,8 +286,8 @@
     align-items: center;
     gap: 6px;
     padding: 4px 8px;
-    background: #1e2a1e;
-    border-bottom: 1px solid #2d5a3d;
+    background: var(--bg-checked);
+    border-bottom: 1px solid var(--border-bookmark);
     flex-shrink: 0;
   }
 
@@ -335,6 +352,11 @@
     display: flex;
     flex-direction: column;
     user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .revision-list ::selection {
+    background: transparent;
   }
 
   .graph-row {
@@ -344,31 +366,33 @@
     line-height: 1.15;
     font-size: 13px;
     cursor: pointer;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .graph-row:hover:not(.selected) {
-    background: #262637;
+    background: var(--bg-hover);
   }
 
   /* Hovering the description row also highlights its node row, and vice versa */
   .graph-row.node-row:not(.selected):has(+ .graph-row.desc-row:hover) {
-    background: #262637;
+    background: var(--bg-hover);
   }
   .graph-row.node-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
-    background: #262637;
+    background: var(--bg-hover);
   }
 
   .graph-row.selected {
-    background: #2a2a40;
+    background: var(--bg-selected);
     box-shadow: inset 2px 0 0 var(--blue);
   }
 
   .graph-row.checked {
-    background: #1e2a1e;
+    background: var(--bg-checked);
   }
 
   .graph-row.checked.selected {
-    background: #243024;
+    background: var(--bg-checked-selected);
     box-shadow: inset 2px 0 0 var(--blue);
   }
 
@@ -403,6 +427,15 @@
     align-items: baseline;
     gap: 6px;
     white-space: nowrap;
+    overflow: hidden;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .bookmark-line-content {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
     overflow: hidden;
     min-width: 0;
     flex: 1;
@@ -455,13 +488,13 @@
   .bookmark-badge {
     display: inline-flex;
     align-items: center;
-    background: #1e3a2a;
+    background: var(--bg-bookmark);
     color: var(--green);
     padding: 0 5px;
     border-radius: 3px;
     font-size: 10px;
     font-weight: 600;
-    border: 1px solid #2d5a3d;
+    border: 1px solid var(--border-bookmark);
     line-height: 1.15;
     letter-spacing: 0.02em;
     vertical-align: baseline;
@@ -477,7 +510,7 @@
   }
 
   .wc .description-text {
-    color: #e0e0e0;
+    color: var(--wc-desc-color);
   }
 
   .rev-actions {
@@ -515,7 +548,7 @@
   }
 
   .action-btn.danger:hover {
-    background: #45171a;
+    background: var(--bg-error);
     border-color: var(--red);
     color: var(--red);
   }

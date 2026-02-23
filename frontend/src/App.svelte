@@ -43,6 +43,19 @@
 
   let paletteOpen: boolean = $state(false)
 
+  // --- Theme ---
+  let darkMode: boolean = $state(localStorage.getItem('jj-web-theme') !== 'light')
+
+  function toggleTheme() {
+    darkMode = !darkMode
+    document.documentElement.classList.toggle('light', !darkMode)
+    localStorage.setItem('jj-web-theme', darkMode ? 'dark' : 'light')
+    diffPanelRef?.rehighlight()
+  }
+
+  // Apply saved theme on load
+  if (!darkMode) document.documentElement.classList.add('light')
+
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
@@ -133,6 +146,7 @@
     { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
     { label: 'Toggle operation log', action: () => toggleOplog() },
     { label: 'Toggle evolution log for selected revision', action: () => toggleEvolog(), when: () => !!selectedRevision },
+    { label: darkMode ? 'Switch to light theme' : 'Switch to dark theme', action: () => toggleTheme() },
   ])
 
   // --- API actions ---
@@ -506,12 +520,6 @@
     }
   }
 
-  // Debug: uncomment to trace reactive updates during j/k navigation
-  // $inspect('selectedIndex', selectedIndex)
-  // $inspect('diffContent length', diffContent.length)
-  // $inspect('changedFiles', changedFiles.length)
-  // $inspect('diffLoading', diffLoading)
-
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
   onStale(() => {
@@ -542,7 +550,6 @@
     </div>
   {/if}
 
-  <!-- Main content -->
   <div class="workspace">
     <RevisionGraph
       bind:this={revisionGraphRef}
@@ -618,7 +625,7 @@
 </div>
 
 <style>
-  /* --- Catppuccin Mocha palette --- */
+  /* --- Catppuccin Mocha (dark) --- */
   :root {
     --base: #1e1e2e;
     --mantle: #181825;
@@ -636,6 +643,94 @@
     --red: #f38ba8;
     --yellow: #f9e2af;
     --teal: #74c7ec;
+
+    /* Semantic tinted backgrounds */
+    --bg-hover: #262637;
+    --bg-selected: #2a2a40;
+    --bg-checked: #1e2a1e;
+    --bg-checked-selected: #243024;
+    --bg-error: #45171a;
+    --bg-error-hover: #f38ba822;
+    --bg-bookmark: #1e3a2a;
+    --border-bookmark: #2d5a3d;
+    --bg-diff-header-hover: #1e1e30;
+    --bg-hunk-header: #1a1a2e;
+    --border-hunk-header: #21212e;
+    --bg-diff-empty: #1a1a2a;
+    --bg-active: #89b4fa22;
+    --bg-btn-primary-hover: #b4d0fb;
+    --bg-btn-kbd: #1e1e2e33;
+    --wc-desc-color: #e0e0e0;
+
+    /* Diff line colors */
+    --diff-add-text: #a6e3a1;
+    --diff-remove-text: #f38ba8;
+    --diff-add-bg: #a6e3a112;
+    --diff-remove-bg: #f38ba812;
+    --diff-add-word: #a6e3a133;
+    --diff-remove-word: #f38ba833;
+
+    /* File type badge backgrounds */
+    --badge-add-bg: #a6e3a120;
+    --badge-modify-bg: #89b4fa20;
+    --badge-delete-bg: #f38ba820;
+    --badge-other-bg: #f9e2af20;
+
+    /* Palette overlay */
+    --backdrop: #00000066;
+    --shadow-heavy: 0 16px 48px #00000088;
+  }
+
+  /* --- Catppuccin Latte (light) --- */
+  :root.light {
+    --base: #eff1f5;
+    --mantle: #e6e9ef;
+    --crust: #dce0e8;
+    --surface0: #ccd0da;
+    --surface1: #bcc0cc;
+    --surface2: #acb0be;
+    --overlay0: #9ca0b0;
+    --overlay1: #8c8fa1;
+    --subtext0: #6c6f85;
+    --subtext1: #5c5f77;
+    --text: #4c4f69;
+    --blue: #1e66f5;
+    --green: #40a02b;
+    --red: #d20f39;
+    --yellow: #df8e1d;
+    --teal: #04a5e5;
+
+    --bg-hover: #d9dbe5;
+    --bg-selected: #cbd0e0;
+    --bg-checked: #d4e8d0;
+    --bg-checked-selected: #c0ddb8;
+    --bg-error: #fce4e8;
+    --bg-error-hover: #d20f3918;
+    --bg-bookmark: #d8f0d0;
+    --border-bookmark: #90c480;
+    --bg-diff-header-hover: #d8dae5;
+    --bg-hunk-header: #d5d8e2;
+    --border-hunk-header: #c8ccd8;
+    --bg-diff-empty: #e0e2ea;
+    --bg-active: #1e66f522;
+    --bg-btn-primary-hover: #1555d0;
+    --bg-btn-kbd: #ffffff55;
+    --wc-desc-color: #2a2d3a;
+
+    --diff-add-text: #2c7a1e;
+    --diff-remove-text: #b01030;
+    --diff-add-bg: #40a02b15;
+    --diff-remove-bg: #d20f3915;
+    --diff-add-word: #40a02b30;
+    --diff-remove-word: #d20f3930;
+
+    --badge-add-bg: #40a02b20;
+    --badge-modify-bg: #1e66f520;
+    --badge-delete-bg: #d20f3920;
+    --badge-other-bg: #df8e1d20;
+
+    --backdrop: #00000033;
+    --shadow-heavy: 0 16px 48px #00000044;
   }
 
   /* --- Reset & Globals --- */
@@ -673,7 +768,7 @@
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
-    background: #45171a;
+    background: var(--bg-error);
     border-bottom: 1px solid var(--red);
     color: var(--red);
     font-size: 12px;
@@ -696,6 +791,6 @@
   }
 
   .error-dismiss:hover {
-    background: #f38ba822;
+    background: var(--bg-error-hover);
   }
 </style>

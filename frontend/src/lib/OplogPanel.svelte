@@ -101,15 +101,15 @@
     align-items: baseline;
     gap: 10px;
     padding: 3px 12px;
-    border-bottom: 1px solid #1a1a2e;
+    border-bottom: 1px solid var(--border-hunk-header);
   }
 
   .oplog-entry:hover {
-    background: #262637;
+    background: var(--bg-hover);
   }
 
   .oplog-entry.oplog-current {
-    background: #1e2a1e;
+    background: var(--bg-checked);
   }
 
   .oplog-id {
