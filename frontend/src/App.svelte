@@ -35,6 +35,7 @@
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
   // Non-reactive generation counters for async cancellation
+  let logGeneration: number = 0
   let diffGeneration: number = 0
   let filesGeneration: number = 0
   let evologGeneration: number = 0
@@ -53,6 +54,8 @@
   let bookmarkInputOpen: boolean = $state(false)
   let gitModalOpen: boolean = $state(false)
   let rebaseModalOpen: boolean = $state(false)
+
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || rebaseModalOpen)
 
   // --- Theme ---
   let darkMode: boolean = $state(localStorage.getItem('lightjj-theme') !== 'light')
@@ -160,14 +163,14 @@
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
-    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: () => { rebaseModalOpen = true }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
+    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: () => { closeAllModals(); rebaseModalOpen = true }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
 
     // Git
-    { label: 'Git operations (push/fetch)', category: 'Git', action: () => { gitModalOpen = true } },
+    { label: 'Git operations (push/fetch)', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true } },
 
     // Bookmarks
     { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal },
-    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { closeAllModals(); bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
 
     // View
     { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', shortcut: 't', category: 'View', action: toggleViewMode },
@@ -183,13 +186,16 @@
   ])
 
   // --- API actions ---
-  async function loadLog() {
+  async function loadLog(resetSelection = false) {
+    const gen = ++logGeneration
     if (revisions.length === 0) loading = true
     error = ''
     try {
       const effectiveRevset = revsetFilter || (viewMode === 'tracked' ? TRACKED_REVSET : undefined)
-      revisions = await api.log(effectiveRevset)
-      if (selectedIndex < 0 || selectedIndex >= revisions.length) {
+      const result = await api.log(effectiveRevset)
+      if (gen !== logGeneration) return
+      revisions = result
+      if (resetSelection || selectedIndex < 0 || selectedIndex >= revisions.length) {
         selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
       }
       if (checkedRevisions.size > 0) {
@@ -203,9 +209,10 @@
         loadDiffAndFiles(revisions[selectedIndex].commit.change_id)
       }
     } catch (e) {
+      if (gen !== logGeneration) return
       showError(e)
     } finally {
-      loading = false
+      if (gen === logGeneration) loading = false
     }
   }
 
@@ -437,7 +444,16 @@
     }
   }
 
+  function closeAllModals() {
+    paletteOpen = false
+    bookmarkModalOpen = false
+    bookmarkInputOpen = false
+    gitModalOpen = false
+    rebaseModalOpen = false
+  }
+
   function openBookmarkModal(filter?: string) {
+    closeAllModals()
     bookmarkModalFilter = filter ?? ''
     bookmarkModalOpen = true
   }
@@ -502,10 +518,11 @@
   }
 
   function handleRevsetSubmit() {
-    selectedIndex = -1
+    clearTimeout(navDebounceTimer)
+    diffContent = ''
     changedFiles = []
     clearChecks()
-    loadLog()
+    loadLog(true)
   }
 
   function clearRevsetFilter() {
@@ -514,6 +531,7 @@
   }
 
   function toggleViewMode() {
+    revsetFilter = ''
     viewMode = viewMode === 'log' ? 'tracked' : 'log'
     handleRevsetSubmit()
   }
@@ -525,11 +543,15 @@
     // Cmd+K / Ctrl+K opens palette from anywhere
     if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
+      closeAllModals()
       paletteOpen = true
       return
     }
 
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+
+    // Skip all shortcuts when any modal is open (modals handle their own keys)
+    if (anyModalOpen) return
 
     switch (e.key) {
       case 'j':
@@ -620,7 +642,7 @@
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
   onStale(() => {
-    if (!loading) loadLog()
+    if (!loading && !anyModalOpen) loadLog()
   })
 
   loadLog()
@@ -632,9 +654,9 @@
   <Toolbar
     onrefresh={loadLog}
     onundo={handleUndo}
-    onfetch={() => { gitModalOpen = true }}
-    onpush={() => { gitModalOpen = true }}
-    onopenpalette={() => { paletteOpen = true }}
+    onfetch={() => { closeAllModals(); gitModalOpen = true }}
+    onpush={() => { closeAllModals(); gitModalOpen = true }}
+    onopenpalette={() => { closeAllModals(); paletteOpen = true }}
   />
 
   {#if error}

@@ -24,6 +24,8 @@
   let bookmarks: Bookmark[] = $state([])
   let remotes: string[] = $state([])
   let loading: boolean = $state(false)
+  let previousFocus: HTMLElement | null = null
+  let fetchGen: number = 0
 
   function opLabel(op: BookmarkOp): string {
     const suffix = op.remote ? `@${op.remote}` : ''
@@ -71,21 +73,32 @@
 
   $effect(() => {
     if (open) {
+      previousFocus = document.activeElement as HTMLElement | null
       query = ''
       index = 0
       loading = true
+      const gen = ++fetchGen
       Promise.all([api.bookmarks(), api.remotes()]).then(([bms, rms]) => {
+        if (gen !== fetchGen) return
         bookmarks = bms
         remotes = rms
         loading = false
-      }).catch(() => { loading = false })
-      requestAnimationFrame(() => inputEl?.focus())
+      }).catch(() => { if (gen === fetchGen) loading = false })
+      inputEl?.focus()
+    }
+  })
+
+  // Clamp index when filtered list shrinks
+  $effect(() => {
+    if (open && index >= filteredOps.length && filteredOps.length > 0) {
+      index = filteredOps.length - 1
     }
   })
 
   function close() {
     open = false
     onclose()
+    previousFocus?.focus()
   }
 
   function execute(op: BookmarkOp) {
@@ -107,7 +120,7 @@
       case 'j':
         if (e.key === 'j' && inInput) break
         e.preventDefault()
-        index = Math.min(index + 1, filteredOps.length - 1)
+        index = Math.min(index + 1, Math.max(filteredOps.length - 1, 0))
         scrollActiveIntoView()
         break
       case 'ArrowUp':
@@ -119,10 +132,12 @@
         break
       case 'Enter':
         e.preventDefault()
+        e.stopPropagation()
         if (filteredOps[index]) execute(filteredOps[index])
         break
       case 'Escape':
         e.preventDefault()
+        e.stopPropagation()
         close()
         break
     }

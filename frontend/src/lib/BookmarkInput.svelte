@@ -14,6 +14,7 @@
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let suggestions: string[] = $state([])
   let selectedSuggestion: number = $state(-1)
+  let previousFocus: HTMLElement | null = null
 
   let filtered = $derived.by(() => {
     if (!open || !value) return []
@@ -22,12 +23,13 @@
 
   $effect(() => {
     if (open) {
+      previousFocus = document.activeElement as HTMLElement | null
       value = ''
       selectedSuggestion = -1
       api.bookmarks().then((bms: Bookmark[]) => {
         suggestions = bms.map(b => b.name)
       }).catch(() => {})
-      requestAnimationFrame(() => inputEl?.focus())
+      inputEl?.focus()
     }
   })
 
@@ -39,16 +41,19 @@
   function close() {
     open = false
     oncancel()
+    previousFocus?.focus()
   }
 
   function handleKeydown(e: KeyboardEvent) {
     switch (e.key) {
       case 'Enter':
         e.preventDefault()
+        e.stopPropagation()
         submit()
         break
       case 'Escape':
         e.preventDefault()
+        e.stopPropagation()
         close()
         break
       case 'ArrowDown':
