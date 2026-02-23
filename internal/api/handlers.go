@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/iant/jj-web/internal/jj"
-	"github.com/iant/jj-web/internal/parser"
+	"github.com/iant/lightjj/internal/jj"
+	"github.com/iant/lightjj/internal/parser"
 )
 
 // Whitelisted flags for git push/fetch to prevent injection of arbitrary jj flags.
@@ -25,6 +25,7 @@ var allowedGitFetchFlags = map[string]bool{
 	"--remote":      true,
 	"--all-remotes": true,
 	"--branch":      true,
+	"--tracked":     true,
 }
 
 // validateFlags checks that every element in flags is either an allowed flag

@@ -21,6 +21,7 @@
   let bookmarks: Bookmark[] = $state([])
   let remotes: string[] = $state([])
   let loading: boolean = $state(false)
+  let modalEl: HTMLDivElement | undefined = $state(undefined)
 
   function buildOps(bms: Bookmark[], rms: string[], changeId: string | null): GitOp[] {
     const ops: GitOp[] = []
@@ -108,6 +109,7 @@
         remotes = rms
         loading = false
       }).catch(() => { loading = false })
+      requestAnimationFrame(() => modalEl?.focus())
     }
   })
 
@@ -156,7 +158,7 @@
 
 {#if open}
   <div class="git-backdrop" onclick={close} role="presentation"></div>
-  <div class="git-modal" onkeydown={handleKeydown} role="dialog" aria-label="Git operations" tabindex="-1">
+  <div class="git-modal" bind:this={modalEl} onkeydown={handleKeydown} role="dialog" aria-label="Git operations" tabindex="-1">
     <div class="git-header">Git Operations</div>
     {#if loading}
       <div class="git-empty">Loading...</div>

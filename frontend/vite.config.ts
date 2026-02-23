@@ -11,7 +11,7 @@ export default defineConfig({
   },
   build: {
     // Output to a directory the Go binary will embed
-    outDir: '../cmd/jj-web/frontend-dist',
+    outDir: '../cmd/lightjj/frontend-dist',
     emptyOutDir: true,
   },
 })

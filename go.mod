@@ -1,4 +1,4 @@
-module github.com/iant/jj-web
+module github.com/iant/lightjj
 
 go 1.25.6
 

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/iant/jj-web/internal/jj"
+	"github.com/iant/lightjj/internal/jj"
 )
 
 // GraphRow represents one revision in the log, with its graph lines and commit data.
