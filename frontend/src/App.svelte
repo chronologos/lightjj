@@ -12,6 +12,7 @@
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
+  import RebaseModal from './lib/RebaseModal.svelte'
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])
@@ -25,6 +26,8 @@
   let descriptionDraft: string = $state('')
   let commandOutput: string = $state('')
   let revsetFilter: string = $state('')
+  let viewMode: 'log' | 'tracked' = $state('log')
+  const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
   let changedFiles: FileChange[] = $state([])
   let filesLoading: boolean = $state(false)
   let describeSaved: boolean = $state(false)
@@ -49,6 +52,7 @@
   let bookmarkModalFilter: string = $state('')
   let bookmarkInputOpen: boolean = $state(false)
   let gitModalOpen: boolean = $state(false)
+  let rebaseModalOpen: boolean = $state(false)
 
   // --- Theme ---
   let darkMode: boolean = $state(localStorage.getItem('lightjj-theme') !== 'light')
@@ -138,50 +142,53 @@
   const noop = () => {}
   let commands: PaletteCommand[] = $derived.by(() => [
     // Navigation
-    { label: 'Move down', shortcut: 'j', category: 'Navigation', action: noop },
-    { label: 'Move up', shortcut: 'k', category: 'Navigation', action: noop },
-    { label: 'Toggle check', shortcut: 'Space', category: 'Navigation', action: noop },
-    { label: 'Load diff', shortcut: 'Enter', category: 'Navigation', action: noop },
+    { label: 'Move down', shortcut: 'j', category: 'Navigation', action: noop, infoOnly: true },
+    { label: 'Move up', shortcut: 'k', category: 'Navigation', action: noop, infoOnly: true },
+    { label: 'Toggle check', shortcut: 'Space', category: 'Navigation', action: noop, infoOnly: true },
+    { label: 'Load diff', shortcut: 'Enter', category: 'Navigation', action: noop, infoOnly: true },
     { label: 'Focus revset filter', shortcut: '/', category: 'Navigation', action: () => revisionGraphRef?.focusRevsetInput() },
-    { label: 'Clear revset filter', category: 'Navigation', action: () => clearRevsetFilter(), when: () => revsetFilter !== '' },
+    { label: 'Clear revset filter', category: 'Navigation', action: clearRevsetFilter, when: () => revsetFilter !== '' },
 
     // Revisions
-    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: () => loadLog() },
+    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog },
     { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(selectedRevision.commit.change_id)
     }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
-    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: () => startDescriptionEdit(), when: () => !!selectedRevision && checkedRevisions.size <= 1 },
+    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !!selectedRevision && checkedRevisions.size <= 1 },
     { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(selectedRevision!.commit.change_id), when: () => !!selectedRevision },
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
-    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
-    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
+    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
+    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
+    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: () => { rebaseModalOpen = true }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
 
     // Git
     { label: 'Git operations (push/fetch)', category: 'Git', action: () => { gitModalOpen = true } },
 
     // Bookmarks
-    { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: () => openBookmarkModal() },
+    { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal },
     { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
 
     // View
+    { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', shortcut: 't', category: 'View', action: toggleViewMode },
     { label: 'Toggle split/unified diff', category: 'View', action: () => { splitView = !splitView } },
-    { label: 'Toggle operation log', category: 'View', action: () => toggleOplog() },
-    { label: 'Toggle evolution log', category: 'View', action: () => toggleEvolog(), when: () => !!selectedRevision },
-    { label: darkMode ? 'Light theme' : 'Dark theme', category: 'View', action: () => toggleTheme() },
+    { label: 'Toggle operation log', category: 'View', action: toggleOplog },
+    { label: 'Toggle evolution log', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
+    { label: darkMode ? 'Light theme' : 'Dark theme', category: 'View', action: toggleTheme },
 
     // Actions
-    { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: () => handleUndo() },
+    { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo },
     { label: 'Clear checked revisions', shortcut: 'Esc', category: 'Actions', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
-    { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop },
+    { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop, infoOnly: true },
   ])
 
   // --- API actions ---
   async function loadLog() {
-    loading = true
+    if (revisions.length === 0) loading = true
     error = ''
     try {
-      revisions = await api.log(revsetFilter || undefined)
+      const effectiveRevset = revsetFilter || (viewMode === 'tracked' ? TRACKED_REVSET : undefined)
+      revisions = await api.log(effectiveRevset)
       if (selectedIndex < 0 || selectedIndex >= revisions.length) {
         selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
       }
@@ -414,6 +421,22 @@
     }
   }
 
+  async function handleRebase(destination: string) {
+    const revs = effectiveRevisions
+    if (revs.length === 0) return
+    try {
+      const result = await api.rebase(revs, destination)
+      lastAction = revs.length > 1
+        ? `Rebased ${revs.length} revisions onto ${destination.slice(0, 8)}`
+        : `Rebased ${revs[0].slice(0, 8)} onto ${destination.slice(0, 8)}`
+      commandOutput = result.output
+      clearChecks()
+      await loadLog()
+    } catch (e) {
+      showError(e)
+    }
+  }
+
   function openBookmarkModal(filter?: string) {
     bookmarkModalFilter = filter ?? ''
     bookmarkModalOpen = true
@@ -490,6 +513,11 @@
     handleRevsetSubmit()
   }
 
+  function toggleViewMode() {
+    viewMode = viewMode === 'log' ? 'tracked' : 'log'
+    handleRevsetSubmit()
+  }
+
   // --- Keyboard shortcuts ---
   function handleKeydown(e: KeyboardEvent) {
     const target = e.target as HTMLElement
@@ -557,11 +585,21 @@
         e.preventDefault()
         openBookmarkModal()
         break
+      case 'R':
+        if (selectedRevision || checkedRevisions.size > 0) {
+          e.preventDefault()
+          rebaseModalOpen = true
+        }
+        break
       case 'B':
         if (selectedRevision && checkedRevisions.size === 0) {
           e.preventDefault()
           bookmarkInputOpen = true
         }
+        break
+      case 't':
+        e.preventDefault()
+        toggleViewMode()
         break
       case '/':
         e.preventDefault()
@@ -617,6 +655,7 @@
       {checkedRevisions}
       {loading}
       {revsetFilter}
+      {viewMode}
       {lastCheckedIndex}
       onselect={selectRevision}
       oncheck={toggleCheck}
@@ -631,6 +670,7 @@
       onrevsetclear={clearRevsetFilter}
       onrevsetchange={(v) => { revsetFilter = v }}
       onrevsetescaped={clearRevsetFilter}
+      onviewmodechange={toggleViewMode}
       onbookmarkclick={openBookmarkModal}
     />
 
@@ -686,6 +726,14 @@
     bind:open={bookmarkInputOpen}
     onsave={handleBookmarkSet}
     oncancel={() => { bookmarkInputOpen = false }}
+  />
+
+  <RebaseModal
+    bind:open={rebaseModalOpen}
+    revisions={effectiveRevisions}
+    candidates={revisions}
+    onexecute={handleRebase}
+    onclose={() => { rebaseModalOpen = false }}
   />
 
   <BookmarkModal
