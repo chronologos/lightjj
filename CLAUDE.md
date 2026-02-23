@@ -61,6 +61,7 @@ frontend/              — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **API handlers are thin.** Parse request → call command builder → call runner → return JSON. No business logic in handlers.
 - **Validate POST inputs.** All POST handlers check required fields and return 400 on empty values.
 - **Validate flags.** `validateFlags()` whitelists allowed `--` and `-` flags for git push/fetch. Reject anything not in the allowed set.
+- **Rebase API accepts `source_mode` and `target_mode` params.** `source_mode` maps to `-r`/`-s`/`-b`; `target_mode` maps to `-d`/`--insert-after`/`--insert-before`.
 - **Use `--tool :git`** when requesting diff output for the web API. Users may have external diff formatters (difftastic) configured that output ANSI codes.
 - **Use `--color never`** for any jj output the backend will parse. Use `--color always` only if passing through to a terminal.
 - **Use `\x1F` (unit separator)** as the field delimiter in jj templates, not tabs. Tabs can appear in commit descriptions and break parsing.
@@ -73,6 +74,9 @@ frontend/              — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **pnpm, not npm** — the project uses pnpm for package management.
 - **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes.
 - **Change IDs show full short form with highlighted prefix.** `commit.change_prefix` determines how many characters to highlight. Same for `commit_prefix`.
+- **Rebase mode is inline, not a modal.** Press `R` to enter rebase mode. `j`/`k` navigate the destination; Enter executes; Escape cancels. Source mode (`r`/`s`/`b`) and target mode (`o`/`a`/`i`) can be switched while in rebase mode. Source and destination commits are marked with inline badges directly in the revision graph.
+- **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` gutter markers are colored blue; working-copy `@` markers are colored green.
+- **View mode toggle** — The revision panel header has a Log/Tracked toggle (`t` key). Tracked view uses the `tracked_remote_bookmarks()` revset to show remote work.
 
 ### Testing patterns
 

@@ -12,7 +12,11 @@
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
-  import RebaseModal from './lib/RebaseModal.svelte'
+  type SourceMode = '-r' | '-s' | '-b'
+  type TargetMode = '-d' | '--insert-after' | '--insert-before'
+
+  const sourceModeLabel: Record<SourceMode, string> = { '-r': 'revision', '-s': 'source', '-b': 'branch' }
+  const targetModeLabel: Record<TargetMode, string> = { '-d': 'onto', '--insert-after': 'after', '--insert-before': 'before' }
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])
@@ -53,9 +57,12 @@
   let bookmarkModalFilter: string = $state('')
   let bookmarkInputOpen: boolean = $state(false)
   let gitModalOpen: boolean = $state(false)
-  let rebaseModalOpen: boolean = $state(false)
+  let rebaseMode: boolean = $state(false)
+  let rebaseSources: string[] = $state([])
+  let rebaseSourceMode: SourceMode = $state('-r')
+  let rebaseTargetMode: TargetMode = $state('-d')
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || rebaseModalOpen)
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
 
   // --- Theme ---
   let darkMode: boolean = $state(localStorage.getItem('lightjj-theme') !== 'light')
@@ -89,6 +96,7 @@
   })
 
   let statusText = $derived.by(() => {
+    if (rebaseMode) return ''
     if (loading) return 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
@@ -163,7 +171,7 @@
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
-    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: () => { closeAllModals(); rebaseModalOpen = true }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
+    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && (!!selectedRevision || checkedRevisions.size > 0) },
 
     // Git
     { label: 'Git operations (push/fetch)', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true } },
@@ -428,14 +436,30 @@
     }
   }
 
-  async function handleRebase(destination: string) {
+  function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
+    rebaseSources = revs
+    rebaseSourceMode = '-r'
+    rebaseTargetMode = '-d'
+    rebaseMode = true
+  }
+
+  async function executeRebase() {
+    if (!selectedRevision || rebaseSources.length === 0) return
+    const destination = selectedRevision.commit.change_id
+    // Don't rebase onto self
+    if (rebaseSources.includes(destination)) {
+      lastAction = 'Cannot rebase onto source revision'
+      return
+    }
+    rebaseMode = false
     try {
-      const result = await api.rebase(revs, destination)
-      lastAction = revs.length > 1
-        ? `Rebased ${revs.length} revisions onto ${destination.slice(0, 8)}`
-        : `Rebased ${revs[0].slice(0, 8)} onto ${destination.slice(0, 8)}`
+      const result = await api.rebase(rebaseSources, destination, rebaseSourceMode, rebaseTargetMode)
+      const modeLabel = targetModeLabel[rebaseTargetMode]
+      lastAction = rebaseSources.length > 1
+        ? `Rebased ${rebaseSources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
+        : `Rebased ${rebaseSources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
       commandOutput = result.output
       clearChecks()
       await loadLog()
@@ -449,7 +473,7 @@
     bookmarkModalOpen = false
     bookmarkInputOpen = false
     gitModalOpen = false
-    rebaseModalOpen = false
+    rebaseMode = false
   }
 
   function openBookmarkModal(filter?: string) {
@@ -553,6 +577,53 @@
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
 
+    // Rebase mode: limited keyset — j/k navigate, Enter executes, Escape cancels, mode keys
+    if (rebaseMode) {
+      switch (e.key) {
+        case 'j':
+          e.preventDefault()
+          if (selectedIndex < revisions.length - 1) selectRevision(selectedIndex + 1)
+          break
+        case 'k':
+          e.preventDefault()
+          if (selectedIndex > 0) selectRevision(selectedIndex - 1)
+          break
+        case 'Enter':
+          e.preventDefault()
+          executeRebase()
+          break
+        case 'Escape':
+          e.preventDefault()
+          rebaseMode = false
+          break
+        case 'r':
+          e.preventDefault()
+          rebaseSourceMode = '-r'
+          break
+        case 's':
+          e.preventDefault()
+          rebaseSourceMode = '-s'
+          break
+        case 'b':
+          e.preventDefault()
+          rebaseSourceMode = '-b'
+          break
+        case 'a':
+          e.preventDefault()
+          rebaseTargetMode = '--insert-after'
+          break
+        case 'i':
+          e.preventDefault()
+          rebaseTargetMode = '--insert-before'
+          break
+        case 'o': case 'd':
+          e.preventDefault()
+          rebaseTargetMode = '-d'
+          break
+      }
+      return
+    }
+
     switch (e.key) {
       case 'j':
         e.preventDefault()
@@ -610,7 +681,7 @@
       case 'R':
         if (selectedRevision || checkedRevisions.size > 0) {
           e.preventDefault()
-          rebaseModalOpen = true
+          enterRebaseMode()
         }
         break
       case 'B':
@@ -694,6 +765,10 @@
       onrevsetescaped={clearRevsetFilter}
       onviewmodechange={toggleViewMode}
       onbookmarkclick={openBookmarkModal}
+      {rebaseMode}
+      {rebaseSources}
+      {rebaseSourceMode}
+      {rebaseTargetMode}
     />
 
     <DiffPanel
@@ -750,14 +825,6 @@
     oncancel={() => { bookmarkInputOpen = false }}
   />
 
-  <RebaseModal
-    bind:open={rebaseModalOpen}
-    revisions={effectiveRevisions}
-    candidates={revisions}
-    onexecute={handleRebase}
-    onclose={() => { rebaseModalOpen = false }}
-  />
-
   <BookmarkModal
     bind:open={bookmarkModalOpen}
     currentCommitId={selectedRevision?.commit.commit_id ?? null}
@@ -766,7 +833,13 @@
     onclose={() => { bookmarkModalOpen = false }}
   />
 
-  <StatusBar {statusText} {commandOutput} />
+  <StatusBar
+    {statusText}
+    {commandOutput}
+    {rebaseMode}
+    {rebaseSourceMode}
+    {rebaseTargetMode}
+  />
 </div>
 
 <style>

@@ -146,6 +146,16 @@ func TestParseGraphLog_HiddenCommit(t *testing.T) {
 	assert.Equal(t, "hidden change", rows[0].Description)
 }
 
+func TestParseGraphLog_ImmutableCommit(t *testing.T) {
+	output := "◆  _PREFIX:i_PREFIX:5_PREFIX:false\x1fiiiiiiii\x1f55555555\x1fimmutable change\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].Commit.Immutable)
+	assert.False(t, rows[0].Commit.IsWorkingCopy)
+	assert.Equal(t, "iiiiiiii", rows[0].Commit.ChangeId)
+	assert.Equal(t, "immutable change", rows[0].Description)
+}
+
 func TestParseGraphLog_FallbackToShortest(t *testing.T) {
 	// Old format without full IDs — should fall back to shortest prefix
 	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\n"
