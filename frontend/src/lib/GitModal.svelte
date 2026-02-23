@@ -22,6 +22,8 @@
   let remotes: string[] = $state([])
   let loading: boolean = $state(false)
   let modalEl: HTMLDivElement | undefined = $state(undefined)
+  let previousFocus: HTMLElement | null = null
+  let fetchGen: number = 0
 
   function buildOps(bms: Bookmark[], rms: string[], changeId: string | null): GitOp[] {
     const ops: GitOp[] = []
@@ -102,20 +104,24 @@
 
   $effect(() => {
     if (open) {
+      previousFocus = document.activeElement as HTMLElement | null
       index = 0
       loading = true
+      const gen = ++fetchGen
       Promise.all([api.bookmarks(), api.remotes()]).then(([bms, rms]) => {
+        if (gen !== fetchGen) return
         bookmarks = bms
         remotes = rms
         loading = false
-      }).catch(() => { loading = false })
-      requestAnimationFrame(() => modalEl?.focus())
+      }).catch(() => { if (gen === fetchGen) loading = false })
+      modalEl?.focus()
     }
   })
 
   function close() {
     open = false
     onclose()
+    previousFocus?.focus()
   }
 
   function execute(op: GitOp) {
@@ -146,10 +152,12 @@
         break
       case 'Enter':
         e.preventDefault()
+        e.stopPropagation()
         if (ops[index]) execute(ops[index])
         break
       case 'Escape':
         e.preventDefault()
+        e.stopPropagation()
         close()
         break
     }

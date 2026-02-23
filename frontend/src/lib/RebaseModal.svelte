@@ -31,17 +31,28 @@
     return items
   })
 
+  let previousFocus: HTMLElement | null = null
+
   $effect(() => {
     if (open) {
+      previousFocus = document.activeElement as HTMLElement | null
       query = ''
       index = 0
-      requestAnimationFrame(() => inputEl?.focus())
+      inputEl?.focus()
+    }
+  })
+
+  // Clamp index when filtered list shrinks (e.g. onStale refresh while modal is open)
+  $effect(() => {
+    if (open && index >= filtered.length && filtered.length > 0) {
+      index = filtered.length - 1
     }
   })
 
   function close() {
     open = false
     onclose()
+    previousFocus?.focus()
   }
 
   function execute(entry: LogEntry) {
@@ -63,7 +74,7 @@
       case 'j':
         if (e.key === 'j' && inInput) break
         e.preventDefault()
-        index = Math.min(index + 1, filtered.length - 1)
+        index = Math.min(index + 1, Math.max(filtered.length - 1, 0))
         scrollActiveIntoView()
         break
       case 'ArrowUp':
@@ -75,10 +86,12 @@
         break
       case 'Enter':
         e.preventDefault()
+        e.stopPropagation()
         if (filtered[index]) execute(filtered[index])
         break
       case 'Escape':
         e.preventDefault()
+        e.stopPropagation()
         close()
         break
     }
@@ -94,8 +107,11 @@
 {#if open}
   <div class="rb-backdrop" onclick={close} role="presentation"></div>
   <div class="rb-modal" onkeydown={handleKeydown} role="dialog" aria-label="Rebase revision" tabindex="-1">
-    <div class="rb-header">
-      Rebase {revisions.length > 1 ? `${revisions.length} revisions` : revisions[0]?.slice(0, 8)} onto...
+    <div class="rb-header">Rebase onto...</div>
+    <div class="rb-sources">
+      {#each revisions as rev}
+        <span class="rb-source-chip">{rev.slice(0, 8)}</span>
+      {/each}
     </div>
     <input
       bind:this={inputEl}
@@ -110,17 +126,18 @@
         <div class="rb-empty">No matching revisions</div>
       {:else}
         {#each filtered as entry, i}
+          {@const id = shortId(entry)}
           <button
             class="rb-item"
             class:rb-item-active={i === index}
             onclick={() => execute(entry)}
             onmouseenter={() => { index = i }}
           >
-            {@const id = shortId(entry)}
             <span class="rb-change-id">
-              <span class="rb-id-prefix">{id.prefix}</span><span class="rb-id-rest">{id.rest}</span>
+              <span class="rb-id-prefix" class:rb-wc={entry.commit.is_working_copy}>{id.prefix}</span><span class="rb-id-rest">{id.rest}</span>
+              {#if entry.commit.is_working_copy}<span class="rb-wc-marker">@</span>{/if}
             </span>
-            <span class="rb-desc">{entry.description || '(no description)'}</span>
+            <span class="rb-desc" class:rb-no-desc={!entry.description}>{entry.description || '(no description)'}</span>
             {#if entry.bookmarks?.length}
               <span class="rb-bookmarks">
                 {#each entry.bookmarks as bm}
@@ -148,7 +165,7 @@
     top: 20%;
     left: 50%;
     transform: translateX(-50%);
-    width: 540px;
+    width: 580px;
     max-height: 400px;
     background: var(--base);
     border: 1px solid var(--surface1);
@@ -162,12 +179,29 @@
   }
 
   .rb-header {
-    padding: 10px 16px 6px;
+    padding: 10px 16px 4px;
     font-size: 12px;
     font-weight: 700;
     color: var(--subtext0);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  .rb-sources {
+    display: flex;
+    gap: 4px;
+    padding: 0 16px 8px;
+    flex-wrap: wrap;
+  }
+
+  .rb-source-chip {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--bg-active);
+    border: 1px solid var(--blue);
+    color: var(--blue);
+    font-weight: 600;
   }
 
   .rb-input {
@@ -216,8 +250,18 @@
   }
 
   .rb-id-prefix {
-    color: var(--teal);
+    color: var(--blue);
     font-weight: 700;
+  }
+
+  .rb-id-prefix.rb-wc {
+    color: var(--green);
+  }
+
+  .rb-wc-marker {
+    color: var(--green);
+    font-weight: 700;
+    margin-left: 2px;
   }
 
   .rb-id-rest {
@@ -232,6 +276,11 @@
     color: var(--subtext1);
   }
 
+  .rb-no-desc {
+    color: var(--overlay0);
+    font-style: italic;
+  }
+
   .rb-bookmarks {
     display: flex;
     gap: 4px;
@@ -239,9 +288,11 @@
   }
 
   .rb-bookmark {
-    font-size: 11px;
-    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0 5px;
     border-radius: 3px;
+    letter-spacing: 0.02em;
     background: var(--bg-bookmark);
     border: 1px solid var(--border-bookmark);
     color: var(--green);
