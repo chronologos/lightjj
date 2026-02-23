@@ -103,9 +103,25 @@ func TestRebase(t *testing.T) {
 }
 
 func TestEscapeFileName(t *testing.T) {
-	assert.Equal(t, `file:"simple.go"`, EscapeFileName("simple.go"))
-	assert.Equal(t, `file:"path with spaces/file.go"`, EscapeFileName("path with spaces/file.go"))
-	assert.Equal(t, `file:"has\"quote.go"`, EscapeFileName(`has"quote.go`))
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple", "simple.go", `file:"simple.go"`},
+		{"spaces", "path with spaces/file.go", `file:"path with spaces/file.go"`},
+		{"double quote", `has"quote.go`, `file:"has\"quote.go"`},
+		{"backslash", `path\to\file.go`, `file:"path\\to\\file.go"`},
+		{"backslash and quote", `a\"b.go`, `file:"a\\\"b.go"`},
+		{"unicode", "fichier-\u00e9t\u00e9.go", `file:"fichier-été.go"`},
+		{"unicode CJK", "\u6587\u4ef6.txt", `file:"文件.txt"`},
+		{"multiple spaces", "a  b  c.go", `file:"a  b  c.go"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, EscapeFileName(tt.input))
+		})
+	}
 }
 
 func TestSetDescription(t *testing.T) {
@@ -170,6 +186,107 @@ func TestParseDiffSummary(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestDiffStat(t *testing.T) {
+	got := DiffStat("abc")
+	assert.Equal(t, []string{"diff", "--stat", "--color", "never", "-r", "abc", "--ignore-working-copy"}, got)
+}
+
+func TestParseDiffStat(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  map[string]FileStat
+	}{
+		{
+			name: "multiple files",
+			input: ` src/main.go | 15 +++++++++------
+ new_file.go |  3 +++
+ 2 files changed, 12 insertions(+), 6 deletions(-)
+`,
+			want: map[string]FileStat{
+				"src/main.go": {Additions: 9, Deletions: 6},
+				"new_file.go": {Additions: 3, Deletions: 0},
+			},
+		},
+		{
+			name:  "empty output",
+			input: "",
+			want:  map[string]FileStat{},
+		},
+		{
+			name: "deletions only",
+			input: ` old.go | 5 -----
+ 1 file changed, 5 deletions(-)
+`,
+			want: map[string]FileStat{
+				"old.go": {Additions: 0, Deletions: 5},
+			},
+		},
+		{
+			name: "path with spaces",
+			input: ` path with spaces/file.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+`,
+			want: map[string]FileStat{
+				"path with spaces/file.go": {Additions: 1, Deletions: 1},
+			},
+		},
+		{
+			name: "rename with braces",
+			input: ` src/{old.go => new.go} | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+`,
+			want: map[string]FileStat{
+				"src/new.go": {Additions: 2, Deletions: 2},
+			},
+		},
+		{
+			name: "rename entire path",
+			input: ` {old_dir/file.go => new_dir/file.go} | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+`,
+			want: map[string]FileStat{
+				"new_dir/file.go": {Additions: 3, Deletions: 3},
+			},
+		},
+		{
+			name: "proportional scaling large file",
+			input: ` big.go | 100 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 99 insertions(+), 1 deletion(-)
+`,
+			want: map[string]FileStat{
+				"big.go": {Additions: 98, Deletions: 2},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseDiffStat(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMergeStats(t *testing.T) {
+	files := []FileChange{
+		{Type: "M", Path: "a.go"},
+		{Type: "A", Path: "b.go"},
+		{Type: "D", Path: "c.go"},
+	}
+	stats := map[string]FileStat{
+		"a.go": {Additions: 10, Deletions: 3},
+		"b.go": {Additions: 5, Deletions: 0},
+	}
+	MergeStats(files, stats)
+	assert.Equal(t, 10, files[0].Additions)
+	assert.Equal(t, 3, files[0].Deletions)
+	assert.Equal(t, 5, files[1].Additions)
+	assert.Equal(t, 0, files[1].Deletions)
+	// c.go not in stats, should remain zero
+	assert.Equal(t, 0, files[2].Additions)
+	assert.Equal(t, 0, files[2].Deletions)
 }
 
 func TestBookmarkMove(t *testing.T) {

@@ -1,6 +1,6 @@
 # jj-web
 
-Browser-based UI for Jujutsu (jj) version control. See [ARCHITECTURE.md](ARCHITECTURE.md) for system design and diagrams.
+Browser-based UI for Jujutsu (jj) version control. See [ARCHITECTURE.md](ARCHITECTURE.md) for system design and diagrams, [BACKLOG.md](BACKLOG.md) for planned features.
 
 ## Build & Test
 
@@ -30,20 +30,23 @@ cmd/jj-web/main.go     — CLI entry point, flag parsing, embeds frontend-dist/
 internal/
   jj/                  — Command builders + data models (PURE — no I/O, no side effects)
     commands.go        — Functions that return []string args for jj subcommands
-    commit.go          — Commit data model
+    commit.go          — Commit model with ChangePrefix/CommitPrefix for highlighted IDs
     bookmark.go        — Bookmark model + output parsers
+    file_change.go     — FileChange model, DiffStat/DiffSummary parsers, MergeStats
     selected_revisions.go — Multi-revision selection helper
   runner/              — CommandRunner interface + implementations
     runner.go          — Interface definition (Run, RunWithInput, Stream)
     local.go           — LocalRunner: exec("jj", args) with configurable Binary
     ssh.go             — SSHRunner: wraps jj args in ssh command
   api/                 — HTTP handlers
-    server.go          — Route registration, helper functions
-    handlers.go        — All endpoint implementations + LogEntry parser
+    server.go          — Route registration, MaxBytesReader, helper functions
+    handlers.go        — All endpoint implementations, flag validation
+  parser/              — Graph log parser
+    graph.go           — Parses jj log graph output with _PREFIX: markers into GraphRow[]
 testutil/              — Test infrastructure
   mock_runner.go       — MockRunner with Expect(args)/Verify() pattern
 frontend/              — Svelte 5 SPA (Vite + TypeScript + pnpm)
-  src/App.svelte       — Main UI component
+  src/App.svelte       — Main UI: graph view, diff viewer (unified+split), collapsible files
   src/lib/api.ts       — Typed API client (mirrors Go endpoints 1:1)
   vite.config.ts       — Dev proxy + build output to ../cmd/jj-web/frontend-dist/
 ```
@@ -56,14 +59,20 @@ frontend/              — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Never call `exec.Command` outside of `internal/runner/`.** All jj execution goes through the `CommandRunner` interface.
 - **Test with MockRunner.** Use `testutil.NewMockRunner(t)` with `.Expect(args).SetOutput(output)` and `defer runner.Verify()`. See existing tests for the pattern.
 - **API handlers are thin.** Parse request → call command builder → call runner → return JSON. No business logic in handlers.
-- **Use `--tool :builtin`** when requesting diff output for the web API. Users may have external diff formatters (difftastic) configured that output ANSI codes.
+- **Validate POST inputs.** All POST handlers check required fields and return 400 on empty values.
+- **Validate flags.** `validateFlags()` whitelists allowed `--` and `-` flags for git push/fetch. Reject anything not in the allowed set.
+- **Use `--tool :git`** when requesting diff output for the web API. Users may have external diff formatters (difftastic) configured that output ANSI codes.
 - **Use `--color never`** for any jj output the backend will parse. Use `--color always` only if passing through to a terminal.
+- **Use `\x1F` (unit separator)** as the field delimiter in jj templates, not tabs. Tabs can appear in commit descriptions and break parsing.
+- **Parsers return empty slices, not nil.** This ensures JSON serialization produces `[]` not `null`.
 
 ### Svelte frontend
 
 - **Svelte 5 runes** — use `$state()`, `$derived()`, `$effect()`. No Svelte 4 stores.
 - **api.ts is the single API boundary** — all backend calls go through the `api` object in `src/lib/api.ts`. Don't use raw `fetch()` in components.
 - **pnpm, not npm** — the project uses pnpm for package management.
+- **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes.
+- **Change IDs show full short form with highlighted prefix.** `commit.change_prefix` determines how many characters to highlight. Same for `commit_prefix`.
 
 ### Testing patterns
 
@@ -114,3 +123,5 @@ jj-web --addr localhost:8080    # specify port
 ## Upstream Reference
 
 Core command builder and test patterns were ported from [jjui](https://github.com/idursun/jjui) (`internal/jj/commands.go`, `test/test_command_runner.go`). The ANSI parser and BubbleTea UI layers were intentionally not ported — we use structured jj output and a browser frontend instead.
+
+Diff viewer patterns (split view, collapsible files, diff stats) were informed by [antique](~/src/anthropic/antique), an internal code review tool.

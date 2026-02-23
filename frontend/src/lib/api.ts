@@ -46,6 +46,13 @@ function post<T>(url: string, body: unknown): Promise<T> {
   })
 }
 
+export interface FileChange {
+  type: string
+  path: string
+  additions: number
+  deletions: number
+}
+
 export const api = {
   log: (revset?: string, limit?: number) => {
     const params = new URLSearchParams()
@@ -71,9 +78,9 @@ export const api = {
     return request<{ description: string }>(`/api/description?${params}`)
   },
 
-  status: (revision: string) => {
+  files: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return request<{ status: string }>(`/api/status?${params}`)
+    return request<FileChange[]>(`/api/files?${params}`)
   },
 
   remotes: () => request<string[]>('/api/remotes'),

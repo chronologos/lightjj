@@ -27,14 +27,13 @@ var allowedGitFetchFlags = map[string]bool{
 	"--branch":      true,
 }
 
-// validateFlags checks that every element in flags starts with "--" and matches
-// the allowed set. Flags using "=" syntax (e.g. "--remote=origin") are matched
-// by the key portion before "=". Bare values (flag arguments like "main" after
-// "--bookmark") are passed through unchecked because they are positional args
-// to a preceding flag.
+// validateFlags checks that every element in flags is either an allowed flag
+// or a bare value (argument to a preceding flag). Any string starting with "-"
+// (single or double dash) must be in the allowed set. This prevents injection
+// of arbitrary jj flags via single-dash variants.
 func validateFlags(flags []string, allowed map[string]bool) error {
 	for _, f := range flags {
-		if !strings.HasPrefix(f, "--") {
+		if !strings.HasPrefix(f, "-") {
 			// Bare value (argument to a preceding flag), not a flag itself.
 			continue
 		}
@@ -134,14 +133,22 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	args := jj.DiffSummary(revision)
-	output, err := s.Runner.Run(r.Context(), args)
+	summaryArgs := jj.DiffSummary(revision)
+	summaryOutput, err := s.Runner.Run(r.Context(), summaryArgs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	files := jj.ParseDiffSummary(string(summaryOutput))
 
-	files := jj.ParseDiffSummary(string(output))
+	// Fetch stat counts and merge into file list
+	statArgs := jj.DiffStat(revision)
+	statOutput, err := s.Runner.Run(r.Context(), statArgs)
+	if err == nil {
+		stats := jj.ParseDiffStat(string(statOutput))
+		jj.MergeStats(files, stats)
+	}
+
 	writeJSON(w, http.StatusOK, files)
 }
 
