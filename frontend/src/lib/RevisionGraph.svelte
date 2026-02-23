@@ -171,6 +171,7 @@
       <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list">
         {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineSubIdx)}
           {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
             class="graph-row"
             class:node-row={line.isNode}

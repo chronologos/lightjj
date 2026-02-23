@@ -1,12 +1,37 @@
-import { createHighlighter, type Highlighter } from 'shiki'
+import { createHighlighterCore, type HighlighterCore } from 'shiki/core'
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
 
-let highlighterPromise: Promise<Highlighter> | null = null
+// Only the 2 themes used
+import catppuccinMocha from 'shiki/themes/catppuccin-mocha.mjs'
+import catppuccinLatte from 'shiki/themes/catppuccin-latte.mjs'
 
-export async function getHighlighter(): Promise<Highlighter> {
+// Only the languages referenced in EXTENSION_LANGUAGES
+import langTypescript from 'shiki/langs/typescript.mjs'
+import langJavascript from 'shiki/langs/javascript.mjs'
+import langGo from 'shiki/langs/go.mjs'
+import langPython from 'shiki/langs/python.mjs'
+import langRust from 'shiki/langs/rust.mjs'
+import langCss from 'shiki/langs/css.mjs'
+import langHtml from 'shiki/langs/html.mjs'
+import langSvelte from 'shiki/langs/svelte.mjs'
+import langJson from 'shiki/langs/json.mjs'
+import langYaml from 'shiki/langs/yaml.mjs'
+import langMarkdown from 'shiki/langs/markdown.mjs'
+import langBash from 'shiki/langs/bash.mjs'
+import langToml from 'shiki/langs/toml.mjs'
+
+let highlighterPromise: Promise<HighlighterCore> | null = null
+
+export async function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
-      themes: ['catppuccin-mocha', 'catppuccin-latte'],
-      langs: [],  // load on demand
+    highlighterPromise = createHighlighterCore({
+      themes: [catppuccinMocha, catppuccinLatte],
+      langs: [
+        langTypescript, langJavascript, langGo, langPython, langRust,
+        langCss, langHtml, langSvelte, langJson, langYaml,
+        langMarkdown, langBash, langToml,
+      ],
+      engine: createJavaScriptRegexEngine(),
     })
   }
   return highlighterPromise
@@ -31,8 +56,6 @@ export function detectLanguage(filePath: string): string {
   return EXTENSION_LANGUAGES[ext] ?? 'text'
 }
 
-const loadedLangs = new Set<string>()
-
 // Highlight an array of code lines, returning HTML strings
 export async function highlightLines(lines: string[], lang: string): Promise<string[]> {
   if (lang === 'text' || lines.length === 0) {
@@ -40,17 +63,13 @@ export async function highlightLines(lines: string[], lang: string): Promise<str
   }
 
   const hl = await getHighlighter()
-  const theme = getShikiTheme()
 
-  if (!loadedLangs.has(lang)) {
-    try {
-      await hl.loadLanguage(lang as any)
-      loadedLangs.add(lang)
-    } catch {
-      return lines.map(l => escapeHtml(l))
-    }
+  // Check if the language is loaded (all supported langs are loaded at init)
+  if (!hl.getLoadedLanguages().includes(lang)) {
+    return lines.map(l => escapeHtml(l))
   }
 
+  const theme = getShikiTheme()
   const code = lines.join('\n')
   try {
     const html = hl.codeToHtml(code, { lang, theme })

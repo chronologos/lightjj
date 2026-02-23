@@ -283,7 +283,7 @@ func TestHandleFiles_Empty(t *testing.T) {
 
 func TestHandleBookmarkMove(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.BookmarkMove("abc", "feature")).SetOutput([]byte(""))
+	runner.Expect(jj.BookmarkMove("abc", "feature", "--allow-backwards")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)

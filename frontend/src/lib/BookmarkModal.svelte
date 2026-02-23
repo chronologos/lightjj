@@ -10,13 +10,13 @@
 
   interface Props {
     open: boolean
-    currentChangeId: string | null
+    currentCommitId: string | null
     filterBookmark: string
     onexecute: (op: BookmarkOp) => void
     onclose: () => void
   }
 
-  let { open = $bindable(false), currentChangeId, filterBookmark, onexecute, onclose }: Props = $props()
+  let { open = $bindable(false), currentCommitId, filterBookmark, onexecute, onclose }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -47,7 +47,7 @@
     return ops
   }
 
-  let allOps = $derived(buildOps(bookmarks, currentChangeId))
+  let allOps = $derived(buildOps(bookmarks, currentCommitId))
 
   let filteredOps = $derived.by(() => {
     if (!open) return []
@@ -130,7 +130,7 @@
 
 {#if open}
   <div class="bm-backdrop" onclick={close} role="presentation"></div>
-  <div class="bm-modal" onkeydown={handleKeydown}>
+  <div class="bm-modal" onkeydown={handleKeydown} role="dialog" aria-label="Bookmark operations" tabindex="-1">
     <div class="bm-header">Bookmark Operations</div>
     <input
       bind:this={inputEl}
