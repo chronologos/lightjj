@@ -78,7 +78,7 @@ func TestBookmarkSet(t *testing.T) {
 
 func TestBookmarkTrack(t *testing.T) {
 	got := BookmarkTrack("main", "origin")
-	assert.Equal(t, []string{"bookmark", "track", "main@origin"}, got)
+	assert.Equal(t, []string{"bookmark", "track", "main", "--remote", "origin"}, got)
 }
 
 func TestBookmarkTrack_NoRemote(t *testing.T) {

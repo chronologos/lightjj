@@ -11,6 +11,7 @@
   import OplogPanel from './lib/OplogPanel.svelte'
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
+  import GitModal from './lib/GitModal.svelte'
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])

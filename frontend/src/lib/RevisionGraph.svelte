@@ -513,6 +513,13 @@
     line-height: 1.15;
     letter-spacing: 0.02em;
     vertical-align: baseline;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .bookmark-badge:hover {
+    border-color: var(--green);
+    filter: brightness(1.2);
   }
 
   .description-text {
