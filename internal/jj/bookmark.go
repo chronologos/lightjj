@@ -25,7 +25,7 @@ func (b Bookmark) IsTrackable() bool {
 	return b.Local != nil && len(b.Remotes) == 0
 }
 
-// ParseBookmarkListOutput parses the semicolon-delimited output from
+// ParseBookmarkListOutput parses the \x1F-delimited output from
 // `jj bookmark list` with a custom template.
 func ParseBookmarkListOutput(output string) []Bookmark {
 	lines := strings.Split(output, "\n")
@@ -33,7 +33,7 @@ func ParseBookmarkListOutput(output string) []Bookmark {
 	var orderedNames []string
 
 	for _, b := range lines {
-		parts := strings.Split(b, ";")
+		parts := strings.Split(b, "\x1f")
 		if len(parts) < 6 {
 			continue
 		}

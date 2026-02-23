@@ -219,7 +219,7 @@ func Squash(from SelectedRevisions, destination string, files []string, keepEmpt
 	return args
 }
 
-const bookmarkListTemplate = `separate(";", name, if(remote, remote, "."), tracked, conflict, 'false', normal_target.commit_id().shortest(1)) ++ "\n"`
+const bookmarkListTemplate = `separate("\x1F", name, if(remote, remote, "."), tracked, conflict, 'false', normal_target.commit_id().shortest(1)) ++ "\n"`
 
 func BookmarkList(revset string) CommandArgs {
 	return []string{"bookmark", "list", "-a", "-r", revset, "--template", bookmarkListTemplate, "--color", "never", "--ignore-working-copy"}

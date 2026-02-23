@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -72,9 +73,9 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // refreshOpId fetches the current op-id from jj and caches it.
-// Call after mutation handlers to pick up the new state.
-func (s *Server) refreshOpId(r *http.Request) {
-	output, err := s.Runner.Run(r.Context(), jj.CurrentOpId())
+// Uses a detached context so it completes even if the HTTP request is cancelled.
+func (s *Server) refreshOpId() {
+	output, err := s.Runner.Run(context.Background(), jj.CurrentOpId())
 	if err != nil {
 		return
 	}
@@ -84,6 +85,18 @@ func (s *Server) refreshOpId(r *http.Request) {
 	s.cachedMu.Unlock()
 }
 
+// runMutation executes a jj command, refreshes the op-id in the background,
+// and writes the output as JSON. This is the standard pattern for all mutation handlers.
+func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []string) {
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	go s.refreshOpId()
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+}
+
 // getOpId returns the cached op-id (may be empty on first call).
 func (s *Server) getOpId() string {
 	s.cachedMu.RLock()
@@ -91,8 +104,8 @@ func (s *Server) getOpId() string {
 	return s.cachedOp
 }
 
-func decodeBody(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // 1 MB limit
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
 }

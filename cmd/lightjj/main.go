@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/iant/lightjj/internal/api"
 	"github.com/iant/lightjj/internal/runner"
@@ -68,9 +69,31 @@ func main() {
 		openBrowser(url)
 	}
 
-	if err := http.Serve(listener, srv.Mux); err != nil {
+	httpServer := &http.Server{
+		Handler:           localhostOnly(srv.Mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := httpServer.Serve(listener); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// localhostOnly rejects requests where the Host header is not localhost.
+// This prevents DNS rebinding attacks against the local server.
+func localhostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func openBrowser(url string) {
@@ -94,6 +117,9 @@ func parseRemoteSpec(spec string) (host string, path string, err error) {
 	path = spec[idx+1:]
 	if host == "" || path == "" {
 		return "", "", fmt.Errorf("expected format user@host:/path, got %q", spec)
+	}
+	if strings.HasPrefix(host, "-") {
+		return "", "", fmt.Errorf("host must not start with '-': %q", host)
 	}
 	return host, path, nil
 }

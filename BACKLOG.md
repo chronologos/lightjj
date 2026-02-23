@@ -1,5 +1,49 @@
 # lightjj Backlog
 
+## Architecture Review Findings (2026-02-23)
+
+Deep review across 6 perspectives (maintainability, performance, reliability, correctness, testability, API design/security). Items marked ✅ are fixed.
+
+### Critical
+- [x] Bookmark template uses `;` delimiter — silent parsing corruption if bookmark names contain semicolons. Should use `\x1F` like everything else.
+
+### Warnings
+- [x] DNS rebinding — no Host header validation. Malicious webpage can DNS-rebind to `127.0.0.1` and call mutation endpoints.
+- [x] No HTTP server timeouts — hung jj subprocess holds connections forever.
+- [x] `handleFiles` spawns two sequential subprocesses (summary + stat) on the hottest read path.
+- [x] `refreshOpId` fires synchronously before every mutation response, adding ~50-150ms.
+- [x] Repeated mutation handler boilerplate — `refreshOpId` is manually called at 15 sites, easy to forget.
+- [x] `handleNew` and `handleAbandon` accept empty revision lists (inconsistent with rebase/squash).
+- [ ] No frontend fetch timeouts — stuck spinners with no escape if backend hangs.
+- [ ] Response cache clears entirely on any op-id change; immutable commits' diffs should be preserved.
+- [ ] `wordDiffMap` recomputes all hunks when a single file is expanded.
+- [x] `MaxBytesReader` called with `nil` ResponseWriter — violates Go API contract.
+- [x] `ParseGraphLog` returns nil instead of empty slice — produces JSON `null` not `[]`.
+- [ ] Modal fetch errors silently swallowed (GitModal, BookmarkModal).
+- [ ] `"origin"` hardcoded as preferred remote — no way to configure.
+- [ ] MockRunner `RunWithInput` silently discards stdin — can't verify describe content.
+
+### Suggestions
+- [ ] `App.svelte` is 1010 lines — rebase state is ambient and threaded through multiple components. Extract to shared module.
+- [ ] No list virtualization for large repos (500+ commits).
+- [ ] No HTTP response compression (especially impacts SSH mode).
+- [ ] `highlightDiff` re-highlights all files when one is expanded.
+- [ ] `onStale` supports only a single callback — second caller silently replaces first.
+- [ ] SSH host not validated against flag injection (`-oProxyCommand=...`).
+- [ ] 11 command builder functions have no unit tests.
+- [ ] `handleBookmarkTrack`/`handleBookmarkUntrack` have zero test coverage.
+- [ ] No mutation handler runner-error tests.
+- [ ] Frontend `onStale`/`isCached` entirely untested.
+- [ ] Frontend HTTP error responses not tested.
+- [ ] No integration tests against a real jj repo.
+
+### Nitpicks
+- [ ] `\x1F` vs `\x1f` case inconsistency across files.
+- [ ] Divergent commit `??` suffix is a string hack — a `Divergent bool` field would be cleaner.
+- [ ] `GET /api/oplog` has no upper bound on `limit` parameter.
+- [ ] No `Content-Type: application/json` validation on POST requests.
+- [ ] `commitsFromIds` wraps raw strings in fake `Commit` structs with zero-valued fields.
+
 ## UI Inspirations
 
 ### Sublime Merge
