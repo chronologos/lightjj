@@ -5,9 +5,13 @@
     rebaseMode: boolean
     rebaseSourceMode: string
     rebaseTargetMode: string
+    squashMode: boolean
+    squashKeepEmptied: boolean
+    squashUseDestMsg: boolean
+    squashFileCount: { selected: number, total: number } | null
   }
 
-  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode }: Props = $props()
+  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode, squashMode, squashKeepEmptied, squashUseDestMsg, squashFileCount }: Props = $props()
 
   const sourceKeys: { key: string; flag: string; label: string }[] = [
     { key: 'r', flag: '-r', label: 'revision' },
@@ -22,8 +26,27 @@
   ]
 </script>
 
-<footer class="statusbar" class:rebase-active={rebaseMode}>
-  {#if rebaseMode}
+<footer class="statusbar" class:rebase-active={rebaseMode} class:squash-active={squashMode}>
+  {#if squashMode}
+    <div class="statusbar-left">
+      <span class="mode-badge mode-badge-squash">squash</span>
+      <span class="key-group">
+        <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
+        <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
+      </span>
+      <span class="key-divider"></span>
+      <span class="key-group">
+        <kbd class="key" class:key-active={squashKeepEmptied}>e</kbd><span class="key-label" class:key-label-active={squashKeepEmptied}>keep-emptied</span>
+        <kbd class="key" class:key-active={squashUseDestMsg}>d</kbd><span class="key-label" class:key-label-active={squashUseDestMsg}>use-dest-message</span>
+      </span>
+      {#if squashFileCount}
+        <span class="key-divider"></span>
+        <span class="key-group">
+          <span class="file-count">{squashFileCount.selected}/{squashFileCount.total} files</span>
+        </span>
+      {/if}
+    </div>
+  {:else if rebaseMode}
     <div class="statusbar-left">
       <span class="mode-badge">rebase</span>
       <span class="key-group">
@@ -74,6 +97,11 @@
   .statusbar.rebase-active {
     background: var(--crust);
     border-top: 1px solid var(--yellow);
+  }
+
+  .statusbar.squash-active {
+    background: var(--crust);
+    border-top: 1px solid var(--green);
   }
 
   .statusbar-left,
@@ -148,5 +176,14 @@
   .key-label.key-label-active {
     color: var(--text);
     font-weight: 600;
+  }
+
+  .mode-badge-squash {
+    background: var(--green);
+  }
+
+  .file-count {
+    color: var(--subtext0);
+    font-size: 10px;
   }
 </style>

@@ -173,8 +173,14 @@ export const api = {
   rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string) =>
     post<{ output: string }>('/api/rebase', { revisions, destination, source_mode: sourceMode, target_mode: targetMode }),
 
-  squash: (revisions: string[], destination: string) =>
-    post<{ output: string }>('/api/squash', { revisions, destination }),
+  squash: (revisions: string[], destination: string, opts?: {
+    files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean
+  }) =>
+    post<{ output: string }>('/api/squash', {
+      revisions, destination,
+      files: opts?.files, keep_emptied: opts?.keepEmptied,
+      use_destination_message: opts?.useDestinationMessage,
+    }),
 
   undo: () => post<{ output: string }>('/api/undo', {}),
 
