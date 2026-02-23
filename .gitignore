@@ -1,0 +1,16 @@
+# Binaries
+jj-web
+*.exe
+
+# Frontend build output
+frontend/build/
+frontend/node_modules/
+frontend/.svelte-kit/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
