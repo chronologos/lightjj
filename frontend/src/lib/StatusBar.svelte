@@ -15,7 +15,7 @@
     {#if commandOutput}
       <span class="status-item output">{commandOutput.trim().split('\n').pop()}</span>
     {/if}
-    <span class="status-item">jj-web</span>
+    <span class="status-item">lightjj</span>
   </div>
 </footer>
 

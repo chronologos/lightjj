@@ -1,4 +1,4 @@
-# jj-web Backlog
+# lightjj Backlog
 
 ## UI Inspirations
 
@@ -71,7 +71,7 @@
 - [ ] Rebase modal (pick source + destination)
 - [ ] Squash modal
 - [ ] Conflict resolution UI
-- [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "jj-web -R /path"`). Option (c) sidesteps the problem entirely.
+- [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
 - [ ] Live file watching (auto-refresh on working copy changes)
 - [ ] Git push/fetch with progress indication

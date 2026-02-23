@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iant/jj-web/internal/jj"
-	"github.com/iant/jj-web/internal/parser"
-	"github.com/iant/jj-web/testutil"
+	"github.com/iant/lightjj/internal/jj"
+	"github.com/iant/lightjj/internal/parser"
+	"github.com/iant/lightjj/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

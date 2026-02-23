@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/iant/jj-web/internal/jj"
-	"github.com/iant/jj-web/internal/runner"
+	"github.com/iant/lightjj/internal/jj"
+	"github.com/iant/lightjj/internal/runner"
 )
 
 // Server holds the HTTP handler and its dependencies.

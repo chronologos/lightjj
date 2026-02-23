@@ -1,10 +1,10 @@
 .PHONY: install build frontend dev clean
 
 install: frontend
-	go install ./cmd/jj-web
+	go install ./cmd/lightjj
 
 build: frontend
-	go build -o jj-web ./cmd/jj-web
+	go build -o lightjj ./cmd/lightjj
 
 frontend:
 	cd frontend && pnpm install && pnpm run build
@@ -13,6 +13,6 @@ dev:
 	cd frontend && pnpm run dev
 
 clean:
-	rm -f jj-web
-	rm -rf cmd/jj-web/frontend-dist
+	rm -f lightjj
+	rm -rf cmd/lightjj/frontend-dist
 

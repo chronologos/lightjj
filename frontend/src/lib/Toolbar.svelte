@@ -12,7 +12,7 @@
 
 <header class="titlebar">
   <div class="titlebar-left">
-    <span class="app-name">jj-web</span>
+    <span class="app-name">lightjj</span>
     <span class="separator">|</span>
     <div class="toolbar">
       <button class="toolbar-btn" onclick={onrefresh} title="Refresh (r)">

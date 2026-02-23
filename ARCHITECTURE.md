@@ -2,7 +2,7 @@
 
 ## Overview
 
-jj-web is a browser-based UI for the Jujutsu (jj) version control system. It follows a two-process model: a Go backend that shells out to `jj` CLI, and a Svelte SPA frontend served as embedded static files.
+lightjj is a browser-based UI for the Jujutsu (jj) version control system. It follows a two-process model: a Go backend that shells out to `jj` CLI, and a Svelte SPA frontend served as embedded static files.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -19,7 +19,7 @@ jj-web is a browser-based UI for the Jujutsu (jj) version control system. It fol
 └────────────────────────────┼────────────────────────────────────┘
                              │ http://localhost:PORT/api/*
 ┌────────────────────────────┼────────────────────────────────────┐
-│  Go Backend (cmd/jj-web)   │                                     │
+│  Go Backend (cmd/lightjj)   │                                     │
 │  ┌─────────────────────────┴──────────────────────────────────┐ │
 │  │  HTTP Server (net/http)                                     │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
@@ -82,7 +82,7 @@ Handlers use `httptest.NewRecorder` + `testutil.MockRunner` for testing, so they
 
 ### Frontend (`frontend/`)
 
-Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to `cmd/jj-web/frontend-dist/`. In production, files are embedded in the Go binary via `//go:embed`. In development, Vite's dev server proxies `/api` to the Go backend.
+Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to `cmd/lightjj/frontend-dist/`. In production, files are embedded in the Go binary via `//go:embed`. In development, Vite's dev server proxies `/api` to the Go backend.
 
 `src/lib/api.ts` is a typed client that mirrors the Go API endpoints 1:1.
 
