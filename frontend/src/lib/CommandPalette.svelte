@@ -7,6 +7,7 @@
     category?: string
     action: () => void
     when?: () => boolean
+    infoOnly?: boolean
   }
 
   interface Props {
@@ -32,28 +33,26 @@
 
   let groupedCommands = $derived.by(() => {
     if (query) return []
-    const groups: Map<string, PaletteCommand[]> = new Map()
-    for (const cmd of availableCommands) {
-      if (!cmd.shortcut) continue
-      const cat = cmd.category ?? 'Other'
-      let list = groups.get(cat)
-      if (!list) {
-        list = []
-        groups.set(cat, list)
-      }
-      list.push(cmd)
-    }
+    const groups = Map.groupBy(
+      availableCommands.filter(c => c.shortcut),
+      c => c.category ?? 'Other'
+    )
     return [...groups.entries()]
   })
 
-  let isCheatsheet = $derived(!query && groupedCommands.length > 0)
+  let isCheatsheet = $derived(groupedCommands.length > 0)
+
+  let searchOnlyCount = $derived.by(() => {
+    if (!isCheatsheet) return 0
+    return availableCommands.filter(c => !c.shortcut).length
+  })
 
   // Focus input when palette opens
   $effect(() => {
     if (open) {
       query = ''
       index = 0
-      requestAnimationFrame(() => inputEl?.focus())
+      inputEl?.focus()
     }
   })
 
@@ -110,7 +109,7 @@
 
 {#if open}
   <div class="palette-backdrop" onclick={close} role="presentation"></div>
-  <div class="palette" class:palette-wide={isCheatsheet}>
+  <div class="palette" class:palette-wide={isCheatsheet} role="dialog" aria-modal="true" aria-label="Command palette">
     <input
       bind:this={inputEl}
       bind:value={query}
@@ -126,13 +125,23 @@
           <div class="cheatsheet-group">
             <div class="cheatsheet-header">{category}</div>
             {#each cmds as cmd}
-              <button class="cheatsheet-item" onclick={() => execute(cmd)}>
-                <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
-                <span class="cheatsheet-label">{cmd.label}</span>
-              </button>
+              {#if cmd.infoOnly}
+                <div class="cheatsheet-item cheatsheet-item-info">
+                  <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
+                  <span class="cheatsheet-label">{cmd.label}</span>
+                </div>
+              {:else}
+                <button class="cheatsheet-item" onclick={() => execute(cmd)}>
+                  <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
+                  <span class="cheatsheet-label">{cmd.label}</span>
+                </button>
+              {/if}
             {/each}
           </div>
         {/each}
+        {#if searchOnlyCount > 0}
+          <div class="cheatsheet-hint">{searchOnlyCount} more — type to search</div>
+        {/if}
       </div>
     {:else}
       <div class="palette-results">
@@ -248,8 +257,12 @@
     border-radius: 3px;
   }
 
-  .cheatsheet-item:hover {
+  .cheatsheet-item:not(.cheatsheet-item-info):hover {
     background: var(--surface0);
+  }
+
+  .cheatsheet-item-info {
+    cursor: default;
   }
 
   .cheatsheet-key {
@@ -265,6 +278,14 @@
   .cheatsheet-label {
     color: var(--subtext0);
     font-size: 12px;
+  }
+
+  .cheatsheet-hint {
+    column-span: all;
+    text-align: center;
+    color: var(--surface2);
+    font-size: 11px;
+    padding: 8px 0 4px;
   }
 
   /* --- Filtered list (existing) --- */

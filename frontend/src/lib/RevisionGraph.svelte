@@ -8,6 +8,7 @@
     checkedRevisions: SvelteSet<string>
     loading: boolean
     revsetFilter: string
+    viewMode: 'log' | 'tracked'
     lastCheckedIndex: number
     onselect: (index: number) => void
     oncheck: (changeId: string, index: number) => void
@@ -22,14 +23,15 @@
     onrevsetclear: () => void
     onrevsetchange: (value: string) => void
     onrevsetescaped: () => void
+    onviewmodechange: () => void
     onbookmarkclick: (name: string) => void
   }
 
   let {
-    revisions, selectedIndex, checkedRevisions, loading, revsetFilter, lastCheckedIndex,
+    revisions, selectedIndex, checkedRevisions, loading, revsetFilter, viewMode, lastCheckedIndex,
     onselect, oncheck, onrangecheck, onedit, onnew, onabandon,
     onnewfromchecked, onabandonchecked, onclearchecks,
-    onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onbookmarkclick,
+    onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -122,6 +124,10 @@
 <div class="panel revisions-panel">
   <div class="panel-header">
     <span class="panel-title">Revisions</span>
+    <div class="view-toggle">
+      <button class="view-btn" class:view-btn-active={viewMode === 'log'} onclick={() => { if (viewMode !== 'log') onviewmodechange() }}>Log</button>
+      <button class="view-btn" class:view-btn-active={viewMode === 'tracked'} onclick={() => { if (viewMode !== 'tracked') onviewmodechange() }}>Tracked</button>
+    </div>
     {#if !loading}
       <span class="panel-badge">{revisions.length}{#if checkedRevisions.size > 0} ({checkedRevisions.size} checked){/if}</span>
     {/if}
@@ -227,6 +233,36 @@
 </div>
 
 <style>
+  /* --- View toggle --- */
+  .view-toggle {
+    display: flex;
+    gap: 1px;
+    background: var(--surface0);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .view-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    font-weight: 500;
+    border: none;
+    background: var(--mantle);
+    color: var(--overlay0);
+    cursor: pointer;
+    line-height: 1.4;
+  }
+
+  .view-btn:hover:not(.view-btn-active) {
+    color: var(--text);
+  }
+
+  .view-btn-active {
+    background: var(--surface0);
+    color: var(--text);
+  }
+
   /* --- Revset filter --- */
   .revset-filter-bar {
     display: flex;
