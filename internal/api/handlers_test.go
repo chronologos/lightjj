@@ -66,8 +66,7 @@ func TestHandleBookmarks(t *testing.T) {
 
 func TestHandleDiff(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	// Diff overrides --color from the command builder, so the final args have both
-	runner.Expect(jj.Diff("abc", "", "--color", "never")).SetOutput([]byte("+added line"))
+	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+added line"))
 	defer runner.Verify()
 
 	srv := NewServer(runner)
