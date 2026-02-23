@@ -32,8 +32,20 @@
 
   // --- Local state ---
   let collapsedFiles = new SvelteSet<string>()
+  // Persist collapse state per revision so switching back restores it
+  let collapseStateCache = new Map<string, Set<string>>()
 
   let parsedDiff = $derived(parseDiffContent(diffContent))
+
+  // Aggregate diff stats across all files
+  let totalStats = $derived.by(() => {
+    let add = 0, del = 0
+    for (const f of changedFiles) {
+      add += f.additions
+      del += f.deletions
+    }
+    return { add, del }
+  })
 
   // Pre-built map for O(1) file stats lookup
   let fileStatsMap = $derived(new Map(changedFiles.map(f => [f.path, f])))
@@ -121,6 +133,24 @@
     return () => clearTimeout(highlightTimer)
   })
 
+  // Save/restore collapse state when revision changes
+  let lastRevisionId: string | null = null
+  $effect(() => {
+    const currentId = selectedRevision?.commit.change_id ?? null
+    if (currentId === lastRevisionId) return
+    // Save current state before switching
+    if (lastRevisionId && collapsedFiles.size > 0) {
+      collapseStateCache.set(lastRevisionId, new Set(collapsedFiles))
+    }
+    // Restore saved state or start expanded
+    collapsedFiles.clear()
+    const saved = currentId ? collapseStateCache.get(currentId) : null
+    if (saved) {
+      for (const path of saved) collapsedFiles.add(path)
+    }
+    lastRevisionId = currentId
+  })
+
   // --- Collapse helpers ---
   function toggleFile(path: string) {
     if (collapsedFiles.has(path)) {
@@ -149,9 +179,10 @@
     })
   }
 
-  // Reset collapsed files when diff changes significantly
+  // Reset collapsed files when diff changes significantly (e.g., multi-select)
   export function resetCollapsed() {
     collapsedFiles.clear()
+    if (lastRevisionId) collapseStateCache.delete(lastRevisionId)
   }
 
   export function rehighlight() {
@@ -218,6 +249,12 @@
   {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0}
     <div class="file-list-bar">
       <span class="file-list-label">Files ({changedFiles.length})</span>
+      {#if totalStats.add > 0 || totalStats.del > 0}
+        <span class="total-stats">
+          {#if totalStats.add > 0}<span class="stat-add">+{totalStats.add}</span>{/if}
+          {#if totalStats.del > 0}<span class="stat-del">-{totalStats.del}</span>{/if}
+        </span>
+      {/if}
       <div class="file-list">
         {#each changedFiles as file (file.path)}
           <button
@@ -460,6 +497,17 @@
     letter-spacing: 0.05em;
     flex-shrink: 0;
   }
+
+  .total-stats {
+    font-size: 11px;
+    font-weight: 600;
+    flex-shrink: 0;
+    display: flex;
+    gap: 6px;
+  }
+
+  .total-stats .stat-add { color: var(--green); }
+  .total-stats .stat-del { color: var(--red); }
 
   .file-list {
     display: flex;
