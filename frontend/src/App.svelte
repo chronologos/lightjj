@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, type LogEntry, type FileChange, type OpEntry } from './lib/api'
+  import { api, onStale, type LogEntry, type FileChange, type OpEntry } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import Toolbar from './lib/Toolbar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -25,10 +25,13 @@
   let changedFiles: FileChange[] = $state([])
   let filesLoading: boolean = $state(false)
   let describeSaved: boolean = $state(false)
+  let splitView: boolean = $state(false)
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
+  // Non-reactive generation counters for async cancellation
   let diffGeneration: number = 0
   let filesGeneration: number = 0
+  let evologGeneration: number = 0
   let evologOpen: boolean = $state(false)
   let evologContent: string = $state('')
   let evologLoading: boolean = $state(false)
@@ -36,8 +39,9 @@
   let oplogEntries: OpEntry[] = $state([])
   let oplogLoading: boolean = $state(false)
 
+  let paletteOpen: boolean = $state(false)
+
   // --- Refs ---
-  let paletteRef: ReturnType<typeof CommandPalette> | undefined = $state(undefined)
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
 
@@ -124,7 +128,7 @@
       if (selectedRevision) { loadDiff(selectedRevision); loadFiles(selectedRevision) }
       else { diffContent = ''; changedFiles = [] }
     }, when: () => checkedRevisions.size > 0 },
-    { label: 'Toggle split/unified diff view', action: () => { /* handled in DiffPanel */ } },
+    { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
     { label: 'Toggle operation log', action: () => toggleOplog() },
     { label: 'Toggle evolution log for selected revision', action: () => toggleEvolog(), when: () => !!selectedRevision },
   ])
@@ -317,6 +321,7 @@
       const result = await api.gitPush()
       lastAction = 'Git push complete'
       commandOutput = result.output
+      await loadLog() // push may update remote tracking bookmarks
     } catch (e) {
       showError(e)
     }
@@ -359,16 +364,19 @@
   }
 
   async function loadEvolog(changeId: string) {
+    const gen = ++evologGeneration
     evologLoading = true
     evologContent = ''
     try {
       const result = await api.evolog(changeId)
+      if (gen !== evologGeneration) return
       evologContent = result.output
     } catch (e) {
+      if (gen !== evologGeneration) return
       evologContent = ''
       showError(e)
     } finally {
-      evologLoading = false
+      if (gen === evologGeneration) evologLoading = false
     }
   }
 
@@ -377,8 +385,10 @@
     try {
       const result = await api.description(selectedRevision.commit.change_id)
       descriptionDraft = result.description
-    } catch {
+    } catch (e) {
+      // Fall back to cached description but warn the user
       descriptionDraft = selectedRevision.description
+      lastAction = 'Using cached description (could not fetch latest)'
     }
     descriptionEditing = true
     requestAnimationFrame(() => {
@@ -406,21 +416,7 @@
     // Cmd+K / Ctrl+K opens palette from anywhere
     if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      paletteRef?.show()
-      return
-    }
-
-    // Handle Escape in revset input specially
-    const revsetInputEl = revisionGraphRef?.getRevsetInputEl()
-    if (target === revsetInputEl) {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        revsetFilter = ''
-        handleRevsetSubmit()
-        revisionGraphRef?.blurRevsetInput()
-        const listEl = document.querySelector('.revision-list') as HTMLElement
-        listEl?.focus()
-      }
+      paletteOpen = true
       return
     }
 
@@ -448,7 +444,7 @@
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
-          loadDiff(selectedRevision)
+          Promise.all([loadDiff(selectedRevision), loadFiles(selectedRevision)])
         }
         break
       case 'u':
@@ -499,16 +495,10 @@
     }
   }
 
-  // Scroll selected revision into view
-  function scrollSelectedIntoView(_index: number) {
-    requestAnimationFrame(() => {
-      const el = document.querySelector('.graph-row.node-row.selected')
-      el?.scrollIntoView({ block: 'nearest' })
-    })
-  }
-
-  $effect(() => {
-    scrollSelectedIntoView(selectedIndex)
+  // Auto-refresh when jj state changes outside the UI (detected via op-id header).
+  // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
+  onStale(() => {
+    if (!loading) loadLog()
   })
 
   loadLog()
@@ -522,7 +512,7 @@
     onundo={handleUndo}
     onfetch={handleGitFetch}
     onpush={handleGitPush}
-    onopenpalette={() => paletteRef?.show()}
+    onopenpalette={() => { paletteOpen = true }}
   />
 
   {#if error}
@@ -561,6 +551,10 @@
       onrevsetsubmit={handleRevsetSubmit}
       onrevsetclear={clearRevsetFilter}
       onrevsetchange={(v) => { revsetFilter = v }}
+      onrevsetescaped={() => {
+        revsetFilter = ''
+        handleRevsetSubmit()
+      }}
     />
 
     <DiffPanel
@@ -571,6 +565,7 @@
       {checkedRevisions}
       {diffLoading}
       {filesLoading}
+      bind:splitView
       {descriptionEditing}
       {descriptionDraft}
       {describeSaved}
@@ -600,7 +595,7 @@
     />
   {/if}
 
-  <CommandPalette bind:this={paletteRef} {commands} />
+  <CommandPalette bind:open={paletteOpen} {commands} />
 
   <StatusBar {statusText} {commandOutput} />
 </div>

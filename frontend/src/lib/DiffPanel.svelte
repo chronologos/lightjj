@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import type { LogEntry, FileChange } from './api'
-  import { parseDiffContent, filePathFromHeader } from './diff-parser'
+  import { parseDiffContent } from './diff-parser'
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
@@ -11,9 +11,10 @@
     diffContent: string
     changedFiles: FileChange[]
     selectedRevision: LogEntry | null
-    checkedRevisions: Set<string>
+    checkedRevisions: SvelteSet<string>
     diffLoading: boolean
     filesLoading: boolean
+    splitView: boolean
     descriptionEditing: boolean
     descriptionDraft: string
     describeSaved: boolean
@@ -25,13 +26,12 @@
 
   let {
     diffContent, changedFiles, selectedRevision, checkedRevisions,
-    diffLoading, filesLoading, descriptionEditing, descriptionDraft, describeSaved,
+    diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange,
   }: Props = $props()
 
   // --- Local state ---
   let collapsedFiles = new SvelteSet<string>()
-  let splitView: boolean = $state(false)
 
   let parsedDiff = $derived(parseDiffContent(diffContent))
 
@@ -42,7 +42,7 @@
   let wordDiffMap = $derived.by(() => {
     const map = new Map<string, Map<number, WordSpan[]>>()
     for (const file of parsedDiff) {
-      const filePath = filePathFromHeader(file.header)
+      const filePath = file.filePath
       for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
         map.set(`${filePath}:${hunkIdx}`, computeWordDiffs(file.hunks[hunkIdx]))
       }
@@ -58,7 +58,7 @@
     const gen = ++highlightGeneration
     const newMap = new Map<string, string>()
     for (const file of files) {
-      const filePath = filePathFromHeader(file.header)
+      const filePath = file.filePath
       const lang = detectLanguage(filePath)
 
       for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
@@ -130,10 +130,6 @@
     })
   }
 
-  function selectFile(file: FileChange) {
-    scrollToFile(file.path)
-  }
-
   // Reset collapsed files when diff changes significantly
   export function resetCollapsed() {
     collapsedFiles.clear()
@@ -180,7 +176,7 @@
         {#each changedFiles as file (file.path)}
           <button
             class="file-chip"
-            onclick={() => selectFile(file)}
+            onclick={() => scrollToFile(file.path)}
             title={file.path}
           >
             <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
@@ -227,8 +223,8 @@
       </div>
     {:else}
       <div class="diff-content">
-        {#each parsedDiff as file (filePathFromHeader(file.header))}
-          {@const filePath = filePathFromHeader(file.header)}
+        {#each parsedDiff as file (file.filePath)}
+          {@const filePath = file.filePath}
           <DiffFileView
             {file}
             fileStats={fileStatsMap.get(filePath)}

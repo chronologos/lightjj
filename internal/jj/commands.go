@@ -281,6 +281,12 @@ func Evolog(revision string) CommandArgs {
 	return []string{"evolog", "-r", revision, "--no-graph", "--color", "never", "--quiet", "--ignore-working-copy"}
 }
 
+// CurrentOpId returns the short ID of the most recent operation.
+func CurrentOpId() CommandArgs {
+	return []string{"op", "log", "--no-graph", "--color", "never", "--ignore-working-copy",
+		"--limit", "1", "-T", `self.id().short()`}
+}
+
 func OpLog(limit int) CommandArgs {
 	args := []string{"op", "log", "--no-graph", "--color", "never", "--ignore-working-copy"}
 	if limit > 0 {

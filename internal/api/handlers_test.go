@@ -16,13 +16,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestServer creates a Server with the op-id command pre-allowed on the mock.
+func newTestServer(runner *testutil.MockRunner) *Server {
+	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+	return NewServer(runner)
+}
+
+func TestOpIdHeader(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/log", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "abc123", w.Header().Get("X-JJ-Op-Id"))
+}
+
 func TestHandleLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1fmain\n"
 	runner.Expect(jj.LogGraph("@", 0)).SetOutput([]byte(graphOutput))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/log?revset=@", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -45,7 +65,7 @@ func TestHandleLog_Empty(t *testing.T) {
 	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/log", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -58,7 +78,7 @@ func TestHandleBookmarks(t *testing.T) {
 	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main;.;false;false;false;abc"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/bookmarks", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -75,7 +95,7 @@ func TestHandleDiff(t *testing.T) {
 	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+added line"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/diff?revision=abc", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -87,7 +107,7 @@ func TestHandleDiff(t *testing.T) {
 }
 
 func TestHandleDiff_MissingRevision(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("GET", "/api/diff", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -100,7 +120,7 @@ func TestHandleNew(t *testing.T) {
 	runner.Expect(jj.New(jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"}))).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(newRequest{Revisions: []string{"abc"}})
 	req := httptest.NewRequest("POST", "/api/new", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -115,7 +135,7 @@ func TestHandleAbandon(t *testing.T) {
 	runner.Expect(jj.Abandon(revs, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(abandonRequest{Revisions: []string{"abc"}})
 	req := httptest.NewRequest("POST", "/api/abandon", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -130,7 +150,7 @@ func TestHandleDescribe(t *testing.T) {
 	runner.Expect(args).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(describeRequest{Revision: "abc", Description: "new description"})
 	req := httptest.NewRequest("POST", "/api/describe", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -145,7 +165,7 @@ func TestHandleRebase(t *testing.T) {
 	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", false, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def"})
 	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -160,7 +180,7 @@ func TestHandleSquash(t *testing.T) {
 	runner.Expect(jj.Squash(revs, "def", nil, false, false, false, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(squashRequest{Revisions: []string{"abc"}, Destination: "def"})
 	req := httptest.NewRequest("POST", "/api/squash", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -174,7 +194,7 @@ func TestHandleUndo(t *testing.T) {
 	runner.Expect(jj.Undo()).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("POST", "/api/undo", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -187,7 +207,7 @@ func TestHandleBookmarkSet(t *testing.T) {
 	runner.Expect(jj.BookmarkSet("abc", "feature")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "feature"})
 	req := httptest.NewRequest("POST", "/api/bookmark/set", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -201,7 +221,7 @@ func TestHandleGitPush(t *testing.T) {
 	runner.Expect(jj.GitPush("--bookmark", "main")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--bookmark", "main"}})
 	req := httptest.NewRequest("POST", "/api/git/push", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -216,7 +236,7 @@ func TestHandleFiles(t *testing.T) {
 	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 10 +++++++---\n new.go      |  5 +++++\n 2 files changed, 12 insertions(+), 3 deletions(-)\n"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -236,7 +256,7 @@ func TestHandleFiles(t *testing.T) {
 }
 
 func TestHandleFiles_MissingRevision(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("GET", "/api/files", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -250,7 +270,7 @@ func TestHandleFiles_Empty(t *testing.T) {
 	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -266,7 +286,7 @@ func TestHandleBookmarkMove(t *testing.T) {
 	runner.Expect(jj.BookmarkMove("abc", "feature")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "feature"})
 	req := httptest.NewRequest("POST", "/api/bookmark/move", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -280,7 +300,7 @@ func TestHandleBookmarkForget(t *testing.T) {
 	runner.Expect(jj.BookmarkForget("feature")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(bookmarkNameRequest{Name: "feature"})
 	req := httptest.NewRequest("POST", "/api/bookmark/forget", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -296,7 +316,7 @@ func TestHandleLog_RunnerError(t *testing.T) {
 	runner.Expect(jj.LogGraph("@", 0)).SetError(errors.New("jj failed"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/log?revset=@", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -308,7 +328,7 @@ func TestHandleLog_RunnerError(t *testing.T) {
 }
 
 func TestHandleEdit_InvalidJSON(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("POST", "/api/edit", strings.NewReader("{bad json"))
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -317,7 +337,7 @@ func TestHandleEdit_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleGitPush_DisallowedFlag(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--force"}})
 	req := httptest.NewRequest("POST", "/api/git/push", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -330,7 +350,7 @@ func TestHandleGitPush_DisallowedFlag(t *testing.T) {
 }
 
 func TestHandleGitFetch_DisallowedFlag(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--force"}})
 	req := httptest.NewRequest("POST", "/api/git/fetch", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -343,7 +363,7 @@ func TestHandleGitFetch_DisallowedFlag(t *testing.T) {
 }
 
 func TestHandleLog_InvalidLimit(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("GET", "/api/log?limit=notanumber", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -352,7 +372,7 @@ func TestHandleLog_InvalidLimit(t *testing.T) {
 }
 
 func TestHandleEdit_MissingRevision(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(editRequest{})
 	req := httptest.NewRequest("POST", "/api/edit", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -362,7 +382,7 @@ func TestHandleEdit_MissingRevision(t *testing.T) {
 }
 
 func TestHandleRebase_MissingFields(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 
 	// Missing revisions
 	body, _ := json.Marshal(rebaseRequest{Destination: "def"})
@@ -380,7 +400,7 @@ func TestHandleRebase_MissingFields(t *testing.T) {
 }
 
 func TestHandleBookmarkSet_MissingFields(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc"})
 	req := httptest.NewRequest("POST", "/api/bookmark/set", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -405,7 +425,7 @@ func TestHandleGetDescription(t *testing.T) {
 	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("my commit message"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/description?revision=abc", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -417,7 +437,7 @@ func TestHandleGetDescription(t *testing.T) {
 }
 
 func TestHandleGetDescription_MissingRevision(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("GET", "/api/description", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -430,7 +450,7 @@ func TestHandleStatus(t *testing.T) {
 	runner.Expect(jj.Status("abc")).SetOutput([]byte("M src/main.go\n"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/status?revision=abc", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -442,7 +462,7 @@ func TestHandleStatus(t *testing.T) {
 }
 
 func TestHandleStatus_MissingRevision(t *testing.T) {
-	srv := NewServer(testutil.NewMockRunner(t))
+	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("GET", "/api/status", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -455,7 +475,7 @@ func TestHandleRemotes(t *testing.T) {
 	runner.Expect(jj.GitRemoteList()).SetOutput([]byte("origin https://github.com/test/repo.git\n"))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/remotes", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -468,7 +488,7 @@ func TestHandleGitFetch_ValidFlags(t *testing.T) {
 	runner.Expect(jj.GitFetch("--remote", "origin")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := newTestServer(runner)
 	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--remote", "origin"}})
 	req := httptest.NewRequest("POST", "/api/git/fetch", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -482,6 +502,93 @@ func TestValidateFlags_SingleDashRejected(t *testing.T) {
 	err := validateFlags([]string{"-f"}, allowed)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "flag not allowed: -f")
+}
+
+func TestOpIdHeader_Failure(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Allow(jj.CurrentOpId()).SetError(errors.New("op-id fetch failed"))
+	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := NewServer(runner)
+	req := httptest.NewRequest("GET", "/api/log", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	// When op-id fetch fails, header should be absent
+	assert.Empty(t, w.Header().Get("X-JJ-Op-Id"))
+}
+
+func TestHandleOpLog(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	opLogOutput := "abc123\x1Fdescription one\x1F2026-01-01 00:00\x1Ftrue\ndef456\x1Fdescription two\x1F2026-01-01 00:01\x1Ffalse\n"
+	runner.Expect(jj.OpLog(50)).SetOutput([]byte(opLogOutput))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/oplog", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var entries []jj.OpEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	assert.Len(t, entries, 2)
+	assert.Equal(t, "abc123", entries[0].ID)
+	assert.Equal(t, "description one", entries[0].Description)
+	assert.True(t, entries[0].IsCurrent)
+	assert.Equal(t, "def456", entries[1].ID)
+	assert.False(t, entries[1].IsCurrent)
+}
+
+func TestHandleEvolog(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Evolog("abc")).SetOutput([]byte("evolution log output"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/evolog?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "evolution log output", resp["output"])
+}
+
+func TestHandleEvolog_MissingRevision(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/evolog", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleBookmarkDelete(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkDelete("feature")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(bookmarkNameRequest{Name: "feature"})
+	req := httptest.NewRequest("POST", "/api/bookmark/delete", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleBookmarkDelete_MissingName(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkNameRequest{})
+	req := httptest.NewRequest("POST", "/api/bookmark/delete", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // parseLogOutput tests moved to internal/parser/graph_test.go

@@ -12,6 +12,7 @@ export interface DiffHunk {
 
 export interface DiffFile {
   header: string
+  filePath: string
   hunks: DiffHunk[]
 }
 
@@ -26,7 +27,7 @@ export function parseDiffContent(raw: string): DiffFile[] {
   for (const line of lines) {
     if (line.startsWith('diff --git') || line.startsWith('=== ') || line.startsWith('Modified ') || line.startsWith('Added ') || line.startsWith('Deleted ') || line.startsWith('Copied ') || line.startsWith('Renamed ')) {
       // jj uses different diff headers than git
-      currentFile = { header: line, hunks: [] }
+      currentFile = { header: line, filePath: '', hunks: [] }
       files.push(currentFile)
       currentHunk = null
     } else if (line.startsWith('@@')) {
@@ -34,7 +35,7 @@ export function parseDiffContent(raw: string): DiffFile[] {
       if (currentFile) {
         currentFile.hunks.push(currentHunk)
       } else {
-        currentFile = { header: '(unknown file)', hunks: [currentHunk] }
+        currentFile = { header: '(unknown file)', filePath: '(unknown file)', hunks: [currentHunk] }
         files.push(currentFile)
       }
     } else if (line.startsWith('---') || line.startsWith('+++')) {
@@ -53,6 +54,13 @@ export function parseDiffContent(raw: string): DiffFile[] {
     } else if (currentFile && line.trim()) {
       // Lines between file header and first hunk (e.g. "Binary file..." or index lines)
       currentFile.header += '\n' + line
+    }
+  }
+
+  // Compute filePath for each file now that headers are fully assembled
+  for (const file of files) {
+    if (!file.filePath) {
+      file.filePath = filePathFromHeader(file.header)
     }
   }
 
