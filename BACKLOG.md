@@ -64,8 +64,8 @@
 - [x] Evolog viewer
 
 ### P3 — Advanced
-- [ ] Retain collapse/expand state per revision (switching revisions should not reset which files are collapsed)
-- [ ] Show total diff stats (aggregate +N -N across all files) in the file list header
+- [x] Retain collapse/expand state per revision (cached per change-id, restored on revisit)
+- [x] Show total diff stats (aggregate +N -N across all files) in the file list header
 - [ ] Branch/remote sidebar (like Sublime Merge left panel)
 - [ ] Drag-and-drop rebase (drag revision onto destination)
 - [ ] Rebase modal (pick source + destination)
