@@ -72,12 +72,17 @@ func TestAbandon_IgnoreImmutable(t *testing.T) {
 }
 
 func TestDiff(t *testing.T) {
-	got := Diff("abc", "")
+	got := Diff("abc", "", "")
 	assert.Equal(t, []string{"diff", "-r", "abc", "--color", "always", "--ignore-working-copy"}, got)
 }
 
+func TestDiff_NoColor(t *testing.T) {
+	got := Diff("abc", "", "never")
+	assert.Equal(t, []string{"diff", "-r", "abc", "--color", "never", "--ignore-working-copy"}, got)
+}
+
 func TestDiff_WithFile(t *testing.T) {
-	got := Diff("abc", "src/main.go")
+	got := Diff("abc", "src/main.go", "")
 	assert.Contains(t, got, `file:"src/main.go"`)
 }
 

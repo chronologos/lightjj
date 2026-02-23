@@ -60,8 +60,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	file := r.URL.Query().Get("file")
 
-	// For web, request without color so we can syntax-highlight in the frontend
-	args := jj.Diff(revision, file, "--color", "never")
+	args := jj.Diff(revision, file, "never", "--tool", ":git")
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
