@@ -94,8 +94,8 @@ func parseNodeLine(line string) GraphRow {
 	// The rest contains the markers and content
 	rest := line[prefixIdx:]
 
-	// Tab-separated fields: prefixBlock \t fullChangeId \t fullCommitId \t description \t bookmarks
-	parts := strings.SplitN(rest, "\t", 5)
+	// Unit-separator-delimited fields: prefixBlock \x1F fullChangeId \x1F fullCommitId \x1F description \x1F bookmarks
+	parts := strings.SplitN(rest, "\x1f", 5)
 	prefixBlock := parts[0]
 	if len(parts) > 1 {
 		row.Commit.ChangeId = parts[1]
@@ -107,7 +107,15 @@ func parseNodeLine(line string) GraphRow {
 		row.Description = parts[3]
 	}
 	if len(parts) > 4 && parts[4] != "" {
-		row.Bookmarks = strings.Fields(parts[4])
+		// Bookmarks are joined with \x1F in the template to handle names with spaces.
+		// After the top-level SplitN on \x1F, remaining separators within the bookmarks
+		// field delimit individual bookmark names.
+		for _, bm := range strings.Split(parts[4], "\x1f") {
+			bm = strings.TrimSpace(bm)
+			if bm != "" {
+				row.Bookmarks = append(row.Bookmarks, bm)
+			}
+		}
 	}
 
 	// Parse the prefix block: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent

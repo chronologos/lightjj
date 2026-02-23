@@ -18,7 +18,7 @@ import (
 
 func TestHandleLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\tabcdefgh\txyz12345\tmy commit\tmain\n"
+	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1fmain\n"
 	runner.Expect(jj.LogGraph("@", 0)).SetOutput([]byte(graphOutput))
 	defer runner.Verify()
 
@@ -213,6 +213,7 @@ func TestHandleGitPush(t *testing.T) {
 func TestHandleFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\nA new.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 10 +++++++---\n new.go      |  5 +++++\n 2 files changed, 12 insertions(+), 3 deletions(-)\n"))
 	defer runner.Verify()
 
 	srv := NewServer(runner)
@@ -226,8 +227,12 @@ func TestHandleFiles(t *testing.T) {
 	assert.Len(t, files, 2)
 	assert.Equal(t, "M", files[0].Type)
 	assert.Equal(t, "src/main.go", files[0].Path)
+	assert.Equal(t, 7, files[0].Additions)
+	assert.Equal(t, 3, files[0].Deletions)
 	assert.Equal(t, "A", files[1].Type)
 	assert.Equal(t, "new.go", files[1].Path)
+	assert.Equal(t, 5, files[1].Additions)
+	assert.Equal(t, 0, files[1].Deletions)
 }
 
 func TestHandleFiles_MissingRevision(t *testing.T) {
@@ -242,6 +247,7 @@ func TestHandleFiles_MissingRevision(t *testing.T) {
 func TestHandleFiles_Empty(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := NewServer(runner)
@@ -392,6 +398,90 @@ func TestValidateFlags(t *testing.T) {
 	err := validateFlags([]string{"--force"}, allowed)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "flag not allowed: --force")
+}
+
+func TestHandleGetDescription(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("my commit message"))
+	defer runner.Verify()
+
+	srv := NewServer(runner)
+	req := httptest.NewRequest("GET", "/api/description?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "my commit message", resp["description"])
+}
+
+func TestHandleGetDescription_MissingRevision(t *testing.T) {
+	srv := NewServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/description", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleStatus(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Status("abc")).SetOutput([]byte("M src/main.go\n"))
+	defer runner.Verify()
+
+	srv := NewServer(runner)
+	req := httptest.NewRequest("GET", "/api/status?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["status"], "M src/main.go")
+}
+
+func TestHandleStatus_MissingRevision(t *testing.T) {
+	srv := NewServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleRemotes(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.GitRemoteList()).SetOutput([]byte("origin https://github.com/test/repo.git\n"))
+	defer runner.Verify()
+
+	srv := NewServer(runner)
+	req := httptest.NewRequest("GET", "/api/remotes", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleGitFetch_ValidFlags(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.GitFetch("--remote", "origin")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := NewServer(runner)
+	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--remote", "origin"}})
+	req := httptest.NewRequest("POST", "/api/git/fetch", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestValidateFlags_SingleDashRejected(t *testing.T) {
+	allowed := map[string]bool{"--bookmark": true}
+	err := validateFlags([]string{"-f"}, allowed)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "flag not allowed: -f")
 }
 
 // parseLogOutput tests moved to internal/parser/graph_test.go

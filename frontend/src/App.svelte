@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { api, type LogEntry } from './lib/api'
+  import { api, type LogEntry, type FileChange } from './lib/api'
+  import { highlightLines, detectLanguage } from './lib/highlighter'
 
   // --- State ---
   let revisions: LogEntry[] = $state([])
@@ -13,10 +14,16 @@
   let descriptionDraft: string = $state('')
   let commandOutput: string = $state('')
   let revsetFilter: string = $state('')
-  let changedFiles: string[] = $state([])
-  let selectedFile: string | null = $state(null)
+  let changedFiles: FileChange[] = $state([])
+  let selectedFile: FileChange | null = $state(null)
   let filesLoading: boolean = $state(false)
   let describeSaved: boolean = $state(false)
+  let collapsedFiles: Set<string> = $state(new Set())
+  let splitView: boolean = $state(false)
+  let checkedRevisions: Set<string> = $state(new Set())
+  let lastCheckedIndex: number = $state(-1)
+  let diffGeneration: number = 0
+  let filesGeneration: number = 0
 
   // --- Refs ---
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -27,6 +34,17 @@
       ? revisions[selectedIndex]
       : null
   )
+
+  // Effective revisions for operations: checked if any, otherwise cursor
+  let effectiveRevisions = $derived.by(() => {
+    if (checkedRevisions.size > 0) {
+      return [...checkedRevisions]
+    }
+    return selectedRevision ? [selectedRevision.commit.change_id] : []
+  })
+
+  // Aggregate revset string for diff/files queries
+  let effectiveRevset = $derived(effectiveRevisions.join('|'))
 
   interface FlatLine {
     gutter: string
@@ -84,14 +102,98 @@
 
   let parsedDiff = $derived(parseDiffContent(diffContent))
 
+  // --- Syntax highlighting ---
+  let highlightedLines: Map<string, string> = $state(new Map())
+  let highlightGeneration = 0
+
+  async function highlightDiff(files: DiffFile[]) {
+    const gen = ++highlightGeneration
+    const newMap = new Map<string, string>()
+    for (const file of files) {
+      const filePath = filePathFromHeader(file.header)
+      const lang = detectLanguage(filePath)
+
+      for (const hunk of file.hunks) {
+        const hunkIdx = file.hunks.indexOf(hunk)
+        // Collect lines by type for coherent highlighting (like antique)
+        const addLines: { idx: number; content: string }[] = []
+        const removeLines: { idx: number; content: string }[] = []
+        const contextLines: { idx: number; content: string }[] = []
+
+        hunk.lines.forEach((line, i) => {
+          const stripped = line.content.slice(1) // remove +/- /space prefix
+          if (line.type === 'add') addLines.push({ idx: i, content: stripped })
+          else if (line.type === 'remove') removeLines.push({ idx: i, content: stripped })
+          else contextLines.push({ idx: i, content: stripped })
+        })
+
+        // Highlight each group separately so the highlighter sees coherent code
+        for (const group of [addLines, removeLines, contextLines]) {
+          if (group.length === 0) continue
+          const highlighted = await highlightLines(group.map(g => g.content), lang)
+          if (gen !== highlightGeneration) return // stale — abort
+          group.forEach((g, j) => {
+            const key = `${filePath}:${hunkIdx}:${g.idx}`
+            const line = hunk.lines[g.idx]
+            const prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '
+            newMap.set(key, `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`)
+          })
+        }
+      }
+    }
+    if (gen === highlightGeneration) {
+      highlightedLines = newMap
+    }
+  }
+
+  $effect(() => {
+    if (parsedDiff.length > 0) {
+      highlightDiff(parsedDiff)
+    } else {
+      highlightedLines = new Map()
+    }
+  })
+
   let statusText = $derived.by(() => {
     if (loading) return 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
     const count = revisions.length
     const wc = revisions.find(r => r.commit.is_working_copy)
-    return `${count} revisions${wc ? ` | @ ${wc.commit.change_id.slice(0, 8)}` : ''}`
+    const checked = checkedRevisions.size > 0 ? `${checkedRevisions.size} checked | ` : ''
+    return `${checked}${count} revisions${wc ? ` | @ ${wc.commit.change_id.slice(0, 8)}` : ''}`
   })
+
+  function toggleCheck(changeId: string, index: number) {
+    const next = new Set(checkedRevisions)
+    if (next.has(changeId)) {
+      next.delete(changeId)
+    } else {
+      next.add(changeId)
+    }
+    checkedRevisions = next
+    collapsedFiles = new Set()
+    lastCheckedIndex = index
+  }
+
+  function rangeCheck(fromIndex: number, toIndex: number) {
+    const lo = Math.min(fromIndex, toIndex)
+    const hi = Math.max(fromIndex, toIndex)
+    const next = new Set(checkedRevisions)
+    for (let i = lo; i <= hi; i++) {
+      if (i < revisions.length) {
+        next.add(revisions[i].commit.change_id)
+      }
+    }
+    checkedRevisions = next
+    collapsedFiles = new Set()
+    lastCheckedIndex = toIndex
+  }
+
+  function clearChecks() {
+    checkedRevisions = new Set()
+    lastCheckedIndex = -1
+  }
 
   // --- Types ---
   interface DiffFile {
@@ -154,19 +256,101 @@
     return files
   }
 
-  // --- Status parser ---
-  // Parses `jj status` output to extract changed file paths
-  function parseStatusOutput(raw: string): string[] {
-    if (!raw) return []
-    const files: string[] = []
-    for (const line of raw.split('\n')) {
-      // jj status lines look like: "M path/to/file" or "A path/to/file" etc.
-      const match = line.match(/^([MADRC])\s+(.+)$/)
-      if (match) {
-        files.push(match[2])
+  // --- Split view ---
+  interface SplitSide {
+    line: DiffLine
+    hunkIdx: number
+    lineIdx: number
+  }
+
+  interface SplitLine {
+    left: SplitSide | null
+    right: SplitSide | null
+  }
+
+  function toSplitView(hunks: DiffHunk[]): SplitLine[] {
+    const result: SplitLine[] = []
+    for (let hunkIdx = 0; hunkIdx < hunks.length; hunkIdx++) {
+      const hunk = hunks[hunkIdx]
+      result.push({
+        left: { line: { type: 'header', content: hunk.header }, hunkIdx, lineIdx: -1 },
+        right: { line: { type: 'header', content: hunk.header }, hunkIdx, lineIdx: -1 },
+      })
+      let dels: SplitSide[] = []
+      let adds: SplitSide[] = []
+      const flush = () => {
+        const max = Math.max(dels.length, adds.length)
+        for (let i = 0; i < max; i++) {
+          result.push({ left: dels[i] ?? null, right: adds[i] ?? null })
+        }
+        dels = []
+        adds = []
       }
+      hunk.lines.forEach((line, lineIdx) => {
+        const side: SplitSide = { line, hunkIdx, lineIdx }
+        if (line.type === 'remove') {
+          dels.push(side)
+        } else if (line.type === 'add') {
+          adds.push(side)
+        } else {
+          flush()
+          result.push({ left: side, right: side })
+        }
+      })
+      flush()
     }
-    return files
+    return result
+  }
+
+  // --- Collapse helpers ---
+  function toggleFile(path: string) {
+    const next = new Set(collapsedFiles)
+    if (next.has(path)) {
+      next.delete(path)
+    } else {
+      next.add(path)
+    }
+    collapsedFiles = next
+  }
+
+  function collapseAll() {
+    collapsedFiles = new Set(parsedDiff.map((f) => filePathFromHeader(f.header)))
+  }
+
+  function expandAll() {
+    collapsedFiles = new Set()
+  }
+
+  // Extract file path from diff header for matching with changedFiles
+  function filePathFromHeader(header: string): string {
+    // jj headers: "Modified regular file src/main.go:" or "Added regular file new.go:" etc.
+    // Also git-style: "diff --git a/file b/file"
+    const firstLine = header.split('\n')[0]
+    // Match jj-style: "Modified regular file path/to/file:"
+    const jjMatch = firstLine.match(/^(?:Modified|Added|Deleted|Copied|Renamed)\s+(?:regular\s+)?file\s+(.+?)(?::)?$/)
+    if (jjMatch) return jjMatch[1]
+    // Match git-style: "diff --git a/path b/path"
+    const gitMatch = firstLine.match(/^diff --git a\/(.+?) b\//)
+    if (gitMatch) return gitMatch[1]
+    return firstLine
+  }
+
+  function scrollToFile(path: string) {
+    // Expand if collapsed
+    if (collapsedFiles.has(path)) {
+      toggleFile(path)
+    }
+    // Also try to match by header
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-file-path="${CSS.escape(path)}"]`)
+      el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
+  }
+
+  // Look up stats for a diff file by matching its header against changedFiles
+  function statsForFile(header: string): FileChange | undefined {
+    const path = filePathFromHeader(header)
+    return changedFiles.find((f) => f.path === path)
   }
 
   // --- API actions ---
@@ -179,9 +363,19 @@
       if (selectedIndex < 0 || selectedIndex >= revisions.length) {
         selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
       }
-      if (selectedIndex >= 0) {
+      // Clear stale checked revisions (their change_ids may no longer exist)
+      if (checkedRevisions.size > 0) {
+        const validIds = new Set(revisions.map(r => r.commit.change_id))
+        const next = new Set([...checkedRevisions].filter(id => validIds.has(id)))
+        if (next.size !== checkedRevisions.size) {
+          checkedRevisions = next
+        }
+      }
+      // Reset range anchor — list may have been reordered
+      lastCheckedIndex = -1
+      if (selectedIndex >= 0 && checkedRevisions.size === 0) {
         await loadDiff(revisions[selectedIndex])
-        await loadStatus(revisions[selectedIndex])
+        await loadFiles(revisions[selectedIndex])
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -190,28 +384,44 @@
     }
   }
 
-  async function loadDiff(entry: LogEntry, file?: string) {
+  async function loadDiffForRevset(revset: string, file?: string) {
+    const gen = ++diffGeneration
     diffLoading = true
     try {
-      const result = await api.diff(entry.commit.change_id, file)
+      const result = await api.diff(revset, file)
+      if (gen !== diffGeneration) return
       diffContent = result.diff
     } catch (e) {
-      diffContent = e instanceof Error ? e.message : String(e)
+      if (gen !== diffGeneration) return
+      const msg = e instanceof Error ? e.message : String(e)
+      diffContent = ''
+      error = msg
     } finally {
-      diffLoading = false
+      if (gen === diffGeneration) diffLoading = false
     }
   }
 
-  async function loadStatus(entry: LogEntry) {
+  async function loadFilesForRevset(revset: string) {
+    const gen = ++filesGeneration
     filesLoading = true
     try {
-      const result = await api.status(entry.commit.change_id)
-      changedFiles = parseStatusOutput(result.status)
+      const result = await api.files(revset)
+      if (gen !== filesGeneration) return
+      changedFiles = result
     } catch {
+      if (gen !== filesGeneration) return
       changedFiles = []
     } finally {
-      filesLoading = false
+      if (gen === filesGeneration) filesLoading = false
     }
+  }
+
+  async function loadDiff(entry: LogEntry, file?: string) {
+    await loadDiffForRevset(entry.commit.change_id, file)
+  }
+
+  async function loadFiles(entry: LogEntry) {
+    await loadFilesForRevset(entry.commit.change_id)
   }
 
   async function selectRevision(index: number) {
@@ -220,20 +430,27 @@
     if (entry) {
       descriptionEditing = false
       selectedFile = null
-      await Promise.all([loadDiff(entry), loadStatus(entry)])
+      collapsedFiles = new Set()
+      // When checked revisions exist, don't reload on cursor move — the effect handles it
+      if (checkedRevisions.size === 0) {
+        await Promise.all([loadDiff(entry), loadFiles(entry)])
+      }
     }
   }
 
-  async function selectFile(file: string) {
-    if (!selectedRevision) return
-    if (selectedFile === file) {
-      // Deselect — show full diff
-      selectedFile = null
-      await loadDiff(selectedRevision)
-    } else {
-      selectedFile = file
-      await loadDiff(selectedRevision, file)
-    }
+  // Reload diff/files when checked revisions change
+  // Build revset directly from checkedRevisions to avoid tracking cursor changes
+  $effect(() => {
+    // Access checkedRevisions to create dependency
+    const checked = [...checkedRevisions]
+    if (checked.length === 0) return
+    const revset = checked.join('|')
+    loadDiffForRevset(revset)
+    loadFilesForRevset(revset)
+  })
+
+  function selectFile(file: FileChange) {
+    scrollToFile(file.path)
   }
 
   async function handleAbandon(changeId: string) {
@@ -247,11 +464,43 @@
     }
   }
 
+  async function handleAbandonChecked() {
+    const revs = effectiveRevisions
+    if (revs.length === 0) return
+    try {
+      const result = await api.abandon(revs)
+      lastAction = revs.length > 1
+        ? `Abandoned ${revs.length} revisions`
+        : `Abandoned ${revs[0].slice(0, 8)}`
+      commandOutput = result.output
+      clearChecks()
+      await loadLog()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   async function handleNew(changeId: string) {
     try {
       const result = await api.newRevision([changeId])
       lastAction = `Created new revision from ${changeId.slice(0, 8)}`
       commandOutput = result.output
+      await loadLog()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleNewFromChecked() {
+    const revs = effectiveRevisions
+    if (revs.length === 0) return
+    try {
+      const result = await api.newRevision(revs)
+      lastAction = revs.length > 1
+        ? `Created new revision from ${revs.length} revisions`
+        : `Created new revision from ${revs[0].slice(0, 8)}`
+      commandOutput = result.output
+      clearChecks()
       await loadLog()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -343,6 +592,7 @@
     selectedIndex = -1
     selectedFile = null
     changedFiles = []
+    clearChecks()
     loadLog()
   }
 
@@ -385,6 +635,12 @@
           selectRevision(selectedIndex - 1)
         }
         break
+      case ' ':
+        if (selectedRevision) {
+          e.preventDefault()
+          toggleCheck(selectedRevision.commit.change_id, selectedIndex)
+        }
+        break
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
@@ -400,14 +656,19 @@
         loadLog()
         break
       case 'e':
-        if (selectedRevision) {
+        if (checkedRevisions.size > 1) {
+          e.preventDefault()
+          lastAction = 'Describe works on a single revision — clear checks first'
+        } else if (selectedRevision) {
           e.preventDefault()
           startDescriptionEdit()
         }
         break
       case 'n':
-        if (selectedRevision) {
-          e.preventDefault()
+        e.preventDefault()
+        if (checkedRevisions.size > 0) {
+          handleNewFromChecked()
+        } else if (selectedRevision) {
           handleNew(selectedRevision.commit.change_id)
         }
         break
@@ -418,6 +679,16 @@
       case 'Escape':
         if (descriptionEditing) {
           descriptionEditing = false
+        } else if (checkedRevisions.size > 0) {
+          clearChecks()
+          // Reload diff for cursor selection, or clear stale aggregate diff
+          if (selectedRevision) {
+            loadDiff(selectedRevision)
+            loadFiles(selectedRevision)
+          } else {
+            diffContent = ''
+            changedFiles = []
+          }
         } else if (error) {
           dismissError()
         }
@@ -425,8 +696,9 @@
     }
   }
 
-  // Scroll selected revision into view
-  function scrollSelectedIntoView() {
+  // Scroll selected revision into view.
+  // Accepts _index parameter to create a reactive dependency in $effect.
+  function scrollSelectedIntoView(_index: number) {
     requestAnimationFrame(() => {
       const el = document.querySelector('.graph-row.node-row.selected')
       el?.scrollIntoView({ block: 'nearest' })
@@ -434,9 +706,7 @@
   }
 
   $effect(() => {
-    // Re-run when selectedIndex changes
-    selectedIndex;
-    scrollSelectedIntoView()
+    scrollSelectedIntoView(selectedIndex)
   })
 
   loadLog()
@@ -483,6 +753,7 @@
     <div class="titlebar-right">
       <kbd class="shortcut-hint">/</kbd> filter
       <kbd class="shortcut-hint">j/k</kbd> navigate
+      <kbd class="shortcut-hint">Space</kbd> check
       <kbd class="shortcut-hint">e</kbd> describe
       <kbd class="shortcut-hint">n</kbd> new
       <kbd class="shortcut-hint">u</kbd> undo
@@ -506,7 +777,7 @@
       <div class="panel-header">
         <span class="panel-title">Revisions</span>
         {#if !loading}
-          <span class="panel-badge">{revisions.length}</span>
+          <span class="panel-badge">{revisions.length}{#if checkedRevisions.size > 0} ({checkedRevisions.size} checked){/if}</span>
         {/if}
       </div>
       <!-- Revset filter input -->
@@ -529,6 +800,14 @@
           <button class="revset-clear" onclick={clearRevsetFilter} title="Clear filter (Escape)">x</button>
         {/if}
       </div>
+      {#if checkedRevisions.size > 0}
+        <div class="batch-actions-bar">
+          <span class="batch-label">{checkedRevisions.size} checked</span>
+          <button class="action-btn" onclick={handleNewFromChecked} title="New from checked (n)">new</button>
+          <button class="action-btn danger" onclick={handleAbandonChecked} title="Abandon checked">abandon</button>
+          <button class="action-btn" onclick={clearChecks} title="Clear checks (Escape)">clear</button>
+        </div>
+      {/if}
       <div class="panel-content">
         {#if loading}
           <div class="empty-state">
@@ -538,19 +817,29 @@
         {:else if revisions.length === 0}
           <div class="empty-state">No revisions found</div>
         {:else}
-          <div class="revision-list" role="listbox">
+          <div class="revision-list" role="listbox" aria-label="Revision list">
             {#each flatLines as line, lineIdx}
+              {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
               <div
                 class="graph-row"
                 class:node-row={line.isNode}
                 class:selected={selectedIndex === line.entryIndex}
+                class:checked={isChecked}
                 class:wc={line.isWorkingCopy}
                 class:hidden-rev={line.isHidden}
-                onclick={() => selectRevision(line.entryIndex)}
+                onclick={(e: MouseEvent) => {
+                  if (e.shiftKey && line.isNode && lastCheckedIndex >= 0) {
+                    e.preventDefault()
+                    rangeCheck(lastCheckedIndex, line.entryIndex)
+                  } else {
+                    selectRevision(line.entryIndex)
+                  }
+                }}
                 role="option"
                 tabindex={line.isNode ? 0 : -1}
                 aria-selected={selectedIndex === line.entryIndex}
               >
+                <span class="check-gutter">{#if line.isNode && isChecked}✓{/if}</span>
                 <span class="gutter" class:wc-gutter={line.isWorkingCopy}>{line.gutter}</span>
                 {#if line.isNode}
                   {@const entry = revisions[line.entryIndex]}
@@ -563,8 +852,7 @@
                     {/if}
                     <span class="commit-id"><span class="commit-id-prefix">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span><span class="commit-id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix)}</span></span>
                   </span>
-                  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions, a11y_no_noninteractive_element_interactions -->
-                  <span class="rev-actions" role="group" onclick={(e: MouseEvent) => e.stopPropagation()}>
+                  <span class="rev-actions" role="group">
                     <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); handleEdit(entry.commit.change_id) }} title="Edit">edit</button>
                     <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); handleNew(entry.commit.change_id) }} title="New (n)">new</button>
                     <button class="action-btn danger" onclick={(e: MouseEvent) => { e.stopPropagation(); handleAbandon(entry.commit.change_id) }} title="Abandon">abandon</button>
@@ -585,7 +873,12 @@
     <!-- Right panel: diff viewer -->
     <div class="panel diff-panel">
       <div class="panel-header">
-        {#if selectedRevision}
+        {#if checkedRevisions.size > 0}
+          <span class="panel-title">
+            Changes in
+            <span class="header-change-id">{checkedRevisions.size === 1 ? [...checkedRevisions][0].slice(0, 12) : `${checkedRevisions.size} revisions`}</span>
+          </span>
+        {:else if selectedRevision}
           <span class="panel-title">
             Changes in
             <span class="header-change-id">{selectedRevision.commit.change_id.slice(0, 12)}</span>
@@ -602,34 +895,70 @@
           <span class="panel-title">Diff Viewer</span>
         {/if}
       </div>
-      <div class="panel-content">
-        {#if descriptionEditing && selectedRevision}
-          <div class="desc-editor">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="desc-label">Description for {selectedRevision.commit.change_id.slice(0, 12)}</label>
-            <textarea
-              bind:value={descriptionDraft}
-              rows="4"
-              placeholder="Enter commit description..."
-              onkeydown={(e: KeyboardEvent) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  handleDescribe()
-                }
-                if (e.key === 'Escape') {
-                  descriptionEditing = false
-                }
-              }}
-            ></textarea>
-            <div class="desc-actions">
-              <button class="btn-primary" onclick={handleDescribe}>
-                Save
-                <kbd>Cmd+Enter</kbd>
-              </button>
-              <button class="btn-secondary" onclick={() => descriptionEditing = false}>Cancel</button>
-            </div>
+      {#if descriptionEditing && selectedRevision}
+        <div class="desc-editor">
+          <label class="desc-label" for="desc-textarea">Description for {selectedRevision.commit.change_id.slice(0, 12)}</label>
+          <textarea
+            id="desc-textarea"
+            bind:value={descriptionDraft}
+            rows="4"
+            placeholder="Enter commit description..."
+            onkeydown={(e: KeyboardEvent) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                handleDescribe()
+              }
+              if (e.key === 'Escape') {
+                descriptionEditing = false
+              }
+            }}
+          ></textarea>
+          <div class="desc-actions">
+            <button class="btn-primary" onclick={handleDescribe}>
+              Save
+              <kbd>Cmd+Enter</kbd>
+            </button>
+            <button class="btn-secondary" onclick={() => descriptionEditing = false}>Cancel</button>
           </div>
-        {/if}
-
+        </div>
+      {/if}
+      {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0}
+        <div class="file-list-bar">
+          <span class="file-list-label">Files ({changedFiles.length})</span>
+          <div class="file-list">
+            {#each changedFiles as file}
+              <button
+                class="file-chip"
+                onclick={() => selectFile(file)}
+                title={file.path}
+              >
+                <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
+                {file.path.split('/').pop()}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+      {#if parsedDiff.length > 0}
+        <div class="diff-toolbar">
+          <div class="diff-toolbar-left">
+            <button class="toolbar-btn-sm" onclick={collapseAll}>Collapse all</button>
+            <button class="toolbar-btn-sm" onclick={expandAll}>Expand all</button>
+          </div>
+          <div class="diff-toolbar-right">
+            <button
+              class="toolbar-btn-sm"
+              class:active={!splitView}
+              onclick={() => splitView = false}
+            >Unified</button>
+            <button
+              class="toolbar-btn-sm"
+              class:active={splitView}
+              onclick={() => splitView = true}
+            >Split</button>
+          </div>
+        </div>
+      {/if}
+      <div class="panel-content">
         {#if diffLoading}
           <div class="empty-state">
             <div class="spinner"></div>
@@ -645,51 +974,118 @@
             <span class="empty-hint">No changes in this revision</span>
           </div>
         {:else}
-          <!-- File list -->
-          {#if changedFiles.length > 0}
-            <div class="file-list-bar">
-              <span class="file-list-label">Files ({changedFiles.length})</span>
-              <div class="file-list">
-                {#each changedFiles as file}
-                  <button
-                    class="file-chip"
-                    class:active={selectedFile === file}
-                    onclick={() => selectFile(file)}
-                    title={file}
-                  >
-                    {file.split('/').pop()}
-                  </button>
-                {/each}
-                {#if selectedFile}
-                  <button class="file-chip clear-chip" onclick={() => selectFile(selectedFile!)}>
-                    Show all
-                  </button>
-                {/if}
-              </div>
-            </div>
-          {/if}
-
           <div class="diff-content">
             {#each parsedDiff as file}
-              <div class="diff-file">
-                <div class="diff-file-header">
-                  {#each file.header.split('\n') as headerLine}
-                    <div>{headerLine}</div>
-                  {/each}
+              {@const filePath = filePathFromHeader(file.header)}
+              {@const fileStats = statsForFile(file.header)}
+              {@const isCollapsed = collapsedFiles.has(filePath)}
+              <div class="diff-file" data-file-path={filePath}>
+                <div
+                  class="diff-file-header"
+                  onclick={() => toggleFile(filePath)}
+                  role="button"
+                  tabindex="0"
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFile(filePath) }}}
+                >
+                  <span class="collapse-toggle">{isCollapsed ? '\u25B6' : '\u25BC'}</span>
+                  {#if fileStats}
+                    <span class="file-type-badge" class:badge-A={fileStats.type === 'A'} class:badge-M={fileStats.type === 'M'} class:badge-D={fileStats.type === 'D'} class:badge-R={fileStats.type === 'R'}>{fileStats.type}</span>
+                  {/if}
+                  <span class="diff-file-path">
+                    {#if filePath.includes('/')}
+                      <span class="file-dir">{filePath.slice(0, filePath.lastIndexOf('/') + 1)}</span><span class="file-name">{filePath.slice(filePath.lastIndexOf('/') + 1)}</span>
+                    {:else}
+                      <span class="file-name">{filePath}</span>
+                    {/if}
+                  </span>
+                  {#if fileStats && (fileStats.additions > 0 || fileStats.deletions > 0)}
+                    <span class="file-stats">
+                      {#if fileStats.additions > 0}<span class="stat-add">+{fileStats.additions}</span>{/if}
+                      {#if fileStats.deletions > 0}<span class="stat-del">-{fileStats.deletions}</span>{/if}
+                    </span>
+                  {/if}
                 </div>
-                {#each file.hunks as hunk}
-                  <div class="diff-hunk-header">{hunk.header}</div>
-                  <div class="diff-lines">
-                    {#each hunk.lines as line}
-                      <div
-                        class="diff-line"
-                        class:diff-add={line.type === 'add'}
-                        class:diff-remove={line.type === 'remove'}
-                        class:diff-context={line.type === 'context'}
-                      >{line.content}</div>
+                {#if !isCollapsed}
+                  {#if splitView}
+                    <!-- Split (side-by-side) view -->
+                    {@const splitLines = toSplitView(file.hunks)}
+                    <div class="split-view">
+                      <div class="split-col split-left">
+                        {#each splitLines as sl}
+                          {#if sl.left?.line.type === 'header'}
+                            <div class="diff-hunk-header">{sl.left.line.content}</div>
+                          {:else if sl.left}
+                            {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
+                            {#if highlightedLines.has(slKey)}
+                              <div
+                                class="diff-line highlighted"
+                                class:diff-remove={sl.left.line.type === 'remove'}
+                                class:diff-context={sl.left.line.type === 'context'}
+                              >{@html highlightedLines.get(slKey)}</div>
+                            {:else}
+                              <div
+                                class="diff-line"
+                                class:diff-remove={sl.left.line.type === 'remove'}
+                                class:diff-context={sl.left.line.type === 'context'}
+                              >{sl.left.line.content}</div>
+                            {/if}
+                          {:else}
+                            <div class="diff-line diff-empty">&nbsp;</div>
+                          {/if}
+                        {/each}
+                      </div>
+                      <div class="split-col split-right">
+                        {#each splitLines as sl}
+                          {#if sl.right?.line.type === 'header'}
+                            <div class="diff-hunk-header">{sl.right.line.content}</div>
+                          {:else if sl.right}
+                            {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
+                            {#if highlightedLines.has(srKey)}
+                              <div
+                                class="diff-line highlighted"
+                                class:diff-add={sl.right.line.type === 'add'}
+                                class:diff-context={sl.right.line.type === 'context'}
+                              >{@html highlightedLines.get(srKey)}</div>
+                            {:else}
+                              <div
+                                class="diff-line"
+                                class:diff-add={sl.right.line.type === 'add'}
+                                class:diff-context={sl.right.line.type === 'context'}
+                              >{sl.right.line.content}</div>
+                            {/if}
+                          {:else}
+                            <div class="diff-line diff-empty">&nbsp;</div>
+                          {/if}
+                        {/each}
+                      </div>
+                    </div>
+                  {:else}
+                    <!-- Unified view -->
+                    {#each file.hunks as hunk, hunkIdx}
+                      <div class="diff-hunk-header">{hunk.header}</div>
+                      <div class="diff-lines">
+                        {#each hunk.lines as line, lineIdx}
+                          {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
+                          {#if highlightedLines.has(hlKey)}
+                            <div
+                              class="diff-line highlighted"
+                              class:diff-add={line.type === 'add'}
+                              class:diff-remove={line.type === 'remove'}
+                              class:diff-context={line.type === 'context'}
+                            >{@html highlightedLines.get(hlKey)}</div>
+                          {:else}
+                            <div
+                              class="diff-line"
+                              class:diff-add={line.type === 'add'}
+                              class:diff-remove={line.type === 'remove'}
+                              class:diff-context={line.type === 'context'}
+                            >{line.content}</div>
+                          {/if}
+                        {/each}
+                      </div>
                     {/each}
-                  </div>
-                {/each}
+                  {/if}
+                {/if}
               </div>
             {/each}
           </div>
@@ -1000,6 +1396,24 @@
     color: #f38ba8;
   }
 
+  /* --- Batch actions bar --- */
+  .batch-actions-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: #1e2a1e;
+    border-bottom: 1px solid #2d5a3d;
+    flex-shrink: 0;
+  }
+
+  .batch-label {
+    color: #a6e3a1;
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+
   /* --- Revision list (flat graph rows) --- */
   .revision-list {
     display: flex;
@@ -1025,8 +1439,27 @@
     box-shadow: inset 2px 0 0 #89b4fa;
   }
 
+  .graph-row.checked {
+    background: #1e2a1e;
+  }
+
+  .graph-row.checked.selected {
+    background: #243024;
+    box-shadow: inset 2px 0 0 #89b4fa;
+  }
+
   .graph-row.hidden-rev {
     opacity: 0.45;
+  }
+
+  /* Check gutter: ✓ indicator for checked revisions */
+  .check-gutter {
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+    color: #a6e3a1;
+    font-size: 11px;
+    padding-left: 4px;
   }
 
   /* Gutter: graph characters */
@@ -1036,7 +1469,6 @@
     line-height: 1.15;
     color: #585b70;
     flex-shrink: 0;
-    padding-left: 8px;
   }
 
   .gutter.wc-gutter {
@@ -1318,22 +1750,64 @@
     color: #cdd6f4;
   }
 
-  .file-chip.active {
+  .file-type-indicator {
+    font-weight: 700;
+    font-size: 10px;
+    margin-right: 3px;
+    color: #a6adc8;
+  }
+
+  .file-type-A {
+    color: #a6e3a1;
+  }
+
+  .file-type-D {
+    color: #f38ba8;
+  }
+
+  .file-type-M {
+    color: #f9e2af;
+  }
+
+  /* --- Diff toolbar --- */
+  .diff-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px;
+    background: #181825;
+    border-bottom: 1px solid #313244;
+    flex-shrink: 0;
+  }
+
+  .diff-toolbar-left,
+  .diff-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .toolbar-btn-sm {
+    background: transparent;
+    border: 1px solid #45475a;
+    color: #a6adc8;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    transition: all 0.15s ease;
+  }
+
+  .toolbar-btn-sm:hover {
+    background: #313244;
+    color: #cdd6f4;
+  }
+
+  .toolbar-btn-sm.active {
     background: #89b4fa22;
     border-color: #89b4fa;
     color: #89b4fa;
-  }
-
-  .file-chip.clear-chip {
-    background: transparent;
-    border-color: #585b70;
-    color: #585b70;
-    font-style: italic;
-  }
-
-  .file-chip.clear-chip:hover {
-    color: #a6adc8;
-    border-color: #a6adc8;
   }
 
   /* --- Diff viewer --- */
@@ -1351,6 +1825,9 @@
   }
 
   .diff-file-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 8px 12px;
     background: #181825;
     color: #cdd6f4;
@@ -1360,6 +1837,82 @@
     position: sticky;
     top: 0;
     z-index: 1;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s ease;
+  }
+
+  .diff-file-header:hover {
+    background: #1e1e30;
+  }
+
+  .collapse-toggle {
+    color: #585b70;
+    font-size: 10px;
+    width: 12px;
+    flex-shrink: 0;
+  }
+
+  .file-type-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .badge-A {
+    background: #a6e3a120;
+    color: #a6e3a1;
+  }
+
+  .badge-M {
+    background: #89b4fa20;
+    color: #89b4fa;
+  }
+
+  .badge-D {
+    background: #f38ba820;
+    color: #f38ba8;
+  }
+
+  .badge-R {
+    background: #f9e2af20;
+    color: #f9e2af;
+  }
+
+  .diff-file-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-dir {
+    color: #585b70;
+    font-weight: 400;
+  }
+
+  .file-name {
+    color: #cdd6f4;
+    font-weight: 700;
+  }
+
+  .file-stats {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .stat-add {
+    color: #a6e3a1;
+  }
+
+  .stat-del {
+    color: #f38ba8;
   }
 
   .diff-hunk-header {
@@ -1396,6 +1949,50 @@
 
   .diff-context {
     color: #6c7086;
+    border-left: 3px solid transparent;
+  }
+
+  /* When syntax-highlighted, let Shiki token colors show through */
+  .diff-line.highlighted {
+    color: #cdd6f4;
+  }
+
+  .diff-line.highlighted.diff-add {
+    color: inherit;
+  }
+
+  .diff-line.highlighted.diff-remove {
+    color: inherit;
+  }
+
+  .diff-line.highlighted.diff-context {
+    color: inherit;
+    opacity: 0.7;
+  }
+
+  :global(.diff-prefix) {
+    user-select: none;
+    opacity: 0.5;
+    margin-right: 0;
+  }
+
+  /* --- Split view --- */
+  .split-view {
+    display: flex;
+  }
+
+  .split-col {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .split-left {
+    border-right: 1px solid #313244;
+  }
+
+  .diff-empty {
+    background: #1a1a2a;
     border-left: 3px solid transparent;
   }
 

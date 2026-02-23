@@ -58,9 +58,11 @@ func LogGraph(revset string, limit int) CommandArgs {
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
-	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \t fullShortChangeId \t fullShortCommitId \t description \t bookmarks
+	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F bookmarks
+	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
+	// Bookmarks are joined with \x1F to avoid breakage if bookmark names contain spaces.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\t" ++ change_id.short() ++ "\t" ++ commit_id.short() ++ "\t" ++ description.first_line() ++ "\t" ++ bookmarks ++ "\n"`,
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ bookmarks.join("\x1F") ++ "\n"`,
 		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args
