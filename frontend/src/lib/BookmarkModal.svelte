@@ -22,6 +22,7 @@
   let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let bookmarks: Bookmark[] = $state([])
+  let remotes: string[] = $state([])
   let loading: boolean = $state(false)
 
   function opLabel(op: BookmarkOp): string {
@@ -29,7 +30,7 @@
     return `${op.action} ${op.bookmark}${suffix}`
   }
 
-  function buildOps(bms: Bookmark[], changeId: string | null): BookmarkOp[] {
+  function buildOps(bms: Bookmark[], changeId: string | null, availableRemotes: string[]): BookmarkOp[] {
     const ops: BookmarkOp[] = []
     for (const bm of bms) {
       if (changeId && bm.commit_id !== changeId) {
@@ -39,15 +40,22 @@
         ops.push({ action: 'delete', bookmark: bm.name })
       }
       ops.push({ action: 'forget', bookmark: bm.name })
+      // Track/untrack for existing remote entries
       for (const remote of bm.remotes ?? []) {
         const action = remote.tracked ? 'untrack' : 'track'
         ops.push({ action, bookmark: bm.name, remote: remote.remote })
+      }
+      // Offer track for local-only bookmarks against available remotes
+      if (bm.local && (!bm.remotes || bm.remotes.length === 0)) {
+        for (const remote of availableRemotes) {
+          ops.push({ action: 'track', bookmark: bm.name, remote })
+        }
       }
     }
     return ops
   }
 
-  let allOps = $derived(buildOps(bookmarks, currentCommitId))
+  let allOps = $derived(buildOps(bookmarks, currentCommitId, remotes))
 
   let filteredOps = $derived.by(() => {
     if (!open) return []
@@ -66,8 +74,9 @@
       query = ''
       index = 0
       loading = true
-      api.bookmarks().then(bms => {
+      Promise.all([api.bookmarks(), api.remotes()]).then(([bms, rms]) => {
         bookmarks = bms
+        remotes = rms
         loading = false
       }).catch(() => { loading = false })
       requestAnimationFrame(() => inputEl?.focus())

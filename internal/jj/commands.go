@@ -182,19 +182,19 @@ func BookmarkForget(name string) CommandArgs {
 }
 
 func BookmarkTrack(name string, remote string) CommandArgs {
-	ref := name
+	args := []string{"bookmark", "track", name}
 	if remote != "" {
-		ref = name + "@" + remote
+		args = append(args, "--remote", remote)
 	}
-	return []string{"bookmark", "track", ref}
+	return args
 }
 
 func BookmarkUntrack(name string, remote string) CommandArgs {
-	ref := name
+	args := []string{"bookmark", "untrack", name}
 	if remote != "" {
-		ref = name + "@" + remote
+		args = append(args, "--remote", remote)
 	}
-	return []string{"bookmark", "untrack", ref}
+	return args
 }
 
 func Squash(from SelectedRevisions, destination string, files []string, keepEmptied bool, useDestinationMessage bool, interactive bool, ignoreImmutable bool) CommandArgs {
