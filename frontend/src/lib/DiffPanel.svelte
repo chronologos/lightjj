@@ -281,6 +281,11 @@
       ondraftchange={ondraftchange}
     />
   {/if}
+  {#if squashMode}
+    <div class="squash-banner">
+      Squash source — select files to move
+    </div>
+  {/if}
   {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0}
     <div class="file-list-bar">
       <span class="file-list-label">Files ({changedFiles.length})</span>
@@ -527,6 +532,15 @@
   }
 
   /* --- File list bar --- */
+  .squash-banner {
+    padding: 4px 12px;
+    background: var(--bg-checked);
+    border-bottom: 1px solid var(--green);
+    color: var(--green);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
   .file-list-bar {
     display: flex;
     align-items: center;

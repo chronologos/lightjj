@@ -31,6 +31,8 @@
     rebaseTargetMode: string
     squashMode: boolean
     squashSources: string[]
+    squashKeepEmptied: boolean
+    squashUseDestMsg: boolean
   }
 
   let {
@@ -39,7 +41,7 @@
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
     rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
-    squashMode, squashSources,
+    squashMode, squashSources, squashKeepEmptied, squashUseDestMsg,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -92,7 +94,8 @@
         })
         if (isNode) {
           const contGutter = continuationGutter(gl.gutter)
-          if (entry.bookmarks?.length) {
+          const hasLabels = (entry.bookmarks?.length ?? 0) + (entry.commit.working_copies?.length ?? 0) > 0
+          if (hasLabels) {
             lines.push({
               gutter: contGutter,
               entryIndex: i,
@@ -170,7 +173,7 @@
       <button class="revset-clear" onclick={onrevsetclear} title="Clear filter (Escape)">x</button>
     {/if}
   </div>
-  {#if checkedRevisions.size > 0}
+  {#if checkedRevisions.size > 0 && !rebaseMode && !squashMode}
     <div class="batch-actions-bar">
       <span class="batch-label">{checkedRevisions.size} checked</span>
       <button class="action-btn" onclick={onnewfromchecked} title="New from checked (n)">new</button>
@@ -247,6 +250,9 @@
             {:else if line.isBookmarkLine}
               {@const entry = revisions[line.entryIndex]}
               <span class="bookmark-line-content">
+                {#each entry.commit.working_copies ?? [] as ws}
+                  <span class="workspace-badge">{ws}@</span>
+                {/each}
                 {#each entry.bookmarks ?? [] as bm}
                   <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>{bm}</button>
                 {/each}
@@ -259,7 +265,7 @@
                 {#if isRebaseTarget}
                   <span class="rebase-preview">rebase {rebaseSourceMode} {rebaseSources.map(s => s.slice(0, 8)).join(' ')} {rebaseTargetMode} {entry.commit.change_id.slice(0, 8)}</span>
                 {:else if isSquashTarget}
-                  <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}</span>
+                  <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squashKeepEmptied ? ' --keep-emptied' : ''}{squashUseDestMsg ? ' --use-destination-message' : ''}</span>
                 {:else}
                   <span class="description-text">{entry.description || '(no description)'}</span>
                 {/if}
@@ -604,6 +610,21 @@
   .bookmark-badge:hover {
     border-color: var(--green);
     filter: brightness(1.2);
+  }
+
+  .workspace-badge {
+    display: inline-flex;
+    align-items: center;
+    background: var(--badge-workspace-bg);
+    color: var(--teal);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid var(--border-workspace);
+    line-height: 1.15;
+    letter-spacing: 0.02em;
+    vertical-align: baseline;
   }
 
   .rebase-badge {

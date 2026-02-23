@@ -311,3 +311,160 @@ func TestBookmarkForget(t *testing.T) {
 	got := BookmarkForget("feature")
 	assert.Equal(t, []string{"bookmark", "forget", "feature"}, got)
 }
+
+func TestBookmarkDelete(t *testing.T) {
+	got := BookmarkDelete("feature")
+	assert.Equal(t, []string{"bookmark", "delete", "feature"}, got)
+}
+
+func TestBookmarkUntrack(t *testing.T) {
+	got := BookmarkUntrack("main", "origin")
+	assert.Equal(t, []string{"bookmark", "untrack", "main", "--remote", "origin"}, got)
+}
+
+func TestBookmarkUntrack_NoRemote(t *testing.T) {
+	got := BookmarkUntrack("main", "")
+	assert.Equal(t, []string{"bookmark", "untrack", "main"}, got)
+}
+
+func TestCommitWorkingCopy(t *testing.T) {
+	assert.Equal(t, []string{"commit"}, CommitWorkingCopy())
+}
+
+func TestDiffEdit(t *testing.T) {
+	assert.Equal(t, []string{"diffedit", "-r", "abc"}, DiffEdit("abc"))
+}
+
+func TestRestore(t *testing.T) {
+	got := Restore("abc", []string{"main.go"}, false)
+	assert.Equal(t, []string{"restore", "-c", "abc", `file:"main.go"`}, got)
+}
+
+func TestRestore_Interactive(t *testing.T) {
+	got := Restore("abc", nil, true)
+	assert.Contains(t, got, "--interactive")
+}
+
+func TestSnapshot(t *testing.T) {
+	assert.Equal(t, []string{"debug", "snapshot"}, Snapshot())
+}
+
+func TestDuplicate(t *testing.T) {
+	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
+	got := Duplicate(from, "def", "-d")
+	assert.Equal(t, []string{"duplicate", "-r", "abc", "-d", "def"}, got)
+}
+
+func TestAbsorb(t *testing.T) {
+	got := Absorb("abc", "main.go", "test.go")
+	assert.Equal(t, []string{"absorb", "--from", "abc", "--color", "never", `file:"main.go"`, `file:"test.go"`}, got)
+}
+
+func TestAbsorb_NoFiles(t *testing.T) {
+	got := Absorb("abc")
+	assert.Equal(t, []string{"absorb", "--from", "abc", "--color", "never"}, got)
+}
+
+func TestOpRestore(t *testing.T) {
+	assert.Equal(t, []string{"op", "restore", "abc123"}, OpRestore("abc123"))
+}
+
+func TestGetParents(t *testing.T) {
+	got := GetParents("abc")
+	assert.Contains(t, got, "-r")
+	assert.Contains(t, got, "abc")
+	assert.Contains(t, got, "--template")
+}
+
+func TestGetFirstChild(t *testing.T) {
+	c := &Commit{CommitId: "abc123"}
+	got := GetFirstChild(c)
+	assert.Contains(t, got, "-r")
+	assert.Contains(t, got, "abc123+")
+}
+
+func TestFilesInRevision(t *testing.T) {
+	c := &Commit{CommitId: "abc123"}
+	got := FilesInRevision(c)
+	assert.Contains(t, got, "file")
+	assert.Contains(t, got, "list")
+	assert.Contains(t, got, "-r")
+	assert.Contains(t, got, "abc123")
+}
+
+func TestConfigListAll(t *testing.T) {
+	got := ConfigListAll()
+	assert.Contains(t, got, "config")
+	assert.Contains(t, got, "list")
+	assert.Contains(t, got, "--include-defaults")
+}
+
+func TestParseOpLog(t *testing.T) {
+	output := "abc123\x1fdescription one\x1f2026-01-01 00:00\x1ftrue\ndef456\x1fdescription two\x1f2026-01-01 00:01\x1ffalse\n"
+	entries := ParseOpLog(output)
+	assert.Len(t, entries, 2)
+	assert.Equal(t, "abc123", entries[0].ID)
+	assert.Equal(t, "description one", entries[0].Description)
+	assert.True(t, entries[0].IsCurrent)
+	assert.Equal(t, "def456", entries[1].ID)
+	assert.False(t, entries[1].IsCurrent)
+}
+
+func TestParseOpLog_Empty(t *testing.T) {
+	entries := ParseOpLog("")
+	assert.Len(t, entries, 0)
+	assert.NotNil(t, entries)
+}
+
+func TestParseOpLog_Malformed(t *testing.T) {
+	// Lines with < 4 fields should be skipped
+	entries := ParseOpLog("only\x1ftwo\x1ffields\n")
+	assert.Empty(t, entries)
+}
+
+func TestEvolog(t *testing.T) {
+	got := Evolog("abc")
+	assert.Contains(t, got, "evolog")
+	assert.Contains(t, got, "-r")
+	assert.Contains(t, got, "abc")
+	assert.Contains(t, got, "--no-graph")
+}
+
+func TestWorkspaceList(t *testing.T) {
+	got := WorkspaceList()
+	assert.Equal(t, []string{"workspace", "list", "--color", "never", "--ignore-working-copy"}, got)
+}
+
+func TestParseWorkspaceList(t *testing.T) {
+	output := "base2: skpssuxl a14ce848 Architecture review burndown\ndefault: qqqqpqpq bbbbbbbb Other description\n"
+	ws := ParseWorkspaceList(output)
+	assert.Len(t, ws, 2)
+	assert.Equal(t, "base2", ws[0].Name)
+	assert.Equal(t, "skpssuxl", ws[0].ChangeId)
+	assert.Equal(t, "a14ce848", ws[0].CommitId)
+	assert.Equal(t, "default", ws[1].Name)
+	assert.Equal(t, "qqqqpqpq", ws[1].ChangeId)
+	assert.Equal(t, "bbbbbbbb", ws[1].CommitId)
+}
+
+func TestParseWorkspaceList_Malformed(t *testing.T) {
+	// Lines without ": " separator or with too few fields are skipped
+	output := "no-colon-here\ndefault: onlyOneField\nvalid: abc def description\n"
+	ws := ParseWorkspaceList(output)
+	assert.Len(t, ws, 1)
+	assert.Equal(t, "valid", ws[0].Name)
+	assert.Equal(t, "abc", ws[0].ChangeId)
+	assert.Equal(t, "def", ws[0].CommitId)
+}
+
+func TestParseWorkspaceList_Single(t *testing.T) {
+	output := "default: xyzwvuts abcdef12 my commit\n"
+	ws := ParseWorkspaceList(output)
+	assert.Len(t, ws, 1)
+	assert.Equal(t, "default", ws[0].Name)
+}
+
+func TestParseWorkspaceList_Empty(t *testing.T) {
+	ws := ParseWorkspaceList("")
+	assert.Empty(t, ws)
+}

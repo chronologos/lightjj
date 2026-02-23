@@ -8,10 +8,10 @@ import (
 )
 
 func TestParseGraphLog_LinearHistory(t *testing.T) {
-	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1fmain\n" +
-		"○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\n" +
-		"○  _PREFIX:m_PREFIX:b_PREFIX:false\x1fmwoxvszn\x1fb6a3ed01\x1fport jjui golang code\x1f\n" +
-		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\n"
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1fmain\n" +
+		"○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\x1f\n" +
+		"○  _PREFIX:m_PREFIX:b_PREFIX:false\x1fmwoxvszn\x1fb6a3ed01\x1fport jjui golang code\x1f\x1f\n" +
+		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\n"
 
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 4)
@@ -34,13 +34,13 @@ func TestParseGraphLog_LinearHistory(t *testing.T) {
 }
 
 func TestParseGraphLog_WithBranches(t *testing.T) {
-	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\n" +
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\x1f\n" +
 		"│\n" +
-		"│ ○  _PREFIX:q_PREFIX:5_PREFIX:false\x1fqlpymtvq\x1f50dbf764\x1f\x1f\n" +
+		"│ ○  _PREFIX:q_PREFIX:5_PREFIX:false\x1fqlpymtvq\x1f50dbf764\x1f\x1f\x1f\n" +
 		"├─╯\n" +
-		"○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\n" +
-		"○  _PREFIX:m_PREFIX:b_PREFIX:false\x1fmwoxvszn\x1fb6a3ed01\x1fport jjui golang code\x1f\n" +
-		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\n"
+		"○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\x1f\n" +
+		"○  _PREFIX:m_PREFIX:b_PREFIX:false\x1fmwoxvszn\x1fb6a3ed01\x1fport jjui golang code\x1f\x1f\n" +
+		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\n"
 
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 5)
@@ -58,13 +58,13 @@ func TestParseGraphLog_WithBranches(t *testing.T) {
 }
 
 func TestParseGraphLog_MergeCommit(t *testing.T) {
-	output := "@    _PREFIX:x_PREFIX:2b_PREFIX:false\x1fxsrvltkl\x1f2b52f01c\x1f\x1f\n" +
+	output := "@    _PREFIX:x_PREFIX:2b_PREFIX:false\x1fxsrvltkl\x1f2b52f01c\x1f\x1f\x1f\n" +
 		"├─╮\n" +
-		"│ ○  _PREFIX:q_PREFIX:5_PREFIX:false\x1fqlpymtvq\x1f50dbf764\x1f\x1f\n" +
+		"│ ○  _PREFIX:q_PREFIX:5_PREFIX:false\x1fqlpymtvq\x1f50dbf764\x1f\x1f\x1f\n" +
 		"│ │\n" +
-		"○ │  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\n" +
+		"○ │  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\x1f\n" +
 		"├─╯\n" +
-		"○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\n"
+		"○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\x1f\n"
 
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 4)
@@ -81,9 +81,9 @@ func TestParseGraphLog_MergeCommit(t *testing.T) {
 }
 
 func TestParseGraphLog_WorkingCopyDetection(t *testing.T) {
-	output := "○  _PREFIX:a_PREFIX:1_PREFIX:false\x1faaaaaaaa\x1f11111111\x1f\x1f\n" +
-		"@  _PREFIX:b_PREFIX:2_PREFIX:false\x1fbbbbbbbb\x1f22222222\x1f\x1f\n" +
-		"○  _PREFIX:c_PREFIX:3_PREFIX:false\x1fcccccccc\x1f33333333\x1f\x1f\n"
+	output := "○  _PREFIX:a_PREFIX:1_PREFIX:false\x1faaaaaaaa\x1f11111111\x1f\x1f\x1f\n" +
+		"@  _PREFIX:b_PREFIX:2_PREFIX:false\x1fbbbbbbbb\x1f22222222\x1f\x1f\x1f\n" +
+		"○  _PREFIX:c_PREFIX:3_PREFIX:false\x1fcccccccc\x1f33333333\x1f\x1f\x1f\n"
 
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 3)
@@ -94,7 +94,7 @@ func TestParseGraphLog_WorkingCopyDetection(t *testing.T) {
 }
 
 func TestParseGraphLog_PrefixLength(t *testing.T) {
-	output := "@  _PREFIX:xy_PREFIX:abc_PREFIX:false\x1fxyzwvuts\x1fabcdef12\x1ftest\x1f\n"
+	output := "@  _PREFIX:xy_PREFIX:abc_PREFIX:false\x1fxyzwvuts\x1fabcdef12\x1ftest\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 
@@ -104,8 +104,8 @@ func TestParseGraphLog_PrefixLength(t *testing.T) {
 }
 
 func TestParseGraphLog_ImmutableAndConflict(t *testing.T) {
-	output := "×  _PREFIX:k_PREFIX:9_PREFIX:false\x1fkkkkkkkk\x1f99999999\x1f\x1f\n" +
-		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\n"
+	output := "×  _PREFIX:k_PREFIX:9_PREFIX:false\x1fkkkkkkkk\x1f99999999\x1f\x1f\x1f\n" +
+		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\n"
 
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 2)
@@ -115,21 +115,21 @@ func TestParseGraphLog_ImmutableAndConflict(t *testing.T) {
 }
 
 func TestParseGraphLog_BookmarksMultiple(t *testing.T) {
-	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1fmain\x1fdevelop\n"
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1fmain\x1fdevelop\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.Equal(t, []string{"main", "develop"}, rows[0].Bookmarks)
 }
 
 func TestParseGraphLog_EmptyDescription(t *testing.T) {
-	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\n"
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "", rows[0].Description)
 }
 
 func TestParseGraphLog_DivergentCommit(t *testing.T) {
-	output := "○  _PREFIX:d_PREFIX:4_PREFIX:true\x1fdddddddd\x1f44444444\x1fdivergent change\x1f\n"
+	output := "○  _PREFIX:d_PREFIX:4_PREFIX:true\x1fdddddddd\x1f44444444\x1fdivergent change\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "dddddddd??", rows[0].Commit.ChangeId)
@@ -138,7 +138,7 @@ func TestParseGraphLog_DivergentCommit(t *testing.T) {
 }
 
 func TestParseGraphLog_HiddenCommit(t *testing.T) {
-	output := "◌  _PREFIX:h_PREFIX:5_PREFIX:false\x1fhhhhhhhh\x1f55555555\x1fhidden change\x1f\n"
+	output := "◌  _PREFIX:h_PREFIX:5_PREFIX:false\x1fhhhhhhhh\x1f55555555\x1fhidden change\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].Commit.Hidden)
@@ -147,7 +147,7 @@ func TestParseGraphLog_HiddenCommit(t *testing.T) {
 }
 
 func TestParseGraphLog_ImmutableCommit(t *testing.T) {
-	output := "◆  _PREFIX:i_PREFIX:5_PREFIX:false\x1fiiiiiiii\x1f55555555\x1fimmutable change\x1f\n"
+	output := "◆  _PREFIX:i_PREFIX:5_PREFIX:false\x1fiiiiiiii\x1f55555555\x1fimmutable change\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].Commit.Immutable)
@@ -157,7 +157,7 @@ func TestParseGraphLog_ImmutableCommit(t *testing.T) {
 }
 
 func TestParseGraphLog_MutableCommit(t *testing.T) {
-	output := "○  _PREFIX:m_PREFIX:3_PREFIX:false\x1fmmmmmmmm\x1f33333333\x1fmutable change\x1f\n"
+	output := "○  _PREFIX:m_PREFIX:3_PREFIX:false\x1fmmmmmmmm\x1f33333333\x1fmutable change\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.False(t, rows[0].Commit.Immutable)
@@ -166,10 +166,10 @@ func TestParseGraphLog_MutableCommit(t *testing.T) {
 }
 
 func TestParseGraphLog_MixedImmutableAndMutable(t *testing.T) {
-	output := "○  _PREFIX:a_PREFIX:1_PREFIX:false\x1faaaaaaaa\x1f11111111\x1fmutable\x1f\n" +
-		"◆  _PREFIX:b_PREFIX:2_PREFIX:false\x1fbbbbbbbb\x1f22222222\x1fimmutable\x1f\n" +
-		"○  _PREFIX:c_PREFIX:3_PREFIX:false\x1fcccccccc\x1f33333333\x1falso mutable\x1f\n" +
-		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\n"
+	output := "○  _PREFIX:a_PREFIX:1_PREFIX:false\x1faaaaaaaa\x1f11111111\x1fmutable\x1f\x1f\n" +
+		"◆  _PREFIX:b_PREFIX:2_PREFIX:false\x1fbbbbbbbb\x1f22222222\x1fimmutable\x1f\x1f\n" +
+		"○  _PREFIX:c_PREFIX:3_PREFIX:false\x1fcccccccc\x1f33333333\x1falso mutable\x1f\x1f\n" +
+		"◆  _PREFIX:z_PREFIX:0_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\n"
 
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 4)
@@ -188,7 +188,7 @@ func TestParseGraphLog_MixedImmutableAndMutable(t *testing.T) {
 }
 
 func TestParseGraphLog_WorkingCopyIsNotImmutable(t *testing.T) {
-	output := "@  _PREFIX:w_PREFIX:7_PREFIX:false\x1fwwwwwwww\x1f77777777\x1fworking copy\x1f\n"
+	output := "@  _PREFIX:w_PREFIX:7_PREFIX:false\x1fwwwwwwww\x1f77777777\x1fworking copy\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].Commit.IsWorkingCopy)
@@ -203,4 +203,32 @@ func TestParseGraphLog_FallbackToShortest(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "o", rows[0].Commit.ChangeId)
 	assert.Equal(t, "20", rows[0].Commit.CommitId)
+}
+
+func TestParseGraphLog_WorkingCopies(t *testing.T) {
+	// Revision is working copy for two workspaces
+	output := "@  _PREFIX:s_PREFIX:a1_PREFIX:false\x1fskpssuxl\x1fa14ce848\x1fmy change\x1fbase2@ default@\x1fmain\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"base2", "default"}, rows[0].Commit.WorkingCopies)
+	assert.Equal(t, []string{"main"}, rows[0].Bookmarks)
+	assert.Equal(t, "my change", rows[0].Description)
+}
+
+func TestParseGraphLog_WorkingCopiesSingle(t *testing.T) {
+	// Revision is working copy for one workspace (not the current one — ○ gutter)
+	output := "○  _PREFIX:s_PREFIX:a1_PREFIX:false\x1fskpssuxl\x1fa14ce848\x1fother workspace\x1fbase2@\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"base2"}, rows[0].Commit.WorkingCopies)
+	assert.False(t, rows[0].Commit.IsWorkingCopy) // ○ gutter = not current workspace
+	assert.Nil(t, rows[0].Bookmarks)
+}
+
+func TestParseGraphLog_WorkingCopiesEmpty(t *testing.T) {
+	// Normal revision with no workspace associations
+	output := "○  _PREFIX:r_PREFIX:f_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].Commit.WorkingCopies)
 }
