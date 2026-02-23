@@ -7,6 +7,8 @@ export interface DiffLine {
 
 export interface DiffHunk {
   header: string
+  newStart: number  // line number where this hunk starts in the new file
+  newCount: number  // number of lines in the new file version
   lines: DiffLine[]
 }
 
@@ -31,7 +33,13 @@ export function parseDiffContent(raw: string): DiffFile[] {
       files.push(currentFile)
       currentHunk = null
     } else if (line.startsWith('@@')) {
-      currentHunk = { header: line, lines: [] }
+      const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
+      currentHunk = {
+        header: line,
+        newStart: hunkMatch ? parseInt(hunkMatch[1]) : 1,
+        newCount: hunkMatch ? parseInt(hunkMatch[2] ?? '1') : 1,
+        lines: [],
+      }
       if (currentFile) {
         currentFile.hunks.push(currentHunk)
       } else {

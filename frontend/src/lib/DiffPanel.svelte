@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import type { LogEntry, FileChange } from './api'
-  import { parseDiffContent, type DiffFile } from './diff-parser'
+  import { api, type LogEntry, type FileChange } from './api'
+  import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
@@ -34,6 +34,8 @@
   let collapsedFiles = new SvelteSet<string>()
   // Persist collapse state per revision so switching back restores it
   let collapseStateCache = new Map<string, Set<string>>()
+  // Expanded files: store full-context DiffFile per file path
+  let expandedDiffs: Map<string, DiffFile> = $state(new Map())
 
   let parsedDiff = $derived(parseDiffContent(diffContent))
 
@@ -50,13 +52,14 @@
   // Pre-built map for O(1) file stats lookup
   let fileStatsMap = $derived(new Map(changedFiles.map(f => [f.path, f])))
 
-  // Memoize word diffs — only recomputed when parsedDiff changes
+  // Memoize word diffs — recomputed when parsedDiff or expandedDiffs change
   let wordDiffMap = $derived.by(() => {
     const map = new Map<string, Map<number, WordSpan[]>>()
     for (const file of parsedDiff) {
-      const filePath = file.filePath
-      for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
-        map.set(`${filePath}:${hunkIdx}`, computeWordDiffs(file.hunks[hunkIdx]))
+      const effectiveFile = expandedDiffs.get(file.filePath) ?? file
+      const filePath = effectiveFile.filePath
+      for (let hunkIdx = 0; hunkIdx < effectiveFile.hunks.length; hunkIdx++) {
+        map.set(`${filePath}:${hunkIdx}`, computeWordDiffs(effectiveFile.hunks[hunkIdx]))
       }
     }
     return map
@@ -83,26 +86,23 @@
 
       for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
         const hunk = file.hunks[hunkIdx]
-        const addLines: { idx: number; content: string }[] = []
-        const removeLines: { idx: number; content: string }[] = []
-        const contextLines: { idx: number; content: string }[] = []
-
+        // Group lines by type so Shiki highlights each group with correct context
+        const groups = new Map<DiffLine['type'], { idx: number; content: string }[]>()
         hunk.lines.forEach((line, i) => {
-          const stripped = line.content.slice(1)
-          if (line.type === 'add') addLines.push({ idx: i, content: stripped })
-          else if (line.type === 'remove') removeLines.push({ idx: i, content: stripped })
-          else contextLines.push({ idx: i, content: stripped })
+          const list = groups.get(line.type) ?? []
+          list.push({ idx: i, content: line.content.slice(1) })
+          groups.set(line.type, list)
         })
 
-        for (const group of [addLines, removeLines, contextLines]) {
-          if (group.length === 0) continue
+        for (const [type, group] of groups) {
           const highlighted = await highlightLines(group.map(g => g.content), lang)
           if (gen !== highlightGeneration) return
+          const prefix = type === 'add' ? '+' : type === 'remove' ? '-' : ' '
           group.forEach((g, j) => {
-            const key = `${filePath}:${hunkIdx}:${g.idx}`
-            const line = hunk.lines[g.idx]
-            const prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '
-            newMap.set(key, `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`)
+            newMap.set(
+              `${filePath}:${hunkIdx}:${g.idx}`,
+              `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`,
+            )
           })
         }
       }
@@ -114,6 +114,11 @@
     }
   }
 
+  // Build effective file list that substitutes expanded versions
+  let effectiveFiles = $derived(
+    parsedDiff.map(f => expandedDiffs.get(f.filePath) ?? f)
+  )
+
   $effect(() => {
     if (parsedDiff.length > 0) {
       if (diffContent === lastHighlightedDiff) return
@@ -124,7 +129,7 @@
       // Defer Shiki so it doesn't block the keydown → paint path.
       // Plain text + word-diff renders instantly; syntax colors appear ~150ms later.
       clearTimeout(highlightTimer)
-      highlightTimer = setTimeout(() => highlightDiff(parsedDiff), 150)
+      highlightTimer = setTimeout(() => highlightDiff(effectiveFiles), 150)
     } else {
       lastHighlightedDiff = ''
       clearTimeout(highlightTimer)
@@ -141,15 +146,40 @@
     // Save current state before switching
     if (lastRevisionId && collapsedFiles.size > 0) {
       collapseStateCache.set(lastRevisionId, new Set(collapsedFiles))
+      if (collapseStateCache.size > 50) {
+        // Evict oldest entry (Map preserves insertion order)
+        collapseStateCache.delete(collapseStateCache.keys().next().value!)
+      }
     }
     // Restore saved state or start expanded
     collapsedFiles.clear()
+    expandedDiffs = new Map()
     const saved = currentId ? collapseStateCache.get(currentId) : null
     if (saved) {
       for (const path of saved) collapsedFiles.add(path)
     }
     lastRevisionId = currentId
   })
+
+  // --- Expand context ---
+  async function expandFile(filePath: string) {
+    const revset = checkedRevisions.size > 0
+      ? [...checkedRevisions].join('|')
+      : selectedRevision?.commit.change_id
+    if (!revset) return
+    try {
+      const result = await api.diff(revset, filePath, 10000)
+      const parsed = parseDiffContent(result.diff)
+      if (parsed.length > 0) {
+        expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
+        const files = parsedDiff.map(f => expandedDiffs.get(f.filePath) ?? f)
+        clearTimeout(highlightTimer)
+        highlightTimer = setTimeout(() => highlightDiff(files), 50)
+      }
+    } catch {
+      // Silently fail — the unexpanded diff remains visible
+    }
+  }
 
   // --- Collapse helpers ---
   function toggleFile(path: string) {
@@ -308,14 +338,17 @@
       <div class="diff-content">
         {#each parsedDiff as file (file.filePath)}
           {@const filePath = file.filePath}
+          {@const effectiveFile = expandedDiffs.get(filePath) ?? file}
           <DiffFileView
-            {file}
+            file={effectiveFile}
             fileStats={fileStatsMap.get(filePath)}
             isCollapsed={collapsedFiles.has(filePath)}
+            isExpanded={expandedDiffs.has(filePath)}
             {splitView}
             {highlightedLines}
             {wordDiffMap}
             ontoggle={toggleFile}
+            onexpand={expandFile}
           />
         {/each}
       </div>
@@ -592,10 +625,6 @@
     background: var(--bg-active);
     border-color: var(--blue);
     color: var(--blue);
-  }
-
-  .diff-content {
-    padding: 0;
   }
 
   /* --- Empty states --- */

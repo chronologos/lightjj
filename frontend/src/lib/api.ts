@@ -125,10 +125,11 @@ export const api = {
     return request<Bookmark[]>(`/api/bookmarks?${params}`)
   },
 
-  diff: (revision: string, file?: string) => {
+  diff: (revision: string, file?: string, context?: number) => {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
-    const cacheId = 'diff:' + revision + (file ? ':' + file : '')
+    if (context) params.set('context', String(context))
+    const cacheId = 'diff:' + revision + (file ? ':' + file : '') + (context ? ':ctx' + context : '')
     return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`)
   },
 

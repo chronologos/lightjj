@@ -5,7 +5,7 @@ let highlighterPromise: Promise<Highlighter> | null = null
 export async function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ['github-dark', 'github-light'],
+      themes: ['catppuccin-mocha', 'catppuccin-latte'],
       langs: [],  // load on demand
     })
   }
@@ -13,21 +13,22 @@ export async function getHighlighter(): Promise<Highlighter> {
 }
 
 export function getShikiTheme(): string {
-  return document.documentElement.classList.contains('light') ? 'github-light' : 'github-dark'
+  return document.documentElement.classList.contains('light') ? 'catppuccin-latte' : 'catppuccin-mocha'
+}
+
+const EXTENSION_LANGUAGES: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+  go: 'go', py: 'python', rs: 'rust',
+  css: 'css', html: 'html', svelte: 'svelte',
+  json: 'json', yaml: 'yaml', yml: 'yaml',
+  md: 'markdown', sh: 'bash', bash: 'bash',
+  toml: 'toml', mod: 'go', sum: 'go',
 }
 
 // Detect language from file extension
 export function detectLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-    go: 'go', py: 'python', rs: 'rust',
-    css: 'css', html: 'html', svelte: 'svelte',
-    json: 'json', yaml: 'yaml', yml: 'yaml',
-    md: 'markdown', sh: 'bash', bash: 'bash',
-    toml: 'toml', mod: 'go', sum: 'go',
-  }
-  return map[ext] ?? 'text'
+  return EXTENSION_LANGUAGES[ext] ?? 'text'
 }
 
 const loadedLangs = new Set<string>()
