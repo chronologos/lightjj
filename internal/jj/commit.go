@@ -5,13 +5,14 @@ import "strings"
 const RootChangeId = "zzzzzzzz"
 
 type Commit struct {
-	ChangeId       string `json:"change_id"`
-	CommitId       string `json:"commit_id"`
-	ChangePrefix   int    `json:"change_prefix"`
-	CommitPrefix   int    `json:"commit_prefix"`
-	IsWorkingCopy  bool   `json:"is_working_copy"`
-	Hidden         bool   `json:"hidden"`
-	Immutable      bool   `json:"immutable"`
+	ChangeId       string   `json:"change_id"`
+	CommitId       string   `json:"commit_id"`
+	ChangePrefix   int      `json:"change_prefix"`
+	CommitPrefix   int      `json:"commit_prefix"`
+	IsWorkingCopy  bool     `json:"is_working_copy"`
+	Hidden         bool     `json:"hidden"`
+	Immutable      bool     `json:"immutable"`
+	WorkingCopies  []string `json:"working_copies,omitempty"`
 }
 
 func (c Commit) IsRoot() bool {

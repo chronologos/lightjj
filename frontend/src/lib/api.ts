@@ -15,6 +15,7 @@ export interface LogEntry {
     is_working_copy: boolean
     hidden: boolean
     immutable: boolean
+    working_copies?: string[]
   }
   description: string
   bookmarks?: string[]
@@ -32,15 +33,19 @@ export interface Bookmark {
 
 // Op-ID tracking: detect when jj state changes outside the UI
 let lastOpId: string | null = null
-let onStaleCallback: (() => void) | null = null
+const staleCallbacks = new Set<() => void>()
 let refreshQueued = false
 
 // Response cache: keyed by "${cacheId}@${opId}", cleared on op-id change
 const MAX_CACHE_SIZE = 200
 const responseCache = new Map<string, unknown>()
 
-export function onStale(callback: () => void) {
-  onStaleCallback = callback
+// Default timeout for read-only requests (30s). Mutations get no timeout.
+const READ_TIMEOUT_MS = 30_000
+
+export function onStale(callback: () => void): () => void {
+  staleCallbacks.add(callback)
+  return () => { staleCallbacks.delete(callback) }
 }
 
 function trackOpId(res: Response) {
@@ -50,11 +55,12 @@ function trackOpId(res: Response) {
   if (lastOpId !== null && opId !== lastOpId) {
     lastOpId = opId
     responseCache.clear()
-    if (onStaleCallback && !refreshQueued) {
+    if (staleCallbacks.size > 0 && !refreshQueued) {
       refreshQueued = true
+      // Deduplicates within a single tick; resets after callbacks fire
       queueMicrotask(() => {
         refreshQueued = false
-        onStaleCallback?.()
+        for (const cb of [...staleCallbacks]) cb()
       })
     }
   } else {
@@ -63,13 +69,33 @@ function trackOpId(res: Response) {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init)
-  trackOpId(res)
-  const data = await res.json()
-  if (!res.ok) {
-    throw new Error(data.error || `HTTP ${res.status}`)
+  // Add timeout for GET requests (reads). Mutations (POST) have no timeout
+  // since git push/fetch can take minutes.
+  const isRead = !init?.method || init.method === 'GET'
+  let signal = init?.signal
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  if (isRead && !signal) {
+    const controller = new AbortController()
+    signal = controller.signal
+    timeoutId = setTimeout(() => controller.abort(), READ_TIMEOUT_MS)
   }
-  return data as T
+
+  try {
+    const res = await fetch(url, signal ? { ...init, signal } : init)
+    if (timeoutId !== undefined) clearTimeout(timeoutId) // disarm after headers arrive
+    trackOpId(res)
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`)
+    }
+    return data as T
+  } catch (e) {
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Request timed out')
+    }
+    throw e
+  }
 }
 
 function post<T>(url: string, body: unknown): Promise<T> {
@@ -81,10 +107,15 @@ function post<T>(url: string, body: unknown): Promise<T> {
 }
 
 async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
-  const key = `${cacheId}@${lastOpId}`
-  if (lastOpId && responseCache.has(key)) return responseCache.get(key) as T
-  const result = await request<T>(url)
   if (lastOpId) {
+    const key = `${cacheId}@${lastOpId}`
+    if (responseCache.has(key)) return responseCache.get(key) as T
+  }
+  const opIdAtStart = lastOpId
+  const result = await request<T>(url)
+  // Only cache if op-id hasn't been advanced by a concurrent request.
+  // If opIdAtStart was null (first request seeding the op-id), caching is safe.
+  if (lastOpId && (opIdAtStart === null || lastOpId === opIdAtStart)) {
     if (responseCache.size >= MAX_CACHE_SIZE) responseCache.clear()
     responseCache.set(`${cacheId}@${lastOpId}`, result)
   }
@@ -110,6 +141,12 @@ export interface OpEntry {
   description: string
   time: string
   is_current: boolean
+}
+
+export interface Workspace {
+  name: string
+  change_id: string
+  commit_id: string
 }
 
 export const api = {
@@ -145,6 +182,8 @@ export const api = {
   },
 
   remotes: () => request<string[]>('/api/remotes'),
+
+  workspaces: () => cachedRequest<Workspace[]>('workspaces', '/api/workspaces'),
 
   oplog: (limit?: number) => {
     const params = new URLSearchParams()
@@ -215,4 +254,7 @@ export const _testInternals = {
   set lastOpId(v: string | null) { lastOpId = v },
   get cache() { return responseCache },
   get MAX_CACHE_SIZE() { return MAX_CACHE_SIZE },
+  get staleCallbacks() { return staleCallbacks },
+  get refreshQueued() { return refreshQueued },
+  set refreshQueued(v: boolean) { refreshQueued = v },
 }

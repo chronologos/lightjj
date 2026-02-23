@@ -199,6 +199,17 @@ func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, remotes)
 }
 
+func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	args := jj.WorkspaceList()
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	workspaces := jj.ParseWorkspaceList(string(output))
+	s.writeJSON(w, r, http.StatusOK, workspaces)
+}
+
 // --- Write handlers ---
 
 type newRequest struct {
@@ -367,7 +378,12 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+		n, err := strconv.Atoi(l)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "limit must be an integer")
+			return
+		}
+		if n > 0 && n <= 1000 {
 			limit = n
 		}
 	}

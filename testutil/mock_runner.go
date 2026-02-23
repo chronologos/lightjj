@@ -13,10 +13,13 @@ import (
 
 // ExpectedCommand represents a command we expect the runner to execute.
 type ExpectedCommand struct {
-	args   []string
-	output []byte
-	called bool
-	err    error
+	args       []string
+	output     []byte
+	called     bool
+	err        error
+	wantStdin  string
+	gotStdin   string
+	checkStdin bool
 }
 
 func (e *ExpectedCommand) SetOutput(output []byte) *ExpectedCommand {
@@ -29,8 +32,33 @@ func (e *ExpectedCommand) SetError(err error) *ExpectedCommand {
 	return e
 }
 
+// SetExpectedStdin sets the expected stdin value for RunWithInput calls.
+// Verify() will assert that the actual stdin matches.
+// Only valid on Expect'd commands — Allow'd commands do not verify stdin.
+func (e *ExpectedCommand) SetExpectedStdin(s string) *ExpectedCommand {
+	e.wantStdin = s
+	e.checkStdin = true
+	return e
+}
+
+// AllowedCommand is returned by Allow() and supports SetOutput/SetError but not SetExpectedStdin.
+type AllowedCommand struct {
+	cmd *ExpectedCommand
+}
+
+func (a *AllowedCommand) SetOutput(output []byte) *AllowedCommand {
+	a.cmd.output = output
+	return a
+}
+
+func (a *AllowedCommand) SetError(err error) *AllowedCommand {
+	a.cmd.err = err
+	return a
+}
+
 // MockRunner implements runner.CommandRunner with expectation-based verification.
 // Pattern ported from jjui's test.CommandRunner.
+// Not safe for concurrent use from multiple goroutines.
 type MockRunner struct {
 	t            *testing.T
 	expectations map[string][]*ExpectedCommand
@@ -48,13 +76,14 @@ func NewMockRunner(t *testing.T) *MockRunner {
 
 // Allow registers a command that may be called zero or more times without
 // being required. Matches by full args (not just subcommand).
-func (m *MockRunner) Allow(args []string) *ExpectedCommand {
+// Returns AllowedCommand which does not expose SetExpectedStdin.
+func (m *MockRunner) Allow(args []string) *AllowedCommand {
 	if len(args) == 0 {
 		m.t.Fatal("Allow: empty args")
 	}
 	e := &ExpectedCommand{args: slices.Clone(args), called: true} // pre-marked so Verify won't complain
 	m.allowed[strings.Join(args, "\x00")] = e
-	return e
+	return &AllowedCommand{cmd: e}
 }
 
 // Expect registers an expected command. Returns the expectation for chaining.
@@ -72,6 +101,9 @@ func (m *MockRunner) Verify() {
 		for _, e := range expectations {
 			if !e.called {
 				m.t.Errorf("expected command not called: %s %v", subCmd, e.args)
+			}
+			if e.called && e.checkStdin && e.gotStdin != e.wantStdin {
+				m.t.Errorf("stdin mismatch for %v: got %q, want %q", e.args, e.gotStdin, e.wantStdin)
 			}
 		}
 	}
@@ -104,8 +136,11 @@ func (m *MockRunner) Run(_ context.Context, args []string) ([]byte, error) {
 	return e.output, e.err
 }
 
-func (m *MockRunner) RunWithInput(_ context.Context, args []string, _ string) ([]byte, error) {
+func (m *MockRunner) RunWithInput(_ context.Context, args []string, stdin string) ([]byte, error) {
 	e := m.findExpectation(args)
+	m.mu.Lock()
+	e.gotStdin = stdin
+	m.mu.Unlock()
 	return e.output, e.err
 }
 

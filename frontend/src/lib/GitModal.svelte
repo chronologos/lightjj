@@ -21,6 +21,7 @@
   let bookmarks: Bookmark[] = $state([])
   let remotes: string[] = $state([])
   let loading: boolean = $state(false)
+  let fetchError: string | null = $state(null)
   let modalEl: HTMLDivElement | undefined = $state(undefined)
   let previousFocus: HTMLElement | null = null
   let fetchGen: number = 0
@@ -107,18 +108,20 @@
       previousFocus = document.activeElement as HTMLElement | null
       index = 0
       loading = true
+      fetchError = null
       const gen = ++fetchGen
       Promise.all([api.bookmarks(), api.remotes()]).then(([bms, rms]) => {
         if (gen !== fetchGen) return
         bookmarks = bms
         remotes = rms
         loading = false
-      }).catch(() => { if (gen === fetchGen) loading = false })
+      }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
       modalEl?.focus()
     }
   })
 
   function close() {
+    fetchError = null
     open = false
     onclose()
     previousFocus?.focus()
@@ -170,6 +173,8 @@
     <div class="git-header">Git Operations</div>
     {#if loading}
       <div class="git-empty">Loading...</div>
+    {:else if fetchError}
+      <div class="git-empty" style="color: var(--red)">{fetchError}</div>
     {:else}
       <div class="git-results">
         {#each ops as op, i}

@@ -67,6 +67,7 @@
   let squashKeepEmptied: boolean = $state(false)
   let squashUseDestMsg: boolean = $state(false)
   let squashSelectedFiles = new SvelteSet<string>()
+  let squashTotalFiles: number = $state(0) // snapshot of file count at entry time
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
 
@@ -177,8 +178,8 @@
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
-    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && (!!selectedRevision || checkedRevisions.size > 0) },
-    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !squashMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && !squashMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !squashMode && !rebaseMode && (!!selectedRevision || checkedRevisions.size > 0) },
 
     // Git
     { label: 'Git operations (push/fetch)', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true } },
@@ -268,6 +269,12 @@
     loadFilesForRevset(changeId)
   }
 
+  // Move cursor without loading diff/files — used in squash mode where
+  // the diff is intentionally frozen on the source revision
+  function selectRevisionCursorOnly(index: number) {
+    selectedIndex = index
+  }
+
   function selectRevision(index: number) {
     selectedIndex = index
     descriptionEditing = false
@@ -299,9 +306,11 @@
   }
 
   // Reload diff/files when checked revisions change
+  // Skip during squash mode — diff is intentionally frozen on source revision
   $effect(() => {
     const checked = [...checkedRevisions]
     if (checked.length === 0) return
+    if (squashMode) return
     const revset = checked.join('|')
     loadDiffForRevset(revset)
     loadFilesForRevset(revset)
@@ -446,6 +455,9 @@
   function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
+    // Ensure mutual exclusion with squash mode
+    squashMode = false
+    squashSelectedFiles.clear()
     rebaseSources = revs
     rebaseSourceMode = '-r'
     rebaseTargetMode = '-d'
@@ -478,31 +490,41 @@
   function enterSquashMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
+    // Ensure mutual exclusion with rebase mode
+    rebaseMode = false
     squashSources = revs
     squashKeepEmptied = false
     squashUseDestMsg = false
     squashSelectedFiles.clear()
-    // Initialize with all current changed files (source's files)
+    // Initialize with all current changed files (source's files) and snapshot the count
     for (const f of changedFiles) squashSelectedFiles.add(f.path)
+    squashTotalFiles = changedFiles.length
     squashMode = true
     // Move cursor to parent of first source (default squash target)
-    // Don't use selectRevision() — we want to keep the source's diff/files visible
     const sourceIdx = revisions.findIndex(r => r.commit.change_id === revs[0])
     if (sourceIdx >= 0 && sourceIdx < revisions.length - 1) {
-      selectedIndex = sourceIdx + 1
+      selectRevisionCursorOnly(sourceIdx + 1)
     }
   }
 
   async function executeSquash() {
     if (!selectedRevision || squashSources.length === 0) return
     const destination = selectedRevision.commit.change_id
+    // C2: exit mode before guard so user isn't stuck
     if (squashSources.includes(destination)) {
+      squashMode = false
+      squashSelectedFiles.clear()
       lastAction = 'Cannot squash into source revision'
       return
     }
-    squashMode = false
+    // C1: block execution when no files selected (empty array would squash ALL files)
+    if (squashSelectedFiles.size === 0) {
+      lastAction = 'Select at least one file to squash'
+      return
+    }
     try {
-      const files = squashSelectedFiles.size < changedFiles.length
+      // W3: compare against snapshotted total, not live changedFiles
+      const files = squashSelectedFiles.size < squashTotalFiles
         ? [...squashSelectedFiles]
         : undefined
       const result = await api.squash(squashSources, destination, {
@@ -510,14 +532,17 @@
         keepEmptied: squashKeepEmptied || undefined,
         useDestinationMessage: squashUseDestMsg || undefined,
       })
+      // W1: only exit mode after successful API call
+      squashMode = false
+      squashSelectedFiles.clear()
       lastAction = squashSources.length > 1
         ? `Squashed ${squashSources.length} revisions into ${destination.slice(0, 8)}`
         : `Squashed ${squashSources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
       commandOutput = result.output
       clearChecks()
-      squashSelectedFiles.clear()
       await loadLog()
     } catch (e) {
+      // W1: keep squash mode active so user can retry or Escape
       showError(e)
     }
   }
@@ -531,15 +556,19 @@
   }
 
   let squashFileCount = $derived.by(() => {
-    if (!squashMode || changedFiles.length === 0) return null
-    return { selected: squashSelectedFiles.size, total: changedFiles.length }
+    if (!squashMode || squashTotalFiles === 0) return null
+    return { selected: squashSelectedFiles.size, total: squashTotalFiles }
   })
 
-  function closeAllModals() {
+  function closeModals() {
     paletteOpen = false
     bookmarkModalOpen = false
     bookmarkInputOpen = false
     gitModalOpen = false
+  }
+
+  function closeAllModals() {
+    closeModals()
     rebaseMode = false
     squashMode = false
     squashSelectedFiles.clear()
@@ -636,7 +665,7 @@
     // Cmd+K / Ctrl+K opens palette from anywhere
     if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      closeAllModals()
+      closeModals()
       paletteOpen = true
       return
     }
@@ -651,11 +680,11 @@
       switch (e.key) {
         case 'j':
           e.preventDefault()
-          if (selectedIndex < revisions.length - 1) selectedIndex++
+          if (selectedIndex < revisions.length - 1) selectRevisionCursorOnly(selectedIndex + 1)
           break
         case 'k':
           e.preventDefault()
-          if (selectedIndex > 0) selectedIndex--
+          if (selectedIndex > 0) selectRevisionCursorOnly(selectedIndex - 1)
           break
         case 'Enter':
           e.preventDefault()
@@ -819,8 +848,10 @@
 
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
-  onStale(() => {
-    if (!loading && !anyModalOpen && !squashMode) loadLog()
+  $effect(() => {
+    return onStale(() => {
+      if (!loading && !anyModalOpen && !squashMode && !rebaseMode) loadLog()
+    })
   })
 
   loadLog()
@@ -834,7 +865,7 @@
     onundo={handleUndo}
     onfetch={() => { closeAllModals(); gitModalOpen = true }}
     onpush={() => { closeAllModals(); gitModalOpen = true }}
-    onopenpalette={() => { closeAllModals(); paletteOpen = true }}
+    onopenpalette={() => { closeModals(); paletteOpen = true }}
   />
 
   {#if error}
@@ -878,6 +909,8 @@
       {rebaseTargetMode}
       {squashMode}
       {squashSources}
+      {squashKeepEmptied}
+      {squashUseDestMsg}
     />
 
     <DiffPanel
@@ -1007,6 +1040,8 @@
     --badge-modify-bg: #89b4fa20;
     --badge-delete-bg: #f38ba820;
     --badge-other-bg: #f9e2af20;
+    --badge-workspace-bg: #74c7ec15;
+    --border-workspace: #74c7ec40;
 
     /* Palette overlay */
     --backdrop: #00000066;
@@ -1058,6 +1093,8 @@
     --badge-modify-bg: #1e66f520;
     --badge-delete-bg: #d20f3920;
     --badge-other-bg: #df8e1d20;
+    --badge-workspace-bg: #04a5e515;
+    --border-workspace: #04a5e540;
 
     --backdrop: #00000033;
     --shadow-heavy: 0 16px 48px #00000044;

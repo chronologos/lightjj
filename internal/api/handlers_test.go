@@ -38,7 +38,7 @@ func TestOpIdHeader(t *testing.T) {
 
 func TestHandleLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1fmain\n"
+	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1f\x1fmain\n"
 	runner.Expect(jj.LogGraph("@", 0)).SetOutput([]byte(graphOutput))
 	defer runner.Verify()
 
@@ -761,6 +761,329 @@ func TestHandleRebase_EmptyTargetModeDefaultsToD(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Bookmark track/untrack tests ---
+
+func TestHandleBookmarkTrack(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkTrack("feature", "origin")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "feature", Remote: "origin"})
+	req := httptest.NewRequest("POST", "/api/bookmark/track", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleBookmarkTrack_NoRemote(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkTrack("feature", "")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "feature"})
+	req := httptest.NewRequest("POST", "/api/bookmark/track", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleBookmarkTrack_MissingName(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRemoteRequest{Remote: "origin"})
+	req := httptest.NewRequest("POST", "/api/bookmark/track", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleBookmarkUntrack(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkUntrack("feature", "origin")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "feature", Remote: "origin"})
+	req := httptest.NewRequest("POST", "/api/bookmark/untrack", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleBookmarkUntrack_MissingName(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRemoteRequest{Remote: "origin"})
+	req := httptest.NewRequest("POST", "/api/bookmark/untrack", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Empty revision tests ---
+
+func TestHandleNew_EmptyRevisions(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(newRequest{Revisions: []string{}})
+	req := httptest.NewRequest("POST", "/api/new", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleAbandon_EmptyRevisions(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(abandonRequest{Revisions: []string{}})
+	req := httptest.NewRequest("POST", "/api/abandon", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Mutation runner-error tests ---
+
+func TestHandleNew_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.New(jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"}))).SetError(errors.New("jj new failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(newRequest{Revisions: []string{"abc"}})
+	req := httptest.NewRequest("POST", "/api/new", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "jj new failed", resp["error"])
+}
+
+func TestHandleAbandon_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Abandon(revs, false)).SetError(errors.New("jj abandon failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(abandonRequest{Revisions: []string{"abc"}})
+	req := httptest.NewRequest("POST", "/api/abandon", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestHandleDescribe_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	args, _ := jj.SetDescription("abc", "desc")
+	runner.Expect(args).SetError(errors.New("describe failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(describeRequest{Revision: "abc", Description: "desc"})
+	req := httptest.NewRequest("POST", "/api/describe", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestHandleRebase_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", false, false)).SetError(errors.New("rebase failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def"})
+	req := httptest.NewRequest("POST", "/api/rebase", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestHandleGitPush_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.GitPush("--all")).SetError(errors.New("push failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--all"}})
+	req := httptest.NewRequest("POST", "/api/git/push", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// --- Bookmarks with revset test ---
+
+func TestHandleBookmarks_WithRevset(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkList("main")).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fabc"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/bookmarks?revset=main", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Describe stdin verification ---
+
+func TestHandleDescribe_StdinContent(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	args, _ := jj.SetDescription("abc", "new description")
+	runner.Expect(args).SetOutput([]byte("")).SetExpectedStdin("new description")
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(describeRequest{Revision: "abc", Description: "new description"})
+	req := httptest.NewRequest("POST", "/api/describe", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Missing validation tests ---
+
+func TestHandleBookmarkMove_MissingFields(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc"})
+	req := httptest.NewRequest("POST", "/api/bookmark/move", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleBookmarkForget_MissingName(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkNameRequest{})
+	req := httptest.NewRequest("POST", "/api/bookmark/forget", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleDescribe_MissingRevision(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(describeRequest{Description: "test"})
+	req := httptest.NewRequest("POST", "/api/describe", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleFiles_SummaryError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetError(errors.New("summary failed"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestHandleFiles_StatError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetError(errors.New("stat failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	assert.Len(t, files, 1)
+	assert.Equal(t, 0, files[0].Additions) // stats not merged due to error
+	assert.Equal(t, 0, files[0].Deletions)
+}
+
+func TestHandleOpLog_CustomLimit(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.OpLog(10)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/oplog?limit=10", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleOpLog_InvalidLimit(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/oplog?limit=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleOpLog_LimitClamped(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	// limit=9999 exceeds cap of 1000, falls back to default 50
+	runner.Expect(jj.OpLog(50)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/oplog?limit=9999", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaces(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte("base2: skpssuxl a14ce848 Architecture review\ndefault: qqqqpqpq bbbbbbbb Other\n"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/workspaces", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var workspaces []jj.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &workspaces))
+	require.Len(t, workspaces, 2)
+	assert.Equal(t, "base2", workspaces[0].Name)
+	assert.Equal(t, "skpssuxl", workspaces[0].ChangeId)
+	assert.Equal(t, "default", workspaces[1].Name)
+}
+
+func TestHandleWorkspaces_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList()).SetError(errors.New("workspace list failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/workspaces", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "workspace list failed")
 }
 
 // parseLogOutput tests moved to internal/parser/graph_test.go

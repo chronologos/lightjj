@@ -94,45 +94,51 @@ func parseNodeLine(line string) GraphRow {
 	// The rest contains the markers and content
 	rest := line[prefixIdx:]
 
-	// Unit-separator-delimited fields: prefixBlock \x1F fullChangeId \x1F fullCommitId \x1F description \x1F bookmarks
-	parts := strings.SplitN(rest, "\x1f", 5)
+	// Fields: [0]=prefixBlock [1]=changeId [2]=commitId [3]=description [4]=working_copies [5]=bookmarks
+	// Bookmarks MUST be last — SplitN(6) leaves the tail unsplit so \x1F-joined bookmark names survive.
+	parts := strings.SplitN(rest, "\x1f", 6)
 	prefixBlock := parts[0]
-	if len(parts) > 1 {
+
+	// Parse the prefix block: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent
+	prefixParts := strings.Split(prefixBlock, jj.JJUIPrefix)
+	var divergent bool
+	if len(prefixParts) >= 4 {
+		row.Commit.ChangePrefix = len(prefixParts[1])
+		row.Commit.CommitPrefix = len(prefixParts[2])
+		row.Commit.ChangeId = prefixParts[1]
+		row.Commit.CommitId = prefixParts[2]
+		divergent, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[3]))
+	}
+
+	// Full IDs and content fields override the shortest prefix fallbacks
+	if len(parts) >= 4 {
 		row.Commit.ChangeId = parts[1]
-	}
-	if len(parts) > 2 {
 		row.Commit.CommitId = parts[2]
-	}
-	if len(parts) > 3 {
 		row.Description = parts[3]
 	}
+
+	if divergent {
+		row.Commit.ChangeId += "??"
+	}
+
+	// working_copies outputs "base2@ default@" — space-separated workspace names with @ suffix
 	if len(parts) > 4 && parts[4] != "" {
-		// Bookmarks are joined with \x1F in the template to handle names with spaces.
-		// After the top-level SplitN on \x1F, remaining separators within the bookmarks
-		// field delimit individual bookmark names.
-		for _, bm := range strings.Split(parts[4], "\x1f") {
-			bm = strings.TrimSpace(bm)
-			if bm != "" {
-				row.Bookmarks = append(row.Bookmarks, bm)
+		for _, wc := range strings.Fields(parts[4]) {
+			name := strings.TrimSuffix(wc, "@")
+			if name != "" {
+				row.Commit.WorkingCopies = append(row.Commit.WorkingCopies, name)
 			}
 		}
 	}
 
-	// Parse the prefix block: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent
-	prefixParts := strings.Split(prefixBlock, jj.JJUIPrefix)
-	if len(prefixParts) >= 4 {
-		row.Commit.ChangePrefix = len(prefixParts[1])
-		row.Commit.CommitPrefix = len(prefixParts[2])
-		divergent, _ := strconv.ParseBool(strings.TrimSpace(prefixParts[3]))
-		if divergent {
-			row.Commit.ChangeId += "??"
-		}
-		// If full IDs weren't in the tab fields, fall back to shortest
-		if row.Commit.ChangeId == "" {
-			row.Commit.ChangeId = prefixParts[1]
-		}
-		if row.Commit.CommitId == "" {
-			row.Commit.CommitId = prefixParts[2]
+	// Bookmarks are joined with \x1F in the template. After SplitN(6), remaining
+	// separators within the bookmarks field delimit individual bookmark names.
+	if len(parts) > 5 && parts[5] != "" {
+		for _, bm := range strings.Split(parts[5], "\x1f") {
+			bm = strings.TrimSpace(bm)
+			if bm != "" {
+				row.Bookmarks = append(row.Bookmarks, bm)
+			}
 		}
 	}
 

@@ -14,35 +14,55 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] `refreshOpId` fires synchronously before every mutation response, adding ~50-150ms.
 - [x] Repeated mutation handler boilerplate — `refreshOpId` is manually called at 15 sites, easy to forget.
 - [x] `handleNew` and `handleAbandon` accept empty revision lists (inconsistent with rebase/squash).
-- [ ] No frontend fetch timeouts — stuck spinners with no escape if backend hangs.
+- [x] No frontend fetch timeouts — stuck spinners with no escape if backend hangs.
 - [ ] Response cache clears entirely on any op-id change; immutable commits' diffs should be preserved.
 - [ ] `wordDiffMap` recomputes all hunks when a single file is expanded.
 - [x] `MaxBytesReader` called with `nil` ResponseWriter — violates Go API contract.
 - [x] `ParseGraphLog` returns nil instead of empty slice — produces JSON `null` not `[]`.
-- [ ] Modal fetch errors silently swallowed (GitModal, BookmarkModal).
+- [x] Modal fetch errors silently swallowed (GitModal, BookmarkModal).
 - [ ] `"origin"` hardcoded as preferred remote — no way to configure.
-- [ ] MockRunner `RunWithInput` silently discards stdin — can't verify describe content.
+- [x] MockRunner `RunWithInput` silently discards stdin — can't verify describe content.
 
 ### Suggestions
 - [ ] `App.svelte` is 1010 lines — rebase state is ambient and threaded through multiple components. Extract to shared module.
 - [ ] No list virtualization for large repos (500+ commits).
 - [ ] No HTTP response compression (especially impacts SSH mode).
 - [ ] `highlightDiff` re-highlights all files when one is expanded.
-- [ ] `onStale` supports only a single callback — second caller silently replaces first.
-- [ ] SSH host not validated against flag injection (`-oProxyCommand=...`).
-- [ ] 11 command builder functions have no unit tests.
-- [ ] `handleBookmarkTrack`/`handleBookmarkUntrack` have zero test coverage.
-- [ ] No mutation handler runner-error tests.
-- [ ] Frontend `onStale`/`isCached` entirely untested.
-- [ ] Frontend HTTP error responses not tested.
+- [x] `onStale` supports only a single callback — second caller silently replaces first.
+- [x] SSH host not validated against flag injection (`-oProxyCommand=...`).
+- [x] 11 command builder functions have no unit tests.
+- [x] `handleBookmarkTrack`/`handleBookmarkUntrack` have zero test coverage.
+- [x] No mutation handler runner-error tests.
+- [x] Frontend `onStale`/`isCached` entirely untested.
+- [x] Frontend HTTP error responses not tested.
 - [ ] No integration tests against a real jj repo.
 
 ### Nitpicks
-- [ ] `\x1F` vs `\x1f` case inconsistency across files.
+- [x] `\x1F` vs `\x1f` case inconsistency across files.
 - [ ] Divergent commit `??` suffix is a string hack — a `Divergent bool` field would be cleaner.
-- [ ] `GET /api/oplog` has no upper bound on `limit` parameter.
+- [x] `GET /api/oplog` has no upper bound on `limit` parameter.
 - [ ] No `Content-Type: application/json` validation on POST requests.
 - [ ] `commitsFromIds` wraps raw strings in fake `Commit` structs with zero-valued fields.
+
+### Remaining Items by Effort
+
+**Quick wins (< 30 min):**
+- [ ] `Content-Type: application/json` validation on POST requests — also serves as CSRF defense-in-depth
+- [ ] `commitsFromIds` → `SelectedRevisions.FromIDs(ids)` to avoid fake `Commit` structs
+
+**Medium effort (1-2 hours):**
+- [ ] Immutable commit cache preservation — don't clear cached diffs for `◆` commits on op-id change
+- [ ] `wordDiffMap` per-file computation — move to component-local `$derived` in `DiffFileView`
+- [ ] `highlightDiff` partial re-highlight — only re-tokenize the expanded file, merge into existing highlights
+- [ ] `"origin"` hardcoded as preferred remote — make configurable via startup flag or jj config query
+- [ ] `OplogPanel` inline error display — pass error prop, match GitModal/BookmarkModal pattern
+
+**Larger refactors (half day+):**
+- [ ] `App.svelte` rebase state extraction — move rebase mode, source/target types, keyboard handling into shared module
+- [ ] List virtualization for large repos — `@tanstack/virtual` for 500+ commit histories
+- [ ] HTTP response compression (gzip middleware) — mainly benefits SSH mode
+- [ ] Integration tests — build-tagged tests against a real jj repo
+- [ ] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
 
 ## UI Inspirations
 
@@ -114,7 +134,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] Drag-and-drop rebase (drag revision onto destination)
 - [ ] Rebase modal (pick source + destination)
 - [ ] Squash modal
-- [ ] Conflict resolution UI
+- [ ] Conflict resolution UI — jj uses a unique "snapshot + diff" conflict marker format: `%%%%%%%` sections show a diff (what one side changed relative to base), `+++++++` sections show the other side's full content. Unlike git's `<<<<<<< / ======= / >>>>>>>` which shows both full versions, jj's format is more compact but harder to parse visually. The UI should detect `×` (conflicting) revisions, parse jj's conflict markers (`<<<<<<<`, `%%%%%%%`, `\\\\\\\`, `+++++++`, `>>>>>>>`), and render a 3-way merge view showing base, side 1, and side 2 with the ability to pick/combine sides. `jj resolve --list -r <rev>` lists conflicted files; the diff viewer should highlight conflict markers inline and offer resolution actions.
 - [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
 - [ ] Live file watching (auto-refresh on working copy changes)
@@ -126,6 +146,9 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] Syntax highlighting deadline / Web Worker — `codeToHtml` is synchronous and can freeze the UI for seconds on pathological files (e.g., 200-line CSS). Short-term: chunk input into ~30-line batches with yields between. Long-term: move Shiki into a Web Worker so `worker.terminate()` acts as a true cancellation primitive.
 - [ ] Lazy rendering for large diffs (IntersectionObserver, like antique)
 - [ ] Draggable split view divider (resize ratio)
+- [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
+- [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
+- [ ] `jj split` support — interactive file-level split from the UI, select files/hunks to move into a new revision
 
 ## State Synchronization
 

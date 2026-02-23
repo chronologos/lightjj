@@ -42,7 +42,7 @@
       {#if squashFileCount}
         <span class="key-divider"></span>
         <span class="key-group">
-          <span class="file-count">{squashFileCount.selected}/{squashFileCount.total} files</span>
+          <span class="file-count" class:file-count-empty={squashFileCount.selected === 0}>{squashFileCount.selected}/{squashFileCount.total} files</span>
         </span>
       {/if}
     </div>
@@ -185,5 +185,10 @@
   .file-count {
     color: var(--subtext0);
     font-size: 10px;
+  }
+
+  .file-count-empty {
+    color: var(--red);
+    font-weight: 600;
   }
 </style>

@@ -58,11 +58,12 @@ func LogGraph(revset string, limit int) CommandArgs {
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
-	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F bookmarks
+	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F bookmarks
 	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
+	// working_copies is inserted before bookmarks since bookmarks use \x1F as internal separator.
 	// Bookmarks are joined with \x1F to avoid breakage if bookmark names contain spaces.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ bookmarks.join("\x1F") ++ "\n"`,
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ bookmarks.join("\x1F") ++ "\n"`,
 		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args
@@ -310,7 +311,7 @@ func ParseOpLog(output string) []OpEntry {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x1F", 4)
+		parts := strings.SplitN(line, "\x1f", 4)
 		if len(parts) < 4 {
 			continue
 		}
@@ -350,4 +351,41 @@ func FilesInRevision(revision *Commit) CommandArgs {
 
 func ConfigListAll() CommandArgs {
 	return []string{"config", "list", "--color", "never", "--include-defaults", "--ignore-working-copy"}
+}
+
+// WorkspaceList returns args for `jj workspace list` to enumerate all workspaces.
+func WorkspaceList() CommandArgs {
+	return []string{"workspace", "list", "--color", "never", "--ignore-working-copy"}
+}
+
+// Workspace represents a jj workspace entry.
+type Workspace struct {
+	Name     string `json:"name"`
+	ChangeId string `json:"change_id"`
+	CommitId string `json:"commit_id"`
+}
+
+// ParseWorkspaceList parses `jj workspace list` output.
+// Each line looks like: "default: skpssuxl a14ce848 description text"
+func ParseWorkspaceList(output string) []Workspace {
+	workspaces := []Workspace{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		colonIdx := strings.Index(line, ": ")
+		if colonIdx == -1 {
+			continue
+		}
+		fields := strings.Fields(line[colonIdx+2:])
+		if len(fields) < 2 {
+			continue
+		}
+		workspaces = append(workspaces, Workspace{
+			Name:     line[:colonIdx],
+			ChangeId: fields[0],
+			CommitId: fields[1],
+		})
+	}
+	return workspaces
 }

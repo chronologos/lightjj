@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, _testInternals } from './api'
+import { api, isCached, onStale, _testInternals } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
-function mockResponse(data: unknown, opId: string | null = 'op1') {
+function mockResponse(data: unknown, opId: string | null = 'op1', ok = true, status = 200) {
   const headers = new Map<string, string>()
   if (opId) headers.set('X-JJ-Op-Id', opId)
   return {
-    ok: true,
-    status: 200,
+    ok,
+    status,
     headers: { get: (k: string) => headers.get(k) ?? null },
     json: () => Promise.resolve(data),
   }
@@ -20,6 +20,8 @@ beforeEach(() => {
   mockFetch.mockReset()
   _testInternals.lastOpId = null
   _testInternals.cache.clear()
+  _testInternals.staleCallbacks.clear()
+  _testInternals.refreshQueued = false
 })
 
 describe('response cache', () => {
@@ -180,5 +182,112 @@ describe('response cache', () => {
 
     // Cache was cleared, then 1 new entry added
     expect(_testInternals.cache.size).toBe(1)
+  })
+})
+
+describe('onStale', () => {
+  it('fires callback when op-id changes', async () => {
+    const cb = vi.fn()
+    onStale(cb)
+
+    // Seed op-id
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op1'))
+    await api.log()
+    expect(cb).not.toHaveBeenCalled()
+
+    // Op-id changes → callback should fire via microtask
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op2'))
+    await api.log()
+    await Promise.resolve() // drain microtask queue
+    expect(cb).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fire callback when op-id stays the same', async () => {
+    const cb = vi.fn()
+    onStale(cb)
+
+    mockFetch.mockResolvedValue(mockResponse([], 'op1'))
+    await api.log()
+    await api.log()
+    await Promise.resolve()
+    expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('supports multiple callbacks', async () => {
+    const cb1 = vi.fn()
+    const cb2 = vi.fn()
+    onStale(cb1)
+    onStale(cb2)
+
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op1'))
+    await api.log()
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op2'))
+    await api.log()
+    await Promise.resolve()
+
+    expect(cb1).toHaveBeenCalledTimes(1)
+    expect(cb2).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns unsubscribe function', async () => {
+    const cb = vi.fn()
+    const unsub = onStale(cb)
+
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op1'))
+    await api.log()
+
+    unsub() // unsubscribe before op-id change
+
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op2'))
+    await api.log()
+    await Promise.resolve()
+    expect(cb).not.toHaveBeenCalled()
+  })
+})
+
+describe('isCached', () => {
+  it('returns false when lastOpId is null', () => {
+    expect(isCached('abc')).toBe(false)
+  })
+
+  it('returns true when both diff and files are cached', () => {
+    _testInternals.lastOpId = 'op1'
+    _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
+    _testInternals.cache.set('files:abc@op1', [])
+    expect(isCached('abc')).toBe(true)
+  })
+
+  it('returns false when only diff is cached', () => {
+    _testInternals.lastOpId = 'op1'
+    _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
+    expect(isCached('abc')).toBe(false)
+  })
+
+  it('returns false when only files are cached', () => {
+    _testInternals.lastOpId = 'op1'
+    _testInternals.cache.set('files:abc@op1', [])
+    expect(isCached('abc')).toBe(false)
+  })
+})
+
+describe('error handling', () => {
+  it('throws error with server error message on non-ok response', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ error: 'jj failed' }, 'op1', false, 500))
+    await expect(api.log()).rejects.toThrow('jj failed')
+  })
+
+  it('throws fallback error when no error field in response', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({}, 'op1', false, 400))
+    await expect(api.log()).rejects.toThrow('HTTP 400')
+  })
+
+  it('tracks op-id even on error responses', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op1'))
+    await api.log()
+
+    // Error response with a new op-id
+    mockFetch.mockResolvedValueOnce(mockResponse({ error: 'fail' }, 'op2', false, 500))
+    await api.log().catch(() => {}) // swallow the error
+    expect(_testInternals.lastOpId).toBe('op2')
   })
 })
