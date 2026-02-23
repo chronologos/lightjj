@@ -24,9 +24,13 @@
   let lastCheckedIndex: number = $state(-1)
   let diffGeneration: number = 0
   let filesGeneration: number = 0
+  let paletteOpen: boolean = $state(false)
+  let paletteQuery: string = $state('')
+  let paletteIndex: number = $state(0)
 
   // --- Refs ---
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
+  let paletteInputEl: HTMLInputElement | undefined = $state(undefined)
 
   // --- Derived ---
   let selectedRevision: LogEntry | null = $derived(
@@ -193,6 +197,97 @@
   function clearChecks() {
     checkedRevisions = new Set()
     lastCheckedIndex = -1
+  }
+
+  // --- Command palette ---
+  interface PaletteCommand {
+    id: string
+    label: string
+    shortcut?: string
+    action: () => void
+    when?: () => boolean  // only show when condition is true
+  }
+
+  let commands: PaletteCommand[] = $derived.by(() => [
+    { id: 'refresh', label: 'Refresh revisions', shortcut: 'r', action: () => loadLog() },
+    { id: 'undo', label: 'Undo last operation', shortcut: 'u', action: () => handleUndo() },
+    { id: 'git-fetch', label: 'Git fetch', action: () => handleGitFetch() },
+    { id: 'git-push', label: 'Git push', action: () => handleGitPush() },
+    { id: 'filter', label: 'Focus revset filter', shortcut: '/', action: () => revsetInputEl?.focus() },
+    { id: 'clear-filter', label: 'Clear revset filter', action: () => clearRevsetFilter(), when: () => revsetFilter !== '' },
+    { id: 'describe', label: 'Edit description', shortcut: 'e', action: () => startDescriptionEdit(), when: () => !!selectedRevision && checkedRevisions.size <= 1 },
+    { id: 'new', label: 'New revision from selected', shortcut: 'n', action: () => {
+      if (checkedRevisions.size > 0) handleNewFromChecked()
+      else if (selectedRevision) handleNew(selectedRevision.commit.change_id)
+    }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
+    { id: 'edit', label: 'Edit selected revision', action: () => { if (selectedRevision) handleEdit(selectedRevision.commit.change_id) }, when: () => !!selectedRevision },
+    { id: 'abandon', label: 'Abandon selected revision', action: () => { if (selectedRevision) handleAbandon(selectedRevision.commit.change_id) }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { id: 'abandon-checked', label: `Abandon ${checkedRevisions.size} checked revisions`, action: () => handleAbandonChecked(), when: () => checkedRevisions.size > 0 },
+    { id: 'new-checked', label: `New from ${checkedRevisions.size} checked revisions`, action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
+    { id: 'clear-checks', label: 'Clear all checked revisions', shortcut: 'Esc', action: () => {
+      clearChecks()
+      if (selectedRevision) { loadDiff(selectedRevision); loadFiles(selectedRevision) }
+      else { diffContent = ''; changedFiles = [] }
+    }, when: () => checkedRevisions.size > 0 },
+    { id: 'collapse-all', label: 'Collapse all file diffs', action: () => collapseAll(), when: () => parsedDiff.length > 0 },
+    { id: 'expand-all', label: 'Expand all file diffs', action: () => expandAll(), when: () => parsedDiff.length > 0 },
+    { id: 'split-view', label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
+  ])
+
+  function fuzzyMatch(query: string, text: string): boolean {
+    const lq = query.toLowerCase()
+    const lt = text.toLowerCase()
+    let qi = 0
+    for (let ti = 0; ti < lt.length && qi < lq.length; ti++) {
+      if (lt[ti] === lq[qi]) qi++
+    }
+    return qi === lq.length
+  }
+
+  let filteredCommands = $derived.by(() => {
+    const available = commands.filter(c => !c.when || c.when())
+    if (!paletteQuery) return available
+    return available.filter(c => fuzzyMatch(paletteQuery, c.label))
+  })
+
+  function openPalette() {
+    paletteOpen = true
+    paletteQuery = ''
+    paletteIndex = 0
+    requestAnimationFrame(() => paletteInputEl?.focus())
+  }
+
+  function closePalette() {
+    paletteOpen = false
+    paletteQuery = ''
+  }
+
+  function executePaletteCommand(cmd: PaletteCommand) {
+    closePalette()
+    cmd.action()
+  }
+
+  function handlePaletteKeydown(e: KeyboardEvent) {
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        paletteIndex = Math.min(paletteIndex + 1, filteredCommands.length - 1)
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        paletteIndex = Math.max(paletteIndex - 1, 0)
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (filteredCommands[paletteIndex]) {
+          executePaletteCommand(filteredCommands[paletteIndex])
+        }
+        break
+      case 'Escape':
+        e.preventDefault()
+        closePalette()
+        break
+    }
   }
 
   // --- Types ---
@@ -606,6 +701,13 @@
     // Don't capture when typing in inputs (except specific keys in revset input)
     const target = e.target as HTMLElement
 
+    // Cmd+K / Ctrl+K opens palette from anywhere
+    if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      openPalette()
+      return
+    }
+
     // Handle Escape in revset input specially
     if (target === revsetInputEl) {
       if (e.key === 'Escape') {
@@ -751,6 +853,7 @@
       </div>
     </div>
     <div class="titlebar-right">
+      <kbd class="shortcut-hint">Cmd+K</kbd> commands
       <kbd class="shortcut-hint">/</kbd> filter
       <kbd class="shortcut-hint">j/k</kbd> navigate
       <kbd class="shortcut-hint">Space</kbd> check
@@ -1093,6 +1196,40 @@
       </div>
     </div>
   </div>
+
+  <!-- Command palette -->
+  {#if paletteOpen}
+    <div class="palette-backdrop" onclick={closePalette} role="presentation"></div>
+    <div class="palette">
+      <input
+        bind:this={paletteInputEl}
+        bind:value={paletteQuery}
+        class="palette-input"
+        type="text"
+        placeholder="Type a command..."
+        onkeydown={handlePaletteKeydown}
+        oninput={() => { paletteIndex = 0 }}
+      />
+      <div class="palette-results">
+        {#each filteredCommands as cmd, i}
+          <button
+            class="palette-item"
+            class:palette-item-active={i === paletteIndex}
+            onclick={() => executePaletteCommand(cmd)}
+            onmouseenter={() => { paletteIndex = i }}
+          >
+            <span class="palette-label">{cmd.label}</span>
+            {#if cmd.shortcut}
+              <kbd class="palette-shortcut">{cmd.shortcut}</kbd>
+            {/if}
+          </button>
+        {/each}
+        {#if filteredCommands.length === 0}
+          <div class="palette-empty">No matching commands</div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- Status bar -->
   <footer class="statusbar">
@@ -2070,6 +2207,97 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* --- Command palette --- */
+  .palette-backdrop {
+    position: fixed;
+    inset: 0;
+    background: #00000066;
+    z-index: 100;
+  }
+
+  .palette {
+    position: fixed;
+    top: 20%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 480px;
+    max-height: 400px;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    box-shadow: 0 16px 48px #00000088;
+    z-index: 101;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .palette-input {
+    width: 100%;
+    background: #181825;
+    color: #cdd6f4;
+    border: none;
+    border-bottom: 1px solid #313244;
+    padding: 12px 16px;
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+  }
+
+  .palette-input::placeholder {
+    color: #585b70;
+  }
+
+  .palette-results {
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .palette-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    color: #cdd6f4;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .palette-item-active {
+    background: #313244;
+  }
+
+  .palette-label {
+    flex: 1;
+  }
+
+  .palette-shortcut {
+    background: #313244;
+    color: #a6adc8;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px solid #45475a;
+    margin-left: 12px;
+  }
+
+  .palette-item-active .palette-shortcut {
+    background: #45475a;
+  }
+
+  .palette-empty {
+    padding: 16px;
+    color: #585b70;
+    text-align: center;
+    font-size: 13px;
   }
 
   /* --- Scrollbar --- */

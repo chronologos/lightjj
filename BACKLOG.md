@@ -57,7 +57,7 @@
 - [x] Split view (side-by-side diff, unified/split toggle)
 - [x] Change type badges (M blue, A green, D red)
 - [x] Pinned file list + toolbar (outside scroll container)
-- [ ] Multi-select revisions for batch operations
+- [x] Multi-select revisions for batch operations
 - [ ] Command palette (Cmd+K / Ctrl+K)
 - [ ] Inline diff (word-level highlighting)
 - [ ] Operation log viewer
@@ -72,7 +72,7 @@
 - [ ] SSH remote repo browser
 - [ ] Live file watching (auto-refresh on working copy changes)
 - [ ] Git push/fetch with progress indication
-- [ ] Diff syntax highlighting (language-aware, Shiki like antique)
+- [x] Diff syntax highlighting (language-aware, Shiki like antique)
 - [ ] Context expansion at hunk boundaries (like antique)
 - [ ] Search across revisions
 - [ ] Themes (light/dark)
