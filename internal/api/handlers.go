@@ -397,6 +397,11 @@ type bookmarkNameRequest struct {
 	Name string `json:"name"`
 }
 
+type bookmarkRemoteRequest struct {
+	Name   string `json:"name"`
+	Remote string `json:"remote"`
+}
+
 type gitFlagsRequest struct {
 	Flags []string `json:"flags,omitempty"`
 }
@@ -472,6 +477,46 @@ func (s *Server) handleBookmarkForget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := jj.BookmarkForget(req.Name)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.refreshOpId(r)
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+}
+
+func (s *Server) handleBookmarkTrack(w http.ResponseWriter, r *http.Request) {
+	var req bookmarkRemoteRequest
+	if err := decodeBody(r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	args := jj.BookmarkTrack(req.Name, req.Remote)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.refreshOpId(r)
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+}
+
+func (s *Server) handleBookmarkUntrack(w http.ResponseWriter, r *http.Request) {
+	var req bookmarkRemoteRequest
+	if err := decodeBody(r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	args := jj.BookmarkUntrack(req.Name, req.Remote)
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())

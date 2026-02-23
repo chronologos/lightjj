@@ -22,12 +22,13 @@
     ondescribe: () => void
     oncanceldescribe: () => void
     ondraftchange: (value: string) => void
+    onbookmarkclick: (name: string) => void
   }
 
   let {
     diffContent, changedFiles, selectedRevision, checkedRevisions,
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
-    onstartdescribe, ondescribe, oncanceldescribe, ondraftchange,
+    onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
   }: Props = $props()
 
   // --- Local state ---
@@ -247,7 +248,7 @@
       {#if selectedRevision.bookmarks?.length}
         <div class="detail-bookmarks">
           {#each selectedRevision.bookmarks as bm}
-            <span class="detail-bookmark-badge">{bm}</span>
+            <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>{bm}</button>
           {/each}
         </div>
       {/if}
@@ -489,6 +490,8 @@
     border: 1px solid var(--border-bookmark);
     line-height: 1.15;
     letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
   }
 
   .detail-description {

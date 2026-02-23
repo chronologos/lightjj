@@ -22,13 +22,14 @@
     onrevsetclear: () => void
     onrevsetchange: (value: string) => void
     onrevsetescaped: () => void
+    onbookmarkclick: (name: string) => void
   }
 
   let {
     revisions, selectedIndex, checkedRevisions, loading, revsetFilter, lastCheckedIndex,
     onselect, oncheck, onrangecheck, onedit, onnew, onabandon,
     onnewfromchecked, onabandonchecked, onclearchecks,
-    onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped,
+    onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onbookmarkclick,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -208,7 +209,7 @@
               {@const entry = revisions[line.entryIndex]}
               <span class="bookmark-line-content">
                 {#each entry.bookmarks ?? [] as bm}
-                  <span class="bookmark-badge">{bm}</span>
+                  <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>{bm}</button>
                 {/each}
               </span>
             {:else if line.isDescLine}

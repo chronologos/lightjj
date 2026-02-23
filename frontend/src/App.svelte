@@ -9,6 +9,8 @@
   import DiffPanel from './lib/DiffPanel.svelte'
   import EvologPanel from './lib/EvologPanel.svelte'
   import OplogPanel from './lib/OplogPanel.svelte'
+  import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
+  import BookmarkInput from './lib/BookmarkInput.svelte'
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])
@@ -42,6 +44,9 @@
   let oplogLoading: boolean = $state(false)
 
   let paletteOpen: boolean = $state(false)
+  let bookmarkModalOpen: boolean = $state(false)
+  let bookmarkModalFilter: string = $state('')
+  let bookmarkInputOpen: boolean = $state(false)
 
   // --- Theme ---
   let darkMode: boolean = $state(localStorage.getItem('jj-web-theme') !== 'light')
@@ -149,6 +154,8 @@
     { label: 'Toggle operation log', action: () => toggleOplog() },
     { label: 'Toggle evolution log for selected revision', action: () => toggleEvolog(), when: () => !!selectedRevision },
     { label: darkMode ? 'Switch to light theme' : 'Switch to dark theme', action: () => toggleTheme() },
+    { label: 'Set bookmark on revision', shortcut: 'B', action: () => { bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Bookmark operations', shortcut: 'b', action: () => openBookmarkModal() },
   ])
 
   // --- API actions ---
@@ -366,6 +373,43 @@
     }
   }
 
+  async function handleBookmarkSet(name: string) {
+    if (!selectedRevision) return
+    try {
+      const result = await api.bookmarkSet(selectedRevision.commit.change_id, name)
+      bookmarkInputOpen = false
+      lastAction = `Set bookmark ${name}`
+      commandOutput = result.output
+      await loadLog()
+    } catch (e) {
+      showError(e)
+    }
+  }
+
+  async function handleBookmarkOp(op: BookmarkOp) {
+    try {
+      let result: { output: string }
+      switch (op.action) {
+        case 'move': result = await api.bookmarkMove(op.bookmark, selectedRevision!.commit.change_id); break
+        case 'delete': result = await api.bookmarkDelete(op.bookmark); break
+        case 'forget': result = await api.bookmarkForget(op.bookmark); break
+        case 'track': result = await api.bookmarkTrack(op.bookmark, op.remote!); break
+        case 'untrack': result = await api.bookmarkUntrack(op.bookmark, op.remote!); break
+      }
+      bookmarkModalOpen = false
+      lastAction = `${op.action} ${op.bookmark}`
+      commandOutput = result!.output
+      await loadLog()
+    } catch (e) {
+      showError(e)
+    }
+  }
+
+  function openBookmarkModal(filter?: string) {
+    bookmarkModalFilter = filter ?? ''
+    bookmarkModalOpen = true
+  }
+
   async function toggleOplog() {
     oplogOpen = !oplogOpen
     if (oplogOpen && oplogEntries.length === 0) {
@@ -500,6 +544,16 @@
           handleNew(selectedRevision.commit.change_id)
         }
         break
+      case 'b':
+        e.preventDefault()
+        openBookmarkModal()
+        break
+      case 'B':
+        if (selectedRevision && checkedRevisions.size === 0) {
+          e.preventDefault()
+          bookmarkInputOpen = true
+        }
+        break
       case '/':
         e.preventDefault()
         revisionGraphRef?.focusRevsetInput()
@@ -568,6 +622,7 @@
       onrevsetclear={clearRevsetFilter}
       onrevsetchange={(v) => { revsetFilter = v }}
       onrevsetescaped={clearRevsetFilter}
+      onbookmarkclick={(name) => openBookmarkModal(name)}
     />
 
     <DiffPanel
@@ -586,6 +641,7 @@
       ondescribe={handleDescribe}
       oncanceldescribe={() => { descriptionEditing = false }}
       ondraftchange={(v) => { descriptionDraft = v }}
+      onbookmarkclick={(name) => openBookmarkModal(name)}
     />
   </div>
 
@@ -609,6 +665,20 @@
   {/if}
 
   <CommandPalette bind:open={paletteOpen} {commands} />
+
+  <BookmarkInput
+    bind:open={bookmarkInputOpen}
+    onsave={handleBookmarkSet}
+    oncancel={() => { bookmarkInputOpen = false }}
+  />
+
+  <BookmarkModal
+    bind:open={bookmarkModalOpen}
+    currentChangeId={selectedRevision?.commit.change_id ?? null}
+    filterBookmark={bookmarkModalFilter}
+    onexecute={handleBookmarkOp}
+    onclose={() => { bookmarkModalOpen = false }}
+  />
 
   <StatusBar {statusText} {commandOutput} />
 </div>
