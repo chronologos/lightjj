@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, onStale, type LogEntry, type FileChange, type OpEntry } from './lib/api'
+  import { api, isCached, onStale, type LogEntry, type FileChange, type OpEntry } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import Toolbar from './lib/Toolbar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -32,6 +32,8 @@
   let diffGeneration: number = 0
   let filesGeneration: number = 0
   let evologGeneration: number = 0
+  // Debounce timer for diff/files loading during rapid j/k navigation
+  let navDebounceTimer: number | undefined
   let evologOpen: boolean = $state(false)
   let evologContent: string = $state('')
   let evologLoading: boolean = $state(false)
@@ -125,7 +127,7 @@
     { label: `New from ${checkedRevisions.size} checked revisions`, action: () => handleNewFromChecked(), when: () => checkedRevisions.size > 0 },
     { label: 'Clear all checked revisions', shortcut: 'Esc', action: () => {
       clearChecks()
-      if (selectedRevision) { loadDiff(selectedRevision); loadFiles(selectedRevision) }
+      if (selectedRevision) { loadDiffAndFiles(selectedRevision.commit.change_id) }
       else { diffContent = ''; changedFiles = [] }
     }, when: () => checkedRevisions.size > 0 },
     { label: 'Toggle split/unified diff view', action: () => { splitView = !splitView } },
@@ -150,7 +152,7 @@
       }
       lastCheckedIndex = -1
       if (selectedIndex >= 0 && checkedRevisions.size === 0) {
-        await Promise.all([loadDiff(revisions[selectedIndex]), loadFiles(revisions[selectedIndex])])
+        loadDiffAndFiles(revisions[selectedIndex].commit.change_id)
       }
     } catch (e) {
       showError(e)
@@ -161,12 +163,11 @@
 
   async function loadDiffForRevset(revset: string, file?: string) {
     const gen = ++diffGeneration
-    diffLoading = true
-    diffContent = ''
+    if (!isCached(revset)) diffLoading = true
     try {
       const result = await api.diff(revset, file)
       if (gen !== diffGeneration) return
-      diffContent = result.diff
+      if (diffContent !== result.diff) diffContent = result.diff
     } catch (e) {
       if (gen !== diffGeneration) return
       diffContent = ''
@@ -178,12 +179,11 @@
 
   async function loadFilesForRevset(revset: string) {
     const gen = ++filesGeneration
-    filesLoading = true
-    changedFiles = []
+    if (!isCached(revset)) filesLoading = true
     try {
       const result = await api.files(revset)
       if (gen !== filesGeneration) return
-      changedFiles = result
+      if (changedFiles !== result) changedFiles = result
     } catch (e) {
       if (gen !== filesGeneration) return
       changedFiles = []
@@ -193,26 +193,38 @@
     }
   }
 
-  async function loadDiff(entry: LogEntry, file?: string) {
-    await loadDiffForRevset(entry.commit.change_id, file)
+  function loadDiffAndFiles(changeId: string) {
+    loadDiffForRevset(changeId)
+    loadFilesForRevset(changeId)
   }
 
-  async function loadFiles(entry: LogEntry) {
-    await loadFilesForRevset(entry.commit.change_id)
-  }
-
-  async function selectRevision(index: number) {
+  function selectRevision(index: number) {
     selectedIndex = index
+    descriptionEditing = false
+
     const entry = revisions[index]
-    if (entry) {
-      descriptionEditing = false
-      diffPanelRef?.resetCollapsed()
-      if (checkedRevisions.size === 0) {
-        await Promise.all([loadDiff(entry), loadFiles(entry)])
+    if (!entry) return
+
+    // Debounce diff/files loading: highlight moves instantly, but fetches
+    // wait for navigation to settle. Cache hits skip the debounce.
+    clearTimeout(navDebounceTimer)
+    const cached = isCached(entry.commit.change_id)
+    if (checkedRevisions.size === 0) {
+      if (cached) {
+        loadDiffAndFiles(entry.commit.change_id)
+      } else {
+        navDebounceTimer = setTimeout(() => {
+          const current = revisions[selectedIndex]
+          if (current) {
+            loadDiffAndFiles(current.commit.change_id)
+            if (evologOpen) loadEvolog(current.commit.change_id)
+          }
+        }, 50)
+        return // evolog deferred with the rest
       }
-      if (evologOpen) {
-        loadEvolog(entry.commit.change_id)
-      }
+    }
+    if (evologOpen) {
+      loadEvolog(entry.commit.change_id)
     }
   }
 
@@ -444,7 +456,7 @@
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
-          Promise.all([loadDiff(selectedRevision), loadFiles(selectedRevision)])
+          loadDiffAndFiles(selectedRevision.commit.change_id)
         }
         break
       case 'u':
@@ -482,8 +494,7 @@
         } else if (checkedRevisions.size > 0) {
           clearChecks()
           if (selectedRevision) {
-            loadDiff(selectedRevision)
-            loadFiles(selectedRevision)
+            loadDiffAndFiles(selectedRevision.commit.change_id)
           } else {
             diffContent = ''
             changedFiles = []
@@ -494,6 +505,12 @@
         break
     }
   }
+
+  // Debug: uncomment to trace reactive updates during j/k navigation
+  // $inspect('selectedIndex', selectedIndex)
+  // $inspect('diffContent length', diffContent.length)
+  // $inspect('changedFiles', changedFiles.length)
+  // $inspect('diffLoading', diffLoading)
 
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
@@ -545,7 +562,7 @@
       onabandonchecked={handleAbandonChecked}
       onclearchecks={() => {
         clearChecks()
-        if (selectedRevision) { loadDiff(selectedRevision); loadFiles(selectedRevision) }
+        if (selectedRevision) { loadDiffAndFiles(selectedRevision.commit.change_id) }
         else { diffContent = ''; changedFiles = [] }
       }}
       onrevsetsubmit={handleRevsetSubmit}

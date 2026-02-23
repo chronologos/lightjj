@@ -90,6 +90,13 @@ async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
   return result
 }
 
+// Check if a revision's diff + files are both cached (useful for debounce decisions)
+export function isCached(revision: string): boolean {
+  if (!lastOpId) return false
+  return responseCache.has(`diff:${revision}@${lastOpId}`) &&
+         responseCache.has(`files:${revision}@${lastOpId}`)
+}
+
 export interface FileChange {
   type: string
   path: string

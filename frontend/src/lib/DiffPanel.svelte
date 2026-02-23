@@ -112,7 +112,7 @@
   function collapseAll() {
     collapsedFiles.clear()
     for (const f of parsedDiff) {
-      collapsedFiles.add(filePathFromHeader(f.header))
+      collapsedFiles.add(f.filePath)
     }
   }
 

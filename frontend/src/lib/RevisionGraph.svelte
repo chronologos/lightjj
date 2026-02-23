@@ -94,16 +94,13 @@
     revsetInputEl?.focus()
   }
 
-  // Scroll the selected node row into view when selectedIndex changes
+  // Scroll the selected node row into view when selectedIndex changes.
+  // Svelte 5 effects run after DOM updates, so no rAF needed.
+  let listEl: HTMLElement | undefined = $state(undefined)
   $effect(() => {
     if (selectedIndex < 0) return
-    // Read selectedIndex to track it
-    const _idx = selectedIndex
-    requestAnimationFrame(() => {
-      const listEl = document.querySelector('.revision-list')
-      const el = listEl?.querySelector('.graph-row.node-row.selected')
-      el?.scrollIntoView({ block: 'nearest' })
-    })
+    const el = listEl?.querySelector('.graph-row.node-row.selected')
+    el?.scrollIntoView({ block: 'nearest' })
   })
 </script>
 
@@ -156,7 +153,7 @@
     {:else if revisions.length === 0}
       <div class="empty-state">No revisions found</div>
     {:else}
-      <div class="revision-list" role="listbox" aria-label="Revision list">
+      <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list">
         {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineSubIdx)}
           {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
           <div
@@ -337,6 +334,7 @@
   .revision-list {
     display: flex;
     flex-direction: column;
+    user-select: none;
   }
 
   .graph-row {
@@ -346,18 +344,17 @@
     line-height: 1.15;
     font-size: 13px;
     cursor: pointer;
-    transition: background 0.1s ease;
   }
 
-  .graph-row:hover {
+  .graph-row:hover:not(.selected) {
     background: #262637;
   }
 
   /* Hovering the description row also highlights its node row, and vice versa */
-  .graph-row.node-row:has(+ .graph-row.desc-row:hover) {
+  .graph-row.node-row:not(.selected):has(+ .graph-row.desc-row:hover) {
     background: #262637;
   }
-  .graph-row.node-row:hover + .graph-row.desc-row {
+  .graph-row.node-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
     background: #262637;
   }
 
@@ -489,7 +486,6 @@
     gap: 2px;
     padding: 0 6px;
     opacity: 0;
-    transition: opacity 0.15s ease;
     flex-shrink: 0;
   }
 
