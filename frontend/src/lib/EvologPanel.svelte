@@ -12,7 +12,7 @@
   let { content, loading, selectedRevision, onrefresh, onclose }: Props = $props()
 </script>
 
-<div class="oplog-panel">
+<div class="evolog-panel">
   <div class="panel-header">
     <span class="panel-title">
       Evolution Log
@@ -27,7 +27,7 @@
       <button class="header-btn" onclick={onclose}>Close</button>
     </div>
   </div>
-  <div class="oplog-content">
+  <div class="evolog-content">
     {#if loading}
       <div class="empty-state">
         <div class="spinner"></div>
@@ -42,7 +42,7 @@
 </div>
 
 <style>
-  .oplog-panel {
+  .evolog-panel {
     border-top: 1px solid var(--surface0);
     flex-shrink: 0;
     max-height: 200px;
@@ -100,7 +100,7 @@
     color: var(--text);
   }
 
-  .oplog-content {
+  .evolog-content {
     overflow-y: auto;
     font-size: 12px;
   }

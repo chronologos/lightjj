@@ -142,6 +142,19 @@ func TestUndoRedo(t *testing.T) {
 	assert.Equal(t, []string{"redo"}, Redo())
 }
 
+func TestCurrentOpId(t *testing.T) {
+	got := CurrentOpId()
+	assert.Contains(t, got, "op")
+	assert.Contains(t, got, "log")
+	assert.Contains(t, got, "--no-graph")
+	assert.Contains(t, got, "--limit")
+	assert.Contains(t, got, "1")
+	assert.Contains(t, got, "--ignore-working-copy")
+	// Must use -T with the template string
+	assert.Contains(t, got, "-T")
+	assert.Contains(t, got, "self.id().short()")
+}
+
 func TestDiffSummary(t *testing.T) {
 	got := DiffSummary("abc")
 	assert.Equal(t, []string{"diff", "--summary", "--color", "never", "-r", "abc", "--ignore-working-copy"}, got)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -33,6 +34,7 @@ func (e *ExpectedCommand) SetError(err error) *ExpectedCommand {
 type MockRunner struct {
 	t            *testing.T
 	expectations map[string][]*ExpectedCommand
+	allowed      map[string]*ExpectedCommand // optional commands keyed by full args string
 	mu           sync.Mutex
 }
 
@@ -40,7 +42,19 @@ func NewMockRunner(t *testing.T) *MockRunner {
 	return &MockRunner{
 		t:            t,
 		expectations: make(map[string][]*ExpectedCommand),
+		allowed:      make(map[string]*ExpectedCommand),
 	}
+}
+
+// Allow registers a command that may be called zero or more times without
+// being required. Matches by full args (not just subcommand).
+func (m *MockRunner) Allow(args []string) *ExpectedCommand {
+	if len(args) == 0 {
+		m.t.Fatal("Allow: empty args")
+	}
+	e := &ExpectedCommand{args: slices.Clone(args), called: true} // pre-marked so Verify won't complain
+	m.allowed[strings.Join(args, "\x00")] = e
+	return e
 }
 
 // Expect registers an expected command. Returns the expectation for chaining.
@@ -69,16 +83,19 @@ func (m *MockRunner) findExpectation(args []string) *ExpectedCommand {
 
 	subCmd := args[0]
 	expectations, ok := m.expectations[subCmd]
-	if !ok || len(expectations) == 0 {
-		m.t.Fatalf("unexpected command: %v", args)
-	}
-	for _, e := range expectations {
-		if slices.Equal(e.args, args) {
-			e.called = true
-			return e
+	if ok {
+		for _, e := range expectations {
+			if slices.Equal(e.args, args) {
+				e.called = true
+				return e
+			}
 		}
 	}
-	m.t.Fatalf("unexpected command args: %v", args)
+	// Check allowed (optional) commands — matched by full args
+	if a, ok := m.allowed[strings.Join(args, "\x00")]; ok {
+		return a
+	}
+	m.t.Fatalf("unexpected command: %v", args)
 	return nil
 }
 

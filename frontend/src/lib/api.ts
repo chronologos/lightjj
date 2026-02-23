@@ -29,8 +29,41 @@ export interface Bookmark {
   commit_id: string
 }
 
+// Op-ID tracking: detect when jj state changes outside the UI
+let lastOpId: string | null = null
+let onStaleCallback: (() => void) | null = null
+let refreshQueued = false
+
+// Response cache: keyed by "${cacheId}@${opId}", cleared on op-id change
+const MAX_CACHE_SIZE = 200
+const responseCache = new Map<string, unknown>()
+
+export function onStale(callback: () => void) {
+  onStaleCallback = callback
+}
+
+function trackOpId(res: Response) {
+  // Track op-id even on error responses — a failed mutation may still advance the op-id
+  const opId = res.headers.get('X-JJ-Op-Id')
+  if (!opId) return
+  if (lastOpId !== null && opId !== lastOpId) {
+    lastOpId = opId
+    responseCache.clear()
+    if (onStaleCallback && !refreshQueued) {
+      refreshQueued = true
+      queueMicrotask(() => {
+        refreshQueued = false
+        onStaleCallback?.()
+      })
+    }
+  } else {
+    lastOpId = opId
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
+  trackOpId(res)
   const data = await res.json()
   if (!res.ok) {
     throw new Error(data.error || `HTTP ${res.status}`)
@@ -44,6 +77,17 @@ function post<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+}
+
+async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
+  const key = `${cacheId}@${lastOpId}`
+  if (lastOpId && responseCache.has(key)) return responseCache.get(key) as T
+  const result = await request<T>(url)
+  if (lastOpId) {
+    if (responseCache.size >= MAX_CACHE_SIZE) responseCache.clear()
+    responseCache.set(`${cacheId}@${lastOpId}`, result)
+  }
+  return result
 }
 
 export interface FileChange {
@@ -77,7 +121,8 @@ export const api = {
   diff: (revision: string, file?: string) => {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
-    return request<{ diff: string }>(`/api/diff?${params}`)
+    const cacheId = 'diff:' + revision + (file ? ':' + file : '')
+    return cachedRequest<{ diff: string }>(`${cacheId}`, `/api/diff?${params}`)
   },
 
   description: (revision: string) => {
@@ -87,7 +132,7 @@ export const api = {
 
   files: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return request<FileChange[]>(`/api/files?${params}`)
+    return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`)
   },
 
   remotes: () => request<string[]>('/api/remotes'),
@@ -100,7 +145,7 @@ export const api = {
 
   evolog: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return request<{ output: string }>(`/api/evolog?${params}`)
+    return cachedRequest<{ output: string }>('evolog:' + revision, `/api/evolog?${params}`)
   },
 
   // Mutations
@@ -135,4 +180,12 @@ export const api = {
 
   gitFetch: (flags?: string[]) =>
     post<{ output: string }>('/api/git/fetch', { flags }),
+}
+
+// Test-only exports for cache inspection/reset
+export const _testInternals = {
+  get lastOpId() { return lastOpId },
+  set lastOpId(v: string | null) { lastOpId = v },
+  get cache() { return responseCache },
+  get MAX_CACHE_SIZE() { return MAX_CACHE_SIZE },
 }

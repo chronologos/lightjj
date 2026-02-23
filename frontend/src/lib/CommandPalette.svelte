@@ -10,11 +10,11 @@
 
   interface Props {
     commands: PaletteCommand[]
+    open: boolean
   }
 
-  let { commands }: Props = $props()
+  let { commands, open = $bindable(false) }: Props = $props()
 
-  let open: boolean = $state(false)
   let query: string = $state('')
   let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
@@ -25,12 +25,14 @@
     return available.filter(c => fuzzyMatch(query, c.label))
   })
 
-  export function show() {
-    open = true
-    query = ''
-    index = 0
-    requestAnimationFrame(() => inputEl?.focus())
-  }
+  // Focus input when palette opens
+  $effect(() => {
+    if (open) {
+      query = ''
+      index = 0
+      requestAnimationFrame(() => inputEl?.focus())
+    }
+  })
 
   function close() {
     open = false

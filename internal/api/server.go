@@ -4,14 +4,19 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
+	"sync"
 
+	"github.com/iant/jj-web/internal/jj"
 	"github.com/iant/jj-web/internal/runner"
 )
 
 // Server holds the HTTP handler and its dependencies.
 type Server struct {
-	Runner runner.CommandRunner
-	Mux    *http.ServeMux
+	Runner    runner.CommandRunner
+	Mux       *http.ServeMux
+	cachedOp  string // last known op-id, refreshed after mutations
+	cachedMu  sync.RWMutex
 }
 
 func NewServer(r runner.CommandRunner) *Server {
@@ -48,14 +53,40 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/git/fetch", s.handleGitFetch)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
+	if opId := s.getOpId(); opId != "" {
+		w.Header().Set("X-JJ-Op-Id", opId)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+// writeError writes an error response without fetching op-id (errors should be cheap).
+func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// refreshOpId fetches the current op-id from jj and caches it.
+// Call after mutation handlers to pick up the new state.
+func (s *Server) refreshOpId(r *http.Request) {
+	output, err := s.Runner.Run(r.Context(), jj.CurrentOpId())
+	if err != nil {
+		return
+	}
+	opId := strings.TrimSpace(string(output))
+	s.cachedMu.Lock()
+	s.cachedOp = opId
+	s.cachedMu.Unlock()
+}
+
+// getOpId returns the cached op-id (may be empty on first call).
+func (s *Server) getOpId() string {
+	s.cachedMu.RLock()
+	defer s.cachedMu.RUnlock()
+	return s.cachedOp
 }
 
 func decodeBody(r *http.Request, v any) error {

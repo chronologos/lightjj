@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity'
   import type { LogEntry } from './api'
 
   interface Props {
     revisions: LogEntry[]
     selectedIndex: number
-    checkedRevisions: Set<string>
+    checkedRevisions: SvelteSet<string>
     loading: boolean
     revsetFilter: string
     lastCheckedIndex: number
@@ -20,13 +21,14 @@
     onrevsetsubmit: () => void
     onrevsetclear: () => void
     onrevsetchange: (value: string) => void
+    onrevsetescaped: () => void
   }
 
   let {
     revisions, selectedIndex, checkedRevisions, loading, revsetFilter, lastCheckedIndex,
     onselect, oncheck, onrangecheck, onedit, onnew, onabandon,
     onnewfromchecked, onabandonchecked, onclearchecks,
-    onrevsetsubmit, onrevsetclear, onrevsetchange,
+    onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -34,6 +36,7 @@
   interface FlatLine {
     gutter: string
     entryIndex: number
+    lineSubIdx: number // index within this entry's lines (stable across list changes)
     isNode: boolean
     isDescLine: boolean
     isWorkingCopy: boolean
@@ -59,11 +62,13 @@
   let flatLines = $derived.by(() => {
     const lines: FlatLine[] = []
     revisions.forEach((entry, i) => {
+      let subIdx = 0
       entry.graph_lines.forEach((gl, j) => {
         const isNode = gl.is_node ?? (j === 0)
         lines.push({
           gutter: gl.gutter,
           entryIndex: i,
+          lineSubIdx: subIdx++,
           isNode,
           isDescLine: false,
           isWorkingCopy: entry.commit.is_working_copy,
@@ -73,6 +78,7 @@
           lines.push({
             gutter: continuationGutter(gl.gutter),
             entryIndex: i,
+            lineSubIdx: subIdx++,
             isNode: false,
             isDescLine: true,
             isWorkingCopy: entry.commit.is_working_copy,
@@ -88,13 +94,17 @@
     revsetInputEl?.focus()
   }
 
-  export function blurRevsetInput() {
-    revsetInputEl?.blur()
-  }
-
-  export function getRevsetInputEl(): HTMLInputElement | undefined {
-    return revsetInputEl
-  }
+  // Scroll the selected node row into view when selectedIndex changes
+  $effect(() => {
+    if (selectedIndex < 0) return
+    // Read selectedIndex to track it
+    const _idx = selectedIndex
+    requestAnimationFrame(() => {
+      const listEl = document.querySelector('.revision-list')
+      const el = listEl?.querySelector('.graph-row.node-row.selected')
+      el?.scrollIntoView({ block: 'nearest' })
+    })
+  })
 </script>
 
 <div class="panel revisions-panel">
@@ -118,6 +128,10 @@
         if (e.key === 'Enter') {
           e.preventDefault()
           onrevsetsubmit()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          onrevsetescaped()
+          revsetInputEl?.blur()
         }
       }}
     />
@@ -143,7 +157,7 @@
       <div class="empty-state">No revisions found</div>
     {:else}
       <div class="revision-list" role="listbox" aria-label="Revision list">
-        {#each flatLines as line, lineIdx (revisions[line.entryIndex]?.commit.change_id + ':' + lineIdx)}
+        {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineSubIdx)}
           {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
           <div
             class="graph-row"

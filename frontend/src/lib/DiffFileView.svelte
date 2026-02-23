@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { DiffFile } from './diff-parser'
-  import { filePathFromHeader } from './diff-parser'
   import { toSplitView } from './split-view'
   import type { WordSpan } from './word-diff'
   import type { FileChange } from './api'
@@ -17,7 +16,7 @@
 
   let { file, fileStats, isCollapsed, splitView, highlightedLines, wordDiffMap, ontoggle }: Props = $props()
 
-  let filePath = $derived(filePathFromHeader(file.header))
+  let filePath = $derived(file.filePath)
 </script>
 
 {#snippet diffLine(line: import('./diff-parser').DiffLine, hlKey: string, spans: WordSpan[] | undefined)}
