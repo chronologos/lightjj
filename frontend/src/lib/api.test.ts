@@ -423,3 +423,46 @@ describe('error handling', () => {
     expect(_testInternals.lastOpId).toBe('op2')
   })
 })
+
+describe('timeout', () => {
+  it('GET request that takes too long throws Request timed out', async () => {
+    vi.useFakeTimers()
+    try {
+      // Mock fetch that checks signal.aborted synchronously (like real fetch does)
+      mockFetch.mockImplementation((_url: string, init?: RequestInit) => {
+        return new Promise((resolve, reject) => {
+          // Poll signal state -- in real browsers, fetch rejects immediately on abort
+          const check = () => {
+            if (init?.signal?.aborted) {
+              reject(new DOMException('The operation was aborted', 'AbortError'))
+            }
+          }
+          init?.signal?.addEventListener('abort', check)
+        })
+      })
+
+      // Attach the rejection handler immediately so it's never "unhandled"
+      const promise = api.log().catch((e: Error) => e)
+      // Advance past the READ_TIMEOUT_MS (30s)
+      await vi.advanceTimersByTimeAsync(31_000)
+
+      const error = await promise
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toBe('Request timed out')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('POST request has no timeout', async () => {
+    // POST requests should not create an AbortController
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValue(mockResponse({ output: 'done' }, 'op1'))
+
+    await api.abandon(['abc'])
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    // Verify no signal was added by the internal timeout logic
+    const [, init] = mockFetch.mock.calls[0]
+    expect(init?.signal).toBeUndefined()
+  })
+})

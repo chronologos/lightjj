@@ -227,6 +227,7 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
 }
+
 func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	args := jj.WorkspaceList()
 	output, err := s.Runner.Run(r.Context(), args)
@@ -405,6 +406,14 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runMutation(w, r, jj.Undo())
+}
+
+func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
+	if err := decodeBody(w, r, &struct{}{}); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.runMutation(w, r, jj.CommitWorkingCopy())
 }
 
 func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
@@ -614,4 +623,3 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.runMutation(w, r, jj.Resolve(req.Revision, req.File, req.Tool))
 }
-

@@ -1439,3 +1439,79 @@ func TestIntegrationFilesFromSubdirectory(t *testing.T) {
 	assert.Equal(t, 1, conflictCount,
 		"conflict.txt should appear exactly once (not duplicated from path mismatch)")
 }
+
+// ---------------------------------------------------------------------------
+// Split tests
+// ---------------------------------------------------------------------------
+
+func TestIntegrationSplit(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	// Create a revision with two files.
+	writeFile(t, r.RepoDir, "keep.txt", "keep me")
+	writeFile(t, r.RepoDir, "move.txt", "move me")
+	jjExec("describe", "-m", "before split")
+
+	srv := NewServer(r)
+	rows := getLogRows(t, srv, "")
+	rev := findRow(t, rows, "before split")
+
+	// Split: keep.txt stays in the original revision; move.txt goes to the new one.
+	w := apiPost(t, srv, "/api/split", map[string]any{
+		"revision": rev.Commit.ChangeId,
+		"files":    []string{"keep.txt"},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// After split the original revision should only have keep.txt.
+	gw := apiGet(t, srv, fmt.Sprintf("/api/files?revision=%s", rev.Commit.ChangeId))
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &files))
+
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	assert.Contains(t, paths, "keep.txt", "original should keep keep.txt")
+	assert.NotContains(t, paths, "move.txt", "move.txt should be in the new revision")
+}
+
+func TestIntegrationSplit_Parallel(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	// Create a parent commit so we can verify both split children share it.
+	writeFile(t, r.RepoDir, "base.txt", "base")
+	jjExec("describe", "-m", "parent")
+	jjExec("new")
+
+	writeFile(t, r.RepoDir, "a.txt", "a")
+	writeFile(t, r.RepoDir, "b.txt", "b")
+	jjExec("describe", "-m", "to split")
+
+	srv := NewServer(r)
+	rows := getLogRows(t, srv, "")
+	rev := findRow(t, rows, "to split")
+
+	w := apiPost(t, srv, "/api/split", map[string]any{
+		"revision": rev.Commit.ChangeId,
+		"files":    []string{"a.txt"},
+		"parallel": true,
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// After a parallel split, both resulting revisions should be visible in
+	// the log. We can't easily know the new revision's ID, but we can verify
+	// the split succeeded by checking the original revision now has fewer files.
+	gw := apiGet(t, srv, fmt.Sprintf("/api/files?revision=%s", rev.Commit.ChangeId))
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &files))
+
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	assert.Contains(t, paths, "a.txt")
+	assert.NotContains(t, paths, "b.txt", "b.txt should be in the parallel sibling")
+}

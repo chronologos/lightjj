@@ -70,6 +70,34 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] Frontend DOM integration tests (in progress)
 - [ ] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
 
+## Test Gaps — Medium/Low Priority (2026-02-24)
+
+Remaining test coverage gaps identified during the Round 2 test audit. These are pattern inconsistencies or edge cases, not missing critical logic.
+
+### Runner error tests (13 handlers)
+Unit tests verifying 500 response when runner returns an error. Already covered for `handleNew`, `handleAbandon`, `handleDescribe`, `handleRebase`, `handleGitPush`, `handleCommit`, `handleWorkspaces`. Missing for:
+- [ ] `handleBookmarks`
+- [ ] `handleDiff`
+- [ ] `handleStatus`
+- [ ] `handleGetDescription`
+- [ ] `handleRemotes`
+- [ ] `handleUndo`
+- [ ] `handleOpLog`
+- [ ] `handleEvolog`
+- [ ] `handleBookmarkSet`
+- [ ] `handleBookmarkDelete`
+- [ ] `handleBookmarkMove`
+- [ ] `handleBookmarkForget`
+- [ ] `handleBookmarkTrack`
+
+### Edge case tests
+- [ ] `decodeBody` with body exceeding 1MB `MaxBytesReader` limit
+- [ ] `ParseBookmarkListOutput` with `conflict=true` or `backwards=true`
+- [ ] `ParseDiffStat` with binary files
+- [ ] `LogGraph` / `Status` / `FileShow` command builder direct tests
+- [ ] HTTP 405 for wrong method
+- [ ] `ParseGraphLog("")` empty input
+
 ## UI Inspirations
 
 ### Sublime Merge
