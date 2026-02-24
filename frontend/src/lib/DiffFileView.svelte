@@ -23,31 +23,44 @@
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
 
-  // Pre-build a Map<hunkIdx, Map<lineIdx, cssClass>> for O(1) conflict styling lookups.
+  interface ConflictLineMeta {
+    cssClass: string
+    isRegionStart?: boolean
+    isRegionEnd?: boolean
+    sideLabel?: string
+  }
+
+  // Pre-build a Map<hunkIdx, Map<lineIdx, ConflictLineMeta>> for O(1) conflict styling lookups.
   // Only computed when the file has conflicts.
   let conflictData = $derived.by(() => {
     if (!isConflict) return null
-    const lineClasses = new Map<number, Map<number, string>>()
+    const lineMeta = new Map<number, Map<number, ConflictLineMeta>>()
     let totalConflicts = 0
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
       const regions = findConflicts(file.hunks[hunkIdx].lines)
       if (regions.length === 0) continue
       totalConflicts += regions.length
-      const classMap = new Map<number, string>()
+      const metaMap = new Map<number, ConflictLineMeta>()
       for (const region of regions) {
-        classMap.set(region.startIdx, 'conflict-boundary')
-        classMap.set(region.endIdx, 'conflict-boundary')
-        for (const side of region.sides) {
-          classMap.set(side.startIdx, side.type === 'diff' ? 'conflict-diff-marker' : 'conflict-snap-marker')
-          const lineClass = side.type === 'diff' ? 'conflict-diff-line' : 'conflict-snap-line'
+        metaMap.set(region.startIdx, { cssClass: 'conflict-boundary', isRegionStart: true })
+        metaMap.set(region.endIdx, { cssClass: 'conflict-boundary', isRegionEnd: true })
+        for (let sideIdx = 0; sideIdx < region.sides.length; sideIdx++) {
+          const side = region.sides[sideIdx]
+          const isDiff = side.type === 'diff'
+          const label = side.label || (isDiff ? 'changes' : 'content')
+          metaMap.set(side.startIdx, {
+            cssClass: isDiff ? 'conflict-diff-marker' : 'conflict-snap-marker',
+            sideLabel: label,
+          })
+          const lineClass = isDiff ? 'conflict-diff-line' : 'conflict-snap-line'
           for (let i = side.startIdx + 1; i <= side.endIdx; i++) {
-            classMap.set(i, lineClass)
+            metaMap.set(i, { cssClass: lineClass })
           }
         }
       }
-      lineClasses.set(hunkIdx, classMap)
+      lineMeta.set(hunkIdx, metaMap)
     }
-    return { lineClasses, totalConflicts }
+    return { lineMeta, totalConflicts }
   })
 </script>
 
@@ -102,7 +115,7 @@
         {#if fileStats.deletions > 0}<span class="stat-del">-{fileStats.deletions}</span>{/if}
       </span>
     {/if}
-    {#if isConflict && conflictData}
+    {#if isConflict && conflictData && conflictData.totalConflicts > 0}
       <span class="conflict-indicator">{conflictData.totalConflicts} conflict{conflictData.totalConflicts !== 1 ? 's' : ''}</span>
       {#if onresolve}
         <button class="resolve-btn resolve-ours" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}>Accept Ours</button>
@@ -172,9 +185,22 @@
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
             {@const spans = wordDiffs.get(lineIdx)}
-            {@const cc = conflictData?.lineClasses.get(hunkIdx)?.get(lineIdx) ?? ''}
-            {#if cc}
-              <div class="conflict-line {cc}">
+            {@const cm = conflictData?.lineMeta.get(hunkIdx)?.get(lineIdx)}
+            {#if cm}
+              <div
+                class="conflict-line {cm.cssClass}"
+                class:conflict-region-start={cm.isRegionStart}
+                class:conflict-region-end={cm.isRegionEnd}
+              >
+                {#if cm.sideLabel}
+                  <span class="conflict-side-label">{cm.sideLabel}</span>
+                {/if}
+                {#if cm.isRegionEnd && onresolve}
+                  <div class="conflict-resolve-inline">
+                    <button class="resolve-btn-inline resolve-inline-ours" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}>Accept Ours</button>
+                    <button class="resolve-btn-inline resolve-inline-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
+                  </div>
+                {/if}
                 {@render diffLine(line, hlKey, spans)}
               </div>
             {:else}
@@ -412,54 +438,142 @@
   }
 
   .resolve-ours:hover {
-    background: var(--badge-modify-bg);
-    border-color: var(--blue);
-    color: var(--blue);
+    background: var(--conflict-side1-bg);
+    border-color: var(--peach);
+    color: var(--peach);
   }
 
   .resolve-theirs:hover {
-    background: var(--badge-other-bg);
-    border-color: var(--yellow);
-    color: var(--yellow);
+    background: var(--conflict-side2-bg);
+    border-color: var(--mauve);
+    color: var(--mauve);
   }
 
-  /* --- Conflict region styling --- */
+  /* --- Conflict region card --- */
+  .conflict-line {
+    position: relative;
+    border-left: 1px solid var(--conflict-boundary-border);
+    border-right: 1px solid var(--conflict-boundary-border);
+  }
+
   .conflict-line :global(.diff-line) {
-    border-left: 3px solid var(--conflict-color);
+    border-left: 3px solid var(--conflict-side-color, var(--conflict-boundary-border));
+    padding-left: 16px;
   }
 
-  .conflict-boundary {
-    --conflict-color: var(--red);
+  .conflict-region-start {
+    border-top: 1px solid var(--conflict-boundary-border);
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-top: 8px;
   }
+
+  .conflict-region-end {
+    border-bottom: 1px solid var(--conflict-boundary-border);
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    margin-bottom: 8px;
+  }
+
+  /* Boundary lines (<<<<<<< / >>>>>>>) — visual chrome, de-emphasized */
   .conflict-boundary :global(.diff-line) {
-    background: var(--bg-error);
-    color: var(--red);
-    font-weight: 700;
+    background: var(--conflict-boundary-bg);
+    color: var(--conflict-boundary-color);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    line-height: 2;
+    opacity: 0.7;
   }
 
+  /* Side 1: diff (changes) — peach */
   .conflict-diff-marker,
   .conflict-diff-line {
-    --conflict-color: var(--yellow);
-  }
-  .conflict-diff-marker :global(.diff-line),
-  .conflict-diff-line :global(.diff-line) {
-    background: var(--badge-other-bg);
-  }
-  .conflict-diff-marker :global(.diff-line) {
-    color: var(--yellow);
-    font-weight: 600;
+    --conflict-side-color: var(--conflict-side1-border);
   }
 
+  .conflict-diff-line :global(.diff-line) {
+    background: var(--conflict-side1-bg);
+  }
+
+  .conflict-diff-marker :global(.diff-line) {
+    background: var(--conflict-side1-marker-bg);
+    color: var(--conflict-marker-color);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.3px;
+    line-height: 2;
+    opacity: 0.6;
+  }
+
+  /* Side 2: snapshot (content) — mauve */
   .conflict-snap-marker,
   .conflict-snap-line {
-    --conflict-color: var(--blue);
+    --conflict-side-color: var(--conflict-side2-border);
   }
-  .conflict-snap-marker :global(.diff-line),
+
   .conflict-snap-line :global(.diff-line) {
-    background: var(--badge-modify-bg);
+    background: var(--conflict-side2-bg);
   }
+
   .conflict-snap-marker :global(.diff-line) {
-    color: var(--blue);
+    background: var(--conflict-side2-marker-bg);
+    color: var(--conflict-marker-color);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.3px;
+    line-height: 2;
+    opacity: 0.6;
+  }
+
+  /* --- Inline side labels (right-aligned on marker lines) --- */
+  .conflict-side-label {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
     font-weight: 600;
+    letter-spacing: 0.3px;
+    color: var(--conflict-side-color, var(--subtext0));
+    opacity: 0.8;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* --- Per-region resolve buttons (on >>>>>>> line) --- */
+  .conflict-resolve-inline {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+  }
+
+  .resolve-btn-inline {
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
+    padding: 1px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 600;
+    transition: all 0.15s ease;
+  }
+
+  .resolve-inline-ours:hover {
+    background: var(--conflict-side1-marker-bg);
+    border-color: var(--conflict-side1-border);
+    color: var(--conflict-side1-border);
+  }
+
+  .resolve-inline-theirs:hover {
+    background: var(--conflict-side2-marker-bg);
+    border-color: var(--conflict-side2-border);
+    color: var(--conflict-side2-border);
   }
 </style>

@@ -70,34 +70,39 @@
     return changedFiles.filter(f => f.conflict && !diffPaths.has(f.path))
   })
 
+  // Active revset: multi-checked join or single selected revision
+  let activeRevset = $derived(
+    checkedRevisions.size > 0
+      ? [...checkedRevisions].join('|')
+      : selectedRevision?.commit.change_id
+  )
+
   let conflictFileDiffs: Map<string, DiffFile> = $state(new Map())
+  let conflictFetchGen = 0
 
   $effect(() => {
+    const gen = ++conflictFetchGen
     const files = conflictOnlyFiles
     if (files.length === 0) {
       if (conflictFileDiffs.size > 0) conflictFileDiffs = new Map()
       return
     }
-    const revset = checkedRevisions.size > 0
-      ? [...checkedRevisions].join('|')
-      : selectedRevision?.commit.change_id
+    const revset = activeRevset
     if (!revset) return
     for (const f of files) {
       if (conflictFileDiffs.has(f.path)) continue
       api.fileShow(revset, f.path).then(result => {
+        if (gen !== conflictFetchGen) return // discard stale responses
         const lines: DiffLine[] = result.content.split('\n').map(line => ({
           type: 'add' as const,
           content: '+' + line,
         }))
-        const diffFile: DiffFile = {
-          header: `Conflicted file ${f.path}`,
+        conflictFileDiffs = new Map(conflictFileDiffs).set(f.path, {
+          header: `Conflicted file: ${f.path}`,
           filePath: f.path,
-          hunks: [{ header: '@@ -0,0 +1,' + lines.length + ' @@', newStart: 1, newCount: lines.length, lines }],
-        }
-        conflictFileDiffs = new Map(conflictFileDiffs).set(f.path, diffFile)
-      }).catch(() => {
-        // Silently fail — the file chip is still visible
-      })
+          hunks: [{ header: '@@ conflict @@', newStart: 1, newCount: lines.length, lines }],
+        })
+      }).catch(() => {})
     }
   })
   // Memoize word diffs — recomputed when parsedDiff or expandedDiffs change
@@ -202,6 +207,7 @@
     // Restore saved state or start expanded
     collapsedFiles.clear()
     expandedDiffs = new Map()
+    conflictFetchGen++ // invalidate any in-flight fileShow requests
     conflictFileDiffs = new Map()
     const saved = currentId ? collapseStateCache.get(currentId) : null
     if (saved) {
@@ -212,12 +218,9 @@
 
   // --- Expand context ---
   async function expandFile(filePath: string) {
-    const revset = checkedRevisions.size > 0
-      ? [...checkedRevisions].join('|')
-      : selectedRevision?.commit.change_id
-    if (!revset) return
+    if (!activeRevset) return
     try {
-      const result = await api.diff(revset, filePath, 10000)
+      const result = await api.diff(activeRevset!, filePath, 10000)
       const parsed = parseDiffContent(result.diff)
       if (parsed.length > 0) {
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
@@ -741,15 +744,12 @@
     font-weight: 600;
   }
 
-  .conflict-file-header .file-type-badge {
+  .badge-C {
     font-size: 10px;
     font-weight: 700;
     padding: 0 4px;
     border-radius: 3px;
     flex-shrink: 0;
-  }
-
-  .badge-C {
     background: var(--badge-delete-bg);
     color: var(--red);
   }
@@ -762,7 +762,7 @@
     flex: 1;
   }
 
-  .conflict-file-header .resolve-btn {
+  .resolve-btn {
     background: transparent;
     border: 1px solid var(--surface1);
     color: var(--subtext0);
@@ -774,16 +774,16 @@
     flex-shrink: 0;
   }
 
-  .conflict-file-header .resolve-ours:hover {
-    background: var(--badge-modify-bg);
-    border-color: var(--blue);
-    color: var(--blue);
+  .resolve-ours:hover {
+    background: var(--conflict-side1-bg);
+    border-color: var(--peach);
+    color: var(--peach);
   }
 
-  .conflict-file-header .resolve-theirs:hover {
-    background: var(--badge-other-bg);
-    border-color: var(--yellow);
-    color: var(--yellow);
+  .resolve-theirs:hover {
+    background: var(--conflict-side2-bg);
+    border-color: var(--mauve);
+    color: var(--mauve);
   }
   /* --- Diff toolbar --- */
   .diff-toolbar {

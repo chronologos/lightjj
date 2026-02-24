@@ -332,8 +332,9 @@ describe('RevisionGraph', () => {
       const { container } = render(RevisionGraph, {
         props: defaultProps({ revisions: [entry] }),
       })
+      // Only the node row gutter gets conflict-gutter, not the desc row
       const conflictGutters = container.querySelectorAll('.gutter.conflict-gutter')
-      expect(conflictGutters.length).toBeGreaterThan(0)
+      expect(conflictGutters).toHaveLength(1)
     })
 
     it('does not apply conflict-gutter to non-conflicted commits', () => {

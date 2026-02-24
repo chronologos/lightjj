@@ -1071,6 +1071,10 @@ func createConflict(t *testing.T) (*runner.LocalRunner, func(args ...string) str
 	// Rebase right onto left → creates conflict on conflict.txt.
 	jjExec("rebase", "-r", "@", "-d", leftId)
 
+	// Verify conflict was actually created (guards against jj behavior changes).
+	status := jjExec("log", "-r", "@", "--no-graph", "-T", "conflict")
+	require.Contains(t, status, "true", "createConflict: expected conflict after rebase")
+
 	return r, jjExec
 }
 
@@ -1129,6 +1133,7 @@ func TestIntegrationResolveOurs(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// After resolve, conflict.txt should no longer be conflicted.
+	// It may disappear from files entirely if resolved content matches parent.
 	w = apiGet(t, srv, "/api/files?revision=@")
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
 	for _, f := range files {
@@ -1152,21 +1157,27 @@ func TestIntegrationResolveTheirs(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// After resolve, the diff should contain the "theirs" content.
-	gw := apiGet(t, srv, "/api/diff?revision=@")
-	var diffResp map[string]string
-	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &diffResp))
-	// The resolved file should have "right content" since :theirs picks
-	// the rebased branch's changes (the "right" side).
-	// Note: ours/theirs semantics depend on jj's perspective — verify the
-	// conflict is gone rather than assuming specific content.
+	// After resolve, verify the conflict is gone and the content is deterministic.
+	// Use file-show to check the resolved content — :theirs should pick one side.
+	gw := apiGet(t, srv, "/api/file-show?revision=@&path=conflict.txt")
+	var fileResp map[string]string
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &fileResp))
+	content := fileResp["content"]
+	// The resolved content should be exactly one side (not conflict markers).
+	assert.NotContains(t, content, "<<<<<<<", "resolved file should not contain conflict markers")
+	// :theirs picks a deterministic side — verify it's one of the two.
+	assert.True(t,
+		strings.Contains(content, "left content") || strings.Contains(content, "right content"),
+		"resolved content should be one of the two sides, got: %q", content)
 
-	// Verify no conflicts remain.
+	// Verify no conflicts remain in files list.
 	w = apiGet(t, srv, "/api/files?revision=@")
 	var files []jj.FileChange
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
 	for _, f := range files {
-		assert.False(t, f.Conflict, "no files should be conflicted after resolve")
+		if f.Path == "conflict.txt" {
+			assert.False(t, f.Conflict, "conflict.txt should not be conflicted after resolve")
+		}
 	}
 }
 
@@ -1213,7 +1224,8 @@ func TestJourneyConflictResolution(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, pw.Code)
 
-	// 5. Verify conflict is gone.
+	// 5. Verify conflict is gone. After resolve, conflict.txt may disappear from
+	// the files list entirely if the resolved content matches the parent (no diff).
 	w = apiGet(t, srv, "/api/files?revision=@")
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
 	for _, f := range files {
@@ -1236,6 +1248,194 @@ func TestJourneyConflictResolution(t *testing.T) {
 			conflictRestored = true
 		}
 	}
-	assert.True(t, conflictRestored,
+	require.True(t, conflictRestored,
 		"conflict should be restored after undo")
+}
+
+// createConflictStack builds a 3-commit conflict chain:
+//
+//	base → left (modifies conflict.txt)
+//	base → right (modifies conflict.txt, rebased onto left → conflict)
+//	     → childA (adds more content, inherits conflict)
+//	     → childB (adds more content, inherits conflict)
+//
+// Returns runner, jjExec, and the change IDs of [right, childA, childB].
+func createConflictStack(t *testing.T) (*runner.LocalRunner, func(args ...string) string, [3]string) {
+	t.Helper()
+	r, jjExec := jjTestRepo(t)
+
+	writeFile(t, r.RepoDir, "conflict.txt", "base content\n")
+	writeFile(t, r.RepoDir, "other.txt", "shared file\n")
+	jjExec("describe", "-m", "base")
+
+	jjExec("new")
+	writeFile(t, r.RepoDir, "conflict.txt", "left content\n")
+	jjExec("describe", "-m", "left change")
+	leftId := strings.TrimSpace(jjExec("log", "-r", "@", "--no-graph", "-T", "change_id.short(8)"))
+
+	jjExec("new", "@-")
+	writeFile(t, r.RepoDir, "conflict.txt", "right content\n")
+	jjExec("describe", "-m", "right change")
+
+	jjExec("rebase", "-r", "@", "-d", leftId)
+	rightId := strings.TrimSpace(jjExec("log", "-r", "@", "--no-graph", "-T", "change_id.short(8)"))
+
+	// Child A: adds content on top of the conflicted commit.
+	jjExec("new")
+	writeFile(t, r.RepoDir, "other.txt", "child A modification\n")
+	jjExec("describe", "-m", "child A")
+	childAId := strings.TrimSpace(jjExec("log", "-r", "@", "--no-graph", "-T", "change_id.short(8)"))
+
+	// Child B: adds content on top of child A, still inherits conflict.
+	jjExec("new")
+	writeFile(t, r.RepoDir, "other.txt", "child B modification\n")
+	jjExec("describe", "-m", "child B")
+	childBId := strings.TrimSpace(jjExec("log", "-r", "@", "--no-graph", "-T", "change_id.short(8)"))
+
+	// Verify all three commits inherited the conflict.
+	for _, id := range []string{rightId, childAId, childBId} {
+		status := jjExec("log", "-r", id, "--no-graph", "-T", "conflict")
+		require.Contains(t, status, "true", "createConflictStack: %s should be conflicted", id)
+	}
+
+	return r, jjExec, [3]string{rightId, childAId, childBId}
+}
+
+// TestJourneyConflictBubbleUp verifies that resolving a conflict in an
+// ancestor automatically clears the conflict from all descendants.
+func TestJourneyConflictBubbleUp(t *testing.T) {
+	r, _, ids := createConflictStack(t)
+	t.Parallel()
+	rightId, childAId, childBId := ids[0], ids[1], ids[2]
+
+	srv := NewServer(r)
+
+	// 1. Verify all three commits are conflicted.
+	for _, id := range []string{rightId, childAId, childBId} {
+		w := apiGet(t, srv, "/api/files?revision="+id)
+		var files []jj.FileChange
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+		var hasConflict bool
+		for _, f := range files {
+			if f.Path == "conflict.txt" && f.Conflict {
+				hasConflict = true
+			}
+		}
+		assert.True(t, hasConflict, "revision %s should have conflict before resolve", id)
+	}
+
+	// 2. Resolve the conflict in the ROOT of the chain (right change).
+	w := apiPost(t, srv, "/api/resolve", map[string]any{
+		"revision": rightId,
+		"file":     "conflict.txt",
+		"tool":     ":ours",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// 3. Verify the conflict is gone from ALL descendants.
+	for _, tc := range []struct {
+		id   string
+		desc string
+	}{
+		{rightId, "right (resolved directly)"},
+		{childAId, "child A (should bubble up)"},
+		{childBId, "child B (should bubble up)"},
+	} {
+		w := apiGet(t, srv, "/api/files?revision="+tc.id)
+		var files []jj.FileChange
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+		for _, f := range files {
+			assert.False(t, f.Conflict,
+				"%s: file %s should not be conflicted after ancestor resolve", tc.desc, f.Path)
+		}
+	}
+
+	// 4. Verify descendants still have their own changes.
+	w = apiGet(t, srv, fmt.Sprintf("/api/diff?revision=%s", childAId))
+	var diffResp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &diffResp))
+	assert.Contains(t, diffResp["diff"], "child A modification",
+		"child A should retain its own changes after conflict resolution")
+
+	w = apiGet(t, srv, fmt.Sprintf("/api/diff?revision=%s", childBId))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &diffResp))
+	assert.Contains(t, diffResp["diff"], "child B modification",
+		"child B should retain its own changes after conflict resolution")
+}
+
+// TestJourneyConflictResolveChildNotParent verifies that resolving a conflict
+// in a descendant does NOT resolve the ancestor's conflict.
+func TestJourneyConflictResolveChildNotParent(t *testing.T) {
+	r, _, ids := createConflictStack(t)
+	t.Parallel()
+	rightId, childAId, _ := ids[0], ids[1], ids[2]
+
+	srv := NewServer(r)
+
+	// Resolve the conflict in childA (a descendant, not the root).
+	w := apiPost(t, srv, "/api/resolve", map[string]any{
+		"revision": childAId,
+		"file":     "conflict.txt",
+		"tool":     ":ours",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// childA should be resolved.
+	w = apiGet(t, srv, "/api/files?revision="+childAId)
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	for _, f := range files {
+		if f.Path == "conflict.txt" {
+			assert.False(t, f.Conflict, "childA: conflict.txt should be resolved")
+		}
+	}
+
+	// The parent (right) should STILL be conflicted — resolve does not propagate upward.
+	w = apiGet(t, srv, "/api/files?revision="+rightId)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	var parentStillConflicted bool
+	for _, f := range files {
+		if f.Path == "conflict.txt" && f.Conflict {
+			parentStillConflicted = true
+		}
+	}
+	assert.True(t, parentStillConflicted,
+		"parent (right) should still be conflicted after resolving child")
+}
+
+// TestIntegrationFilesFromSubdirectory verifies that running lightjj from a
+// subdirectory of the repo produces correct repo-root-relative paths.
+// Bug: `jj resolve --list` outputs paths relative to CWD, so when CWD is a
+// subdirectory the paths have "../" prefixes and don't match `jj diff --summary`.
+// The fix is resolving the workspace root at startup (main.go).
+func TestIntegrationFilesFromSubdirectory(t *testing.T) {
+	r, _ := createConflict(t)
+	t.Parallel()
+
+	// Create a subdirectory and point the runner at it.
+	subdir := filepath.Join(r.RepoDir, "deep", "nested", "dir")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	subRunner := runner.NewLocalRunner(subdir)
+
+	srv := NewServer(subRunner)
+	w := apiGet(t, srv, "/api/files?revision=@")
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+
+	// Without the workspace-root fix, conflict.txt would appear as
+	// "../../../conflict.txt" from resolve --list and "conflict.txt" from
+	// diff --summary, causing a duplicate entry and failed conflict match.
+	var conflictCount int
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "conflict.txt") {
+			conflictCount++
+			// Path should be repo-root-relative, not "../../../conflict.txt".
+			assert.Equal(t, "conflict.txt", f.Path,
+				"conflict file path should be repo-root-relative, not CWD-relative")
+			assert.True(t, f.Conflict,
+				"conflict.txt should be marked as conflicted")
+		}
+	}
+	assert.Equal(t, 1, conflictCount,
+		"conflict.txt should appear exactly once (not duplicated from path mismatch)")
 }
