@@ -1,0 +1,7 @@
+This is a test file for conflict resolution.
+
+The quick brown fox jumps over the lazy dog.
+Side A says: ALPHA CHANGE HERE
+Common unchanged line.
+
+Another section that won't conflict.
