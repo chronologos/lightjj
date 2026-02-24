@@ -12,6 +12,7 @@ function makeEntry(overrides: Partial<{
   is_working_copy: boolean
   hidden: boolean
   immutable: boolean
+  conflicted: boolean
   working_copies: string[]
   bookmarks: string[]
   description: string
@@ -26,6 +27,7 @@ function makeEntry(overrides: Partial<{
       is_working_copy: overrides.is_working_copy ?? false,
       hidden: overrides.hidden ?? false,
       immutable: overrides.immutable ?? false,
+      conflicted: overrides.conflicted ?? false,
       working_copies: overrides.working_copies,
     },
     description: overrides.description ?? 'test commit',
@@ -321,6 +323,36 @@ describe('RevisionGraph', () => {
       // Click the non-active "Tracked" button
       await fireEvent.click(buttons[1])
       expect(onviewmodechange).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('conflicted commits', () => {
+    it('applies conflict-gutter class to conflicted node rows', () => {
+      const entry = makeEntry({ conflicted: true, gutter: '× ' })
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: [entry] }),
+      })
+      const conflictGutters = container.querySelectorAll('.gutter.conflict-gutter')
+      expect(conflictGutters.length).toBeGreaterThan(0)
+    })
+
+    it('does not apply conflict-gutter to non-conflicted commits', () => {
+      const entry = makeEntry({ conflicted: false, gutter: '○ ' })
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: [entry] }),
+      })
+      expect(container.querySelectorAll('.gutter.conflict-gutter')).toHaveLength(0)
+    })
+
+    it('conflict-gutter excludes mutable-gutter class', () => {
+      const entry = makeEntry({ conflicted: true, gutter: '× ' })
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: [entry] }),
+      })
+      // The node row gutter should have conflict-gutter but NOT mutable-gutter
+      const nodeGutter = container.querySelector('.graph-row.node-row .gutter')
+      expect(nodeGutter).toHaveClass('conflict-gutter')
+      expect(nodeGutter).not.toHaveClass('mutable-gutter')
     })
   })
 })
