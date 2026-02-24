@@ -221,7 +221,7 @@
             aria-selected={selectedIndex === line.entryIndex}
           >
             <span class="check-gutter">{#if line.isNode && isChecked}✓{/if}</span>
-            <span class="gutter" class:wc-gutter={line.isWorkingCopy} class:mutable-gutter={!line.isWorkingCopy && !line.isImmutable && !line.isHidden}>{line.gutter}</span>
+            <span class="gutter" class:wc-gutter={line.isWorkingCopy} class:mutable-gutter={!line.isWorkingCopy && !line.isImmutable && !line.isHidden && !(line.isNode && revisions[line.entryIndex]?.commit.conflicted)} class:conflict-gutter={line.isNode && revisions[line.entryIndex]?.commit.conflicted}>{line.gutter}</span>
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
               {@const isRebaseSource = rebaseMode && rebaseSources.includes(entry.commit.change_id)}
@@ -544,6 +544,11 @@
 
   .gutter.mutable-gutter {
     color: var(--blue);
+  }
+
+  .gutter.conflict-gutter {
+    color: var(--red);
+    font-weight: 800;
   }
 
   .node-line-content,

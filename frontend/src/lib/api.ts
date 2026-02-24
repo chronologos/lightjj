@@ -15,6 +15,7 @@ export interface LogEntry {
     is_working_copy: boolean
     hidden: boolean
     immutable: boolean
+    conflicted: boolean
     working_copies?: string[]
   }
   description: string
@@ -134,6 +135,7 @@ export interface FileChange {
   path: string
   additions: number
   deletions: number
+  conflict: boolean
 }
 
 export interface OpEntry {
@@ -249,6 +251,9 @@ export const api = {
 
   gitFetch: (flags?: string[]) =>
     post<{ output: string }>('/api/git/fetch', { flags }),
+
+  resolve: (revision: string, file: string, tool: ':ours' | ':theirs') =>
+    post<{ output: string }>('/api/resolve', { revision, file, tool }),
 }
 
 // Test-only exports for cache inspection/reset
