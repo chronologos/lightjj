@@ -544,8 +544,9 @@
       lastAction = 'Cannot squash into source revision'
       return
     }
-    // C1: block execution when no files selected (empty array would squash ALL files)
-    if (squashSelectedFiles.size === 0) {
+    // C1: block execution when no files selected (empty array would squash ALL files).
+    // Exception: empty commits have 0 total files — squash is still valid (moves metadata).
+    if (squashSelectedFiles.size === 0 && squashTotalFiles > 0) {
       lastAction = 'Select at least one file to squash'
       return
     }

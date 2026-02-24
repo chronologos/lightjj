@@ -53,7 +53,7 @@
   interface FlatLine {
     gutter: string
     entryIndex: number
-    lineSubIdx: number // index within this entry's lines (stable across list changes)
+    lineKey: string // semantic key within this entry (e.g., 'node', 'bm', 'desc', 'g0')
     isNode: boolean
     isBookmarkLine: boolean
     isDescLine: boolean
@@ -83,13 +83,16 @@
   let flatLines = $derived.by(() => {
     const lines: FlatLine[] = []
     revisions.forEach((entry, i) => {
-      let subIdx = 0
+      // Use semantic keys ('node', 'bm', 'desc', 'g0', 'g1', ...) so that
+      // adding/removing a bookmark line doesn't shift sibling keys and cause
+      // Svelte's keyed {#each} to mismap DOM nodes during reconciliation.
+      let graphIdx = 0
       entry.graph_lines.forEach((gl, j) => {
         const isNode = gl.is_node ?? (j === 0)
         lines.push({
           gutter: gl.gutter,
           entryIndex: i,
-          lineSubIdx: subIdx++,
+          lineKey: isNode ? 'node' : `g${graphIdx++}`,
           isNode,
           isBookmarkLine: false,
           isDescLine: false,
@@ -105,7 +108,7 @@
             lines.push({
               gutter: contGutter,
               entryIndex: i,
-              lineSubIdx: subIdx++,
+              lineKey: 'bm',
               isNode: false,
               isBookmarkLine: true,
               isDescLine: false,
@@ -116,7 +119,7 @@
           lines.push({
             gutter: contGutter,
             entryIndex: i,
-            lineSubIdx: subIdx++,
+            lineKey: 'desc',
             isNode: false,
             isBookmarkLine: false,
             isDescLine: true,
@@ -197,7 +200,7 @@
       <div class="empty-state">No revisions found</div>
     {:else}
       <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list">
-        {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineSubIdx)}
+        {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineKey)}
           {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
