@@ -528,7 +528,8 @@ func TestMergeConflicts(t *testing.T) {
 		{Type: "M", Path: "b.go"},
 		{Type: "A", Path: "c.go"},
 	}
-	MergeConflicts(files, []string{"b.go"})
+	files = MergeConflicts(files, []string{"b.go"})
+	assert.Len(t, files, 3)
 	assert.False(t, files[0].Conflict)
 	assert.True(t, files[1].Conflict)
 	assert.False(t, files[2].Conflict)
@@ -538,6 +539,19 @@ func TestMergeConflicts_NoConflicts(t *testing.T) {
 	files := []FileChange{
 		{Type: "M", Path: "a.go"},
 	}
-	MergeConflicts(files, []string{})
+	files = MergeConflicts(files, []string{})
+	assert.Len(t, files, 1)
 	assert.False(t, files[0].Conflict)
+}
+
+func TestMergeConflicts_AppendsConflictOnlyFiles(t *testing.T) {
+	files := []FileChange{
+		{Type: "M", Path: "a.go"},
+	}
+	files = MergeConflicts(files, []string{"a.go", "conflict-only.txt"})
+	assert.Len(t, files, 2)
+	assert.True(t, files[0].Conflict)
+	assert.Equal(t, "conflict-only.txt", files[1].Path)
+	assert.Equal(t, "M", files[1].Type)
+	assert.True(t, files[1].Conflict)
 }

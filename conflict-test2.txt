@@ -1,3 +1,0 @@
-Second conflict file.
-Side A version of this content.
-More lines here.
