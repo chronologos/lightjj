@@ -86,12 +86,12 @@
     align-items: center;
     height: 24px;
     padding: 0 10px;
-    background: var(--mantle);
-    border-top: 1px solid var(--surface0);
+    background: var(--crust);
+    border-top: 1px solid var(--surface1);
     flex-shrink: 0;
     user-select: none;
     font-size: 11px;
-    color: var(--overlay0);
+    color: var(--subtext0);
   }
 
   .statusbar.rebase-active {
