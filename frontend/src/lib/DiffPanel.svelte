@@ -27,13 +27,14 @@
     squashSelectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
     splitMode: boolean
+    onresolve?: (file: string, tool: ':ours' | ':theirs') => void
   }
 
   let {
     diffContent, changedFiles, selectedRevision, checkedRevisions,
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
-    squashMode, squashSelectedFiles, ontogglefile, splitMode,
+    squashMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
   }: Props = $props()
 
   // --- Local state ---
@@ -54,6 +55,8 @@
     }
     return { add, del }
   })
+
+  let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
   // Pre-built map for O(1) file stats lookup
   let fileStatsMap = $derived(new Map(changedFiles.map(f => [f.path, f])))
@@ -293,7 +296,7 @@
   {/if}
   {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0}
     <div class="file-list-bar">
-      <span class="file-list-label">Files ({changedFiles.length})</span>
+      <span class="file-list-label">Files ({changedFiles.length}){#if conflictCount > 0}<span class="conflict-count-label"> · {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}</span>{/if}</span>
       {#if totalStats.add > 0 || totalStats.del > 0}
         <span class="total-stats">
           {#if totalStats.add > 0}<span class="stat-add">+{totalStats.add}</span>{/if}
@@ -317,7 +320,11 @@
                 class:split-file-check={splitMode}
               />
             {/if}
-            <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
+            {#if file.conflict}
+              <span class="file-type-indicator file-type-C">C</span>
+            {:else}
+              <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
+            {/if}
             {file.path.split('/').pop()}
           </button>
         {/each}
@@ -374,6 +381,7 @@
             {wordDiffMap}
             ontoggle={toggleFile}
             onexpand={expandFile}
+            {onresolve}
           />
         {/each}
       </div>
@@ -639,6 +647,18 @@
 
   .file-type-M {
     color: var(--yellow);
+  }
+
+  .file-type-C {
+    color: var(--red);
+    font-weight: 800;
+  }
+
+  .conflict-count-label {
+    color: var(--red);
+    font-weight: 700;
+    text-transform: none;
+    letter-spacing: normal;
   }
 
   /* --- Diff toolbar --- */

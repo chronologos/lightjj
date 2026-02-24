@@ -3,6 +3,7 @@
   import { toSplitView } from './split-view'
   import type { WordSpan } from './word-diff'
   import type { FileChange } from './api'
+  import { findConflicts, type ConflictRegion } from './conflict-parser'
 
   interface Props {
     file: DiffFile
@@ -14,11 +15,40 @@
     wordDiffMap: Map<string, Map<number, WordSpan[]>>
     ontoggle: (path: string) => void
     onexpand: (path: string) => void
+    onresolve?: (file: string, tool: ':ours' | ':theirs') => void
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffMap, ontoggle, onexpand }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffMap, ontoggle, onexpand, onresolve }: Props = $props()
 
   let filePath = $derived(file.filePath)
+  let isConflict = $derived(fileStats?.conflict ?? false)
+
+  // Pre-build a Map<hunkIdx, Map<lineIdx, cssClass>> for O(1) conflict styling lookups.
+  // Only computed when the file has conflicts.
+  let conflictData = $derived.by(() => {
+    if (!isConflict) return null
+    const lineClasses = new Map<number, Map<number, string>>()
+    let totalConflicts = 0
+    for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
+      const regions = findConflicts(file.hunks[hunkIdx].lines)
+      if (regions.length === 0) continue
+      totalConflicts += regions.length
+      const classMap = new Map<number, string>()
+      for (const region of regions) {
+        classMap.set(region.startIdx, 'conflict-boundary')
+        classMap.set(region.endIdx, 'conflict-boundary')
+        for (const side of region.sides) {
+          classMap.set(side.startIdx, side.type === 'diff' ? 'conflict-diff-marker' : 'conflict-snap-marker')
+          const lineClass = side.type === 'diff' ? 'conflict-diff-line' : 'conflict-snap-line'
+          for (let i = side.startIdx + 1; i <= side.endIdx; i++) {
+            classMap.set(i, lineClass)
+          }
+        }
+      }
+      lineClasses.set(hunkIdx, classMap)
+    }
+    return { lineClasses, totalConflicts }
+  })
 </script>
 
 {#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined)}
@@ -71,6 +101,13 @@
         {#if fileStats.additions > 0}<span class="stat-add">+{fileStats.additions}</span>{/if}
         {#if fileStats.deletions > 0}<span class="stat-del">-{fileStats.deletions}</span>{/if}
       </span>
+    {/if}
+    {#if isConflict && conflictData}
+      <span class="conflict-indicator">{conflictData.totalConflicts} conflict{conflictData.totalConflicts !== 1 ? 's' : ''}</span>
+      {#if onresolve}
+        <button class="resolve-btn resolve-ours" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}>Accept Ours</button>
+        <button class="resolve-btn resolve-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
+      {/if}
     {/if}
   </div>
   {#if !isCollapsed}
@@ -135,7 +172,14 @@
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
             {@const spans = wordDiffs.get(lineIdx)}
-            {@render diffLine(line, hlKey, spans)}
+            {@const cc = conflictData?.lineClasses.get(hunkIdx)?.get(lineIdx) ?? ''}
+            {#if cc}
+              <div class="conflict-line {cc}">
+                {@render diffLine(line, hlKey, spans)}
+              </div>
+            {:else}
+              {@render diffLine(line, hlKey, spans)}
+            {/if}
           {/each}
         </div>
       {/each}
@@ -340,5 +384,88 @@
   .diff-empty {
     background: var(--bg-diff-empty);
     border-left: 3px solid transparent;
+  }
+
+  /* --- Conflict indicators --- */
+  .conflict-indicator {
+    color: var(--red);
+    font-size: 10px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .resolve-btn {
+    background: transparent;
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
+    padding: 1px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+  }
+
+  .resolve-btn:hover {
+    color: var(--text);
+  }
+
+  .resolve-ours:hover {
+    background: var(--badge-modify-bg);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+
+  .resolve-theirs:hover {
+    background: var(--badge-other-bg);
+    border-color: var(--yellow);
+    color: var(--yellow);
+  }
+
+  /* --- Conflict region styling --- */
+  .conflict-line :global(.diff-line) {
+    border-left: 3px solid var(--conflict-color);
+  }
+
+  .conflict-boundary {
+    --conflict-color: var(--red);
+  }
+  .conflict-boundary :global(.diff-line) {
+    background: var(--bg-error);
+    color: var(--red);
+    font-weight: 700;
+  }
+
+  .conflict-diff-marker {
+    --conflict-color: var(--yellow);
+  }
+  .conflict-diff-marker :global(.diff-line) {
+    background: var(--badge-other-bg);
+    color: var(--yellow);
+    font-weight: 600;
+  }
+
+  .conflict-snap-marker {
+    --conflict-color: var(--blue);
+  }
+  .conflict-snap-marker :global(.diff-line) {
+    background: var(--badge-modify-bg);
+    color: var(--blue);
+    font-weight: 600;
+  }
+
+  .conflict-diff-line {
+    --conflict-color: var(--yellow);
+  }
+  .conflict-diff-line :global(.diff-line) {
+    background: var(--badge-other-bg);
+  }
+
+  .conflict-snap-line {
+    --conflict-color: var(--blue);
+  }
+  .conflict-snap-line :global(.diff-line) {
+    background: var(--badge-modify-bg);
   }
 </style>

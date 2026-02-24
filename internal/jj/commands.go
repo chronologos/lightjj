@@ -353,6 +353,16 @@ func ConfigListAll() CommandArgs {
 	return []string{"config", "list", "--color", "never", "--include-defaults", "--ignore-working-copy"}
 }
 
+// ResolveList returns args for `jj resolve --list` to enumerate conflicted files.
+func ResolveList(revision string) CommandArgs {
+	return []string{"resolve", "--list", "-r", revision, "--color", "never", "--quiet"}
+}
+
+// Resolve returns args for `jj resolve` to resolve a conflicted file with a tool.
+func Resolve(revision string, file string, tool string) CommandArgs {
+	return []string{"resolve", "--tool", tool, "-r", revision, EscapeFileName(file)}
+}
+
 // WorkspaceList returns args for `jj workspace list` to enumerate all workspaces.
 func WorkspaceList() CommandArgs {
 	return []string{"workspace", "list", "--color", "never", "--ignore-working-copy"}

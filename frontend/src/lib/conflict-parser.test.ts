@@ -1,0 +1,140 @@
+import { describe, it, expect } from 'vitest'
+import { findConflicts } from './conflict-parser'
+import type { DiffLine } from './diff-parser'
+
+function addLine(content: string): DiffLine {
+  return { type: 'add', content }
+}
+
+function ctxLine(content: string): DiffLine {
+  return { type: 'context', content }
+}
+
+describe('findConflicts', () => {
+  it('returns empty for no conflicts', () => {
+    const lines: DiffLine[] = [
+      addLine('+normal add line'),
+      ctxLine(' context line'),
+    ]
+    expect(findConflicts(lines)).toEqual([])
+  })
+
+  it('detects a single conflict', () => {
+    const lines: DiffLine[] = [
+      ctxLine(' before'),
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% Changes from base to side #1'),
+      addLine('+-old line'),
+      addLine('++side 1 line'),
+      addLine('++++++++ Contents of side #2'),
+      addLine('+side 2 line'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+      ctxLine(' after'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(1)
+    expect(regions[0].startIdx).toBe(1)
+    expect(regions[0].endIdx).toBe(7)
+    expect(regions[0].label).toBe('Conflict 1 of 1')
+    expect(regions[0].sides).toHaveLength(2)
+    expect(regions[0].sides[0].type).toBe('diff')
+    expect(regions[0].sides[0].startIdx).toBe(2)
+    expect(regions[0].sides[0].endIdx).toBe(4)
+    expect(regions[0].sides[1].type).toBe('snapshot')
+    expect(regions[0].sides[1].startIdx).toBe(5)
+    expect(regions[0].sides[1].endIdx).toBe(6)
+  })
+
+  it('detects multiple conflicts', () => {
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 2'),
+      addLine('+%%%%%%% Changes from base to side #1'),
+      addLine('+line1'),
+      addLine('++++++++ Contents of side #2'),
+      addLine('+line2'),
+      addLine('+>>>>>>> Conflict 1 of 2 ends'),
+      ctxLine(' between'),
+      addLine('+<<<<<<< Conflict 2 of 2'),
+      addLine('+%%%%%%% Changes from base to side #1'),
+      addLine('+line3'),
+      addLine('++++++++ Contents of side #2'),
+      addLine('+line4'),
+      addLine('+>>>>>>> Conflict 2 of 2 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(2)
+    expect(regions[0].label).toBe('Conflict 1 of 2')
+    expect(regions[1].label).toBe('Conflict 2 of 2')
+    expect(regions[1].startIdx).toBe(7)
+    expect(regions[1].endIdx).toBe(12)
+  })
+
+  it('ignores context lines inside conflict regions', () => {
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% Changes'),
+      ctxLine(' this is context, not part of conflict content'),
+      addLine('+side 1'),
+      addLine('++++++++ Side #2'),
+      addLine('+side 2'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(1)
+    // Context line at index 2 is skipped; diff side runs from marker at 1 to add at 3
+    expect(regions[0].sides[0].startIdx).toBe(1)
+    expect(regions[0].sides[0].endIdx).toBe(3)
+  })
+
+  it('handles unterminated conflict at EOF', () => {
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% side #1'),
+      addLine('+content'),
+      // no >>>>>>> line
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(1)
+    expect(regions[0].startIdx).toBe(0)
+    expect(regions[0].endIdx).toBe(2) // last line
+    expect(regions[0].sides).toHaveLength(1)
+  })
+
+  it('handles empty snapshot side', () => {
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% Changes from base to side #1'),
+      addLine('+content'),
+      addLine('++++++++ Contents of side #2'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(1)
+    expect(regions[0].sides).toHaveLength(2)
+    // Empty snapshot: startIdx === endIdx (marker only)
+    expect(regions[0].sides[1].startIdx).toBe(3)
+    expect(regions[0].sides[1].endIdx).toBe(3)
+  })
+
+  it('ignores conflict-like text in context lines', () => {
+    const lines: DiffLine[] = [
+      ctxLine(' <<<<<<< this is just content'),
+      ctxLine(' >>>>>>> also content'),
+    ]
+    expect(findConflicts(lines)).toEqual([])
+  })
+
+  it('handles conflict with only diff section (no snapshot)', () => {
+    // Edge case: only one side
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% Changes from base to side #1'),
+      addLine('+content'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(1)
+    expect(regions[0].sides).toHaveLength(1)
+    expect(regions[0].sides[0].type).toBe('diff')
+  })
+})

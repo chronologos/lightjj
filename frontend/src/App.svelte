@@ -74,6 +74,7 @@
   let splitParallel: boolean = $state(false)
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
+  let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
   // --- Theme ---
   let darkMode: boolean = $state(localStorage.getItem('lightjj-theme') !== 'light')
@@ -114,7 +115,8 @@
     const count = revisions.length
     const wc = revisions.find(r => r.commit.is_working_copy)
     const checked = checkedRevisions.size > 0 ? `${checkedRevisions.size} checked | ` : ''
-    return `${checked}${count} revisions${wc ? ` | @ ${wc.commit.change_id.slice(0, 8)}` : ''}`
+    const conflicts = conflictCount > 0 ? ` | ${conflictCount} conflict${conflictCount !== 1 ? 's' : ''}` : ''
+    return `${checked}${count} revisions${wc ? ` | @ ${wc.commit.change_id.slice(0, 8)}` : ''}${conflicts}`
   })
 
   // --- Check management ---
@@ -457,6 +459,18 @@
       bookmarkModalOpen = false
       lastAction = `${op.action} ${op.bookmark}`
       commandOutput = result.output
+      await loadLog()
+    } catch (e) {
+      showError(e)
+    }
+  }
+
+  async function handleResolve(file: string, tool: ':ours' | ':theirs') {
+    const revision = selectedRevision?.commit.change_id
+    if (!revision) return
+    try {
+      await api.resolve(revision, file, tool)
+      lastAction = `Resolved ${file.split('/').pop()} with ${tool.slice(1)}`
       await loadLog()
     } catch (e) {
       showError(e)
@@ -1028,6 +1042,7 @@
       {squashSelectedFiles}
       ontogglefile={toggleSquashFile}
       {splitMode}
+      onresolve={squashMode || splitMode || rebaseMode ? undefined : handleResolve}
     />
   </div>
 
