@@ -62,8 +62,8 @@
     align-items: center;
     height: 40px;
     padding: 0 12px;
-    background: var(--mantle);
-    border-bottom: 1px solid var(--surface0);
+    background: var(--crust);
+    border-bottom: 1px solid var(--surface1);
     flex-shrink: 0;
     user-select: none;
   }

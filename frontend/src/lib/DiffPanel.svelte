@@ -393,7 +393,7 @@
     justify-content: space-between;
     height: 34px;
     padding: 0 12px;
-    background: var(--base);
+    background: var(--mantle);
     border-bottom: 1px solid var(--surface0);
     flex-shrink: 0;
     user-select: none;
@@ -401,10 +401,10 @@
 
   .panel-title {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--subtext0);
+    color: var(--subtext1);
   }
 
   .header-change-id {
@@ -446,7 +446,7 @@
   /* --- Revision detail --- */
   .revision-detail {
     padding: 8px 12px;
-    background: var(--crust);
+    background: var(--mantle);
     border-bottom: 1px solid var(--surface0);
     flex-shrink: 0;
     font-size: 11px;
