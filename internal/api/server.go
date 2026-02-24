@@ -107,8 +107,9 @@ func (s *Server) getOpId() string {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
-	// Require application/json content type. This also serves as CSRF defense-in-depth:
-	// browsers won't set this header on form submissions, triggering CORS preflight.
+	// Require application/json content type. Triggers CORS preflight for cross-origin
+	// requests, blocking simple form-based CSRF. Full protection requires CORS origin
+	// restrictions (the Host header validation in the server already provides this).
 	ct := r.Header.Get("Content-Type")
 	if !strings.HasPrefix(ct, "application/json") {
 		return fmt.Errorf("Content-Type must be application/json")

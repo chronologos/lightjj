@@ -372,6 +372,10 @@ func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
+	if err := decodeBody(w, r, &struct{}{}); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s.runMutation(w, r, jj.Undo())
 }
 
