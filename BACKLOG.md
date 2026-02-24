@@ -41,14 +41,14 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] `\x1F` vs `\x1f` case inconsistency across files.
 - [ ] Divergent commit `??` suffix is a string hack — a `Divergent bool` field would be cleaner.
 - [x] `GET /api/oplog` has no upper bound on `limit` parameter.
-- [ ] No `Content-Type: application/json` validation on POST requests.
-- [ ] `commitsFromIds` wraps raw strings in fake `Commit` structs with zero-valued fields.
+- [x] No `Content-Type: application/json` validation on POST requests.
+- [x] `commitsFromIds` wraps raw strings in fake `Commit` structs with zero-valued fields.
 
 ### Remaining Items by Effort
 
 **Quick wins (< 30 min):**
-- [ ] `Content-Type: application/json` validation on POST requests — also serves as CSRF defense-in-depth
-- [ ] `commitsFromIds` → `SelectedRevisions.FromIDs(ids)` to avoid fake `Commit` structs
+- [x] `Content-Type: application/json` validation on POST requests — also serves as CSRF defense-in-depth
+- [x] `commitsFromIds` → `jj.FromIDs(ids)` on SelectedRevisions
 
 **Medium effort (1-2 hours):**
 - [ ] Immutable commit cache preservation — don't clear cached diffs for `◆` commits on op-id change
@@ -132,8 +132,8 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] Show total diff stats (aggregate +N -N across all files) in the file list header
 - [ ] Branch/remote sidebar (like Sublime Merge left panel)
 - [ ] Drag-and-drop rebase (drag revision onto destination)
-- [ ] Rebase modal (pick source + destination)
-- [ ] Squash modal
+- [x] Inline rebase mode (keyboard-driven, not a modal)
+- [x] Squash support (file-level selection, keep-emptied, use-dest-message)
 - [ ] Conflict resolution UI — jj uses a unique "snapshot + diff" conflict marker format: `%%%%%%%` sections show a diff (what one side changed relative to base), `+++++++` sections show the other side's full content. Unlike git's `<<<<<<< / ======= / >>>>>>>` which shows both full versions, jj's format is more compact but harder to parse visually. The UI should detect `×` (conflicting) revisions, parse jj's conflict markers (`<<<<<<<`, `%%%%%%%`, `\\\\\\\`, `+++++++`, `>>>>>>>`), and render a 3-way merge view showing base, side 1, and side 2 with the ability to pick/combine sides. `jj resolve --list -r <rev>` lists conflicted files; the diff viewer should highlight conflict markers inline and offer resolution actions.
 - [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
@@ -152,21 +152,15 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 
 ## State Synchronization
 
-The frontend can go stale if jj state changes outside the UI (CLI, other tools, file edits snapshotted by jj). We need staleness detection.
+**Implemented: Op-ID header (option 1).** Every API response includes `X-JJ-Op-Id`. The frontend (`api.ts`) tracks this value; when it changes, the cache is cleared and stale callbacks fire to refresh the log. Mutation endpoints refresh the cached op-id asynchronously via `runMutation()`.
 
-**jj operation IDs**: Every repo mutation creates a new operation. `jj op log --limit 1 --template id` returns the current op hash. We already have `OpLogId()` in commands.go.
+**Future improvements:**
 
-**Approaches (ordered by implementation cost):**
+1. **Polling endpoint** (simple): `GET /api/op-id` returns current operation ID. Frontend polls every N seconds. Refresh if changed. Adds network traffic but works without SSE/WebSocket.
 
-1. **Op-ID header on every response** (cheapest): Backend includes `X-JJ-Op-Id` header in every API response. Frontend stores last seen op-id. If a response comes back with a different op-id than expected, auto-refresh the log. No polling needed — staleness is detected on next user action.
+2. **File watch + SSE** (best UX): Backend watches `.jj/repo/op_heads/` directory using fsnotify. On change, push event via Server-Sent Events to connected frontends. Instant refresh on any repo mutation — including CLI usage in another terminal. This is the ideal end state.
 
-2. **Polling endpoint** (simple): `GET /api/op-id` returns current operation ID. Frontend polls every N seconds. Refresh if changed. Adds network traffic but works without SSE/WebSocket.
-
-3. **File watch + SSE** (best UX): Backend watches `.jj/repo/op_heads/` directory using fsnotify. On change, push event via Server-Sent Events to connected frontends. Instant refresh on any repo mutation — including CLI usage in another terminal. This is the ideal end state.
-
-4. **Snapshot on focus**: When the browser tab gains focus (`visibilitychange` event), call `jj debug snapshot` to capture working copy changes, then check op-id and refresh if needed.
-
-**Recommended**: Start with option 1 (op-id header) since it's zero-cost. Add option 4 (snapshot on focus) for working copy freshness. Graduate to option 3 (SSE) for live updates.
+3. **Snapshot on focus**: When the browser tab gains focus (`visibilitychange` event), call `jj debug snapshot` to capture working copy changes, then check op-id and refresh if needed.
 
 ## Graph View Notes
 

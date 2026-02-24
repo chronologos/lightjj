@@ -8,6 +8,15 @@ func NewSelectedRevisions(revisions ...*Commit) SelectedRevisions {
 	return SelectedRevisions{Revisions: revisions}
 }
 
+// FromIDs builds a SelectedRevisions directly from change/commit ID strings.
+func FromIDs(ids []string) SelectedRevisions {
+	commits := make([]*Commit, len(ids))
+	for i, id := range ids {
+		commits[i] = &Commit{ChangeId: id}
+	}
+	return SelectedRevisions{Revisions: commits}
+}
+
 func (s SelectedRevisions) Contains(revision *Commit) bool {
 	if revision == nil {
 		return false
