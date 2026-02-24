@@ -354,6 +354,17 @@ func TestContentTypeRequired(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "Content-Type must be application/json")
 }
 
+func TestContentTypeRequired_Undo(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("POST", "/api/undo", bytes.NewReader([]byte("{}")))
+	// No Content-Type header — undo must also enforce the check
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Content-Type must be application/json")
+}
+
 func TestHandleGitPush_DisallowedFlag(t *testing.T) {
 	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--force"}})
