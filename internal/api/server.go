@@ -45,6 +45,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/describe", s.handleDescribe)
 	s.Mux.HandleFunc("POST /api/rebase", s.handleRebase)
 	s.Mux.HandleFunc("POST /api/squash", s.handleSquash)
+	s.Mux.HandleFunc("POST /api/split", s.handleSplit)
 	s.Mux.HandleFunc("POST /api/undo", s.handleUndo)
 
 	s.Mux.HandleFunc("POST /api/bookmark/set", s.handleBookmarkSet)

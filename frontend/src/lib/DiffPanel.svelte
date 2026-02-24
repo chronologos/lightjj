@@ -26,13 +26,14 @@
     squashMode: boolean
     squashSelectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
+    splitMode: boolean
   }
 
   let {
     diffContent, changedFiles, selectedRevision, checkedRevisions,
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
-    squashMode, squashSelectedFiles, ontogglefile,
+    squashMode, squashSelectedFiles, ontogglefile, splitMode,
   }: Props = $props()
 
   // --- Local state ---
@@ -281,7 +282,11 @@
       ondraftchange={ondraftchange}
     />
   {/if}
-  {#if squashMode}
+  {#if splitMode}
+    <div class="squash-banner split-banner">
+      Split — checked files stay, unchecked move to new revision
+    </div>
+  {:else if squashMode}
     <div class="squash-banner">
       Squash source — select files to move
     </div>
@@ -309,6 +314,7 @@
                 onchange={() => ontogglefile(file.path)}
                 onclick={(e: MouseEvent) => e.stopPropagation()}
                 class="squash-file-check"
+                class:split-file-check={splitMode}
               />
             {/if}
             <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
@@ -541,6 +547,12 @@
     font-weight: 600;
   }
 
+  .split-banner {
+    background: var(--badge-workspace-bg);
+    border-bottom-color: var(--teal);
+    color: var(--teal);
+  }
+
   .file-list-bar {
     display: flex;
     align-items: center;
@@ -604,6 +616,10 @@
     cursor: pointer;
     accent-color: var(--green);
     vertical-align: middle;
+  }
+
+  .split-file-check {
+    accent-color: var(--teal);
   }
 
   .file-type-indicator {

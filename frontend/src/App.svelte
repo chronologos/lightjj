@@ -69,6 +69,10 @@
   let squashSelectedFiles = new SvelteSet<string>()
   let squashTotalFiles: number = $state(0) // snapshot of file count at entry time
 
+  let splitMode: boolean = $state(false)
+  let splitRevision: string = $state('')
+  let splitParallel: boolean = $state(false)
+
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
 
   // --- Theme ---
@@ -103,7 +107,7 @@
   })
 
   let statusText = $derived.by(() => {
-    if (rebaseMode || squashMode) return ''
+    if (rebaseMode || squashMode || splitMode) return ''
     if (loading) return 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
@@ -178,8 +182,9 @@
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
-    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && !squashMode && (!!selectedRevision || checkedRevisions.size > 0) },
-    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !squashMode && !rebaseMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && !squashMode && !splitMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !squashMode && !rebaseMode && !splitMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !splitMode && !squashMode && !rebaseMode && !!selectedRevision && checkedRevisions.size === 0 },
 
     // Git
     { label: 'Git operations (push/fetch)', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true } },
@@ -223,6 +228,12 @@
       lastCheckedIndex = -1
       if (selectedIndex >= 0 && checkedRevisions.size === 0) {
         loadDiffAndFiles(revisions[selectedIndex].commit.change_id)
+      }
+      // Refresh open panels — oplog always reflects new operations,
+      // evolog may change if the selected revision was modified
+      if (oplogOpen) loadOplog()
+      if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
+        loadEvolog(revisions[selectedIndex].commit.change_id)
       }
     } catch (e) {
       if (gen !== logGeneration) return
@@ -306,11 +317,11 @@
   }
 
   // Reload diff/files when checked revisions change
-  // Skip during squash mode — diff is intentionally frozen on source revision
+  // Skip during squash/split mode — diff is intentionally frozen on source revision
   $effect(() => {
     const checked = [...checkedRevisions]
     if (checked.length === 0) return
-    if (squashMode) return
+    if (squashMode || splitMode) return
     const revset = checked.join('|')
     loadDiffForRevset(revset)
     loadFilesForRevset(revset)
@@ -455,8 +466,9 @@
   function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    // Ensure mutual exclusion with squash mode
+    // Ensure mutual exclusion with squash/split mode
     squashMode = false
+    splitMode = false
     squashSelectedFiles.clear()
     rebaseSources = revs
     rebaseSourceMode = '-r'
@@ -490,8 +502,9 @@
   function enterSquashMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    // Ensure mutual exclusion with rebase mode
+    // Ensure mutual exclusion with rebase/split mode
     rebaseMode = false
+    splitMode = false
     squashSources = revs
     squashKeepEmptied = false
     squashUseDestMsg = false
@@ -555,8 +568,55 @@
     }
   }
 
+  function enterSplitMode() {
+    if (!selectedRevision || checkedRevisions.size > 0) return
+    // Ensure mutual exclusion
+    rebaseMode = false
+    squashMode = false
+    splitRevision = selectedRevision.commit.change_id
+    splitParallel = false
+    // Initialize: all files checked (stay), user unchecks what to split out
+    squashSelectedFiles.clear()
+    for (const f of changedFiles) squashSelectedFiles.add(f.path)
+    squashTotalFiles = changedFiles.length
+    splitMode = true
+  }
+
+  async function executeSplit() {
+    if (!splitRevision) return
+    // Validate: at least one file must stay (checked) and one must move (unchecked)
+    if (squashSelectedFiles.size === squashTotalFiles) {
+      error = 'Uncheck at least one file to split out'
+      return
+    }
+    if (squashSelectedFiles.size === 0) {
+      error = 'Select at least one file to keep'
+      return
+    }
+    try {
+      const files = [...squashSelectedFiles]
+      const result = await api.split(splitRevision, files, splitParallel || undefined)
+      splitMode = false
+      splitRevision = ''
+      splitParallel = false
+      squashSelectedFiles.clear()
+      lastAction = `Split ${splitRevision.slice(0, 8)} (${files.length} files stay)`
+      commandOutput = result.output
+      clearChecks()
+      await loadLog()
+    } catch (e) {
+      // Keep split mode active so user can retry or Escape
+      showError(e)
+    }
+  }
+
   let squashFileCount = $derived.by(() => {
     if (!squashMode || squashTotalFiles === 0) return null
+    return { selected: squashSelectedFiles.size, total: squashTotalFiles }
+  })
+
+  let splitFileCount = $derived.by(() => {
+    if (!splitMode || squashTotalFiles === 0) return null
     return { selected: squashSelectedFiles.size, total: squashTotalFiles }
   })
 
@@ -571,6 +631,9 @@
     closeModals()
     rebaseMode = false
     squashMode = false
+    splitMode = false
+    splitRevision = ''
+    splitParallel = false
     squashSelectedFiles.clear()
   }
 
@@ -674,6 +737,28 @@
 
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
+
+    // Split mode: no j/k (operates on fixed revision), Enter executes, Escape cancels, p toggles parallel
+    if (splitMode) {
+      switch (e.key) {
+        case 'Enter':
+          e.preventDefault()
+          executeSplit()
+          break
+        case 'Escape':
+          e.preventDefault()
+          splitMode = false
+          splitRevision = ''
+          splitParallel = false
+          squashSelectedFiles.clear()
+          break
+        case 'p':
+          e.preventDefault()
+          splitParallel = !splitParallel
+          break
+      }
+      return
+    }
 
     // Squash mode: j/k navigate (cursor only, keep source diff), Enter executes, Escape cancels
     if (squashMode) {
@@ -814,6 +899,12 @@
           enterRebaseMode()
         }
         break
+      case 's':
+        if (selectedRevision && checkedRevisions.size === 0) {
+          e.preventDefault()
+          enterSplitMode()
+        }
+        break
       case 'S':
         if (selectedRevision || checkedRevisions.size > 0) {
           e.preventDefault()
@@ -850,7 +941,7 @@
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
   $effect(() => {
     return onStale(() => {
-      if (!loading && !anyModalOpen && !squashMode && !rebaseMode) loadLog()
+      if (!loading && !anyModalOpen && !squashMode && !rebaseMode && !splitMode) loadLog()
     })
   })
 
@@ -911,6 +1002,9 @@
       {squashSources}
       {squashKeepEmptied}
       {squashUseDestMsg}
+      {splitMode}
+      {splitRevision}
+      {splitParallel}
     />
 
     <DiffPanel
@@ -930,9 +1024,10 @@
       oncanceldescribe={() => { descriptionEditing = false }}
       ondraftchange={(v) => { descriptionDraft = v }}
       onbookmarkclick={openBookmarkModal}
-      {squashMode}
+      squashMode={squashMode || splitMode}
       {squashSelectedFiles}
       ontogglefile={toggleSquashFile}
+      {splitMode}
     />
   </div>
 
@@ -988,6 +1083,9 @@
     {squashKeepEmptied}
     {squashUseDestMsg}
     {squashFileCount}
+    {splitMode}
+    {splitParallel}
+    {splitFileCount}
   />
 </div>
 

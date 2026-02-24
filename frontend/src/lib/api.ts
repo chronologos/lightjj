@@ -212,6 +212,9 @@ export const api = {
   rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string) =>
     post<{ output: string }>('/api/rebase', { revisions, destination, source_mode: sourceMode, target_mode: targetMode }),
 
+  split: (revision: string, files: string[], parallel?: boolean) =>
+    post<{ output: string }>('/api/split', { revision, files, parallel }),
+
   squash: (revisions: string[], destination: string, opts?: {
     files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean
   }) =>

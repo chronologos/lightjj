@@ -9,9 +9,12 @@
     squashKeepEmptied: boolean
     squashUseDestMsg: boolean
     squashFileCount: { selected: number, total: number } | null
+    splitMode: boolean
+    splitParallel: boolean
+    splitFileCount: { selected: number, total: number } | null
   }
 
-  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode, squashMode, squashKeepEmptied, squashUseDestMsg, squashFileCount }: Props = $props()
+  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode, squashMode, squashKeepEmptied, squashUseDestMsg, squashFileCount, splitMode, splitParallel, splitFileCount }: Props = $props()
 
   const sourceKeys: { key: string; flag: string; label: string }[] = [
     { key: 'r', flag: '-r', label: 'revision' },
@@ -26,8 +29,26 @@
   ]
 </script>
 
-<footer class="statusbar" class:rebase-active={rebaseMode} class:squash-active={squashMode}>
-  {#if squashMode}
+<footer class="statusbar" class:rebase-active={rebaseMode} class:squash-active={squashMode} class:split-active={splitMode}>
+  {#if splitMode}
+    <div class="statusbar-left">
+      <span class="mode-badge mode-badge-split">split</span>
+      <span class="key-group">
+        <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
+        <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
+      </span>
+      <span class="key-divider"></span>
+      <span class="key-group">
+        <kbd class="key" class:key-active={splitParallel}>p</kbd><span class="key-label" class:key-label-active={splitParallel}>parallel</span>
+      </span>
+      {#if splitFileCount}
+        <span class="key-divider"></span>
+        <span class="key-group">
+          <span class="file-count">{splitFileCount.selected}/{splitFileCount.total} files stay</span>
+        </span>
+      {/if}
+    </div>
+  {:else if squashMode}
     <div class="statusbar-left">
       <span class="mode-badge mode-badge-squash">squash</span>
       <span class="key-group">
@@ -102,6 +123,11 @@
   .statusbar.squash-active {
     background: var(--crust);
     border-top: 1px solid var(--green);
+  }
+
+  .statusbar.split-active {
+    background: var(--crust);
+    border-top: 1px solid var(--teal);
   }
 
   .statusbar-left,
@@ -180,6 +206,10 @@
 
   .mode-badge-squash {
     background: var(--green);
+  }
+
+  .mode-badge-split {
+    background: var(--teal);
   }
 
   .file-count {

@@ -24,7 +24,11 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] MockRunner `RunWithInput` silently discards stdin — can't verify describe content.
 
 ### Suggestions
-- [ ] `App.svelte` is 1010 lines — rebase state is ambient and threaded through multiple components. Extract to shared module.
+- [ ] `App.svelte` is 1010 lines — rebase/squash/split state is ambient and threaded through multiple components. Extract to shared module.
+- [ ] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to generic names (`modeSelectedFiles`/`modeTotalFiles`/`toggleFileSelection`) — now shared by squash and split modes.
+- [ ] Rename CSS classes `rebase-badge`/`rebase-source`/`rebase-target` to generic `mode-badge-inline`/`badge-source`/`badge-target` — shared across rebase, squash, split.
+- [ ] Squash mode StatusBar file count should say "N/M files to move" (not just "N/M files") for parity with split's "N/M files stay".
+- [ ] Add bulk select/deselect toggle for file checkboxes (applies to squash + split modes).
 - [ ] No list virtualization for large repos (500+ commits).
 - [ ] No HTTP response compression (especially impacts SSH mode).
 - [ ] `highlightDiff` re-highlights all files when one is expanded.
@@ -35,7 +39,8 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] No mutation handler runner-error tests.
 - [x] Frontend `onStale`/`isCached` entirely untested.
 - [x] Frontend HTTP error responses not tested.
-- [ ] No integration tests against a real jj repo.
+- [x] No integration tests against a real jj repo.
+- [ ] Frontend DOM integration tests (in progress).
 
 ### Nitpicks
 - [x] `\x1F` vs `\x1f` case inconsistency across files.
@@ -61,7 +66,8 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] `App.svelte` rebase state extraction — move rebase mode, source/target types, keyboard handling into shared module
 - [ ] List virtualization for large repos — `@tanstack/virtual` for 500+ commit histories
 - [ ] HTTP response compression (gzip middleware) — mainly benefits SSH mode
-- [ ] Integration tests — build-tagged tests against a real jj repo
+- [x] Integration tests — build-tagged tests against a real jj repo
+- [ ] Frontend DOM integration tests (in progress)
 - [ ] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
 
 ## UI Inspirations
@@ -134,6 +140,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] Drag-and-drop rebase (drag revision onto destination)
 - [x] Inline rebase mode (keyboard-driven, not a modal)
 - [x] Squash support (file-level selection, keep-emptied, use-dest-message)
+- [x] Split support (inline mode, file checkboxes, parallel toggle)
 - [ ] Conflict resolution UI — jj uses a unique "snapshot + diff" conflict marker format: `%%%%%%%` sections show a diff (what one side changed relative to base), `+++++++` sections show the other side's full content. Unlike git's `<<<<<<< / ======= / >>>>>>>` which shows both full versions, jj's format is more compact but harder to parse visually. The UI should detect `×` (conflicting) revisions, parse jj's conflict markers (`<<<<<<<`, `%%%%%%%`, `\\\\\\\`, `+++++++`, `>>>>>>>`), and render a 3-way merge view showing base, side 1, and side 2 with the ability to pick/combine sides. `jj resolve --list -r <rev>` lists conflicted files; the diff viewer should highlight conflict markers inline and offer resolution actions.
 - [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
@@ -148,7 +155,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] Draggable split view divider (resize ratio)
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
-- [ ] `jj split` support — interactive file-level split from the UI, select files/hunks to move into a new revision
+- [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
 
 ## State Synchronization
 

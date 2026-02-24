@@ -3,7 +3,7 @@ import { toSplitView } from './split-view'
 import type { DiffHunk } from './diff-parser'
 
 function makeHunk(lines: { type: 'add' | 'remove' | 'context'; content: string }[]): DiffHunk {
-  return { header: '@@ -1 +1 @@', lines }
+  return { header: '@@ -1 +1 @@', newStart: 1, newCount: 1, lines }
 }
 
 describe('toSplitView', () => {
@@ -130,5 +130,29 @@ describe('toSplitView', () => {
     expect(result[1].right).toBeNull()
     expect(result[2].left?.line.content).toBe('-line2')
     expect(result[2].right).toBeNull()
+  })
+
+  it('lineIdx values match original hunk line positions', () => {
+    const hunks = [makeHunk([
+      { type: 'remove', content: '-old' },     // lineIdx 0 in hunk
+      { type: 'add', content: '+new' },         // lineIdx 1 in hunk
+      { type: 'context', content: ' same' },    // lineIdx 2 in hunk
+      { type: 'remove', content: '-another' },  // lineIdx 3 in hunk
+    ])]
+    const result = toSplitView(hunks)
+    // header(0) + paired(1) + context(2) + unpaired-remove(3)
+    expect(result).toHaveLength(4)
+
+    // Paired remove/add: lineIdx should be 0 and 1
+    expect(result[1].left?.lineIdx).toBe(0)
+    expect(result[1].right?.lineIdx).toBe(1)
+
+    // Context: lineIdx should be 2
+    expect(result[2].left?.lineIdx).toBe(2)
+    expect(result[2].right?.lineIdx).toBe(2) // same side object
+
+    // Unpaired remove: lineIdx should be 3
+    expect(result[3].left?.lineIdx).toBe(3)
+    expect(result[3].right).toBeNull()
   })
 })

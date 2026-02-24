@@ -21,8 +21,10 @@ type FileStat struct {
 }
 
 // DiffStat builds args for `jj diff --stat` which outputs per-file change counts.
+// Uses a wide term-width to prevent jj from truncating long file paths with "..."
+// when the server inherits a narrow COLUMNS from the launching terminal.
 func DiffStat(revision string) CommandArgs {
-	return []string{"diff", "--stat", "--color", "never", "-r", revision, "--ignore-working-copy"}
+	return []string{"diff", "--stat", "--color", "never", "-r", revision, "--ignore-working-copy", "--config", "ui.term-width=500"}
 }
 
 // statLineRe matches lines like: " file1.go | 15 +++++++++------"
@@ -70,11 +72,22 @@ func ParseDiffStat(output string) map[string]FileStat {
 }
 
 // MergeStats enriches a slice of FileChange with stats from ParseDiffStat output.
+// Falls back to suffix matching when stat paths are truncated (e.g., "...dir/file.go").
 func MergeStats(files []FileChange, stats map[string]FileStat) {
 	for i := range files {
 		if s, ok := stats[files[i].Path]; ok {
 			files[i].Additions = s.Additions
 			files[i].Deletions = s.Deletions
+			continue
+		}
+		// Fallback: match truncated stat paths by suffix.
+		// jj truncates paths like "...dir/file.go" when terminal is narrow.
+		for statPath, s := range stats {
+			if strings.HasPrefix(statPath, "...") && strings.HasSuffix(files[i].Path, statPath[3:]) {
+				files[i].Additions = s.Additions
+				files[i].Deletions = s.Deletions
+				break
+			}
 		}
 	}
 }

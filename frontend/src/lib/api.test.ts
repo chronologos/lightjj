@@ -270,6 +270,70 @@ describe('isCached', () => {
   })
 })
 
+describe('squash request body', () => {
+  it('sends correct body shape with all options', async () => {
+    const result = { output: 'squashed' }
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op1'))
+
+    await api.squash(['src1', 'src2'], 'dest1', {
+      files: ['a.go', 'b.go'],
+      keepEmptied: true,
+      useDestinationMessage: true,
+    })
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [, init] = mockFetch.mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(body.revisions).toEqual(['src1', 'src2'])
+    expect(body.destination).toBe('dest1')
+    expect(body.files).toEqual(['a.go', 'b.go'])
+    expect(body.keep_emptied).toBe(true)
+    expect(body.use_destination_message).toBe(true)
+  })
+
+  it('omits undefined fields from request body', async () => {
+    const result = { output: 'squashed' }
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op1'))
+
+    await api.squash(['src1'], 'dest1')
+
+    const [, init] = mockFetch.mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(body.revisions).toEqual(['src1'])
+    expect(body.destination).toBe('dest1')
+    expect(body.files).toBeUndefined()
+    expect(body.keep_emptied).toBeUndefined()
+    expect(body.use_destination_message).toBeUndefined()
+  })
+})
+
+describe('diff with context param', () => {
+  it('URL includes context parameter', async () => {
+    const diffData = { diff: '+ctx' }
+    mockFetch.mockResolvedValueOnce(mockResponse(diffData, 'op1'))
+
+    await api.diff('abc', undefined, 5)
+
+    const [url] = mockFetch.mock.calls[0]
+    expect(url).toContain('context=5')
+  })
+
+  it('cache key includes context', async () => {
+    const diffData = { diff: '+ctx3' }
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(diffData, 'op1'))
+      .mockResolvedValueOnce(mockResponse({ diff: '+ctx10' }, 'op1'))
+
+    await api.diff('abc', undefined, 3)
+    await api.diff('abc', undefined, 10)
+
+    // Both should fetch — different context values = different cache keys
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('error handling', () => {
   it('throws error with server error message on non-ok response', async () => {
     mockFetch.mockResolvedValueOnce(mockResponse({ error: 'jj failed' }, 'op1', false, 500))
