@@ -226,7 +226,7 @@ func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revisions is required")
 		return
 	}
-	revs := commitsFromIds(req.Revisions)
+	revs := jj.FromIDs(req.Revisions)
 	s.runMutation(w, r, jj.New(revs))
 }
 
@@ -263,7 +263,7 @@ func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revisions is required")
 		return
 	}
-	revs := commitsFromIds(req.Revisions)
+	revs := jj.FromIDs(req.Revisions)
 	s.runMutation(w, r, jj.Abandon(revs, req.IgnoreImmutable))
 }
 
@@ -340,7 +340,7 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid target_mode")
 		return
 	}
-	revs := commitsFromIds(req.Revisions)
+	revs := jj.FromIDs(req.Revisions)
 	s.runMutation(w, r, jj.Rebase(revs, req.Destination, sourceMode, targetMode, req.SkipEmptied, req.IgnoreImmutable))
 }
 
@@ -367,7 +367,7 @@ func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "destination is required")
 		return
 	}
-	revs := commitsFromIds(req.Revisions)
+	revs := jj.FromIDs(req.Revisions)
 	s.runMutation(w, r, jj.Squash(revs, req.Destination, req.Files, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable))
 }
 
@@ -534,13 +534,3 @@ func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.GitFetch(req.Flags...))
 }
 
-// --- Helpers ---
-
-// commitsFromIds builds a SelectedRevisions from a list of change/commit IDs.
-func commitsFromIds(ids []string) jj.SelectedRevisions {
-	commits := make([]*jj.Commit, len(ids))
-	for i, id := range ids {
-		commits[i] = &jj.Commit{ChangeId: id}
-	}
-	return jj.NewSelectedRevisions(commits...)
-}

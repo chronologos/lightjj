@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -106,6 +107,12 @@ func (s *Server) getOpId() string {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
+	// Require application/json content type. This also serves as CSRF defense-in-depth:
+	// browsers won't set this header on form submissions, triggering CORS preflight.
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		return fmt.Errorf("Content-Type must be application/json")
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)

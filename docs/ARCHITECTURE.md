@@ -9,10 +9,10 @@ lightjj is a browser-based UI for the Jujutsu (jj) version control system. It fo
 │  Browser                                                         │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │  Svelte SPA (frontend/)                                    │  │
-│  │  ┌──────────────┐ ┌──────────────┐ ┌────────────────────┐ │  │
-│  │  │ RevisionList │ │  DiffViewer  │ │  DescriptionEditor │ │  │
-│  │  └──────┬───────┘ └──────┬───────┘ └─────────┬──────────┘ │  │
-│  │         └────────────────┴───────────────────┘            │  │
+│  │  ┌──────────────────┐ ┌──────────┐ ┌────────────────────┐ │  │
+│  │  │  RevisionGraph   │ │ DiffPanel│ │ DescriptionEditor  │ │  │
+│  │  └────────┬─────────┘ └─────┬────┘ └─────────┬──────────┘ │  │
+│  │           └─────────────────┴────────────────┘            │  │
 │  │                     api.ts                                 │  │
 │  └─────────────────────────┬──────────────────────────────────┘  │
 │                            │ fetch() JSON                        │
@@ -24,8 +24,14 @@ lightjj is a browser-based UI for the Jujutsu (jj) version control system. It fo
 │  │  HTTP Server (net/http)                                     │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
 │  │  │  API Handlers (internal/api/)                         │  │ │
-│  │  │  GET  /api/log, /api/diff, /api/bookmarks, ...       │  │ │
-│  │  │  POST /api/rebase, /api/squash, /api/abandon, ...    │  │ │
+│  │  │  GET  /api/log, /api/diff, /api/files, /api/status   │  │ │
+│  │  │       /api/bookmarks, /api/description, /api/remotes  │  │ │
+│  │  │       /api/oplog, /api/evolog, /api/workspaces        │  │ │
+│  │  │  POST /api/new, /api/edit, /api/abandon, /api/undo   │  │ │
+│  │  │       /api/rebase, /api/squash, /api/describe         │  │ │
+│  │  │       /api/bookmark/{set,delete,move,forget,track,    │  │ │
+│  │  │                      untrack}                         │  │ │
+│  │  │       /api/git/push, /api/git/fetch                   │  │ │
 │  │  └───────────────────────┬──────────────────────────────┘  │ │
 │  │                          │                                  │ │
 │  │  ┌───────────────────────┴──────────────────────────────┐  │ │
@@ -56,9 +62,12 @@ func Rebase(from SelectedRevisions, to string, ...) CommandArgs
 // Returns: ["rebase", "-r", "abc", "-d", "def"]
 ```
 
-This layer is trivially testable and directly ported from [jjui](https://github.com/idursun/jjui)'s `internal/jj/commands.go`. Also contains data models (`Commit`, `Bookmark`, `SelectedRevisions`) and parsers for jj's output formats.
-
-The `Commit` model includes an `Immutable` bool field, populated by the graph parser when it encounters the `◆` glyph in `jj log` output.
+Also contains data models and parsers:
+- `Commit` — includes `ChangePrefix`/`CommitPrefix` for highlighted IDs, `Immutable` bool (from `◆` glyph), `WorkingCopies []string` (for multi-workspace display)
+- `Bookmark` — bookmark model + output parsers
+- `FileChange` — file change model, `DiffStat`/`DiffSummary` parsers
+- `SelectedRevisions` — multi-revision selection helper
+- `Workspace` — workspace model + parser
 
 ### Command Runner (`internal/runner/`)
 
@@ -78,15 +87,21 @@ Two implementations:
 
 ### API Layer (`internal/api/`)
 
-Thin HTTP handlers. Each handler: parses request → calls command builder → executes via runner → returns JSON. No business logic here — just plumbing.
+Thin HTTP handlers. Each handler: parses request → calls command builder → executes via runner → returns JSON. No business logic — just plumbing.
+
+The server includes an operation ID cache (`cachedOp`) that tracks jj's current operation. Every JSON response includes an `X-JJ-Op-Id` header. Mutation endpoints refresh the cache asynchronously via `runMutation()`, which centralizes the post-mutation pattern (run command → refresh op ID → return output).
 
 Handlers use `httptest.NewRecorder` + `testutil.MockRunner` for testing, so they never touch a real jj process in tests.
+
+### Graph Parser (`internal/parser/`)
+
+Parses `jj log` graph output (with `_PREFIX:` field markers and `\x1F` field delimiters) into `[]GraphRow` structs. Each row contains the graph gutter characters and parsed commit data. The parser detects node glyphs (`◆` immutable, `○` mutable, `@` working copy, `×` conflicted, `◌` hidden) and sets the corresponding flags on the `Commit` struct.
 
 ### Frontend (`frontend/`)
 
 Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to `cmd/lightjj/frontend-dist/`. In production, files are embedded in the Go binary via `//go:embed`. In development, Vite's dev server proxies `/api` to the Go backend.
 
-`src/lib/api.ts` is a typed client that mirrors the Go API endpoints 1:1.
+`src/lib/api.ts` is a typed client that mirrors the Go API endpoints 1:1. It tracks the `X-JJ-Op-Id` header from responses and fires stale callbacks when the operation ID changes, triggering automatic cache invalidation and log refresh.
 
 ## Data Flow
 
@@ -96,23 +111,27 @@ Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to
 User opens app
   → Svelte calls api.log()
   → fetch GET /api/log?revset=...
-  → Go handler calls jj.LogJSON(revset, limit) → ["log", "--no-graph", ...]
+  → Go handler calls jj.LogGraph(revset) → ["log", "--template", ..., "\x1F"-delimited]
   → runner.Run(ctx, args) → exec jj subprocess
-  → parse tab-delimited output into []LogEntry
-  → JSON response → Svelte renders revision list
+  → parser.ParseGraphLog(output) → []GraphRow with parsed Commits
+  → JSON response with X-JJ-Op-Id header → Svelte renders revision graph
 ```
 
 ### Write path (e.g., rebase)
 
 ```
-User triggers rebase
+User triggers rebase (inline mode, Enter key)
   → Svelte calls api.rebase({revisions, destination, source_mode, target_mode})
   → fetch POST /api/rebase with JSON body
   → Go handler decodes body, builds SelectedRevisions
   → calls jj.Rebase(...) → ["rebase", "-r"|"-s"|"-b", "abc", "-d"|"--insert-after"|"--insert-before", "def"]
-  → runner.Run(ctx, args)
-  → returns {output} → Svelte refreshes log
+  → runMutation(ctx, args) → Run + async refreshOpId
+  → returns {output} with new X-JJ-Op-Id → Svelte detects op change, refreshes log
 ```
+
+### State synchronization
+
+Every API response carries an `X-JJ-Op-Id` header with jj's current operation ID. The frontend tracks this value; when it changes (due to mutations from the UI or external CLI usage detected on next request), the API client clears its cache and fires stale callbacks that trigger a log refresh.
 
 ### Inline rebase UX
 
@@ -132,15 +151,20 @@ Rebase does not use a modal. Instead, pressing `R` activates an inline rebase mo
 │  └── Request → expected jj args → mock output   │
 │      → assert JSON response                     │
 ├─────────────────────────────────────────────────┤
-│  Integration tests (real jj repo in tmpdir)     │
-│  └── TODO: create repo, run commands, verify    │
+│  Frontend unit tests (Vitest)                   │
+│  ├── API client: fetch mocking, error handling, │
+│  │   op-id tracking, cache invalidation         │
+│  ├── Diff parser: unified diff parsing          │
+│  ├── Split view: side-by-side alignment         │
+│  ├── Word diff: inline diff computation         │
+│  └── Fuzzy search: command palette matching     │
 ├─────────────────────────────────────────────────┤
-│  Frontend tests (Vitest + testing-library)      │
-│  └── TODO: component tests with mocked fetch    │
+│  Integration tests (real jj repo in tmpdir)     │
+│  └── TODO                                       │
 └─────────────────────────────────────────────────┘
 ```
 
-The `testutil.MockRunner` uses an expect/verify pattern ported from jjui:
+The `testutil.MockRunner` uses an expect/verify pattern:
 
 ```go
 runner := testutil.NewMockRunner(t)
@@ -152,14 +176,28 @@ defer runner.Verify()  // asserts all expectations called
 
 1. **Shell out to jj, don't link it** — jj is written in Rust with no stable library API. Shelling out is what jjui does too, and it works well. The CommandRunner interface makes this testable.
 
-2. **Structured output over ANSI parsing** — jjui parses `jj log` terminal output including ANSI escape codes and graph characters. We skip this entirely and use `jj log --template` to get tab-delimited structured data. Graph rendering will be done in SVG on the frontend.
+2. **Structured output with graph parsing** — The backend uses `jj log` with a custom `--template` that outputs `\x1F`-delimited fields. The graph parser (`internal/parser/`) parses both the graph gutter characters and the structured field data from each line. This gives us the full DAG visualization from jj's own graph renderer, combined with structured commit data.
 
 3. **Embed frontend in binary** — Single binary deployment via `//go:embed`. No Node runtime needed in production.
 
 4. **Two runner implementations, one interface** — Local and SSH execution are swappable at startup. The API layer doesn't know or care which is active.
 
-5. **`--tool :builtin` for diffs** — Users may have external diff tools configured (e.g., difftastic with `--color=always`). The web API forces jj's built-in diff formatter to get clean, parseable output.
+5. **`--tool :git` for diffs** — Users may have external diff tools configured (e.g., difftastic with `--color=always`). The web API forces jj's git-format diff output to get clean, parseable output.
 
 6. **Immutable commit detection via graph glyphs** — The graph parser checks for `◆` vs `○` vs `@` when parsing node rows. `◆` sets `Immutable: true` on the `Commit` struct. The frontend uses this to dim immutable commits and color gutter symbols (`○` blue, `@` green) without needing a separate API call.
 
 7. **Tracked view** — The revision panel supports a Log/Tracked toggle (`t` key). Tracked view issues a `jj log` request with the `tracked_remote_bookmarks()` revset, giving a focused view of remote branches without changing any global state.
+
+8. **Op-ID staleness detection** — Every response carries `X-JJ-Op-Id`. The frontend detects operation changes and auto-refreshes. Mutation endpoints refresh the cached op-id asynchronously to avoid adding latency.
+
+## Graph View
+
+The graph view uses jj's own graph output, parsed into DOM rows:
+
+- Each graph line (node or connector) is its own DOM row at identical height
+- Node lines show commit IDs + description on a second line
+- Description lines get a continuation gutter (`│` extended from the node)
+- Working copy `@` detected from graph characters, not template functions
+- Connector lines are just gutter characters maintaining visual continuity
+
+This approach gives pixel-perfect graph rendering by leveraging jj's graph layout algorithm directly, rather than reimplementing DAG layout in the frontend.
