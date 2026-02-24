@@ -354,8 +354,9 @@ func ConfigListAll() CommandArgs {
 }
 
 // FileShow returns args for `jj file show` to get a file's content at a revision.
+// Uses EscapeFileName for consistency and to prevent dash-prefix flag injection.
 func FileShow(revision string, path string) CommandArgs {
-	return []string{"file", "show", "-r", revision, path}
+	return []string{"file", "show", "-r", revision, EscapeFileName(path)}
 }
 
 // ResolveList returns args for `jj resolve --list` to enumerate conflicted files.

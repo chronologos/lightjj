@@ -60,6 +60,7 @@
     isWorkingCopy: boolean
     isHidden: boolean
     isImmutable?: boolean
+    isConflicted?: boolean
   }
 
   const sourceModeLabel: Record<string, string> = { '-r': 'move', '-s': 'source', '-b': 'branch' }
@@ -95,6 +96,7 @@
           isWorkingCopy: entry.commit.is_working_copy,
           isHidden: entry.commit.hidden,
           isImmutable: entry.commit.immutable,
+          isConflicted: isNode && entry.commit.conflicted,
         })
         if (isNode) {
           const contGutter = continuationGutter(gl.gutter)
@@ -221,7 +223,7 @@
             aria-selected={selectedIndex === line.entryIndex}
           >
             <span class="check-gutter">{#if line.isNode && isChecked}✓{/if}</span>
-            <span class="gutter" class:wc-gutter={line.isWorkingCopy} class:mutable-gutter={!line.isWorkingCopy && !line.isImmutable && !line.isHidden && !(line.isNode && revisions[line.entryIndex]?.commit.conflicted)} class:conflict-gutter={line.isNode && revisions[line.entryIndex]?.commit.conflicted}>{line.gutter}</span>
+            <span class="gutter" class:wc-gutter={line.isWorkingCopy} class:mutable-gutter={!line.isWorkingCopy && !line.isImmutable && !line.isHidden && !line.isConflicted} class:conflict-gutter={line.isConflicted}>{line.gutter}</span>
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
               {@const isRebaseSource = rebaseMode && rebaseSources.includes(entry.commit.change_id)}

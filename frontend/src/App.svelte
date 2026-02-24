@@ -1042,7 +1042,7 @@
       {squashSelectedFiles}
       ontogglefile={toggleSquashFile}
       {splitMode}
-      onresolve={squashMode || splitMode || rebaseMode ? undefined : handleResolve}
+      onresolve={squashMode || rebaseMode ? undefined : handleResolve}
     />
   </div>
 
@@ -1123,6 +1123,20 @@
     --red: #f38ba8;
     --yellow: #f9e2af;
     --teal: #74c7ec;
+    --peach: #fab387;
+    --mauve: #cba6f7;
+
+    /* Conflict region card */
+    --conflict-boundary-border: #f38ba835;
+    --conflict-boundary-bg: #f38ba810;
+    --conflict-boundary-color: #6c7086;
+    --conflict-side1-border: #fab387;
+    --conflict-side1-bg: #fab38710;
+    --conflict-side1-marker-bg: #fab38718;
+    --conflict-side2-border: #cba6f7;
+    --conflict-side2-bg: #cba6f710;
+    --conflict-side2-marker-bg: #cba6f718;
+    --conflict-marker-color: #6c7086;
 
     /* Semantic tinted backgrounds */
     --bg-hover: #262637;
@@ -1179,6 +1193,19 @@
     --red: #d20f39;
     --yellow: #df8e1d;
     --teal: #04a5e5;
+    --peach: #fe640b;
+    --mauve: #8839ef;
+
+    --conflict-boundary-border: #d20f3935;
+    --conflict-boundary-bg: #d20f3910;
+    --conflict-boundary-color: #8c8fa1;
+    --conflict-side1-border: #fe640b;
+    --conflict-side1-bg: #fe640b10;
+    --conflict-side1-marker-bg: #fe640b18;
+    --conflict-side2-border: #8839ef;
+    --conflict-side2-bg: #8839ef10;
+    --conflict-side2-marker-bg: #8839ef18;
+    --conflict-marker-color: #8c8fa1;
 
     --bg-hover: #d9dbe5;
     --bg-selected: #cbd0e0;

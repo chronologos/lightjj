@@ -1284,4 +1284,90 @@ func TestHandleFiles_WithConflicts(t *testing.T) {
 	assert.True(t, files[1].Conflict)
 }
 
+func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 5 +++++\n 1 file changed\n"))
+	runner.Expect(jj.ResolveList("abc")).SetOutput([]byte("phantom.go    2-sided conflict\n"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	assert.Len(t, files, 2)
+	assert.False(t, files[0].Conflict)
+	assert.Equal(t, "phantom.go", files[1].Path)
+	assert.True(t, files[1].Conflict)
+}
+
+func TestHandleFiles_ConflictError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.ResolveList("abc")).SetError(errors.New("resolve list failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	assert.Len(t, files, 1)
+	assert.False(t, files[0].Conflict) // graceful: no conflict data on error
+}
+
+func TestHandleFileShow(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FileShow("abc", "src/main.go")).SetOutput([]byte("file content here"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/file-show?revision=abc&path=src/main.go", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "file content here", resp["content"])
+}
+
+func TestHandleFileShow_MissingParams(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+
+	req := httptest.NewRequest("GET", "/api/file-show?path=foo", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	req = httptest.NewRequest("GET", "/api/file-show?revision=abc", nil)
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleFileShow_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FileShow("abc", "bad.go")).SetError(errors.New("file not found"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/file-show?revision=abc&path=bad.go", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "file not found", resp["error"])
+}
+
 // parseLogOutput tests moved to internal/parser/graph_test.go

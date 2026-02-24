@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"strings"
 )
 
 // LocalRunner executes jj commands as local subprocesses.
@@ -13,10 +14,19 @@ type LocalRunner struct {
 	// Binary is the command to execute (default: "jj").
 	Binary string
 	// RepoDir is the working directory for jj commands.
+	// Always resolved to the workspace root so all commands produce
+	// repo-root-relative paths (prevents path mismatches when started
+	// from a subdirectory).
 	RepoDir string
 }
 
 func NewLocalRunner(repoDir string) *LocalRunner {
+	// Resolve jj workspace root so all commands produce consistent paths.
+	cmd := exec.Command("jj", "workspace", "root")
+	cmd.Dir = repoDir
+	if root, err := cmd.Output(); err == nil {
+		repoDir = strings.TrimSpace(string(root))
+	}
 	return &LocalRunner{Binary: "jj", RepoDir: repoDir}
 }
 
