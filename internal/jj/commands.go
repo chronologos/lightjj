@@ -353,6 +353,11 @@ func ConfigListAll() CommandArgs {
 	return []string{"config", "list", "--color", "never", "--include-defaults", "--ignore-working-copy"}
 }
 
+// FileShow returns args for `jj file show` to get a file's content at a revision.
+func FileShow(revision string, path string) CommandArgs {
+	return []string{"file", "show", "-r", revision, path}
+}
+
 // ResolveList returns args for `jj resolve --list` to enumerate conflicted files.
 func ResolveList(revision string) CommandArgs {
 	return []string{"resolve", "--list", "-r", revision, "--color", "never", "--quiet"}

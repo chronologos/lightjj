@@ -183,6 +183,11 @@ export const api = {
     return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`)
   },
 
+  fileShow: (revision: string, path: string) => {
+    const params = new URLSearchParams({ revision, path })
+    return request<{ content: string }>(`/api/file-show?${params}`)
+  },
+
   remotes: () => request<string[]>('/api/remotes'),
 
   workspaces: () => cachedRequest<Workspace[]>('workspaces', '/api/workspaces'),
