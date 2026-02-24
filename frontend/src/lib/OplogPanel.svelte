@@ -41,7 +41,7 @@
 
 <style>
   .oplog-panel {
-    border-top: 1px solid var(--surface0);
+    border-top: 1px solid var(--surface1);
     flex-shrink: 0;
     max-height: 200px;
     display: flex;
@@ -54,7 +54,7 @@
     justify-content: space-between;
     height: 34px;
     padding: 0 12px;
-    background: var(--base);
+    background: var(--mantle);
     border-bottom: 1px solid var(--surface0);
     flex-shrink: 0;
     user-select: none;
@@ -62,10 +62,10 @@
 
   .panel-title {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--subtext0);
+    color: var(--subtext1);
   }
 
   .panel-actions {
