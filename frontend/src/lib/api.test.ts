@@ -334,6 +334,37 @@ describe('diff with context param', () => {
   })
 })
 
+describe('resolve request body', () => {
+  it('sends revision, file, and tool', async () => {
+    const result = { output: 'resolved' }
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op2'))
+
+    await api.resolve('abc', 'src/main.go', ':ours')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/resolve')
+    expect(init.method).toBe('POST')
+    const body = JSON.parse(init.body)
+    expect(body.revision).toBe('abc')
+    expect(body.file).toBe('src/main.go')
+    expect(body.tool).toBe(':ours')
+  })
+
+  it('sends :theirs tool', async () => {
+    const result = { output: 'resolved' }
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op2'))
+
+    await api.resolve('xyz', 'README.md', ':theirs')
+
+    const [, init] = mockFetch.mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(body.tool).toBe(':theirs')
+  })
+})
+
 describe('error handling', () => {
   it('throws error with server error message on non-ok response', async () => {
     mockFetch.mockResolvedValueOnce(mockResponse({ error: 'jj failed' }, 'op1', false, 500))

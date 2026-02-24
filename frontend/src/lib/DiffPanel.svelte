@@ -61,6 +61,45 @@
   // Pre-built map for O(1) file stats lookup
   let fileStatsMap = $derived(new Map(changedFiles.map(f => [f.path, f])))
 
+  // Conflict-only files: in changedFiles with conflict=true but not in parsedDiff.
+  // jj diff --tool :git produces no output for these, so we fetch content via jj file show.
+  let conflictOnlyFiles = $derived.by(() => {
+    if (conflictCount === 0) return []
+    const diffPaths = new Set(parsedDiff.map(f => f.filePath))
+    return changedFiles.filter(f => f.conflict && !diffPaths.has(f.path))
+  })
+
+  // Fetched conflict file content, keyed by path
+  let conflictFileDiffs: Map<string, DiffFile> = $state(new Map())
+
+  // Fetch file content for conflict-only files
+  $effect(() => {
+    const files = conflictOnlyFiles
+    if (files.length === 0) {
+      if (conflictFileDiffs.size > 0) conflictFileDiffs = new Map()
+      return
+    }
+    const revset = checkedRevisions.size > 0
+      ? [...checkedRevisions].join('|')
+      : selectedRevision?.commit.change_id
+    if (!revset) return
+    for (const f of files) {
+      if (conflictFileDiffs.has(f.path)) continue
+      api.fileShow(revset, f.path).then(result => {
+        const lines: DiffLine[] = result.content.split('\n').map(line => ({
+          type: 'add' as const,
+          content: '+' + line,
+        }))
+        const diffFile: DiffFile = {
+          header: `Conflicted file: ${f.path}`,
+          filePath: f.path,
+          hunks: [{ header: '@@ conflict @@', newStart: 1, newCount: lines.length, lines }],
+        }
+        conflictFileDiffs = new Map(conflictFileDiffs).set(f.path, diffFile)
+      }).catch(() => {})
+    }
+  })
+
   // Memoize word diffs — recomputed when parsedDiff or expandedDiffs change
   let wordDiffMap = $derived.by(() => {
     const map = new Map<string, Map<number, WordSpan[]>>()
@@ -163,6 +202,7 @@
     // Restore saved state or start expanded
     collapsedFiles.clear()
     expandedDiffs = new Map()
+    conflictFileDiffs = new Map()
     const saved = currentId ? collapseStateCache.get(currentId) : null
     if (saved) {
       for (const path of saved) collapsedFiles.add(path)
@@ -362,7 +402,7 @@
         <span class="empty-hint">Select a revision to view changes</span>
         <span class="empty-subhint">Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to select</span>
       </div>
-    {:else if parsedDiff.length === 0 && changedFiles.length === 0}
+    {:else if parsedDiff.length === 0 && changedFiles.length === 0 && conflictOnlyFiles.length === 0}
       <div class="empty-state">
         <span class="empty-hint">No changes in this revision</span>
       </div>
@@ -383,6 +423,35 @@
             onexpand={expandFile}
             {onresolve}
           />
+        {/each}
+        {#each conflictOnlyFiles as cf (cf.path)}
+          {@const conflictFile = conflictFileDiffs.get(cf.path)}
+          {#if conflictFile}
+            <DiffFileView
+              file={conflictFile}
+              fileStats={cf}
+              isCollapsed={collapsedFiles.has(cf.path)}
+              isExpanded={false}
+              {splitView}
+              highlightedLines={new Map()}
+              {wordDiffMap}
+              ontoggle={toggleFile}
+              onexpand={expandFile}
+              {onresolve}
+            />
+          {:else}
+            <div class="diff-file">
+              <div class="conflict-file-placeholder">
+                <span class="file-type-indicator file-type-C">C</span>
+                <span>{cf.path}</span>
+                <span class="conflict-loading">Loading...</span>
+                {#if onresolve}
+                  <button class="resolve-btn resolve-ours" onclick={() => onresolve!(cf.path, ':ours')}>Accept Ours</button>
+                  <button class="resolve-btn resolve-theirs" onclick={() => onresolve!(cf.path, ':theirs')}>Accept Theirs</button>
+                {/if}
+              </div>
+            </div>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -659,6 +728,49 @@
     font-weight: 700;
     text-transform: none;
     letter-spacing: normal;
+  }
+
+  .conflict-file-placeholder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .conflict-loading {
+    color: var(--overlay0);
+    font-size: 11px;
+    font-weight: 400;
+    font-style: italic;
+    flex: 1;
+  }
+
+  .conflict-file-placeholder .resolve-btn {
+    background: transparent;
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
+    padding: 1px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+
+  .conflict-file-placeholder .resolve-ours:hover {
+    background: var(--badge-modify-bg);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+
+  .conflict-file-placeholder .resolve-theirs:hover {
+    background: var(--badge-other-bg);
+    border-color: var(--yellow);
+    color: var(--yellow);
   }
 
   /* --- Diff toolbar --- */

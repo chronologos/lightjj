@@ -180,7 +180,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	cr := <-conflictCh
 	if cr.err == nil {
 		conflictPaths := jj.ParseResolveList(string(cr.output))
-		jj.MergeConflicts(files, conflictPaths)
+		files = jj.MergeConflicts(files, conflictPaths)
 	}
 
 	s.writeJSON(w, r, http.StatusOK, files)
@@ -211,6 +211,21 @@ func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
 	}
 	remotes := jj.ParseRemoteListOutput(string(output), "origin")
 	s.writeJSON(w, r, http.StatusOK, remotes)
+}
+
+func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
+	revision := r.URL.Query().Get("revision")
+	path := r.URL.Query().Get("path")
+	if revision == "" || path == "" {
+		s.writeError(w, http.StatusBadRequest, "revision and path are required")
+		return
+	}
+	output, err := s.Runner.Run(r.Context(), jj.FileShow(revision, path))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
 }
 
 func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {

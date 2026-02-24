@@ -136,8 +136,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: conflictProps(onresolve),
       })
-      const oursBtn = container.querySelector('.resolve-ours')!
-      await fireEvent.click(oursBtn)
+      await fireEvent.click(container.querySelector('.resolve-ours')!)
       expect(onresolve).toHaveBeenCalledWith('conflict.go', ':ours')
     })
 
@@ -146,8 +145,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: conflictProps(onresolve),
       })
-      const theirsBtn = container.querySelector('.resolve-theirs')!
-      await fireEvent.click(theirsBtn)
+      await fireEvent.click(container.querySelector('.resolve-theirs')!)
       expect(onresolve).toHaveBeenCalledWith('conflict.go', ':theirs')
     })
   })
@@ -171,20 +169,15 @@ describe('DiffFileView', () => {
       const boundaries = container.querySelectorAll('.conflict-boundary')
       expect(boundaries).toHaveLength(2)
 
-      // Diff markers (%%%%%%%)
-      const diffMarkers = container.querySelectorAll('.conflict-diff-marker')
-      expect(diffMarkers).toHaveLength(1)
+      // Diff marker (%%%%%%%)
+      expect(container.querySelectorAll('.conflict-diff-marker')).toHaveLength(1)
 
-      // Snapshot markers (+++++++)
-      const snapMarkers = container.querySelectorAll('.conflict-snap-marker')
-      expect(snapMarkers).toHaveLength(1)
+      // Snapshot marker (+++++++)
+      expect(container.querySelectorAll('.conflict-snap-marker')).toHaveLength(1)
 
       // Content lines within sides
-      const diffLines = container.querySelectorAll('.conflict-diff-line')
-      expect(diffLines.length).toBeGreaterThan(0)
-
-      const snapLines = container.querySelectorAll('.conflict-snap-line')
-      expect(snapLines.length).toBeGreaterThan(0)
+      expect(container.querySelectorAll('.conflict-diff-line').length).toBeGreaterThan(0)
+      expect(container.querySelectorAll('.conflict-snap-line').length).toBeGreaterThan(0)
     })
 
     it('does not apply conflict classes to non-conflicted files', () => {
