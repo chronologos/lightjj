@@ -334,34 +334,71 @@ describe('diff with context param', () => {
   })
 })
 
-describe('resolve request body', () => {
-  it('sends revision, file, and tool', async () => {
-    const result = { output: 'resolved' }
-    _testInternals.lastOpId = 'op1'
-    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op2'))
+describe('fileShow', () => {
+  it('fetches file content with revision and path params', async () => {
+    const result = { content: 'file contents here' }
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op1'))
 
-    await api.resolve('abc', 'src/main.go', ':ours')
+    const resp = await api.fileShow('abc', 'src/main.go')
 
+    expect(resp).toEqual(result)
     expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [url] = mockFetch.mock.calls[0]
+    expect(url).toContain('/api/file-show')
+    expect(url).toContain('revision=abc')
+    expect(url).toContain('path=src%2Fmain.go')
+  })
+
+  it('does not cache responses (always fetches fresh)', async () => {
+    const result = { content: 'file contents' }
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(result, 'op1'))
+      .mockResolvedValueOnce(mockResponse(result, 'op1'))
+
+    await api.fileShow('abc', 'src/main.go')
+    await api.fileShow('abc', 'src/main.go')
+
+    // fileShow uses request() not cachedRequest(), so both calls hit fetch
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('resolve request body', () => {
+  async function callResolve(revision: string, file: string, tool: ':ours' | ':theirs') {
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValueOnce(mockResponse({ output: 'resolved' }, 'op2'))
+    await api.resolve(revision, file, tool)
     const [url, init] = mockFetch.mock.calls[0]
+    return { url, init, body: JSON.parse(init.body) }
+  }
+
+  it('sends revision, file, and tool', async () => {
+    const { url, init, body } = await callResolve('abc', 'src/main.go', ':ours')
     expect(url).toBe('/api/resolve')
     expect(init.method).toBe('POST')
-    const body = JSON.parse(init.body)
-    expect(body.revision).toBe('abc')
-    expect(body.file).toBe('src/main.go')
-    expect(body.tool).toBe(':ours')
+    expect(body).toEqual({ revision: 'abc', file: 'src/main.go', tool: ':ours' })
   })
 
   it('sends :theirs tool', async () => {
-    const result = { output: 'resolved' }
-    _testInternals.lastOpId = 'op1'
-    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op2'))
-
-    await api.resolve('xyz', 'README.md', ':theirs')
-
-    const [, init] = mockFetch.mock.calls[0]
-    const body = JSON.parse(init.body)
+    const { body } = await callResolve('xyz', 'README.md', ':theirs')
     expect(body.tool).toBe(':theirs')
+  })
+
+  it('clears cache and fires stale callbacks on op-id change', async () => {
+    // Seed cache with a diff entry
+    _testInternals.lastOpId = 'op1'
+    _testInternals.cache.set('diff:abc@op1', { diff: '+cached' })
+
+    const staleCb = vi.fn()
+    onStale(staleCb)
+
+    // Resolve returns a new op-id → should clear cache and fire stale
+    mockFetch.mockResolvedValueOnce(mockResponse({ output: 'resolved' }, 'op2'))
+    await api.resolve('abc', 'file.go', ':ours')
+    await Promise.resolve() // drain microtask queue for stale callback
+
+    expect(_testInternals.cache.size).toBe(0)
+    expect(staleCb).toHaveBeenCalledTimes(1)
   })
 })
 

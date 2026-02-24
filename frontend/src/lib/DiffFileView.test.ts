@@ -62,23 +62,16 @@ describe('DiffFileView', () => {
     })
 
     it('pluralizes conflict count', () => {
-      const file: DiffFile = {
-        header: 'diff',
-        filePath: 'multi.go',
-        hunks: [{
-          header: '@@ -1 +1 @@', newStart: 1, newCount: 1,
-          lines: [
-            { type: 'add', content: '+<<<<<<< Conflict 1 of 2' },
-            { type: 'add', content: '+%%%%%%% Changes' },
-            { type: 'add', content: '+a' },
-            { type: 'add', content: '+>>>>>>> Conflict 1 of 2 ends' },
-            { type: 'add', content: '+<<<<<<< Conflict 2 of 2' },
-            { type: 'add', content: '+%%%%%%% Changes' },
-            { type: 'add', content: '+b' },
-            { type: 'add', content: '+>>>>>>> Conflict 2 of 2 ends' },
-          ],
-        }],
-      }
+      const file = makeFile('multi.go', [
+        { type: 'add', content: '+<<<<<<< Conflict 1 of 2' },
+        { type: 'add', content: '+%%%%%%% Changes' },
+        { type: 'add', content: '+a' },
+        { type: 'add', content: '+>>>>>>> Conflict 1 of 2 ends' },
+        { type: 'add', content: '+<<<<<<< Conflict 2 of 2' },
+        { type: 'add', content: '+%%%%%%% Changes' },
+        { type: 'add', content: '+b' },
+        { type: 'add', content: '+>>>>>>> Conflict 2 of 2 ends' },
+      ])
       const stats = makeStats('multi.go', { conflict: true })
       const { container } = render(DiffFileView, {
         props: defaultProps({ file, fileStats: stats }),
@@ -98,6 +91,20 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({ fileStats: undefined }),
       })
+      expect(container.querySelector('.conflict-indicator')).not.toBeInTheDocument()
+    })
+
+    it('hides conflict indicator when conflict=true but no markers in diff', () => {
+      // Real scenario: commit is conflicted but this specific file has no conflict markers
+      const file = makeFile('other.go', [
+        { type: 'add', content: '+normal add line' },
+        { type: 'context', content: ' context line' },
+      ])
+      const stats = makeStats('other.go', { conflict: true })
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, fileStats: stats }),
+      })
+      // totalConflicts is 0 — indicator should not render
       expect(container.querySelector('.conflict-indicator')).not.toBeInTheDocument()
     })
   })
@@ -136,7 +143,9 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: conflictProps(onresolve),
       })
-      await fireEvent.click(container.querySelector('.resolve-ours')!)
+      const btn = container.querySelector('.resolve-ours')
+      expect(btn).toBeInTheDocument()
+      await fireEvent.click(btn!)
       expect(onresolve).toHaveBeenCalledWith('conflict.go', ':ours')
     })
 
@@ -145,7 +154,9 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: conflictProps(onresolve),
       })
-      await fireEvent.click(container.querySelector('.resolve-theirs')!)
+      const btn = container.querySelector('.resolve-theirs')
+      expect(btn).toBeInTheDocument()
+      await fireEvent.click(btn!)
       expect(onresolve).toHaveBeenCalledWith('conflict.go', ':theirs')
     })
   })
@@ -175,9 +186,9 @@ describe('DiffFileView', () => {
       // Snapshot marker (+++++++)
       expect(container.querySelectorAll('.conflict-snap-marker')).toHaveLength(1)
 
-      // Content lines within sides
-      expect(container.querySelectorAll('.conflict-diff-line').length).toBeGreaterThan(0)
-      expect(container.querySelectorAll('.conflict-snap-line').length).toBeGreaterThan(0)
+      // Content lines within sides (exactly 1 each for the single content line per side)
+      expect(container.querySelectorAll('.conflict-diff-line')).toHaveLength(1)
+      expect(container.querySelectorAll('.conflict-snap-line')).toHaveLength(1)
     })
 
     it('does not apply conflict classes to non-conflicted files', () => {

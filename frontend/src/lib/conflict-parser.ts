@@ -11,6 +11,7 @@ import type { DiffLine } from './diff-parser'
 
 export interface ConflictSide {
   type: 'diff' | 'snapshot'
+  label: string   // extracted from marker line, e.g. commit description
   startIdx: number
   endIdx: number  // inclusive
 }
@@ -29,6 +30,18 @@ const CONFLICT_DIFF  = /^\+%{7}\s*(.*)/
 const CONFLICT_SNAP  = /^\+\+{7}\s*(.*)/
 const CONFLICT_END   = /^\+>{7}\s*(.*)/
 
+// Extract a human-readable label from jj's conflict marker text.
+// Marker text looks like:
+//   diff from: lpymxuwk 75ef1147 "Conflict resolution"
+//   wlykovwr 562576c8 "side Y: modify existing file differently"
+//   Changes from base to side #1
+// We prefer the quoted commit description, falling back to the raw text.
+function extractSideLabel(markerText: string): string {
+  const quoted = markerText.match(/"([^"]+)"/)
+  if (quoted) return quoted[1]
+  return markerText.trim()
+}
+
 export function findConflicts(lines: DiffLine[]): ConflictRegion[] {
   const regions: ConflictRegion[] = []
   let current: ConflictRegion | null = null
@@ -42,15 +55,21 @@ export function findConflicts(lines: DiffLine[]): ConflictRegion[] {
     let m: RegExpMatchArray | null
 
     if ((m = content.match(CONFLICT_START))) {
+      // Flush any in-progress region (malformed/nested markers)
+      if (current) {
+        if (currentSide) currentSide.endIdx = i - 1
+        current.endIdx = i - 1
+        regions.push(current)
+      }
       current = { startIdx: i, endIdx: i, label: m[1].trim(), sides: [] }
       currentSide = null
     } else if (current && (m = content.match(CONFLICT_DIFF))) {
       if (currentSide) currentSide.endIdx = i - 1
-      currentSide = { type: 'diff', startIdx: i, endIdx: i }
+      currentSide = { type: 'diff', label: extractSideLabel(m[1]), startIdx: i, endIdx: i }
       current.sides.push(currentSide)
     } else if (current && (m = content.match(CONFLICT_SNAP))) {
       if (currentSide) currentSide.endIdx = i - 1
-      currentSide = { type: 'snapshot', startIdx: i, endIdx: i }
+      currentSide = { type: 'snapshot', label: extractSideLabel(m[1]), startIdx: i, endIdx: i }
       current.sides.push(currentSide)
     } else if (current && content.match(CONFLICT_END)) {
       if (currentSide) currentSide.endIdx = i - 1

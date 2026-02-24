@@ -137,4 +137,32 @@ describe('findConflicts', () => {
     expect(regions[0].sides).toHaveLength(1)
     expect(regions[0].sides[0].type).toBe('diff')
   })
+
+  it('extracts commit description as side label', () => {
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% diff from: lpymxuwk 75ef1147 "Conflict resolution"'),
+      addLine('+content'),
+      addLine('++++++++ wlykovwr 562576c8 "side Y: modify existing file differently"'),
+      addLine('+content2'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions[0].sides[0].label).toBe('Conflict resolution')
+    expect(regions[0].sides[1].label).toBe('side Y: modify existing file differently')
+  })
+
+  it('falls back to raw marker text when no quoted description', () => {
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% Changes from base to side #1'),
+      addLine('+content'),
+      addLine('++++++++ Contents of side #2'),
+      addLine('+content2'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions[0].sides[0].label).toBe('Changes from base to side #1')
+    expect(regions[0].sides[1].label).toBe('Contents of side #2')
+  })
 })
