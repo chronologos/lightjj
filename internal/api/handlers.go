@@ -134,8 +134,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": string(output)})
 }
 
-// statResult holds the output of a background DiffStat call.
-type statResult struct {
+// asyncResult holds the output of a background goroutine.
+type asyncResult struct {
 	output []byte
 	err    error
 }
@@ -147,16 +147,23 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run summary and stat in parallel to halve latency on this hot path.
-	statCh := make(chan statResult, 1)
+	// Run summary, stat, and conflict list in parallel to minimize latency.
+	statCh := make(chan asyncResult, 1)
 	go func() {
 		out, err := s.Runner.Run(r.Context(), jj.DiffStat(revision))
-		statCh <- statResult{out, err}
+		statCh <- asyncResult{out, err}
+	}()
+
+	conflictCh := make(chan asyncResult, 1)
+	go func() {
+		out, err := s.Runner.Run(r.Context(), jj.ResolveList(revision))
+		conflictCh <- asyncResult{out, err}
 	}()
 
 	summaryOutput, err := s.Runner.Run(r.Context(), jj.DiffSummary(revision))
 	if err != nil {
-		<-statCh // drain the goroutine
+		<-statCh     // drain buffered channels (goroutines self-exit)
+		<-conflictCh
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -167,6 +174,13 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	if sr.err == nil {
 		stats := jj.ParseDiffStat(string(sr.output))
 		jj.MergeStats(files, stats)
+	}
+
+	// Collect conflict result and merge if successful
+	cr := <-conflictCh
+	if cr.err == nil {
+		conflictPaths := jj.ParseResolveList(string(cr.output))
+		jj.MergeConflicts(files, conflictPaths)
 	}
 
 	s.writeJSON(w, r, http.StatusOK, files)
@@ -559,5 +573,31 @@ func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runMutation(w, r, jj.GitFetch(req.Flags...))
+}
+
+// Whitelisted merge tools for resolve to prevent arbitrary tool execution.
+var allowedResolveTools = map[string]bool{":ours": true, ":theirs": true}
+
+type resolveRequest struct {
+	Revision string `json:"revision"`
+	File     string `json:"file"`
+	Tool     string `json:"tool"` // ":ours" or ":theirs"
+}
+
+func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
+	var req resolveRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" || req.File == "" || req.Tool == "" {
+		s.writeError(w, http.StatusBadRequest, "revision, file, and tool are required")
+		return
+	}
+	if !allowedResolveTools[req.Tool] {
+		s.writeError(w, http.StatusBadRequest, "tool must be :ours or :theirs")
+		return
+	}
+	s.runMutation(w, r, jj.Resolve(req.Revision, req.File, req.Tool))
 }
 

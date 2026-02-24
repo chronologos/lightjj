@@ -487,3 +487,57 @@ func TestParseWorkspaceList_Empty(t *testing.T) {
 	ws := ParseWorkspaceList("")
 	assert.Empty(t, ws)
 }
+
+func TestResolveList(t *testing.T) {
+	got := ResolveList("abc")
+	assert.Equal(t, []string{"resolve", "--list", "-r", "abc", "--color", "never", "--quiet"}, got)
+}
+
+func TestResolve(t *testing.T) {
+	got := Resolve("abc", "src/main.go", ":ours")
+	assert.Equal(t, []string{"resolve", "--tool", ":ours", "-r", "abc", `file:"src/main.go"`}, got)
+}
+
+func TestResolve_EscapedFile(t *testing.T) {
+	got := Resolve("abc", `path with "quotes".go`, ":theirs")
+	assert.Equal(t, []string{"resolve", "--tool", ":theirs", "-r", "abc", `file:"path with \"quotes\".go"`}, got)
+}
+
+func TestParseResolveList(t *testing.T) {
+	output := "src/main.go    2-sided conflict\nREADME.md    2-sided conflict\n"
+	paths := ParseResolveList(output)
+	assert.Equal(t, []string{"src/main.go", "README.md"}, paths)
+}
+
+func TestParseResolveList_PlainPaths(t *testing.T) {
+	// Handles output without conflict type suffix (future-proofing).
+	output := "src/main.go\nREADME.md\n"
+	paths := ParseResolveList(output)
+	assert.Equal(t, []string{"src/main.go", "README.md"}, paths)
+}
+
+func TestParseResolveList_Empty(t *testing.T) {
+	paths := ParseResolveList("")
+	assert.Empty(t, paths)
+	assert.NotNil(t, paths)
+}
+
+func TestMergeConflicts(t *testing.T) {
+	files := []FileChange{
+		{Type: "M", Path: "a.go"},
+		{Type: "M", Path: "b.go"},
+		{Type: "A", Path: "c.go"},
+	}
+	MergeConflicts(files, []string{"b.go"})
+	assert.False(t, files[0].Conflict)
+	assert.True(t, files[1].Conflict)
+	assert.False(t, files[2].Conflict)
+}
+
+func TestMergeConflicts_NoConflicts(t *testing.T) {
+	files := []FileChange{
+		{Type: "M", Path: "a.go"},
+	}
+	MergeConflicts(files, []string{})
+	assert.False(t, files[0].Conflict)
+}

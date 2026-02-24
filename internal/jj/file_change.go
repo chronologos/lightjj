@@ -12,6 +12,7 @@ type FileChange struct {
 	Path      string `json:"path"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
+	Conflict  bool   `json:"conflict"`
 }
 
 // FileStat holds per-file addition/deletion counts parsed from `jj diff --stat`.
@@ -88,6 +89,39 @@ func MergeStats(files []FileChange, stats map[string]FileStat) {
 				files[i].Deletions = s.Deletions
 				break
 			}
+		}
+	}
+}
+
+// ParseResolveList parses the output of `jj resolve --list` to extract conflicted file paths.
+// Each line has the form: "path/to/file    2-sided conflict" — we extract just the path
+// by splitting on multiple consecutive spaces (the separator jj uses between path and type).
+func ParseResolveList(output string) []string {
+	paths := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// jj separates the file path from the conflict type with multiple spaces.
+		// Split on "    " (4 spaces) to extract just the path.
+		if idx := strings.Index(line, "    "); idx >= 0 {
+			line = line[:idx]
+		}
+		paths = append(paths, line)
+	}
+	return paths
+}
+
+// MergeConflicts sets Conflict=true on FileChange entries whose paths appear in conflictPaths.
+func MergeConflicts(files []FileChange, conflictPaths []string) {
+	pathSet := make(map[string]bool, len(conflictPaths))
+	for _, p := range conflictPaths {
+		pathSet[p] = true
+	}
+	for i := range files {
+		if pathSet[files[i].Path] {
+			files[i].Conflict = true
 		}
 	}
 }

@@ -1039,3 +1039,203 @@ func TestJourneyOpIdTracking(t *testing.T) {
 	assert.NotEmpty(t, opId2)
 	assert.NotEqual(t, opId1, opId2, "op-id should change after mutation")
 }
+
+// ---------------------------------------------------------------------------
+// Conflict resolution tests
+// ---------------------------------------------------------------------------
+
+// createConflict sets up a repo with a conflict on "conflict.txt":
+// base (content "base") → left (content "left") → right rebased onto left (content "right").
+// Returns the runner and jjExec helper.
+func createConflict(t *testing.T) (*runner.LocalRunner, func(args ...string) string) {
+	t.Helper()
+	r, jjExec := jjTestRepo(t)
+
+	// Base commit with a file.
+	writeFile(t, r.RepoDir, "conflict.txt", "base content\n")
+	writeFile(t, r.RepoDir, "clean.txt", "untouched\n")
+	jjExec("describe", "-m", "base")
+
+	// Left branch: modify the file.
+	jjExec("new")
+	writeFile(t, r.RepoDir, "conflict.txt", "left content\n")
+	jjExec("describe", "-m", "left change")
+	// Capture left's change ID for the rebase target.
+	leftId := strings.TrimSpace(jjExec("log", "-r", "@", "--no-graph", "-T", "change_id.short(8)"))
+
+	// Right branch: sibling of left (child of base).
+	jjExec("new", "@-") // parent of left = base
+	writeFile(t, r.RepoDir, "conflict.txt", "right content\n")
+	jjExec("describe", "-m", "right change")
+
+	// Rebase right onto left → creates conflict on conflict.txt.
+	jjExec("rebase", "-r", "@", "-d", leftId)
+
+	return r, jjExec
+}
+
+func TestIntegrationFilesWithConflicts(t *testing.T) {
+	r, _ := createConflict(t)
+	t.Parallel()
+
+	srv := NewServer(r)
+
+	// The working copy should be the conflicted "right change" commit.
+	w := apiGet(t, srv, "/api/files?revision=@")
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+
+	byPath := map[string]jj.FileChange{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+
+	// conflict.txt should be marked as conflicted.
+	require.Contains(t, byPath, "conflict.txt")
+	assert.True(t, byPath["conflict.txt"].Conflict,
+		"conflict.txt should have conflict=true")
+
+	// clean.txt should NOT be marked as conflicted (it may or may not appear
+	// in the files list depending on whether it was modified in this commit).
+	if f, ok := byPath["clean.txt"]; ok {
+		assert.False(t, f.Conflict, "clean.txt should not be conflicted")
+	}
+}
+
+func TestIntegrationResolveOurs(t *testing.T) {
+	r, _ := createConflict(t)
+	t.Parallel()
+
+	srv := NewServer(r)
+
+	// Verify conflict exists first.
+	w := apiGet(t, srv, "/api/files?revision=@")
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	var hasConflict bool
+	for _, f := range files {
+		if f.Path == "conflict.txt" && f.Conflict {
+			hasConflict = true
+		}
+	}
+	require.True(t, hasConflict, "conflict should exist before resolve")
+
+	// Resolve with :ours.
+	w = apiPost(t, srv, "/api/resolve", map[string]any{
+		"revision": "@",
+		"file":     "conflict.txt",
+		"tool":     ":ours",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// After resolve, conflict.txt should no longer be conflicted.
+	w = apiGet(t, srv, "/api/files?revision=@")
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	for _, f := range files {
+		if f.Path == "conflict.txt" {
+			assert.False(t, f.Conflict, "conflict.txt should be resolved")
+		}
+	}
+}
+
+func TestIntegrationResolveTheirs(t *testing.T) {
+	r, _ := createConflict(t)
+	t.Parallel()
+
+	srv := NewServer(r)
+
+	// Resolve with :theirs.
+	w := apiPost(t, srv, "/api/resolve", map[string]any{
+		"revision": "@",
+		"file":     "conflict.txt",
+		"tool":     ":theirs",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// After resolve, the diff should contain the "theirs" content.
+	gw := apiGet(t, srv, "/api/diff?revision=@")
+	var diffResp map[string]string
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &diffResp))
+	// The resolved file should have "right content" since :theirs picks
+	// the rebased branch's changes (the "right" side).
+	// Note: ours/theirs semantics depend on jj's perspective — verify the
+	// conflict is gone rather than assuming specific content.
+
+	// Verify no conflicts remain.
+	w = apiGet(t, srv, "/api/files?revision=@")
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	for _, f := range files {
+		assert.False(t, f.Conflict, "no files should be conflicted after resolve")
+	}
+}
+
+// TestJourneyConflictResolution exercises the full conflict lifecycle:
+// create conflict → detect in files → resolve → verify clean.
+func TestJourneyConflictResolution(t *testing.T) {
+	r, _ := createConflict(t)
+	t.Parallel()
+
+	srv := NewServer(r)
+
+	// 1. Log should show the conflicted commit at the working copy.
+	rows := getLogRows(t, srv, "revset=@")
+	require.Len(t, rows, 1)
+	wc := rows[0]
+	assert.True(t, wc.Commit.IsWorkingCopy)
+	assert.Equal(t, "right change", wc.Description)
+
+	// 2. Files endpoint should report the conflict.
+	w := apiGet(t, srv, "/api/files?revision=@")
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	var conflictFile *jj.FileChange
+	for i, f := range files {
+		if f.Path == "conflict.txt" {
+			conflictFile = &files[i]
+		}
+	}
+	require.NotNil(t, conflictFile, "conflict.txt should appear in files list")
+	assert.True(t, conflictFile.Conflict, "should be marked as conflicted")
+
+	// 3. Diff should contain conflict markers or conflict-related content.
+	gw := apiGet(t, srv, "/api/diff?revision=@")
+	var diffResp map[string]string
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &diffResp))
+	assert.Contains(t, diffResp["diff"], "conflict.txt",
+		"diff should reference the conflicted file")
+
+	// 4. Resolve the conflict.
+	pw := apiPost(t, srv, "/api/resolve", map[string]any{
+		"revision": "@",
+		"file":     "conflict.txt",
+		"tool":     ":ours",
+	})
+	require.Equal(t, http.StatusOK, pw.Code)
+
+	// 5. Verify conflict is gone.
+	w = apiGet(t, srv, "/api/files?revision=@")
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	for _, f := range files {
+		if f.Path == "conflict.txt" {
+			assert.False(t, f.Conflict,
+				"conflict.txt should no longer be conflicted after resolve")
+		}
+	}
+
+	// 6. Verify we can undo the resolution.
+	pw = apiPost(t, srv, "/api/undo", map[string]any{})
+	require.Equal(t, http.StatusOK, pw.Code)
+
+	// Conflict should be back.
+	w = apiGet(t, srv, "/api/files?revision=@")
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	var conflictRestored bool
+	for _, f := range files {
+		if f.Path == "conflict.txt" && f.Conflict {
+			conflictRestored = true
+		}
+	}
+	assert.True(t, conflictRestored,
+		"conflict should be restored after undo")
+}

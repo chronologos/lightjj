@@ -240,6 +240,7 @@ func TestHandleFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\nA new.go\n"))
 	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 10 +++++++---\n new.go      |  5 +++++\n 2 files changed, 12 insertions(+), 3 deletions(-)\n"))
+	runner.Allow(jj.ResolveList("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -274,6 +275,7 @@ func TestHandleFiles_Empty(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte(""))
 	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
+	runner.Allow(jj.ResolveList("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1021,6 +1023,7 @@ func TestHandleFiles_SummaryError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetError(errors.New("summary failed"))
 	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
+	runner.Allow(jj.ResolveList("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1034,6 +1037,7 @@ func TestHandleFiles_StatError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
 	runner.Expect(jj.DiffStat("abc")).SetError(errors.New("stat failed"))
+	runner.Allow(jj.ResolveList("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1180,6 +1184,104 @@ func TestHandleSplit_RunnerError(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "split failed", resp["error"])
+}
+
+// --- Resolve handler tests ---
+
+func TestHandleResolve(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Resolve("abc", "src/main.go", ":ours")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(resolveRequest{Revision: "abc", File: "src/main.go", Tool: ":ours"})
+	req := jsonPost("/api/resolve", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleResolve_Theirs(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Resolve("abc", "README.md", ":theirs")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(resolveRequest{Revision: "abc", File: "README.md", Tool: ":theirs"})
+	req := jsonPost("/api/resolve", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleResolve_InvalidTool(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(resolveRequest{Revision: "abc", File: "file.go", Tool: ":bad"})
+	req := jsonPost("/api/resolve", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "tool must be :ours or :theirs")
+}
+
+func TestHandleResolve_MissingFields(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+
+	// Missing revision
+	body, _ := json.Marshal(resolveRequest{File: "file.go", Tool: ":ours"})
+	req := jsonPost("/api/resolve", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// Missing file
+	body, _ = json.Marshal(resolveRequest{Revision: "abc", Tool: ":ours"})
+	req = jsonPost("/api/resolve", body)
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleResolve_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Resolve("abc", "file.go", ":ours")).SetError(errors.New("resolve failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(resolveRequest{Revision: "abc", File: "file.go", Tool: ":ours"})
+	req := jsonPost("/api/resolve", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "resolve failed", resp["error"])
+}
+
+func TestHandleFiles_WithConflicts(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\nM conflict.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 10 +++++++---\n conflict.go |  5 +++++\n 2 files changed, 12 insertions(+), 3 deletions(-)\n"))
+	runner.Expect(jj.ResolveList("abc")).SetOutput([]byte("conflict.go    2-sided conflict\n"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	assert.Len(t, files, 2)
+	assert.False(t, files[0].Conflict)
+	assert.True(t, files[1].Conflict)
 }
 
 // parseLogOutput tests moved to internal/parser/graph_test.go

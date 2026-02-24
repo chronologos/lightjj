@@ -12,6 +12,7 @@ type Commit struct {
 	IsWorkingCopy  bool     `json:"is_working_copy"`
 	Hidden         bool     `json:"hidden"`
 	Immutable      bool     `json:"immutable"`
+	Conflicted     bool     `json:"conflicted"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
 }
 
