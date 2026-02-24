@@ -227,7 +227,6 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
 }
-
 func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	args := jj.WorkspaceList()
 	output, err := s.Runner.Run(r.Context(), args)

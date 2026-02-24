@@ -117,21 +117,19 @@ func ParseResolveList(output string) []string {
 // Files in conflictPaths that aren't already in the list are appended (conflict-only files
 // may not appear in DiffSummary output for merge commits).
 func MergeConflicts(files []FileChange, conflictPaths []string) []FileChange {
-	existing := make(map[string]bool, len(files))
-	for _, f := range files {
-		existing[f.Path] = true
-	}
 	pathSet := make(map[string]bool, len(conflictPaths))
 	for _, p := range conflictPaths {
 		pathSet[p] = true
 	}
+	matched := make(map[string]bool, len(conflictPaths))
 	for i := range files {
 		if pathSet[files[i].Path] {
 			files[i].Conflict = true
+			matched[files[i].Path] = true
 		}
 	}
 	for _, p := range conflictPaths {
-		if !existing[p] {
+		if !matched[p] {
 			files = append(files, FileChange{Type: "M", Path: p, Conflict: true})
 		}
 	}

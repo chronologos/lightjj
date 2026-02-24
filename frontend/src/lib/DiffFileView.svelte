@@ -437,35 +437,29 @@
     font-weight: 700;
   }
 
-  .conflict-diff-marker {
+  .conflict-diff-marker,
+  .conflict-diff-line {
     --conflict-color: var(--yellow);
   }
-  .conflict-diff-marker :global(.diff-line) {
+  .conflict-diff-marker :global(.diff-line),
+  .conflict-diff-line :global(.diff-line) {
     background: var(--badge-other-bg);
+  }
+  .conflict-diff-marker :global(.diff-line) {
     color: var(--yellow);
     font-weight: 600;
   }
 
-  .conflict-snap-marker {
-    --conflict-color: var(--blue);
-  }
-  .conflict-snap-marker :global(.diff-line) {
-    background: var(--badge-modify-bg);
-    color: var(--blue);
-    font-weight: 600;
-  }
-
-  .conflict-diff-line {
-    --conflict-color: var(--yellow);
-  }
-  .conflict-diff-line :global(.diff-line) {
-    background: var(--badge-other-bg);
-  }
-
+  .conflict-snap-marker,
   .conflict-snap-line {
     --conflict-color: var(--blue);
   }
+  .conflict-snap-marker :global(.diff-line),
   .conflict-snap-line :global(.diff-line) {
     background: var(--badge-modify-bg);
+  }
+  .conflict-snap-marker :global(.diff-line) {
+    color: var(--blue);
+    font-weight: 600;
   }
 </style>
