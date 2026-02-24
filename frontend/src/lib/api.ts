@@ -233,6 +233,8 @@ export const api = {
 
   undo: () => post<{ output: string }>('/api/undo', {}),
 
+  commit: () => post<{ output: string }>('/api/commit', {}),
+
   bookmarkSet: (revision: string, name: string) =>
     post<{ output: string }>('/api/bookmark/set', { revision, name }),
 

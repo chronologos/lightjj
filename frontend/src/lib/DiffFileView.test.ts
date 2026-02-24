@@ -204,4 +204,134 @@ describe('DiffFileView', () => {
       expect(container.querySelectorAll('.conflict-boundary')).toHaveLength(0)
     })
   })
+
+  describe('basic diff rendering', () => {
+    it('add line has diff-add class', () => {
+      const file = makeFile('test.go', [
+        { type: 'add', content: '+new line' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file }),
+      })
+      const addLines = container.querySelectorAll('.diff-add')
+      expect(addLines.length).toBeGreaterThan(0)
+    })
+
+    it('remove line has diff-remove class', () => {
+      const file = makeFile('test.go', [
+        { type: 'remove', content: '-old line' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file }),
+      })
+      expect(container.querySelectorAll('.diff-remove').length).toBeGreaterThan(0)
+    })
+
+    it('context line has diff-context class', () => {
+      const file = makeFile('test.go', [
+        { type: 'context', content: ' context line' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file }),
+      })
+      expect(container.querySelectorAll('.diff-context').length).toBeGreaterThan(0)
+    })
+
+    it('line content rendered correctly', () => {
+      const file = makeFile('test.go', [
+        { type: 'add', content: '+hello world' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file }),
+      })
+      const line = container.querySelector('.diff-add')
+      expect(line?.textContent).toContain('+hello world')
+    })
+  })
+
+  describe('file header', () => {
+    it('shows file path', () => {
+      const file = makeFile('src/main.go')
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file }),
+      })
+      expect(container.querySelector('.diff-file-path')?.textContent).toContain('main.go')
+    })
+
+    it('shows stat counts when fileStats provided', () => {
+      const stats = makeStats('test.go', { additions: 10, deletions: 3 })
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ fileStats: stats }),
+      })
+      expect(container.querySelector('.stat-add')?.textContent).toBe('+10')
+      expect(container.querySelector('.stat-del')?.textContent).toBe('-3')
+    })
+
+    it('shows type badge', () => {
+      const stats = makeStats('test.go', { type: 'A' })
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ fileStats: stats }),
+      })
+      const badge = container.querySelector('.file-type-badge')
+      expect(badge?.textContent).toBe('A')
+      expect(badge?.classList.contains('badge-A')).toBe(true)
+    })
+  })
+
+  describe('collapse and expand', () => {
+    it('isCollapsed=true hides diff content', () => {
+      const file = makeFile('test.go', [
+        { type: 'add', content: '+line' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, isCollapsed: true }),
+      })
+      expect(container.querySelectorAll('.diff-line')).toHaveLength(0)
+    })
+
+    it('clicking header calls ontoggle', async () => {
+      const ontoggle = vi.fn()
+      const file = makeFile('test.go')
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, ontoggle }),
+      })
+      const header = container.querySelector('.diff-file-header')!
+      await fireEvent.click(header)
+      expect(ontoggle).toHaveBeenCalledWith('test.go')
+    })
+
+    it('expand button visible when not expanded and multiple hunks', () => {
+      // Create a file with 2 hunks where newStart > 1 to trigger expand button
+      const file: DiffFile = {
+        header: 'diff --git a/test.go b/test.go',
+        filePath: 'test.go',
+        hunks: [
+          { header: '@@ -1,3 +1,3 @@', newStart: 5, newCount: 3, lines: [{ type: 'context', content: ' a' }] },
+          { header: '@@ -10,3 +10,3 @@', newStart: 15, newCount: 3, lines: [{ type: 'context', content: ' b' }] },
+        ],
+      }
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, isExpanded: false }),
+      })
+      expect(container.querySelector('.expand-btn')).toBeInTheDocument()
+    })
+
+    it('clicking expand button calls onexpand', async () => {
+      const onexpand = vi.fn()
+      const file: DiffFile = {
+        header: 'diff --git a/test.go b/test.go',
+        filePath: 'test.go',
+        hunks: [
+          { header: '@@ -1,3 +1,3 @@', newStart: 5, newCount: 3, lines: [{ type: 'context', content: ' a' }] },
+          { header: '@@ -10,3 +10,3 @@', newStart: 15, newCount: 3, lines: [{ type: 'context', content: ' b' }] },
+        ],
+      }
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, isExpanded: false, onexpand }),
+      })
+      const btn = container.querySelector('.expand-btn')!
+      await fireEvent.click(btn)
+      expect(onexpand).toHaveBeenCalledWith('test.go')
+    })
+  })
 })

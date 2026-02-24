@@ -42,3 +42,19 @@ func TestSelectedRevisions_Last(t *testing.T) {
 	assert.Equal(t, "def", NewSelectedRevisions(a, b).Last())
 	assert.Equal(t, "", NewSelectedRevisions().Last())
 }
+
+func TestFromIDs(t *testing.T) {
+	sel := FromIDs([]string{"abc", "def"})
+	assert.Len(t, sel.Revisions, 2)
+	assert.Equal(t, "abc", sel.Revisions[0].ChangeId)
+	assert.Equal(t, "def", sel.Revisions[1].ChangeId)
+}
+
+func TestContains_HiddenCommit(t *testing.T) {
+	// Hidden commits use CommitId for matching via GetChangeId()
+	sel := NewSelectedRevisions(&Commit{ChangeId: "abc", CommitId: "commit123", Hidden: true})
+	// Match against CommitId since the commit is hidden
+	assert.True(t, sel.Contains(&Commit{CommitId: "commit123", Hidden: true}))
+	// ChangeId won't match because Hidden uses CommitId
+	assert.False(t, sel.Contains(&Commit{ChangeId: "abc"}))
+}

@@ -1,57 +1,59 @@
 <script lang="ts">
   interface Props {
-    onrefresh: () => void
     onundo: () => void
     onfetch: () => void
     onpush: () => void
+    oncommit: () => void
+    ongitmodal: () => void
     onopenpalette: () => void
   }
 
-  let { onrefresh, onundo, onfetch, onpush, onopenpalette }: Props = $props()
+  let { onundo, onfetch, onpush, oncommit, ongitmodal, onopenpalette }: Props = $props()
 </script>
 
 <header class="titlebar">
   <div class="titlebar-left">
     <span class="app-name">lightjj</span>
-    <span class="separator">|</span>
+  </div>
+  <div class="titlebar-right">
     <div class="toolbar">
-      <button class="toolbar-btn" onclick={onrefresh} title="Refresh (r)">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M13.5 2a.5.5 0 0 0-.5.5V5h-2.5a.5.5 0 0 0 0 1H14a.5.5 0 0 0 .5-.5V2.5a.5.5 0 0 0-.5-.5z"/>
-          <path d="M13.36 4.05A6 6 0 1 0 14 8a.5.5 0 0 1 1 0 7 7 0 1 1-1.75-4.63l.11.68z"/>
-        </svg>
-        Refresh
-      </button>
-      <button class="toolbar-btn" onclick={onundo} title="Undo (u)">
+      <button class="toolbar-btn" onclick={onundo} title="Undo last operation">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
           <path d="M2 5.5a.5.5 0 0 1 .5-.5h9a3.5 3.5 0 0 1 0 7H7a.5.5 0 0 1 0-1h4.5a2.5 2.5 0 0 0 0-5h-9a.5.5 0 0 1-.5-.5z"/>
           <path d="M4.854 3.146a.5.5 0 0 1 0 .708L2.707 6l2.147 2.146a.5.5 0 1 1-.708.708l-2.5-2.5a.5.5 0 0 1 0-.708l2.5-2.5a.5.5 0 0 1 .708 0z"/>
         </svg>
         Undo
+        <kbd>u</kbd>
+      </button>
+      <button class="toolbar-btn" onclick={oncommit} title="Commit working copy">
+        Commit
+        <kbd>c</kbd>
       </button>
       <div class="toolbar-divider"></div>
-      <button class="toolbar-btn" onclick={onfetch} title="Git fetch">
+      <button class="toolbar-btn" onclick={onfetch} title="Git fetch from default remote">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
           <path d="M8 1a.5.5 0 0 1 .5.5v10.793l3.146-3.147a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 0 1 .708-.708L7.5 12.293V1.5A.5.5 0 0 1 8 1z"/>
         </svg>
         Fetch
+        <kbd>f</kbd>
       </button>
-      <button class="toolbar-btn" onclick={onpush} title="Git push">
+      <button class="toolbar-btn" onclick={onpush} title="Git push tracking bookmarks">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
           <path d="M8 15a.5.5 0 0 0 .5-.5V3.707l3.146 3.147a.5.5 0 0 0 .708-.708l-4-4a.5.5 0 0 0-.708 0l-4 4a.5.5 0 0 0 .708.708L7.5 3.707V14.5a.5.5 0 0 0 .5.5z"/>
         </svg>
         Push
+        <kbd>p</kbd>
+      </button>
+      <button class="toolbar-btn" onclick={ongitmodal} title="Advanced git operations">
+        Git
+        <kbd>g</kbd>
+      </button>
+      <div class="toolbar-divider"></div>
+      <button class="toolbar-btn" onclick={onopenpalette} title="Command palette">
+        Help
+        <kbd>{navigator.platform.includes('Mac') ? '\u2318' : 'Ctrl+'}K</kbd>
       </button>
     </div>
-  </div>
-  <div class="titlebar-right">
-    <kbd class="shortcut-hint">Cmd+K</kbd> commands
-    <kbd class="shortcut-hint">/</kbd> filter
-    <kbd class="shortcut-hint">j/k</kbd> navigate
-    <kbd class="shortcut-hint">Space</kbd> check
-    <kbd class="shortcut-hint">e</kbd> describe
-    <kbd class="shortcut-hint">n</kbd> new
-    <kbd class="shortcut-hint">u</kbd> undo
   </div>
 </header>
 
@@ -71,7 +73,11 @@
   .titlebar-left {
     display: flex;
     align-items: center;
-    gap: 10px;
+  }
+
+  .titlebar-right {
+    display: flex;
+    align-items: center;
   }
 
   .app-name {
@@ -79,10 +85,6 @@
     font-size: 14px;
     color: var(--blue);
     letter-spacing: -0.02em;
-  }
-
-  .separator {
-    color: var(--surface1);
   }
 
   .toolbar {
@@ -103,7 +105,6 @@
     cursor: pointer;
     font-family: inherit;
     font-size: 12px;
-    transition: all 0.15s ease;
   }
 
   .toolbar-btn:hover {
@@ -116,29 +117,27 @@
     background: var(--surface1);
   }
 
+  .toolbar-btn kbd {
+    display: inline-block;
+    background: var(--surface0);
+    color: var(--subtext0);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: inherit;
+    border: 1px solid var(--surface1);
+    line-height: 1.5;
+  }
+
+  .toolbar-btn:hover kbd {
+    background: var(--surface1);
+    border-color: var(--surface2);
+  }
+
   .toolbar-divider {
     width: 1px;
     height: 18px;
     background: var(--surface1);
     margin: 0 4px;
-  }
-
-  .titlebar-right {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--overlay0);
-  }
-
-  .shortcut-hint {
-    display: inline-block;
-    background: var(--surface0);
-    color: var(--subtext0);
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-family: inherit;
-    border: 1px solid var(--surface1);
   }
 </style>

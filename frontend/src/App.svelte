@@ -74,6 +74,7 @@
   let splitParallel: boolean = $state(false)
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
+  let inlineMode = $derived(rebaseMode || squashMode || splitMode)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
   // --- Theme ---
@@ -108,7 +109,7 @@
   })
 
   let statusText = $derived.by(() => {
-    if (rebaseMode || squashMode || splitMode) return ''
+    if (inlineMode) return ''
     if (loading) return 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
@@ -184,12 +185,15 @@
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
-    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !rebaseMode && !squashMode && !splitMode && (!!selectedRevision || checkedRevisions.size > 0) },
-    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !squashMode && !rebaseMode && !splitMode && (!!selectedRevision || checkedRevisions.size > 0) },
-    { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !splitMode && !squashMode && !rebaseMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
+    { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Commit working copy', shortcut: 'c', category: 'Revisions', action: handleCommit, when: () => !inlineMode },
 
     // Git
-    { label: 'Git operations (push/fetch)', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true } },
+    { label: 'Git fetch', shortcut: 'f', category: 'Git', action: () => handleGitOp('fetch', []), when: () => !inlineMode },
+    { label: 'Git push', shortcut: 'p', category: 'Git', action: () => handleGitOp('push', []), when: () => !inlineMode },
+    { label: 'Git operations (advanced)', shortcut: 'g', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true }, when: () => !inlineMode },
 
     // Bookmarks
     { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal },
@@ -203,7 +207,7 @@
     { label: darkMode ? 'Light theme' : 'Dark theme', category: 'View', action: toggleTheme },
 
     // Actions
-    { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo },
+    { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
     { label: 'Clear checked revisions', shortcut: 'Esc', category: 'Actions', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
     { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop, infoOnly: true },
   ])
@@ -420,6 +424,17 @@
     }
   }
 
+  async function handleCommit() {
+    try {
+      const result = await api.commit()
+      lastAction = 'Committed working copy'
+      commandOutput = result.output
+      await loadLog()
+    } catch (e) {
+      showError(e)
+    }
+  }
+
   async function handleGitOp(type: 'push' | 'fetch', flags: string[]) {
     try {
       const result = type === 'push' ? await api.gitPush(flags) : await api.gitFetch(flags)
@@ -610,12 +625,13 @@
     }
     try {
       const files = [...squashSelectedFiles]
-      const result = await api.split(splitRevision, files, splitParallel || undefined)
+      const revision = splitRevision
+      const result = await api.split(revision, files, splitParallel || undefined)
       splitMode = false
       splitRevision = ''
       splitParallel = false
       squashSelectedFiles.clear()
-      lastAction = `Split ${splitRevision.slice(0, 8)} (${files.length} files stay)`
+      lastAction = `Split ${revision.slice(0, 8)} (${files.length} files stay)`
       commandOutput = result.output
       clearChecks()
       await loadLog()
@@ -932,6 +948,23 @@
           bookmarkInputOpen = true
         }
         break
+      case 'c':
+        e.preventDefault()
+        handleCommit()
+        break
+      case 'f':
+        e.preventDefault()
+        handleGitOp('fetch', [])
+        break
+      case 'p':
+        e.preventDefault()
+        handleGitOp('push', [])
+        break
+      case 'g':
+        e.preventDefault()
+        closeAllModals()
+        gitModalOpen = true
+        break
       case 't':
         e.preventDefault()
         toggleViewMode()
@@ -956,7 +989,7 @@
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
   $effect(() => {
     return onStale(() => {
-      if (!loading && !anyModalOpen && !squashMode && !rebaseMode && !splitMode) loadLog()
+      if (!loading && !anyModalOpen && !inlineMode) loadLog()
     })
   })
 
@@ -967,10 +1000,11 @@
 
 <div class="app">
   <Toolbar
-    onrefresh={loadLog}
-    onundo={handleUndo}
-    onfetch={() => { closeAllModals(); gitModalOpen = true }}
-    onpush={() => { closeAllModals(); gitModalOpen = true }}
+    onundo={() => { if (!inlineMode) handleUndo() }}
+    onfetch={() => { if (!inlineMode) handleGitOp('fetch', []) }}
+    onpush={() => { if (!inlineMode) handleGitOp('push', []) }}
+    oncommit={() => { if (!inlineMode) handleCommit() }}
+    ongitmodal={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }}
     onopenpalette={() => { closeModals(); paletteOpen = true }}
   />
 
@@ -1043,7 +1077,7 @@
       {squashSelectedFiles}
       ontogglefile={toggleSquashFile}
       {splitMode}
-      onresolve={squashMode || rebaseMode ? undefined : handleResolve}
+      onresolve={inlineMode ? undefined : handleResolve}
     />
   </div>
 
