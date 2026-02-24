@@ -1115,4 +1115,71 @@ func TestHandleWorkspaces_RunnerError(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "workspace list failed")
 }
 
+// --- Split handler tests ---
+
+func TestHandleSplit(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Split("abc", []string{"src/main.go", "README.md"}, false, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(splitRequest{Revision: "abc", Files: []string{"src/main.go", "README.md"}})
+	req := jsonPost("/api/split", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSplit_Parallel(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Split("abc", []string{"src/main.go"}, true, false)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(splitRequest{Revision: "abc", Files: []string{"src/main.go"}, Parallel: true})
+	req := jsonPost("/api/split", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSplit_MissingRevision(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(splitRequest{Files: []string{"file.go"}})
+	req := jsonPost("/api/split", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleSplit_MissingFiles(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(splitRequest{Revision: "abc"})
+	req := jsonPost("/api/split", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleSplit_RunnerError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Split("abc", []string{"file.go"}, false, false)).SetError(errors.New("split failed"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(splitRequest{Revision: "abc", Files: []string{"file.go"}})
+	req := jsonPost("/api/split", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "split failed", resp["error"])
+}
+
 // parseLogOutput tests moved to internal/parser/graph_test.go

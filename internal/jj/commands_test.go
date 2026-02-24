@@ -203,7 +203,7 @@ func TestParseDiffSummary(t *testing.T) {
 
 func TestDiffStat(t *testing.T) {
 	got := DiffStat("abc")
-	assert.Equal(t, []string{"diff", "--stat", "--color", "never", "-r", "abc", "--ignore-working-copy"}, got)
+	assert.Equal(t, []string{"diff", "--stat", "--color", "never", "-r", "abc", "--ignore-working-copy", "--config", "ui.term-width=500"}, got)
 }
 
 func TestParseDiffStat(t *testing.T) {
@@ -300,6 +300,25 @@ func TestMergeStats(t *testing.T) {
 	// c.go not in stats, should remain zero
 	assert.Equal(t, 0, files[2].Additions)
 	assert.Equal(t, 0, files[2].Deletions)
+}
+
+func TestMergeStats_TruncatedPaths(t *testing.T) {
+	files := []FileChange{
+		{Type: "M", Path: "internal/service/machineidentityservice/v1alpha/service_azure.go"},
+		{Type: "M", Path: "obol/cmd/obol-agent/internal/azure/vtpm.go"},
+	}
+	// Simulate truncated paths from narrow terminal stat output
+	stats := map[string]FileStat{
+		"...rvice/machineidentityservice/v1alpha/service_azure.go": {Additions: 5, Deletions: 2},
+		"obol/cmd/obol-agent/internal/azure/vtpm.go":               {Additions: 107, Deletions: 36},
+	}
+	MergeStats(files, stats)
+	// Truncated path should match via suffix
+	assert.Equal(t, 5, files[0].Additions)
+	assert.Equal(t, 2, files[0].Deletions)
+	// Exact match still works
+	assert.Equal(t, 107, files[1].Additions)
+	assert.Equal(t, 36, files[1].Deletions)
 }
 
 func TestBookmarkMove(t *testing.T) {

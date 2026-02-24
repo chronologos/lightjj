@@ -33,6 +33,9 @@
     squashSources: string[]
     squashKeepEmptied: boolean
     squashUseDestMsg: boolean
+    splitMode: boolean
+    splitRevision: string
+    splitParallel: boolean
   }
 
   let {
@@ -42,6 +45,7 @@
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
     rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
     squashMode, squashSources, squashKeepEmptied, squashUseDestMsg,
+    splitMode, splitRevision, splitParallel,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -173,7 +177,7 @@
       <button class="revset-clear" onclick={onrevsetclear} title="Clear filter (Escape)">x</button>
     {/if}
   </div>
-  {#if checkedRevisions.size > 0 && !rebaseMode && !squashMode}
+  {#if checkedRevisions.size > 0 && !rebaseMode && !squashMode && !splitMode}
     <div class="batch-actions-bar">
       <span class="batch-label">{checkedRevisions.size} checked</span>
       <button class="action-btn" onclick={onnewfromchecked} title="New from checked (n)">new</button>
@@ -224,6 +228,7 @@
               {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !isRebaseSource}
               {@const isSquashSource = squashMode && squashSources.includes(entry.commit.change_id)}
               {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !isSquashSource}
+              {@const isSplitSource = splitMode && entry.commit.change_id === splitRevision}
               {#if isRebaseSource}
                 <span class="rebase-badge rebase-source">&lt;&lt; {sourceModeLabel[rebaseSourceMode]} &gt;&gt;</span>
               {/if}
@@ -236,11 +241,14 @@
               {#if isSquashTarget}
                 <span class="rebase-badge rebase-target">&lt;&lt; into &gt;&gt;</span>
               {/if}
+              {#if isSplitSource}
+                <span class="rebase-badge split-source">&lt;&lt; split &gt;&gt;</span>
+              {/if}
               <span class="node-line-content">
                 <span class="change-id"><span class="id-prefix">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}</span><span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix)}</span></span>
                 <span class="commit-id"><span class="commit-id-prefix">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span><span class="commit-id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix)}</span></span>
               </span>
-              {#if !rebaseMode && !squashMode}
+              {#if !rebaseMode && !squashMode && !splitMode}
                 <span class="rev-actions" role="group">
                   <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(entry.commit.change_id) }} title="Edit">edit</button>
                   <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onnew(entry.commit.change_id) }} title="New (n)">new</button>
@@ -261,8 +269,11 @@
               {@const entry = revisions[line.entryIndex]}
               {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !rebaseSources.includes(entry.commit.change_id)}
               {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !squashSources.includes(entry.commit.change_id)}
+              {@const isSplitPreview = splitMode && entry.commit.change_id === splitRevision}
               <span class="desc-line-content">
-                {#if isRebaseTarget}
+                {#if isSplitPreview}
+                  <span class="rebase-preview">jj split -r {entry.commit.change_id.slice(0, 8)}{splitParallel ? ' --parallel' : ''}</span>
+                {:else if isRebaseTarget}
                   <span class="rebase-preview">rebase {rebaseSourceMode} {rebaseSources.map(s => s.slice(0, 8)).join(' ')} {rebaseTargetMode} {entry.commit.change_id.slice(0, 8)}</span>
                 {:else if isSquashTarget}
                   <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squashKeepEmptied ? ' --keep-emptied' : ''}{squashUseDestMsg ? ' --use-destination-message' : ''}</span>
@@ -645,6 +656,12 @@
     background: var(--badge-modify-bg);
     color: var(--blue);
     border: 1px solid var(--blue);
+  }
+
+  .split-source {
+    background: var(--badge-workspace-bg);
+    color: var(--teal);
+    border: 1px solid var(--teal);
   }
 
   .rebase-preview {

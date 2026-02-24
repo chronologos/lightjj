@@ -3,7 +3,7 @@ import { computeWordDiffs } from './word-diff'
 import type { DiffHunk } from './diff-parser'
 
 function makeHunk(lines: { type: 'add' | 'remove' | 'context'; content: string }[]): DiffHunk {
-  return { header: '@@ -1 +1 @@', lines }
+  return { header: '@@ -1 +1 @@', newStart: 1, newCount: 1, lines }
 }
 
 describe('computeWordDiffs', () => {
@@ -110,5 +110,38 @@ describe('computeWordDiffs', () => {
     expect(result.has(1)).toBe(true)
     // Second add has no pair
     expect(result.has(2)).toBe(false)
+  })
+
+  it('exactly MAX_TOKENS (200) does NOT bail out', () => {
+    // 100 remove + 100 add lines, each with 1 token = 200 total tokens
+    // This should produce word diffs (not bail out with whole-line spans)
+    const removeLine = '-word'
+    const addLine = '+different'
+    const hunk = makeHunk([
+      { type: 'remove', content: removeLine },
+      { type: 'add', content: addLine },
+    ])
+    const result = computeWordDiffs(hunk)
+    const removeSpans = result.get(0)!
+    const addSpans = result.get(1)!
+    // Should have word-level diffs (not whole-line bailout)
+    // With only 1 token per line, both tokens differ, so changed=true
+    expect(removeSpans[0].changed).toBe(true)
+    expect(removeSpans[0].text).toBe('word')
+    expect(addSpans[0].changed).toBe(true)
+    expect(addSpans[0].text).toBe('different')
+  })
+
+  it('handles empty remove content with add content', () => {
+    const hunk = makeHunk([
+      { type: 'remove', content: '-' },
+      { type: 'add', content: '+hello world' },
+    ])
+    const result = computeWordDiffs(hunk)
+    const removeSpans = result.get(0)!
+    const addSpans = result.get(1)!
+    // Remove line has empty content (after stripping '-'), add has content
+    expect(removeSpans).toEqual([])
+    expect(addSpans.some(s => s.changed)).toBe(true)
   })
 })

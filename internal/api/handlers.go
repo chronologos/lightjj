@@ -525,6 +525,29 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.GitPush(req.Flags...))
 }
 
+type splitRequest struct {
+	Revision string   `json:"revision"`
+	Files    []string `json:"files"`
+	Parallel bool     `json:"parallel"`
+}
+
+func (s *Server) handleSplit(w http.ResponseWriter, r *http.Request) {
+	var req splitRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	if len(req.Files) == 0 {
+		s.writeError(w, http.StatusBadRequest, "files is required")
+		return
+	}
+	s.runMutation(w, r, jj.Split(req.Revision, req.Files, req.Parallel, false))
+}
+
 func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 	var req gitFlagsRequest
 	if err := decodeBody(w, r, &req); err != nil {
