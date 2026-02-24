@@ -62,17 +62,16 @@
   let fileStatsMap = $derived(new Map(changedFiles.map(f => [f.path, f])))
 
   // Conflict-only files: in changedFiles with conflict=true but not in parsedDiff.
-  // jj diff --tool :git produces no output for these, so we fetch content via jj file show.
+  // These don't appear in jj diff --tool :git output — we fetch their content via
+  // jj file show and convert to DiffFile objects with all lines as 'add' type.
   let conflictOnlyFiles = $derived.by(() => {
     if (conflictCount === 0) return []
     const diffPaths = new Set(parsedDiff.map(f => f.filePath))
     return changedFiles.filter(f => f.conflict && !diffPaths.has(f.path))
   })
 
-  // Fetched conflict file content, keyed by path
   let conflictFileDiffs: Map<string, DiffFile> = $state(new Map())
 
-  // Fetch file content for conflict-only files
   $effect(() => {
     const files = conflictOnlyFiles
     if (files.length === 0) {
@@ -91,15 +90,16 @@
           content: '+' + line,
         }))
         const diffFile: DiffFile = {
-          header: `Conflicted file: ${f.path}`,
+          header: `Conflicted file ${f.path}`,
           filePath: f.path,
-          hunks: [{ header: '@@ conflict @@', newStart: 1, newCount: lines.length, lines }],
+          hunks: [{ header: '@@ -0,0 +1,' + lines.length + ' @@', newStart: 1, newCount: lines.length, lines }],
         }
         conflictFileDiffs = new Map(conflictFileDiffs).set(f.path, diffFile)
-      }).catch(() => {})
+      }).catch(() => {
+        // Silently fail — the file chip is still visible
+      })
     }
   })
-
   // Memoize word diffs — recomputed when parsedDiff or expandedDiffs change
   let wordDiffMap = $derived.by(() => {
     const map = new Map<string, Map<number, WordSpan[]>>()
@@ -440,10 +440,10 @@
               {onresolve}
             />
           {:else}
-            <div class="diff-file">
-              <div class="conflict-file-placeholder">
-                <span class="file-type-indicator file-type-C">C</span>
-                <span>{cf.path}</span>
+            <div class="diff-file" data-file-path={cf.path}>
+              <div class="conflict-file-header">
+                <span class="file-type-badge badge-C">C</span>
+                <span class="diff-file-path">{cf.path}</span>
                 <span class="conflict-loading">Loading...</span>
                 {#if onresolve}
                   <button class="resolve-btn resolve-ours" onclick={() => onresolve!(cf.path, ':ours')}>Accept Ours</button>
@@ -730,7 +730,7 @@
     letter-spacing: normal;
   }
 
-  .conflict-file-placeholder {
+  .conflict-file-header {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -741,6 +741,19 @@
     font-weight: 600;
   }
 
+  .conflict-file-header .file-type-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .badge-C {
+    background: var(--badge-delete-bg);
+    color: var(--red);
+  }
+
   .conflict-loading {
     color: var(--overlay0);
     font-size: 11px;
@@ -749,7 +762,7 @@
     flex: 1;
   }
 
-  .conflict-file-placeholder .resolve-btn {
+  .conflict-file-header .resolve-btn {
     background: transparent;
     border: 1px solid var(--surface1);
     color: var(--subtext0);
@@ -761,18 +774,17 @@
     flex-shrink: 0;
   }
 
-  .conflict-file-placeholder .resolve-ours:hover {
+  .conflict-file-header .resolve-ours:hover {
     background: var(--badge-modify-bg);
     border-color: var(--blue);
     color: var(--blue);
   }
 
-  .conflict-file-placeholder .resolve-theirs:hover {
+  .conflict-file-header .resolve-theirs:hover {
     background: var(--badge-other-bg);
     border-color: var(--yellow);
     color: var(--yellow);
   }
-
   /* --- Diff toolbar --- */
   .diff-toolbar {
     display: flex;
