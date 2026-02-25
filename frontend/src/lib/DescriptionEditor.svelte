@@ -7,13 +7,14 @@
     onsave: () => void
     oncancel: () => void
     ondraftchange: (value: string) => void
+    commitMode?: boolean
   }
 
-  let { revision, draft, onsave, oncancel, ondraftchange }: Props = $props()
+  let { revision, draft, onsave, oncancel, ondraftchange, commitMode = false }: Props = $props()
 </script>
 
 <div class="desc-editor">
-  <label class="desc-label" for="desc-textarea">Description for {revision.commit.change_id.slice(0, 12)}</label>
+  <label class="desc-label" for="desc-textarea">{commitMode ? 'Commit' : 'Description for'} {revision.commit.change_id.slice(0, 12)}</label>
   <textarea
     id="desc-textarea"
     value={draft}
@@ -31,7 +32,7 @@
   ></textarea>
   <div class="desc-actions">
     <button class="btn-primary" onclick={onsave}>
-      Save
+      {commitMode ? 'Commit' : 'Save'}
       <kbd>Cmd+Enter</kbd>
     </button>
     <button class="btn-secondary" onclick={oncancel}>Cancel</button>

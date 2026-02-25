@@ -19,6 +19,7 @@
     descriptionEditing: boolean
     descriptionDraft: string
     describeSaved: boolean
+    commitMode: boolean
     onstartdescribe: () => void
     ondescribe: () => void
     oncanceldescribe: () => void
@@ -33,7 +34,7 @@
 
   let {
     diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions,
-    diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
+    diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
     fileSelectionMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
   }: Props = $props()
@@ -354,6 +355,7 @@
       onsave={ondescribe}
       oncancel={oncanceldescribe}
       ondraftchange={ondraftchange}
+      {commitMode}
     />
   {/if}
   {#if splitMode}

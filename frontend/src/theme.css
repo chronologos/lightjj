@@ -1,0 +1,168 @@
+/* --- Reset & Globals --- */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  background: var(--base);
+  color: var(--text);
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+::selection { background: rgba(255,167,38,0.25); }
+.light ::selection { background: rgba(230,138,0,0.25); }
+
+/* --- Dark theme --- */
+:root {
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  --base: #0f0f13;
+  --mantle: #0f0f13;
+  --crust: #0a0a0e;
+  --surface0: rgba(255,255,255,0.04);
+  --surface1: rgba(255,255,255,0.07);
+  --surface2: #4e4e58;
+  --overlay0: #8a8a94;
+  --overlay1: #8a8a94;
+  --subtext0: #8a8a94;
+  --subtext1: #e2e2e6;
+  --text: #e2e2e6;
+
+  --amber: #ffa726;
+  --green: #66bb6a;
+  --red: #ef5350;
+  --blue: #42a5f5;
+  --purple: #ab47bc;
+  --cyan: #26c6da;
+
+  /* Semantic backgrounds */
+  --bg-hover: rgba(255,255,255,0.04);
+  --bg-selected: rgba(255,167,38,0.07);
+  --bg-checked: rgba(102,187,106,0.08);
+  --bg-checked-selected: rgba(102,187,106,0.12);
+  --bg-error: rgba(239,83,80,0.1);
+  --bg-error-hover: rgba(239,83,80,0.15);
+  --bg-bookmark: rgba(102,187,106,0.08);
+  --border-bookmark: rgba(102,187,106,0.25);
+  --bg-diff-header-hover: rgba(255,255,255,0.03);
+  --bg-hunk-header: rgba(255,255,255,0.03);
+  --border-hunk-header: rgba(255,255,255,0.05);
+  --bg-diff-empty: rgba(255,255,255,0.02);
+  --bg-active: rgba(255,167,38,0.15);
+  --bg-btn-primary-hover: #ffb74d;
+  --bg-btn-kbd: rgba(255,255,255,0.04);
+  --wc-desc-color: #e2e2e6;
+
+  --diff-add-bg: rgba(102,187,106,0.08);
+  --diff-remove-bg: rgba(239,83,80,0.08);
+  --diff-add-word: rgba(102,187,106,0.2);
+  --diff-remove-word: rgba(239,83,80,0.2);
+  --diff-add-text: #a5d6a7;
+  --diff-remove-text: #ef9a9a;
+
+  --badge-add-bg: rgba(102,187,106,0.12);
+  --badge-modify-bg: rgba(255,167,38,0.12);
+  --badge-delete-bg: rgba(239,83,80,0.12);
+  --badge-other-bg: rgba(255,167,38,0.12);
+  --badge-workspace-bg: rgba(38,198,218,0.1);
+  --border-workspace: rgba(38,198,218,0.3);
+
+  /* Conflict region card */
+  --conflict-boundary-border: rgba(239,83,80,0.2);
+  --conflict-boundary-bg: rgba(239,83,80,0.06);
+  --conflict-boundary-color: #8a8a94;
+  --conflict-side1-border: var(--amber);
+  --conflict-side1-bg: rgba(255,167,38,0.06);
+  --conflict-side1-marker-bg: rgba(255,167,38,0.1);
+  --conflict-side2-border: var(--purple);
+  --conflict-side2-bg: rgba(171,71,188,0.06);
+  --conflict-side2-marker-bg: rgba(171,71,188,0.1);
+  --conflict-marker-color: #8a8a94;
+
+  --backdrop: rgba(0,0,0,0.5);
+  --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+
+  --scrollbar-thumb: rgba(255,255,255,0.1);
+  --scrollbar-track: transparent;
+}
+
+/* --- Light theme --- */
+:root.light {
+  --base: #f8f8f6;
+  --mantle: #f8f8f6;
+  --crust: #eeeeec;
+  --surface0: rgba(0,0,0,0.03);
+  --surface1: rgba(0,0,0,0.07);
+  --surface2: #a1a1aa;
+  --overlay0: #71717a;
+  --overlay1: #71717a;
+  --subtext0: #71717a;
+  --subtext1: #1a1a1e;
+  --text: #1a1a1e;
+
+  --amber: #e68a00;
+  --green: #2e7d32;
+  --red: #c62828;
+  --blue: #1976d2;
+  --purple: #6a1b9a;
+  --cyan: #00838f;
+
+  --bg-hover: rgba(0,0,0,0.03);
+  --bg-selected: rgba(230,138,0,0.08);
+  --bg-checked: rgba(46,125,50,0.08);
+  --bg-checked-selected: rgba(46,125,50,0.12);
+  --bg-error: rgba(198,40,40,0.08);
+  --bg-error-hover: rgba(198,40,40,0.12);
+  --bg-bookmark: rgba(46,125,50,0.08);
+  --border-bookmark: rgba(46,125,50,0.25);
+  --bg-diff-header-hover: rgba(0,0,0,0.02);
+  --bg-hunk-header: rgba(0,0,0,0.03);
+  --border-hunk-header: rgba(0,0,0,0.05);
+  --bg-diff-empty: rgba(0,0,0,0.02);
+  --bg-active: rgba(230,138,0,0.12);
+  --bg-btn-primary-hover: #cc7a00;
+  --bg-btn-kbd: rgba(0,0,0,0.04);
+  --wc-desc-color: #1a1a1e;
+
+  --diff-add-bg: rgba(46,125,50,0.14);
+  --diff-remove-bg: rgba(198,40,40,0.1);
+  --diff-add-word: rgba(46,125,50,0.2);
+  --diff-remove-word: rgba(198,40,40,0.2);
+  --diff-add-text: #2e7d32;
+  --diff-remove-text: #c62828;
+
+  --badge-add-bg: rgba(46,125,50,0.12);
+  --badge-modify-bg: rgba(230,138,0,0.12);
+  --badge-delete-bg: rgba(198,40,40,0.12);
+  --badge-other-bg: rgba(230,138,0,0.12);
+  --badge-workspace-bg: rgba(0,131,143,0.1);
+  --border-workspace: rgba(0,131,143,0.3);
+
+  --conflict-boundary-border: rgba(198,40,40,0.2);
+  --conflict-boundary-bg: rgba(198,40,40,0.06);
+  --conflict-boundary-color: #71717a;
+  --conflict-side1-border: var(--amber);
+  --conflict-side1-bg: rgba(230,138,0,0.06);
+  --conflict-side1-marker-bg: rgba(230,138,0,0.1);
+  --conflict-side2-border: var(--purple);
+  --conflict-side2-bg: rgba(106,27,154,0.06);
+  --conflict-side2-marker-bg: rgba(106,27,154,0.1);
+  --conflict-marker-color: #71717a;
+
+  --backdrop: rgba(0,0,0,0.3);
+  --shadow-heavy: 0 20px 60px rgba(0,0,0,0.15);
+
+  --scrollbar-thumb: rgba(0,0,0,0.12);
+  --scrollbar-track: transparent;
+}
