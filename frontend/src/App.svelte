@@ -253,7 +253,10 @@
       if (gen !== logGeneration) return
       showError(e)
     } finally {
-      if (gen === logGeneration) loading = false
+      if (gen === logGeneration) {
+        loading = false
+        blurActiveInput()
+      }
     }
   }
 
@@ -377,7 +380,6 @@
     } catch (e) {
       showError(e)
     }
-    blurActiveInput()
   }
 
   async function handleNewFromChecked() {
@@ -773,16 +775,7 @@
       return
     }
 
-    // Allow shortcuts when an input is focused but not actively being used.
-    // The revset input can inadvertently receive focus after DOM re-renders.
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
-      // Only Cmd+K and Escape should work from inputs
-      if (e.key === 'Escape') {
-        (target as HTMLElement).blur()
-        return
-      }
-      return
-    }
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
 
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
