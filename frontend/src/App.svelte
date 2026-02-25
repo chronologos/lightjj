@@ -404,80 +404,45 @@
     loadFilesForRevset(revset)
   })
 
-  async function handleAbandon(changeId: string) {
+  async function runMutation(
+    fn: () => Promise<{ output: string }>,
+    successMsg: string,
+    opts?: { before?: () => void, after?: () => void },
+  ) {
     try {
-      const result = await api.abandon([changeId])
-      lastAction = `Abandoned ${changeId.slice(0, 8)}`
+      opts?.before?.()
+      const result = await fn()
+      lastAction = successMsg
       commandOutput = result.output
+      opts?.after?.()
       await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    } catch (e) { showError(e) }
   }
 
-  async function handleAbandonChecked() {
+  const handleAbandon = (id: string) =>
+    runMutation(() => api.abandon([id]), `Abandoned ${id.slice(0, 8)}`)
+
+  const handleNew = (id: string) =>
+    runMutation(() => api.newRevision([id]), `Created new revision from ${id.slice(0, 8)}`)
+
+  const handleEdit = (id: string) =>
+    runMutation(() => api.edit(id), `Editing ${id.slice(0, 8)}`)
+
+  const handleUndo = () =>
+    runMutation(() => api.undo(), 'Undo successful')
+
+  function handleAbandonChecked() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    try {
-      const result = await api.abandon(revs)
-      lastAction = revs.length > 1
-        ? `Abandoned ${revs.length} revisions`
-        : `Abandoned ${revs[0].slice(0, 8)}`
-      commandOutput = result.output
-      clearChecks()
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    const msg = revs.length > 1 ? `Abandoned ${revs.length} revisions` : `Abandoned ${revs[0].slice(0, 8)}`
+    runMutation(() => api.abandon(revs), msg, { after: clearChecks })
   }
 
-  async function handleNew(changeId: string) {
-    try {
-      const result = await api.newRevision([changeId])
-      lastAction = `Created new revision from ${changeId.slice(0, 8)}`
-      commandOutput = result.output
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
-  }
-
-  async function handleNewFromChecked() {
+  function handleNewFromChecked() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    try {
-      const result = await api.newRevision(revs)
-      lastAction = revs.length > 1
-        ? `Created new revision from ${revs.length} revisions`
-        : `Created new revision from ${revs[0].slice(0, 8)}`
-      commandOutput = result.output
-      clearChecks()
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
-  }
-
-  async function handleEdit(changeId: string) {
-    try {
-      const result = await api.edit(changeId)
-      lastAction = `Editing ${changeId.slice(0, 8)}`
-      commandOutput = result.output
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
-  }
-
-  async function handleUndo() {
-    try {
-      const result = await api.undo()
-      lastAction = 'Undo successful'
-      commandOutput = result.output
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    const msg = revs.length > 1 ? `Created new revision from ${revs.length} revisions` : `Created new revision from ${revs[0].slice(0, 8)}`
+    runMutation(() => api.newRevision(revs), msg, { after: clearChecks })
   }
 
   async function handleDescribe() {
@@ -531,70 +496,51 @@
     }
   }
 
-  async function handleGitOp(type: 'push' | 'fetch', flags: string[]) {
-    try {
-      const result = type === 'push' ? await api.gitPush(flags) : await api.gitFetch(flags)
-      lastAction = `Git ${type} complete`
-      commandOutput = result.output
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
-  }
+  const handleGitOp = (type: 'push' | 'fetch', flags: string[]) =>
+    runMutation(
+      () => type === 'push' ? api.gitPush(flags) : api.gitFetch(flags),
+      `Git ${type} complete`,
+    )
 
-  async function handleBookmarkSet(name: string) {
+  function handleBookmarkSet(name: string) {
     if (!selectedRevision) return
-    try {
-      const result = await api.bookmarkSet(selectedRevision.commit.change_id, name)
-      bookmarkInputOpen = false
-      lastAction = `Set bookmark ${name}`
-      commandOutput = result.output
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    runMutation(
+      () => api.bookmarkSet(selectedRevision!.commit.change_id, name),
+      `Set bookmark ${name}`,
+      { before: () => { bookmarkInputOpen = false } },
+    )
   }
 
-  async function handleBookmarkOp(op: BookmarkOp) {
+  function handleBookmarkOp(op: BookmarkOp) {
     if (op.action === 'move' && !selectedRevision) return
-    try {
-      const changeId = selectedRevision?.commit.change_id ?? ''
-      const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
-        move: () => api.bookmarkMove(op.bookmark, changeId),
-        delete: () => api.bookmarkDelete(op.bookmark),
-        forget: () => api.bookmarkForget(op.bookmark),
-        track: () => api.bookmarkTrack(op.bookmark, op.remote!),
-        untrack: () => api.bookmarkUntrack(op.bookmark, op.remote!),
-      }
-      const result = await actions[op.action]()
-      bookmarkModalOpen = false
-      lastAction = `${op.action} ${op.bookmark}`
-      commandOutput = result.output
-      await loadLog()
-    } catch (e) {
-      showError(e)
+    const changeId = selectedRevision?.commit.change_id ?? ''
+    const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
+      move: () => api.bookmarkMove(op.bookmark, changeId),
+      delete: () => api.bookmarkDelete(op.bookmark),
+      forget: () => api.bookmarkForget(op.bookmark),
+      track: () => api.bookmarkTrack(op.bookmark, op.remote!),
+      untrack: () => api.bookmarkUntrack(op.bookmark, op.remote!),
     }
+    runMutation(
+      actions[op.action],
+      `${op.action} ${op.bookmark}`,
+      { before: () => { bookmarkModalOpen = false } },
+    )
   }
 
-  async function handleResolve(file: string, tool: ':ours' | ':theirs') {
+  function handleResolve(file: string, tool: ':ours' | ':theirs') {
     const revision = selectedRevision?.commit.change_id
     if (!revision) return
-    try {
-      await api.resolve(revision, file, tool)
-      lastAction = `Resolved ${file.split('/').pop()} with ${tool.slice(1)}`
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    runMutation(
+      () => api.resolve(revision, file, tool),
+      `Resolved ${file.split('/').pop()} with ${tool.slice(1)}`,
+    )
   }
 
   function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    // Ensure mutual exclusion
-    squash.cancel()
-    split.cancel()
-    squashSelectedFiles.clear()
+    cancelInlineModes()
     rebase.enter(revs)
   }
 
@@ -605,13 +551,15 @@
       lastAction = 'Cannot rebase onto source revision'
       return
     }
+    // Capture mode state before cancelling
+    const { sources, sourceMode, targetMode } = rebase
+    const modeLabel = targetModeLabel[targetMode]
     rebase.cancel()
     try {
-      const result = await api.rebase(rebase.sources, destination, rebase.sourceMode, rebase.targetMode)
-      const modeLabel = targetModeLabel[rebase.targetMode]
-      lastAction = rebase.sources.length > 1
-        ? `Rebased ${rebase.sources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
-        : `Rebased ${rebase.sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
+      const result = await api.rebase(sources, destination, sourceMode, targetMode)
+      lastAction = sources.length > 1
+        ? `Rebased ${sources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
+        : `Rebased ${sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
       commandOutput = result.output
       clearChecks()
       await loadLog()
@@ -623,10 +571,7 @@
   function enterSquashMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    // Ensure mutual exclusion
-    rebase.cancel()
-    split.cancel()
-    squashSelectedFiles.clear()
+    cancelInlineModes()
     // Initialize with all current changed files (source's files) and snapshot the count
     for (const f of changedFiles) squashSelectedFiles.add(f.path)
     squashTotalFiles = changedFiles.length
@@ -659,17 +604,18 @@
       const files = squashSelectedFiles.size < squashTotalFiles
         ? [...squashSelectedFiles]
         : undefined
-      const result = await api.squash(squash.sources, destination, {
+      const { sources, keepEmptied, useDestMsg } = squash
+      const result = await api.squash(sources, destination, {
         files,
-        keepEmptied: squash.keepEmptied || undefined,
-        useDestinationMessage: squash.useDestMsg || undefined,
+        keepEmptied: keepEmptied || undefined,
+        useDestinationMessage: useDestMsg || undefined,
       })
       // W1: only exit mode after successful API call
       squash.cancel()
       squashSelectedFiles.clear()
-      lastAction = squash.sources.length > 1
-        ? `Squashed ${squash.sources.length} revisions into ${destination.slice(0, 8)}`
-        : `Squashed ${squash.sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
+      lastAction = sources.length > 1
+        ? `Squashed ${sources.length} revisions into ${destination.slice(0, 8)}`
+        : `Squashed ${sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
       commandOutput = result.output
       clearChecks()
       await loadLog()
@@ -689,11 +635,7 @@
 
   function enterSplitMode() {
     if (!selectedRevision || checkedRevisions.size > 0) return
-    // Ensure mutual exclusion
-    rebase.cancel()
-    squash.cancel()
-    // Initialize: all files checked (stay), user unchecks what to split out
-    squashSelectedFiles.clear()
+    cancelInlineModes()
     for (const f of changedFiles) squashSelectedFiles.add(f.path)
     squashTotalFiles = changedFiles.length
     split.enter(selectedRevision.commit.change_id)
@@ -744,12 +686,16 @@
     contextMenuOpen = false
   }
 
-  function closeAllModals() {
-    closeModals()
+  function cancelInlineModes() {
     rebase.cancel()
     squash.cancel()
     split.cancel()
     squashSelectedFiles.clear()
+  }
+
+  function closeAllModals() {
+    closeModals()
+    cancelInlineModes()
   }
 
   function openBookmarkModal(filter?: string) {
@@ -858,32 +804,29 @@
 
     // Split mode: no j/k (operates on fixed revision), Enter/Escape/p
     if (split.active) {
-      e.preventDefault()
-      if (e.key === 'Enter') { executeSplit(); return }
-      if (e.key === 'Escape') { split.cancel(); squashSelectedFiles.clear(); return }
-      split.handleKey(e.key)
+      if (e.key === 'Enter') { e.preventDefault(); executeSplit(); return }
+      if (e.key === 'Escape') { e.preventDefault(); split.cancel(); squashSelectedFiles.clear(); return }
+      if (split.handleKey(e.key)) { e.preventDefault(); return }
       return
     }
 
     // Squash mode: j/k navigate (cursor only, keep source diff), Enter/Escape, e/d toggles
     if (squash.active) {
-      e.preventDefault()
-      if (e.key === 'j' && selectedIndex < revisions.length - 1) { selectRevisionCursorOnly(selectedIndex + 1); return }
-      if (e.key === 'k' && selectedIndex > 0) { selectRevisionCursorOnly(selectedIndex - 1); return }
-      if (e.key === 'Enter') { executeSquash(); return }
-      if (e.key === 'Escape') { squash.cancel(); squashSelectedFiles.clear(); return }
-      squash.handleKey(e.key)
+      if (e.key === 'j' && selectedIndex < revisions.length - 1) { e.preventDefault(); selectRevisionCursorOnly(selectedIndex + 1); return }
+      if (e.key === 'k' && selectedIndex > 0) { e.preventDefault(); selectRevisionCursorOnly(selectedIndex - 1); return }
+      if (e.key === 'Enter') { e.preventDefault(); executeSquash(); return }
+      if (e.key === 'Escape') { e.preventDefault(); squash.cancel(); squashSelectedFiles.clear(); return }
+      if (squash.handleKey(e.key)) { e.preventDefault(); return }
       return
     }
 
     // Rebase mode: j/k navigate, Enter/Escape, source/target mode keys
     if (rebase.active) {
-      e.preventDefault()
-      if (e.key === 'j' && selectedIndex < revisions.length - 1) { selectRevision(selectedIndex + 1); return }
-      if (e.key === 'k' && selectedIndex > 0) { selectRevision(selectedIndex - 1); return }
-      if (e.key === 'Enter') { executeRebase(); return }
-      if (e.key === 'Escape') { rebase.cancel(); return }
-      rebase.handleKey(e.key)
+      if (e.key === 'j' && selectedIndex < revisions.length - 1) { e.preventDefault(); selectRevision(selectedIndex + 1); return }
+      if (e.key === 'k' && selectedIndex > 0) { e.preventDefault(); selectRevision(selectedIndex - 1); return }
+      if (e.key === 'Enter') { e.preventDefault(); executeRebase(); return }
+      if (e.key === 'Escape') { e.preventDefault(); rebase.cancel(); return }
+      if (rebase.handleKey(e.key)) { e.preventDefault(); return }
       return
     }
 
@@ -981,10 +924,7 @@
         loadLog()
         break
       case 'e':
-        if (checkedRevisions.size > 1) {
-          e.preventDefault()
-          lastAction = 'Describe works on a single revision — clear checks first'
-        } else if (selectedRevision) {
+        if (selectedRevision && checkedRevisions.size <= 1) {
           e.preventDefault()
           startDescriptionEdit()
         }
@@ -1022,6 +962,7 @@
       case 'B':
         if (selectedRevision && checkedRevisions.size === 0) {
           e.preventDefault()
+          closeAllModals()
           bookmarkInputOpen = true
         }
         break
