@@ -43,6 +43,7 @@
   let filesGeneration: number = 0
   let descGeneration: number = 0
   let evologGeneration: number = 0
+  let oplogGeneration: number = 0
   // Debounce timer for diff/files loading during rapid j/k navigation
   let navDebounceTimer: number | undefined
   let evologOpen: boolean = $state(false)
@@ -706,19 +707,23 @@
 
   async function toggleOplog() {
     oplogOpen = !oplogOpen
-    if (oplogOpen && oplogEntries.length === 0) {
+    if (oplogOpen) {
       await loadOplog()
     }
   }
 
   async function loadOplog() {
+    const gen = ++oplogGeneration
     oplogLoading = true
     try {
-      oplogEntries = await api.oplog(50)
+      const result = await api.oplog(50)
+      if (gen !== oplogGeneration) return
+      oplogEntries = result
     } catch (e) {
+      if (gen !== oplogGeneration) return
       showError(e)
     } finally {
-      oplogLoading = false
+      if (gen === oplogGeneration) oplogLoading = false
     }
   }
 
@@ -732,7 +737,6 @@
   async function loadEvolog(changeId: string) {
     const gen = ++evologGeneration
     evologLoading = true
-    evologContent = ''
     try {
       const result = await api.evolog(changeId)
       if (gen !== evologGeneration) return
@@ -994,7 +998,7 @@
     onnavigate={(view) => {
       if (inlineMode) return
       activeView = view
-      if (view === 'operations' && oplogEntries.length === 0) loadOplog()
+      if (view === 'operations') loadOplog()
     }}
     onopenpalette={() => { closeModals(); paletteOpen = true }}
     onthemetoggle={toggleTheme}
