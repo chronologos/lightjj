@@ -262,4 +262,14 @@ describe('filePathFromHeader', () => {
   it('extracts path with spaces', () => {
     expect(filePathFromHeader('Modified regular file path with spaces/file.go:')).toBe('path with spaces/file.go')
   })
+
+  it('uses destination (b/) path for git-style copy/rename headers', () => {
+    // Copies produce "diff --git a/source b/destination" where source != destination.
+    // Using the b/ path avoids duplicate keys when the same source is copied to multiple destinations.
+    expect(filePathFromHeader('diff --git a/src/old.go b/pkg/new.go')).toBe('pkg/new.go')
+  })
+
+  it('extracts git-style path with spaces', () => {
+    expect(filePathFromHeader('diff --git a/path with spaces/file.ts b/path with spaces/file.ts')).toBe('path with spaces/file.ts')
+  })
 })

@@ -54,7 +54,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     DiffFileView.svelte    — Individual file diff with collapsible sections, context expansion
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
-    Toolbar.svelte         — Top toolbar with repo info and actions
+    Sidebar.svelte         — Left sidebar with navigation, actions, and theme toggle
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
     BookmarkModal.svelte   — Bookmark management modal
     BookmarkInput.svelte   — Bookmark name input with autocomplete
@@ -95,7 +95,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Change IDs show full short form with highlighted prefix.** `commit.change_prefix` determines how many characters to highlight. Same for `commit_prefix`.
 - **Rebase mode is inline, not a modal.** Press `R` to enter rebase mode. `j`/`k` navigate the destination; Enter executes; Escape cancels. Source mode (`r`/`s`/`b`) and target mode (`o`/`a`/`i`) can be switched while in rebase mode. Source and destination commits are marked with inline badges directly in the revision graph.
 - **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` gutter markers are colored blue; working-copy `@` markers are colored green.
-- **View mode toggle** — The revision panel header has a Log/Tracked toggle (`t` key). Tracked view uses the `tracked_remote_bookmarks()` revset to show remote work.
+- **View mode toggle** — The revision panel header has a Log/Tracked toggle (click or command palette). Tracked view uses the `tracked_remote_bookmarks()` revset to show remote work. `t` key toggles theme.
 
 ### Testing patterns
 

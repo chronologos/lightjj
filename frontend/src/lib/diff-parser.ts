@@ -7,6 +7,7 @@ export interface DiffLine {
 
 export interface DiffHunk {
   header: string
+  oldStart: number  // line number where this hunk starts in the old file
   newStart: number  // line number where this hunk starts in the new file
   newCount: number  // number of lines in the new file version
   lines: DiffLine[]
@@ -33,11 +34,12 @@ export function parseDiffContent(raw: string): DiffFile[] {
       files.push(currentFile)
       currentHunk = null
     } else if (line.startsWith('@@')) {
-      const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
+      const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
       currentHunk = {
         header: line,
-        newStart: hunkMatch ? parseInt(hunkMatch[1]) : 1,
-        newCount: hunkMatch ? parseInt(hunkMatch[2] ?? '1') : 1,
+        oldStart: hunkMatch ? parseInt(hunkMatch[1]) : 1,
+        newStart: hunkMatch ? parseInt(hunkMatch[2]) : 1,
+        newCount: hunkMatch ? parseInt(hunkMatch[3] ?? '1') : 1,
         lines: [],
       }
       if (currentFile) {
@@ -75,7 +77,9 @@ export function parseDiffContent(raw: string): DiffFile[] {
   return files
 }
 
-// Extract file path from diff header for matching with changedFiles
+// Extract file path from diff header for matching with changedFiles.
+// Uses the b/ (destination) path from git-style headers to handle copies/renames
+// correctly — the a/ path is the source and can appear in multiple diff entries.
 export function filePathFromHeader(header: string): string {
   // jj headers: "Modified regular file src/main.go:" or "Added regular file new.go:" etc.
   // Also git-style: "diff --git a/file b/file"
@@ -83,8 +87,9 @@ export function filePathFromHeader(header: string): string {
   // Match jj-style: "Modified regular file path/to/file:"
   const jjMatch = firstLine.match(/^(?:Modified|Added|Deleted|Copied|Renamed)\s+(?:regular\s+)?file\s+(.+?)(?::)?$/)
   if (jjMatch) return jjMatch[1]
-  // Match git-style: "diff --git a/path b/path"
-  const gitMatch = firstLine.match(/^diff --git a\/(.+?) b\//)
+  // Match git-style: "diff --git a/source b/destination"
+  // Use b/ (destination) to avoid duplicate keys on copies/renames
+  const gitMatch = firstLine.match(/^diff --git a\/.+? b\/(.+)$/)
   if (gitMatch) return gitMatch[1]
   return firstLine
 }

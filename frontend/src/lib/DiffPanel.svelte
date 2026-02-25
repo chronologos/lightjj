@@ -100,17 +100,37 @@
         conflictFileDiffs = new Map(conflictFileDiffs).set(f.path, {
           header: `Conflicted file: ${f.path}`,
           filePath: f.path,
-          hunks: [{ header: '@@ conflict @@', newStart: 1, newCount: lines.length, lines }],
+          hunks: [{ header: '@@ conflict @@', oldStart: 1, newStart: 1, newCount: lines.length, lines }],
         })
       }).catch(() => {})
     }
   })
+
+  // File suffixes where word-level diffs add noise rather than value
+  const SKIP_WORD_DIFF_SUFFIXES = [
+    '.svg', '.xml', '.csv', '.tsv', '.json', '.lock', '.map',
+    '.min.js', '.min.css', '.bundle.js',
+  ]
+
+  // Max total lines per file before skipping word diff (avoids blocking main thread)
+  const WORD_DIFF_LINE_LIMIT = 1000
+  // Auto-collapse files larger than this to prevent DOM flooding
+  const AUTO_COLLAPSE_LINE_LIMIT = 500
+
+  function shouldSkipWordDiff(filePath: string, lineCount: number): boolean {
+    if (lineCount > WORD_DIFF_LINE_LIMIT) return true
+    const lower = filePath.toLowerCase()
+    return SKIP_WORD_DIFF_SUFFIXES.some(suffix => lower.endsWith(suffix))
+  }
+
   // Memoize word diffs — recomputed when parsedDiff or expandedDiffs change
   let wordDiffMap = $derived.by(() => {
     const map = new Map<string, Map<number, WordSpan[]>>()
     for (const file of parsedDiff) {
       const effectiveFile = expandedDiffs.get(file.filePath) ?? file
       const filePath = effectiveFile.filePath
+      const lineCount = effectiveFile.hunks.reduce((sum, h) => sum + h.lines.length, 0)
+      if (shouldSkipWordDiff(filePath, lineCount)) continue
       for (let hunkIdx = 0; hunkIdx < effectiveFile.hunks.length; hunkIdx++) {
         map.set(`${filePath}:${hunkIdx}`, computeWordDiffs(effectiveFile.hunks[hunkIdx]))
       }
@@ -212,8 +232,22 @@
     const saved = currentId ? collapseStateCache.get(currentId) : null
     if (saved) {
       for (const path of saved) collapsedFiles.add(path)
+      // Suppress auto-collapse for cached revisions — user's manual expand/collapse
+      // choices are already preserved in the cache
+      lastAutoCollapseDiff = diffContent
     }
     lastRevisionId = currentId
+  })
+
+  // Auto-collapse large files to prevent DOM flooding
+  let lastAutoCollapseDiff = ''
+  $effect(() => {
+    if (!diffContent || diffContent === lastAutoCollapseDiff) return
+    lastAutoCollapseDiff = diffContent
+    for (const file of parsedDiff) {
+      const lineCount = file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
+      if (lineCount > AUTO_COLLAPSE_LINE_LIMIT) collapsedFiles.add(file.filePath)
+    }
   })
 
   // --- Expand context ---
@@ -598,12 +632,6 @@
     font-family: inherit;
   }
 
-  .detail-description {
-    color: var(--subtext0);
-    white-space: pre-wrap;
-    line-height: 1.4;
-  }
-
   .describe-saved {
     color: var(--green);
     font-size: 11px;
@@ -641,7 +669,8 @@
     background: var(--mantle);
     border-bottom: 1px solid var(--surface0);
     flex-shrink: 0;
-    overflow-x: auto;
+    overflow: hidden;
+    min-width: 0;
   }
 
   .file-list-label {
@@ -667,8 +696,9 @@
   .file-tabs {
     display: flex;
     align-items: center;
-    gap: 0;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    max-height: 52px;
+    overflow-y: auto;
     flex: 1;
   }
 
@@ -731,18 +761,6 @@
   .split-file-check {
     accent-color: var(--teal);
   }
-
-  .file-type-indicator {
-    font-weight: 700;
-    font-size: 10px;
-    margin-right: 3px;
-    color: var(--subtext0);
-  }
-
-  .file-type-A { color: var(--green); }
-  .file-type-D { color: var(--red); }
-  .file-type-M { color: var(--yellow); }
-  .file-type-C { color: var(--red); font-weight: 800; }
 
   .conflict-count-label {
     color: var(--red);
@@ -814,8 +832,7 @@
     flex-shrink: 0;
   }
 
-  .diff-toolbar-left,
-  .diff-toolbar-right {
+  .diff-toolbar-left {
     display: flex;
     align-items: center;
     gap: 4px;

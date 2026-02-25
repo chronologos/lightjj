@@ -10,7 +10,7 @@ function makeFile(filePath: string, lines: { type: 'add' | 'remove' | 'context';
     header: `diff --git a/${filePath} b/${filePath}`,
     filePath,
     hunks: lines.length > 0
-      ? [{ header: '@@ -1 +1 @@', newStart: 1, newCount: 1, lines }]
+      ? [{ header: '@@ -1 +1 @@', oldStart: 1, newStart: 1, newCount: 1, lines }]
       : [],
   }
 }
@@ -306,8 +306,8 @@ describe('DiffFileView', () => {
         header: 'diff --git a/test.go b/test.go',
         filePath: 'test.go',
         hunks: [
-          { header: '@@ -1,3 +1,3 @@', newStart: 5, newCount: 3, lines: [{ type: 'context', content: ' a' }] },
-          { header: '@@ -10,3 +10,3 @@', newStart: 15, newCount: 3, lines: [{ type: 'context', content: ' b' }] },
+          { header: '@@ -1,3 +1,3 @@', oldStart: 1, newStart: 5, newCount: 3, lines: [{ type: 'context', content: ' a' }] },
+          { header: '@@ -10,3 +10,3 @@', oldStart: 10, newStart: 15, newCount: 3, lines: [{ type: 'context', content: ' b' }] },
         ],
       }
       const { container } = render(DiffFileView, {
@@ -322,8 +322,8 @@ describe('DiffFileView', () => {
         header: 'diff --git a/test.go b/test.go',
         filePath: 'test.go',
         hunks: [
-          { header: '@@ -1,3 +1,3 @@', newStart: 5, newCount: 3, lines: [{ type: 'context', content: ' a' }] },
-          { header: '@@ -10,3 +10,3 @@', newStart: 15, newCount: 3, lines: [{ type: 'context', content: ' b' }] },
+          { header: '@@ -1,3 +1,3 @@', oldStart: 1, newStart: 5, newCount: 3, lines: [{ type: 'context', content: ' a' }] },
+          { header: '@@ -10,3 +10,3 @@', oldStart: 10, newStart: 15, newCount: 3, lines: [{ type: 'context', content: ' b' }] },
         ],
       }
       const { container } = render(DiffFileView, {

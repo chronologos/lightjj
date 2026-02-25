@@ -3,7 +3,7 @@ import { toSplitView } from './split-view'
 import type { DiffHunk } from './diff-parser'
 
 function makeHunk(lines: { type: 'add' | 'remove' | 'context'; content: string }[]): DiffHunk {
-  return { header: '@@ -1 +1 @@', newStart: 1, newCount: 1, lines }
+  return { header: '@@ -1 +1 @@', oldStart: 1, newStart: 1, newCount: 1, lines }
 }
 
 describe('toSplitView', () => {

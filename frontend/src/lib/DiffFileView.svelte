@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { DiffFile, DiffLine } from './diff-parser'
-  import { toSplitView } from './split-view'
+  import type { DiffFile, DiffHunk, DiffLine } from './diff-parser'
+  import { toSplitView, type SplitLine } from './split-view'
   import type { WordSpan } from './word-diff'
   import type { FileChange } from './api'
   import { findConflicts, type ConflictRegion } from './conflict-parser'
@@ -22,6 +22,39 @@
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
+
+  function computeLineNumbers(hunk: DiffHunk): { old: number | null; new: number | null }[] {
+    let oldLine = hunk.oldStart
+    let newLine = hunk.newStart
+    return hunk.lines.map(line => {
+      if (line.type === 'context') return { old: oldLine++, new: newLine++ }
+      if (line.type === 'remove') return { old: oldLine++, new: null }
+      if (line.type === 'add') return { old: null, new: newLine++ }
+      return { old: null, new: null }
+    })
+  }
+
+  function computeSplitLineNumbers(hunks: DiffHunk[], splitLines: SplitLine[]): { oldLeft: number | null; newRight: number | null }[] {
+    const hunkOld = hunks.map(h => h.oldStart)
+    const hunkNew = hunks.map(h => h.newStart)
+    return splitLines.map(sl => {
+      let oldLeft: number | null = null
+      let newRight: number | null = null
+      if (sl.left && sl.left.line.type !== 'header') {
+        const hi = sl.left.hunkIdx
+        if (sl.left.line.type === 'remove' || sl.left.line.type === 'context') {
+          oldLeft = hunkOld[hi]++
+        }
+      }
+      if (sl.right && sl.right.line.type !== 'header') {
+        const hi = sl.right.hunkIdx
+        if (sl.right.line.type === 'add' || sl.right.line.type === 'context') {
+          newRight = hunkNew[hi]++
+        }
+      }
+      return { oldLeft, newRight }
+    })
+  }
 
   interface ConflictLineMeta {
     cssClass: string
@@ -64,20 +97,21 @@
   })
 </script>
 
-{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined)}
+{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[])}
+  {@const nums = lineNumbers}
   {#if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
       class:diff-add={line.type === 'add'}
       class:diff-remove={line.type === 'remove'}
       class:diff-context={line.type === 'context'}
-    >{@html highlightedLines.get(hlKey)}</div>
+    >{#each nums as n}<span class="line-num">{n ?? ''}</span>{/each}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
       class="diff-line"
       class:diff-add={line.type === 'add'}
       class:diff-remove={line.type === 'remove'}
-    ><span class="diff-prefix">{line.content[0]}</span>{#each spans as span}{#if span.changed}<span
+    >{#each nums as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{line.content[0]}</span>{#each spans as span}{#if span.changed}<span
           class="word-change"
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
   {:else}
@@ -86,7 +120,7 @@
       class:diff-add={line.type === 'add'}
       class:diff-remove={line.type === 'remove'}
       class:diff-context={line.type === 'context'}
-    >{line.content}</div>
+    >{#each nums as n}<span class="line-num">{n ?? ''}</span>{/each}{line.content}</div>
   {/if}
 {/snippet}
 
@@ -132,28 +166,29 @@
         </button>
       {/if}
       {@const splitLines = toSplitView(file.hunks)}
+      {@const splitNums = computeSplitLineNumbers(file.hunks, splitLines)}
       <div class="split-view">
         <div class="split-col split-left">
-          {#each splitLines as sl}
+          {#each splitLines as sl, si}
             {#if sl.left?.line.type === 'header'}
               {#if !isExpanded}<div class="diff-hunk-header">{sl.left.line.content}</div>{/if}
             {:else if sl.left}
               {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.left.hunkIdx}`)?.get(sl.left.lineIdx)}
-              {@render diffLine(sl.left.line, slKey, spans)}
+              {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft])}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
           {/each}
         </div>
         <div class="split-col split-right">
-          {#each splitLines as sl}
+          {#each splitLines as sl, si}
             {#if sl.right?.line.type === 'header'}
               {#if !isExpanded}<div class="diff-hunk-header">{sl.right.line.content}</div>{/if}
             {:else if sl.right}
               {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.right.hunkIdx}`)?.get(sl.right.lineIdx)}
-              {@render diffLine(sl.right.line, srKey, spans)}
+              {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight])}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
@@ -181,11 +216,13 @@
           {/if}
           <div class="diff-hunk-header">{hunk.header}</div>
         {/if}
+        {@const lineNums = computeLineNumbers(hunk)}
         <div class="diff-lines">
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
             {@const spans = wordDiffs.get(lineIdx)}
             {@const cm = conflictData?.lineMeta.get(hunkIdx)?.get(lineIdx)}
+            {@const ln = lineNums[lineIdx]}
             {#if cm}
               <div
                 class="conflict-line {cm.cssClass}"
@@ -201,10 +238,10 @@
                     <button class="resolve-btn-inline resolve-inline-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
                   </div>
                 {/if}
-                {@render diffLine(line, hlKey, spans)}
+                {@render diffLine(line, hlKey, spans, [ln.old, ln.new])}
               </div>
             {:else}
-              {@render diffLine(line, hlKey, spans)}
+              {@render diffLine(line, hlKey, spans, [ln.old, ln.new])}
             {/if}
           {/each}
         </div>
@@ -342,6 +379,7 @@
   }
 
   .diff-lines {
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
   }
@@ -350,6 +388,18 @@
     padding: 0 12px;
     white-space: pre-wrap;
     word-break: break-all;
+  }
+
+  .line-num {
+    display: inline-block;
+    min-width: 4ch;
+    text-align: right;
+    padding-right: 1.5ch;
+    color: var(--surface2);
+    user-select: none;
+    -webkit-user-select: none;
+    font-size: 11px;
+    opacity: 0.6;
   }
 
   .diff-add {
@@ -401,6 +451,9 @@
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
   }
 
   .split-left {
