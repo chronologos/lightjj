@@ -13,10 +13,7 @@
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
-  type SourceMode = '-r' | '-s' | '-b'
-  type TargetMode = '-d' | '--insert-after' | '--insert-before'
-
-  const targetModeLabel: Record<TargetMode, string> = { '-d': 'onto', '--insert-after': 'after', '--insert-before': 'before' }
+  import { createRebaseMode, createSquashMode, createSplitMode, targetModeLabel } from './lib/modes.svelte'
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])
@@ -60,21 +57,11 @@
   let bookmarkModalFilter: string = $state('')
   let bookmarkInputOpen: boolean = $state(false)
   let gitModalOpen: boolean = $state(false)
-  let rebaseMode: boolean = $state(false)
-  let rebaseSources: string[] = $state([])
-  let rebaseSourceMode: SourceMode = $state('-r')
-  let rebaseTargetMode: TargetMode = $state('-d')
-
-  let squashMode: boolean = $state(false)
-  let squashSources: string[] = $state([])
-  let squashKeepEmptied: boolean = $state(false)
-  let squashUseDestMsg: boolean = $state(false)
+  const rebase = createRebaseMode()
+  const squash = createSquashMode()
+  const split = createSplitMode()
   let squashSelectedFiles = new SvelteSet<string>()
   let squashTotalFiles: number = $state(0) // snapshot of file count at entry time
-
-  let splitMode: boolean = $state(false)
-  let splitRevision: string = $state('')
-  let splitParallel: boolean = $state(false)
 
   let activeView: 'log' | 'branches' | 'operations' = $state('log')
 
@@ -87,7 +74,7 @@
   let contextMenuOpen: boolean = $state(false)
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen)
-  let inlineMode = $derived(rebaseMode || squashMode || splitMode)
+  let inlineMode = $derived(rebase.active || squash.active || split.active)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
   // --- Theme ---
@@ -411,7 +398,7 @@
   $effect(() => {
     const checked = [...checkedRevisions]
     if (checked.length === 0) return
-    if (squashMode || splitMode) return
+    if (squash.active || split.active) return
     const revset = checked.join('|')
     loadDiffForRevset(revset)
     loadFilesForRevset(revset)
@@ -604,31 +591,27 @@
   function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    // Ensure mutual exclusion with squash/split mode
-    squashMode = false
-    splitMode = false
+    // Ensure mutual exclusion
+    squash.cancel()
+    split.cancel()
     squashSelectedFiles.clear()
-    rebaseSources = revs
-    rebaseSourceMode = '-r'
-    rebaseTargetMode = '-d'
-    rebaseMode = true
+    rebase.enter(revs)
   }
 
   async function executeRebase() {
-    if (!selectedRevision || rebaseSources.length === 0) return
+    if (!selectedRevision || rebase.sources.length === 0) return
     const destination = selectedRevision.commit.change_id
-    // Don't rebase onto self
-    if (rebaseSources.includes(destination)) {
+    if (rebase.sources.includes(destination)) {
       lastAction = 'Cannot rebase onto source revision'
       return
     }
-    rebaseMode = false
+    rebase.cancel()
     try {
-      const result = await api.rebase(rebaseSources, destination, rebaseSourceMode, rebaseTargetMode)
-      const modeLabel = targetModeLabel[rebaseTargetMode]
-      lastAction = rebaseSources.length > 1
-        ? `Rebased ${rebaseSources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
-        : `Rebased ${rebaseSources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
+      const result = await api.rebase(rebase.sources, destination, rebase.sourceMode, rebase.targetMode)
+      const modeLabel = targetModeLabel[rebase.targetMode]
+      lastAction = rebase.sources.length > 1
+        ? `Rebased ${rebase.sources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
+        : `Rebased ${rebase.sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
       commandOutput = result.output
       clearChecks()
       await loadLog()
@@ -640,17 +623,14 @@
   function enterSquashMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
-    // Ensure mutual exclusion with rebase/split mode
-    rebaseMode = false
-    splitMode = false
-    squashSources = revs
-    squashKeepEmptied = false
-    squashUseDestMsg = false
+    // Ensure mutual exclusion
+    rebase.cancel()
+    split.cancel()
     squashSelectedFiles.clear()
     // Initialize with all current changed files (source's files) and snapshot the count
     for (const f of changedFiles) squashSelectedFiles.add(f.path)
     squashTotalFiles = changedFiles.length
-    squashMode = true
+    squash.enter(revs)
     // Move cursor to parent of first source (default squash target)
     const sourceIdx = revisions.findIndex(r => r.commit.change_id === revs[0])
     if (sourceIdx >= 0 && sourceIdx < revisions.length - 1) {
@@ -659,11 +639,11 @@
   }
 
   async function executeSquash() {
-    if (!selectedRevision || squashSources.length === 0) return
+    if (!selectedRevision || squash.sources.length === 0) return
     const destination = selectedRevision.commit.change_id
     // C2: exit mode before guard so user isn't stuck
-    if (squashSources.includes(destination)) {
-      squashMode = false
+    if (squash.sources.includes(destination)) {
+      squash.cancel()
       squashSelectedFiles.clear()
       lastAction = 'Cannot squash into source revision'
       return
@@ -679,17 +659,17 @@
       const files = squashSelectedFiles.size < squashTotalFiles
         ? [...squashSelectedFiles]
         : undefined
-      const result = await api.squash(squashSources, destination, {
+      const result = await api.squash(squash.sources, destination, {
         files,
-        keepEmptied: squashKeepEmptied || undefined,
-        useDestinationMessage: squashUseDestMsg || undefined,
+        keepEmptied: squash.keepEmptied || undefined,
+        useDestinationMessage: squash.useDestMsg || undefined,
       })
       // W1: only exit mode after successful API call
-      squashMode = false
+      squash.cancel()
       squashSelectedFiles.clear()
-      lastAction = squashSources.length > 1
-        ? `Squashed ${squashSources.length} revisions into ${destination.slice(0, 8)}`
-        : `Squashed ${squashSources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
+      lastAction = squash.sources.length > 1
+        ? `Squashed ${squash.sources.length} revisions into ${destination.slice(0, 8)}`
+        : `Squashed ${squash.sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
       commandOutput = result.output
       clearChecks()
       await loadLog()
@@ -710,19 +690,17 @@
   function enterSplitMode() {
     if (!selectedRevision || checkedRevisions.size > 0) return
     // Ensure mutual exclusion
-    rebaseMode = false
-    squashMode = false
-    splitRevision = selectedRevision.commit.change_id
-    splitParallel = false
+    rebase.cancel()
+    squash.cancel()
     // Initialize: all files checked (stay), user unchecks what to split out
     squashSelectedFiles.clear()
     for (const f of changedFiles) squashSelectedFiles.add(f.path)
     squashTotalFiles = changedFiles.length
-    splitMode = true
+    split.enter(selectedRevision.commit.change_id)
   }
 
   async function executeSplit() {
-    if (!splitRevision) return
+    if (!split.revision) return
     // Validate: at least one file must stay (checked) and one must move (unchecked)
     if (squashSelectedFiles.size === squashTotalFiles) {
       error = 'Uncheck at least one file to split out'
@@ -734,11 +712,9 @@
     }
     try {
       const files = [...squashSelectedFiles]
-      const revision = splitRevision
-      const result = await api.split(revision, files, splitParallel || undefined)
-      splitMode = false
-      splitRevision = ''
-      splitParallel = false
+      const revision = split.revision
+      const result = await api.split(revision, files, split.parallel || undefined)
+      split.cancel()
       squashSelectedFiles.clear()
       lastAction = `Split ${revision.slice(0, 8)} (${files.length} files stay)`
       commandOutput = result.output
@@ -751,12 +727,12 @@
   }
 
   let squashFileCount = $derived.by(() => {
-    if (!squashMode || squashTotalFiles === 0) return null
+    if (!squash.active || squashTotalFiles === 0) return null
     return { selected: squashSelectedFiles.size, total: squashTotalFiles }
   })
 
   let splitFileCount = $derived.by(() => {
-    if (!splitMode || squashTotalFiles === 0) return null
+    if (!split.active || squashTotalFiles === 0) return null
     return { selected: squashSelectedFiles.size, total: squashTotalFiles }
   })
 
@@ -770,11 +746,9 @@
 
   function closeAllModals() {
     closeModals()
-    rebaseMode = false
-    squashMode = false
-    splitMode = false
-    splitRevision = ''
-    splitParallel = false
+    rebase.cancel()
+    squash.cancel()
+    split.cancel()
     squashSelectedFiles.clear()
   }
 
@@ -882,104 +856,34 @@
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
 
-    // Split mode: no j/k (operates on fixed revision), Enter executes, Escape cancels, p toggles parallel
-    if (splitMode) {
-      switch (e.key) {
-        case 'Enter':
-          e.preventDefault()
-          executeSplit()
-          break
-        case 'Escape':
-          e.preventDefault()
-          splitMode = false
-          splitRevision = ''
-          splitParallel = false
-          squashSelectedFiles.clear()
-          break
-        case 'p':
-          e.preventDefault()
-          splitParallel = !splitParallel
-          break
-      }
+    // Split mode: no j/k (operates on fixed revision), Enter/Escape/p
+    if (split.active) {
+      e.preventDefault()
+      if (e.key === 'Enter') { executeSplit(); return }
+      if (e.key === 'Escape') { split.cancel(); squashSelectedFiles.clear(); return }
+      split.handleKey(e.key)
       return
     }
 
-    // Squash mode: j/k navigate (cursor only, keep source diff), Enter executes, Escape cancels
-    if (squashMode) {
-      switch (e.key) {
-        case 'j':
-          e.preventDefault()
-          if (selectedIndex < revisions.length - 1) selectRevisionCursorOnly(selectedIndex + 1)
-          break
-        case 'k':
-          e.preventDefault()
-          if (selectedIndex > 0) selectRevisionCursorOnly(selectedIndex - 1)
-          break
-        case 'Enter':
-          e.preventDefault()
-          executeSquash()
-          break
-        case 'Escape':
-          e.preventDefault()
-          squashMode = false
-          squashSelectedFiles.clear()
-          break
-        case 'e':
-          e.preventDefault()
-          squashKeepEmptied = !squashKeepEmptied
-          break
-        case 'd':
-          e.preventDefault()
-          squashUseDestMsg = !squashUseDestMsg
-          break
-      }
+    // Squash mode: j/k navigate (cursor only, keep source diff), Enter/Escape, e/d toggles
+    if (squash.active) {
+      e.preventDefault()
+      if (e.key === 'j' && selectedIndex < revisions.length - 1) { selectRevisionCursorOnly(selectedIndex + 1); return }
+      if (e.key === 'k' && selectedIndex > 0) { selectRevisionCursorOnly(selectedIndex - 1); return }
+      if (e.key === 'Enter') { executeSquash(); return }
+      if (e.key === 'Escape') { squash.cancel(); squashSelectedFiles.clear(); return }
+      squash.handleKey(e.key)
       return
     }
 
-    // Rebase mode: limited keyset — j/k navigate, Enter executes, Escape cancels, mode keys
-    if (rebaseMode) {
-      switch (e.key) {
-        case 'j':
-          e.preventDefault()
-          if (selectedIndex < revisions.length - 1) selectRevision(selectedIndex + 1)
-          break
-        case 'k':
-          e.preventDefault()
-          if (selectedIndex > 0) selectRevision(selectedIndex - 1)
-          break
-        case 'Enter':
-          e.preventDefault()
-          executeRebase()
-          break
-        case 'Escape':
-          e.preventDefault()
-          rebaseMode = false
-          break
-        case 'r':
-          e.preventDefault()
-          rebaseSourceMode = '-r'
-          break
-        case 's':
-          e.preventDefault()
-          rebaseSourceMode = '-s'
-          break
-        case 'b':
-          e.preventDefault()
-          rebaseSourceMode = '-b'
-          break
-        case 'a':
-          e.preventDefault()
-          rebaseTargetMode = '--insert-after'
-          break
-        case 'i':
-          e.preventDefault()
-          rebaseTargetMode = '--insert-before'
-          break
-        case 'o': case 'd':
-          e.preventDefault()
-          rebaseTargetMode = '-d'
-          break
-      }
+    // Rebase mode: j/k navigate, Enter/Escape, source/target mode keys
+    if (rebase.active) {
+      e.preventDefault()
+      if (e.key === 'j' && selectedIndex < revisions.length - 1) { selectRevision(selectedIndex + 1); return }
+      if (e.key === 'k' && selectedIndex > 0) { selectRevision(selectedIndex - 1); return }
+      if (e.key === 'Enter') { executeRebase(); return }
+      if (e.key === 'Escape') { rebase.cancel(); return }
+      rebase.handleKey(e.key)
       return
     }
 
@@ -1200,17 +1104,17 @@
           onrevsetescaped={clearRevsetFilter}
           onviewmodechange={toggleViewMode}
           onbookmarkclick={openBookmarkModal}
-          {rebaseMode}
-          {rebaseSources}
-          {rebaseSourceMode}
-          {rebaseTargetMode}
-          {squashMode}
-          {squashSources}
-          {squashKeepEmptied}
-          {squashUseDestMsg}
-          {splitMode}
-          {splitRevision}
-          {splitParallel}
+          rebaseMode={rebase.active}
+          rebaseSources={rebase.sources}
+          rebaseSourceMode={rebase.sourceMode}
+          rebaseTargetMode={rebase.targetMode}
+          squashMode={squash.active}
+          squashSources={squash.sources}
+          squashKeepEmptied={squash.keepEmptied}
+          squashUseDestMsg={squash.useDestMsg}
+          splitMode={split.active}
+          splitRevision={split.revision}
+          splitParallel={split.parallel}
           isDark={darkMode}
         />
 
@@ -1233,10 +1137,10 @@
           oncanceldescribe={() => { descriptionEditing = false; commitMode = false }}
           ondraftchange={(v) => { descriptionDraft = v }}
           onbookmarkclick={openBookmarkModal}
-          fileSelectionMode={squashMode || splitMode}
+          fileSelectionMode={squash.active || split.active}
           {squashSelectedFiles}
           ontogglefile={toggleSquashFile}
-          {splitMode}
+          splitMode={split.active}
           onresolve={inlineMode ? undefined : handleResolve}
         />
       </div>
@@ -1279,15 +1183,15 @@
     <StatusBar
       {statusText}
       {commandOutput}
-      {rebaseMode}
-      {rebaseSourceMode}
-      {rebaseTargetMode}
-      {squashMode}
-      {squashKeepEmptied}
-      {squashUseDestMsg}
+      rebaseMode={rebase.active}
+      rebaseSourceMode={rebase.sourceMode}
+      rebaseTargetMode={rebase.targetMode}
+      squashMode={squash.active}
+      squashKeepEmptied={squash.keepEmptied}
+      squashUseDestMsg={squash.useDestMsg}
       {squashFileCount}
-      {splitMode}
-      {splitParallel}
+      splitMode={split.active}
+      splitParallel={split.parallel}
       {splitFileCount}
       {activeView}
     />
