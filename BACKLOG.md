@@ -181,6 +181,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [ ] Git push/fetch with progress indication
 - [x] Diff syntax highlighting (language-aware, Shiki like antique)
 - [x] Context expansion at hunk boundaries — "Show N hidden lines" buttons between hunks, click to expand full file context
+- [ ] Parse user aliases from jj config and expose them dynamically in the UI (command palette, context menu)
 - [ ] Search across revisions
 - [x] Themes (light/dark) — Catppuccin Mocha (dark) + Latte (light), toggle via Cmd+K, persisted in localStorage
 - [ ] Syntax highlighting deadline / Web Worker — `codeToHtml` is synchronous and can freeze the UI for seconds on pathological files (e.g., 200-line CSS). Short-term: chunk input into ~30-line batches with yields between. Long-term: move Shiki into a Web Worker so `worker.terminate()` acts as a true cancellation primitive.

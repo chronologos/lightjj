@@ -347,7 +347,8 @@ func TestBookmarkUntrack_NoRemote(t *testing.T) {
 }
 
 func TestCommitWorkingCopy(t *testing.T) {
-	assert.Equal(t, []string{"commit"}, CommitWorkingCopy())
+	assert.Equal(t, []string{"commit", "-m", ""}, CommitWorkingCopy(""))
+	assert.Equal(t, []string{"commit", "-m", "my message"}, CommitWorkingCopy("my message"))
 }
 
 func TestDiffEdit(t *testing.T) {

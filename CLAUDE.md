@@ -30,15 +30,18 @@ internal/
     bookmark_test.go       — Bookmark parser tests
     file_change.go         — FileChange model, DiffStat/DiffSummary parsers, MergeStats
     selected_revisions.go  — Multi-revision selection helper
+    workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (name→path map)
+    workspace_store_test.go — Parser tests with real binary data
   runner/                  — CommandRunner interface + implementations
     runner.go              — Interface definition (Run, RunWithInput, Stream)
     local.go               — LocalRunner: exec("jj", args) with configurable Binary
     ssh.go                 — SSHRunner: wraps jj args in ssh command
     ssh_test.go            — SSH arg escaping tests
   api/                     — HTTP handlers
-    server.go              — Route registration, runMutation, op-id caching, helpers
+    server.go              — Route registration, runMutation, op-id caching, workspace spawning, helpers
     handlers.go            — All endpoint implementations, flag validation
     handlers_test.go       — Handler tests with MockRunner
+    integration_test.go    — Integration tests (build-tagged)
   parser/                  — Graph log parser
     graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[]
     graph_test.go          — Graph parser tests
@@ -55,7 +58,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
     ContextMenu.svelte     — Reusable right-click context menu (positioned at cursor)
-    Sidebar.svelte         — Left sidebar with navigation, actions, and theme toggle
+    Sidebar.svelte         — Left sidebar with navigation, actions, workspace selector, theme toggle
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
     BookmarkModal.svelte   — Bookmark management modal
     BookmarkInput.svelte   — Bookmark name input with autocomplete
@@ -86,6 +89,9 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Use `--color never`** for any jj output the backend will parse. Use `--color always` only if passing through to a terminal.
 - **Use `\x1F` (unit separator)** as the field delimiter in jj templates, not tabs. Tabs can appear in commit descriptions and break parsing.
 - **Parsers return empty slices, not nil.** This ensures JSON serialization produces `[]` not `null`.
+- **`NewServer(runner, repoDir)`** takes the resolved repo dir as second arg. Pass `""` for SSH mode or tests. The `RepoDir` enables workspace store reading and child process spawning.
+- **Workspace store parser** (`internal/jj/workspace_store.go`) manually parses protobuf wire format — no protobuf dependency. The `.jj/repo/workspace_store/index` file has a simple schema: `repeated Entry { string name = 1; string path = 2; }`.
+- **Child process spawning** (`spawnWorkspaceInstance`) validates paths (`filepath.IsAbs` + directory existence), deduplicates by workspace name, and reaps zombies via `go cmd.Wait()`. `Server.Shutdown()` kills all children on SIGINT/SIGTERM.
 
 ### Svelte frontend
 
@@ -97,6 +103,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Rebase mode is inline, not a modal.** Press `R` to enter rebase mode. `j`/`k` navigate the destination; Enter executes; Escape cancels. Source mode (`r`/`s`/`b`) and target mode (`o`/`a`/`i`) can be switched while in rebase mode. Source and destination commits are marked with inline badges directly in the revision graph.
 - **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` gutter markers are colored blue; working-copy `@` markers are colored green.
 - **View mode toggle** — The revision panel header has a Log/Tracked toggle (click or command palette). Tracked view uses the `tracked_remote_bookmarks()` revset to show remote work. `t` key toggles theme.
+- **Multi-workspace awareness** — Sidebar shows current workspace name with a dropdown to open other workspaces in new tabs. `GET /api/workspaces` returns `{ current, workspaces[] }` (enriched with paths from workspace store). `POST /api/workspace/open` spawns a child lightjj instance. `w` key toggles the dropdown. Single-workspace repos show the name without a dropdown. SSH mode gracefully degrades (no paths, no spawning).
 
 ### Testing patterns
 
@@ -115,7 +122,7 @@ func TestHandleAbandon(t *testing.T) {
     runner.Expect(jj.Abandon(revs, false)).SetOutput([]byte(""))
     defer runner.Verify()
 
-    srv := api.NewServer(runner)
+    srv := api.NewServer(runner, "")
     body, _ := json.Marshal(abandonRequest{Revisions: []string{"abc"}})
     req := httptest.NewRequest("POST", "/api/abandon", bytes.NewReader(body))
     w := httptest.NewRecorder()

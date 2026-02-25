@@ -18,7 +18,7 @@ import (
 // newTestServer creates a Server with the op-id command pre-allowed on the mock.
 func newTestServer(runner *testutil.MockRunner) *Server {
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-	return NewServer(runner)
+	return NewServer(runner, "")
 }
 
 // jsonPost creates a POST request with Content-Type: application/json.
@@ -520,7 +520,7 @@ func TestOpIdHeader_Failure(t *testing.T) {
 	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := NewServer(runner)
+	srv := NewServer(runner, "")
 	req := httptest.NewRequest("GET", "/api/log", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -855,7 +855,7 @@ func TestHandleGitPush_RunnerError(t *testing.T) {
 
 func TestHandleCommit(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.CommitWorkingCopy()).SetOutput([]byte("Working copy now at: abc12345"))
+	runner.Expect(jj.CommitWorkingCopy("")).SetOutput([]byte("Working copy now at: abc12345"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -871,7 +871,7 @@ func TestHandleCommit(t *testing.T) {
 
 func TestHandleCommit_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.CommitWorkingCopy()).SetError(errors.New("nothing to commit"))
+	runner.Expect(jj.CommitWorkingCopy("")).SetError(errors.New("nothing to commit"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -992,12 +992,13 @@ func TestHandleWorkspaces(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	var workspaces []jj.Workspace
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &workspaces))
-	require.Len(t, workspaces, 2)
-	assert.Equal(t, "base2", workspaces[0].Name)
-	assert.Equal(t, "skpssuxl", workspaces[0].ChangeId)
-	assert.Equal(t, "default", workspaces[1].Name)
+	var resp workspacesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Workspaces, 2)
+	assert.Equal(t, "base2", resp.Workspaces[0].Name)
+	assert.Equal(t, "skpssuxl", resp.Workspaces[0].ChangeId)
+	assert.Equal(t, "default", resp.Workspaces[1].Name)
+	assert.Equal(t, "", resp.Current) // no RepoDir set in test
 }
 
 func TestHandleWorkspaces_RunnerError(t *testing.T) {
