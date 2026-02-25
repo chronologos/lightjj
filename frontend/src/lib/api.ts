@@ -175,7 +175,7 @@ export const api = {
 
   description: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return request<{ description: string }>(`/api/description?${params}`)
+    return cachedRequest<{ description: string }>('desc:' + revision, `/api/description?${params}`)
   },
 
   files: (revision: string) => {

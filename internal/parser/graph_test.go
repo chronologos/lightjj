@@ -232,3 +232,20 @@ func TestParseGraphLog_WorkingCopiesEmpty(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Nil(t, rows[0].Commit.WorkingCopies)
 }
+
+func TestParseGraphLog_ElidedRevisions(t *testing.T) {
+	// jj outputs "~  (elided revisions)" as a connector line between commits.
+	// The text should be split into Gutter ("~ ") and Content ("(elided revisions)").
+	output := "◆  _PREFIX:k_PREFIX:9a_PREFIX:false\x1fkrwsotqn\x1f9a0cb1d7\x1fimprove ui\x1f\x1f\n" +
+		"~  (elided revisions)\n" +
+		"○  _PREFIX:o_PREFIX:f6_PREFIX:false\x1fozyvxqpo\x1ff69abe99\x1fchild B\x1f\x1f\n"
+
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 2)
+
+	// The elided line should be a connector on the first row
+	require.Len(t, rows[0].GraphLines, 2) // node line + elided connector
+	assert.Equal(t, "~  ", rows[0].GraphLines[1].Gutter)
+	assert.Equal(t, "(elided revisions)", rows[0].GraphLines[1].Content)
+	assert.False(t, rows[0].GraphLines[1].IsNode)
+}

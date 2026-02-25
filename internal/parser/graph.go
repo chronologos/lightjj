@@ -66,10 +66,15 @@ func ParseGraphLog(output string) []GraphRow {
 			rows = append(rows, row)
 			current = &rows[len(rows)-1]
 		} else if current != nil {
-			// It's a connector line (│, ├─╯, etc.) belonging to the current row
-			current.GraphLines = append(current.GraphLines, GraphLine{
-				Gutter: line,
-			})
+			// It's a connector line (│, ├─╯, etc.) belonging to the current row.
+			// Some lines contain text after graph chars, e.g. "~  (elided revisions)".
+			// Split at the first '(' to preserve the text as Content.
+			gl := GraphLine{Gutter: line}
+			if idx := strings.Index(line, "("); idx > 0 {
+				gl.Gutter = line[:idx]
+				gl.Content = line[idx:]
+			}
+			current.GraphLines = append(current.GraphLines, gl)
 		}
 	}
 

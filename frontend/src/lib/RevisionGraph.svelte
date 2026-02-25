@@ -13,9 +13,7 @@
     onselect: (index: number) => void
     oncheck: (changeId: string, index: number) => void
     onrangecheck: (from: number, to: number) => void
-    onedit: (changeId: string) => void
-    onnew: (changeId: string) => void
-    onabandon: (changeId: string) => void
+    oncontextmenu: (changeId: string, x: number, y: number) => void
     onnewfromchecked: () => void
     onabandonchecked: () => void
     onclearchecks: () => void
@@ -40,7 +38,7 @@
 
   let {
     revisions, selectedIndex, checkedRevisions, loading, revsetFilter, viewMode, lastCheckedIndex,
-    onselect, oncheck, onrangecheck, onedit, onnew, onabandon,
+    onselect, oncheck, onrangecheck, oncontextmenu,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
     rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
@@ -52,6 +50,7 @@
 
   interface FlatLine {
     gutter: string
+    content?: string // text content for connector lines (e.g., "(elided revisions)")
     entryIndex: number
     lineKey: string // semantic key within this entry (e.g., 'node', 'bm', 'desc', 'g0')
     isNode: boolean
@@ -112,6 +111,7 @@
         const isNode = gl.is_node ?? (j === 0)
         lines.push({
           gutter: padGutter(gl.gutter),
+          content: gl.content || undefined,
           entryIndex: i,
           lineKey: isNode ? 'node' : `g${graphIdx++}`,
           isNode,
@@ -242,6 +242,11 @@
                 onselect(line.entryIndex)
               }
             }}
+            oncontextmenu={(e: MouseEvent) => {
+              e.preventDefault()
+              if (rebaseMode || squashMode || splitMode) return
+              oncontextmenu(revisions[line.entryIndex].commit.change_id, e.clientX, e.clientY)
+            }}
             role="option"
             tabindex={line.isNode ? 0 : -1}
             aria-selected={selectedIndex === line.entryIndex}
@@ -276,13 +281,6 @@
                 {/if}
                 <span class="description-text">{entry.description || '(no description)'}</span>
               </span>
-              {#if !rebaseMode && !squashMode && !splitMode}
-                <span class="rev-actions" role="group">
-                  <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(entry.commit.change_id) }} title="Edit">edit</button>
-                  <button class="action-btn" onclick={(e: MouseEvent) => { e.stopPropagation(); onnew(entry.commit.change_id) }} title="New (n)">new</button>
-                  <button class="action-btn danger" onclick={(e: MouseEvent) => { e.stopPropagation(); onabandon(entry.commit.change_id) }} title="Abandon">abandon</button>
-                </span>
-              {/if}
             {:else if line.isBookmarkLine}
               {@const entry = revisions[line.entryIndex]}
               <span class="bookmark-line-content">
@@ -311,6 +309,12 @@
                     <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span>
                   </span>
                 {/if}
+              </span>
+            {:else if line.content}
+              <span class="elided-marker">
+                <span class="elided-dots" aria-hidden="true"></span>
+                <span class="elided-label">{line.content}</span>
+                <span class="elided-dots" aria-hidden="true"></span>
               </span>
             {/if}
           </div>
@@ -488,11 +492,14 @@
   .graph-row {
     display: flex;
     align-items: baseline;
-    line-height: 1.15;
+    height: 18px;
+    line-height: 18px;
     font-size: 13px;
     cursor: pointer;
     outline: none;
     -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+    position: relative;
   }
 
   .graph-row:hover:not(.selected) {
@@ -566,7 +573,6 @@
     white-space: pre;
     font-family: var(--font-mono);
     font-size: 12px;
-    line-height: 1.15;
     color: var(--surface2);
     flex-shrink: 0;
   }
@@ -608,10 +614,10 @@
     justify-content: center;
     background: var(--green);
     color: var(--crust);
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 800;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border-radius: 3px;
     flex-shrink: 0;
     line-height: 1;
@@ -635,6 +641,30 @@
   .id-rest {
     color: var(--surface2);
     font-weight: 400;
+  }
+
+  .elided-marker {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .elided-label {
+    color: var(--surface2);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+
+  .elided-dots {
+    flex: 1;
+    min-width: 8px;
+    max-width: 60px;
+    height: 0;
+    border-top: 1px dashed var(--surface1);
   }
 
   .commit-id {
@@ -722,48 +752,6 @@
 
   .wc .description-text {
     color: var(--wc-desc-color);
-  }
-
-  .rev-actions {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 0 6px;
-    opacity: 0;
-    flex-shrink: 0;
-  }
-
-  .graph-row.node-row:hover .rev-actions,
-  .graph-row.node-row:has(+ .graph-row.desc-row:hover) .rev-actions,
-  .graph-row.node-row:has(+ .graph-row.bookmark-row:hover) .rev-actions,
-  .graph-row.node-row:has(+ .graph-row.bookmark-row + .graph-row.desc-row:hover) .rev-actions,
-  .graph-row.node-row.selected .rev-actions {
-    opacity: 1;
-  }
-
-  .action-btn {
-    background: var(--surface0);
-    border: 1px solid var(--surface1);
-    color: var(--subtext0);
-    padding: 1px 5px;
-    border-radius: 3px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 10px;
-    white-space: nowrap;
-    transition: all 0.15s ease;
-    line-height: 1.15;
-  }
-
-  .action-btn:hover {
-    background: var(--surface1);
-    color: var(--text);
-  }
-
-  .action-btn.danger:hover {
-    background: var(--bg-error);
-    border-color: var(--red);
-    color: var(--red);
   }
 
   /* --- Empty states --- */

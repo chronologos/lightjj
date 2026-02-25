@@ -25,13 +25,17 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 
 ### Suggestions
 - [ ] `App.svelte` is 1010 lines — rebase/squash/split state is ambient and threaded through multiple components. Extract to shared module.
-- [ ] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to generic names (`modeSelectedFiles`/`modeTotalFiles`/`toggleFileSelection`) — now shared by squash and split modes.
+- [x] Rename `squashMode` → `fileSelectionMode` in DiffPanel props — partially done; App.svelte still uses `squashMode` internally.
+- [ ] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to generic names in App.svelte — now shared by squash and split modes.
 - [ ] Rename CSS classes `rebase-badge`/`rebase-source`/`rebase-target` to generic `mode-badge-inline`/`badge-source`/`badge-target` — shared across rebase, squash, split.
 - [ ] Squash mode StatusBar file count should say "N/M files to move" (not just "N/M files") for parity with split's "N/M files stay".
 - [ ] Add bulk select/deselect toggle for file checkboxes (applies to squash + split modes).
 - [ ] No list virtualization for large repos (500+ commits).
 - [ ] No HTTP response compression (especially impacts SSH mode).
 - [ ] `highlightDiff` re-highlights all files when one is expanded.
+- [x] Diff parser uses `a/` (source) path from git headers — duplicate keys crash on copy/rename. Fixed to use `b/` (destination).
+- [x] No word-diff skip for non-code files — SVGs/XML/JSON/lock files cause freeze. Added `shouldSkipWordDiff` with extension + line-count limits.
+- [x] No auto-collapse for large diffs — files >500 lines now start collapsed.
 - [x] `onStale` supports only a single callback — second caller silently replaces first.
 - [x] SSH host not validated against flag injection (`-oProxyCommand=...`).
 - [x] 11 command builder functions have no unit tests.
