@@ -211,7 +211,7 @@
   }
 
   .palette-arrow {
-    color: var(--blue);
+    color: var(--amber);
     font-size: 14px;
     flex-shrink: 0;
   }
@@ -297,7 +297,7 @@
   }
 
   .cheatsheet-key {
-    color: var(--yellow);
+    color: var(--amber);
     min-width: 36px;
     font-family: inherit;
     font-size: 11px;

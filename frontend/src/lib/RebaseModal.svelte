@@ -199,8 +199,8 @@
     padding: 1px 6px;
     border-radius: 3px;
     background: var(--bg-active);
-    border: 1px solid var(--blue);
-    color: var(--blue);
+    border: 1px solid var(--amber);
+    color: var(--amber);
     font-weight: 600;
   }
 
@@ -250,7 +250,7 @@
   }
 
   .rb-id-prefix {
-    color: var(--blue);
+    color: var(--amber);
     font-weight: 700;
   }
 

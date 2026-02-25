@@ -196,7 +196,7 @@
 
   .nav-item.nav-active {
     background: var(--bg-selected);
-    color: var(--blue);
+    color: var(--amber);
     font-weight: 500;
   }
 
@@ -216,7 +216,7 @@
   }
 
   .nav-active .nav-key {
-    color: var(--blue);
+    color: var(--amber);
     border-color: transparent;
     opacity: 0.5;
   }
