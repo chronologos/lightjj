@@ -1155,6 +1155,7 @@
           {splitMode}
           {splitRevision}
           {splitParallel}
+          isDark={darkMode}
         />
 
         <DiffPanel
@@ -1284,13 +1285,12 @@
     --subtext1: #e2e2e6;
     --text: #e2e2e6;
 
-    --blue: #ffa726;
+    --amber: #ffa726;
     --green: #66bb6a;
     --red: #ef5350;
-    --yellow: #ffa726;
-    --teal: #26c6da;
-    --peach: #ffa726;
-    --mauve: #ab47bc;
+    --blue: #42a5f5;
+    --purple: #ab47bc;
+    --cyan: #26c6da;
 
     /* Semantic backgrounds */
     --bg-hover: rgba(255,255,255,0.04);
@@ -1328,10 +1328,10 @@
     --conflict-boundary-border: rgba(239,83,80,0.2);
     --conflict-boundary-bg: rgba(239,83,80,0.06);
     --conflict-boundary-color: #8a8a94;
-    --conflict-side1-border: #ffa726;
+    --conflict-side1-border: var(--amber);
     --conflict-side1-bg: rgba(255,167,38,0.06);
     --conflict-side1-marker-bg: rgba(255,167,38,0.1);
-    --conflict-side2-border: #ab47bc;
+    --conflict-side2-border: var(--purple);
     --conflict-side2-bg: rgba(171,71,188,0.06);
     --conflict-side2-marker-bg: rgba(171,71,188,0.1);
     --conflict-marker-color: #8a8a94;
@@ -1357,16 +1357,15 @@
     --subtext1: #1a1a1e;
     --text: #1a1a1e;
 
-    --blue: #e68a00;
+    --amber: #e68a00;
     --green: #2e7d32;
     --red: #c62828;
-    --yellow: #e68a00;
-    --teal: #00838f;
-    --peach: #e68a00;
-    --mauve: #6a1b9a;
+    --blue: #1976d2;
+    --purple: #6a1b9a;
+    --cyan: #00838f;
 
     --bg-hover: rgba(0,0,0,0.03);
-    --bg-selected: rgba(255,167,38,0.08);
+    --bg-selected: rgba(230,138,0,0.08);
     --bg-checked: rgba(46,125,50,0.08);
     --bg-checked-selected: rgba(46,125,50,0.12);
     --bg-error: rgba(198,40,40,0.08);
@@ -1399,10 +1398,10 @@
     --conflict-boundary-border: rgba(198,40,40,0.2);
     --conflict-boundary-bg: rgba(198,40,40,0.06);
     --conflict-boundary-color: #71717a;
-    --conflict-side1-border: #e68a00;
+    --conflict-side1-border: var(--amber);
     --conflict-side1-bg: rgba(230,138,0,0.06);
     --conflict-side1-marker-bg: rgba(230,138,0,0.1);
-    --conflict-side2-border: #6a1b9a;
+    --conflict-side2-border: var(--purple);
     --conflict-side2-bg: rgba(106,27,154,0.06);
     --conflict-side2-marker-bg: rgba(106,27,154,0.1);
     --conflict-marker-color: #71717a;
@@ -1436,6 +1435,7 @@
     border-radius: 3px;
   }
   :global(::selection) { background: rgba(255,167,38,0.25); }
+  :global(.light ::selection) { background: rgba(230,138,0,0.25); }
 
   /* --- Layout --- */
   .app {

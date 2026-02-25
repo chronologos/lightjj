@@ -70,7 +70,7 @@
   }
 
   .desc-editor textarea:focus {
-    border-color: var(--blue);
+    border-color: var(--amber);
   }
 
   .desc-actions {
@@ -83,7 +83,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    background: var(--blue);
+    background: var(--amber);
     color: var(--base);
     border: none;
     padding: 4px 12px;

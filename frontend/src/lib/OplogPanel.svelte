@@ -121,7 +121,7 @@
 
   .oplog-id {
     font-family: var(--font-mono);
-    color: var(--blue);
+    color: var(--amber);
     font-weight: 600;
     font-size: 11px;
     flex-shrink: 0;
@@ -158,7 +158,7 @@
     width: 20px;
     height: 20px;
     border: 2px solid var(--surface0);
-    border-top-color: var(--blue);
+    border-top-color: var(--amber);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
