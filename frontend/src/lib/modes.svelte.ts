@@ -7,7 +7,33 @@ export const targetModeLabel: Record<TargetMode, string> = {
   '--insert-before': 'before',
 }
 
-export function createRebaseMode() {
+export interface ModeBase {
+  readonly active: boolean
+  cancel(): void
+  handleKey(key: string): boolean
+}
+
+export interface RebaseMode extends ModeBase {
+  readonly sources: string[]
+  readonly sourceMode: SourceMode
+  readonly targetMode: TargetMode
+  enter(revisions: string[]): void
+}
+
+export interface SquashMode extends ModeBase {
+  readonly sources: string[]
+  readonly keepEmptied: boolean
+  readonly useDestMsg: boolean
+  enter(revisions: string[]): void
+}
+
+export interface SplitMode extends ModeBase {
+  readonly revision: string
+  readonly parallel: boolean
+  enter(changeId: string): void
+}
+
+export function createRebaseMode(): RebaseMode {
   let active = $state(false)
   let sources: string[] = $state([])
   let sourceMode: SourceMode = $state('-r')
@@ -26,7 +52,10 @@ export function createRebaseMode() {
       active = true
     },
 
-    cancel() { active = false },
+    cancel() {
+      active = false
+      sources = []
+    },
 
     handleKey(key: string): boolean {
       switch (key) {
@@ -42,7 +71,7 @@ export function createRebaseMode() {
   }
 }
 
-export function createSquashMode() {
+export function createSquashMode(): SquashMode {
   let active = $state(false)
   let sources: string[] = $state([])
   let keepEmptied = $state(false)
@@ -61,7 +90,10 @@ export function createSquashMode() {
       active = true
     },
 
-    cancel() { active = false },
+    cancel() {
+      active = false
+      sources = []
+    },
 
     handleKey(key: string): boolean {
       switch (key) {
@@ -73,7 +105,7 @@ export function createSquashMode() {
   }
 }
 
-export function createSplitMode() {
+export function createSplitMode(): SplitMode {
   let active = $state(false)
   let revision = $state('')
   let parallel = $state(false)
