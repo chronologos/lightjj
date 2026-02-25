@@ -11,6 +11,7 @@
     diffContent: string
     changedFiles: FileChange[]
     selectedRevision: LogEntry | null
+    fullDescription: string
     checkedRevisions: SvelteSet<string>
     diffLoading: boolean
     filesLoading: boolean
@@ -23,7 +24,7 @@
     oncanceldescribe: () => void
     ondraftchange: (value: string) => void
     onbookmarkclick: (name: string) => void
-    squashMode: boolean
+    fileSelectionMode: boolean
     squashSelectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
     splitMode: boolean
@@ -31,10 +32,10 @@
   }
 
   let {
-    diffContent, changedFiles, selectedRevision, checkedRevisions,
+    diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions,
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
-    squashMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
+    fileSelectionMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
   }: Props = $props()
 
   // --- Local state ---
@@ -108,8 +109,8 @@
 
   // File suffixes where word-level diffs add noise rather than value
   const SKIP_WORD_DIFF_SUFFIXES = [
-    '.svg', '.xml', '.csv', '.tsv', '.json', '.lock', '.map',
-    '.min.js', '.min.css', '.bundle.js',
+    '.svg', '.xml', '.csv', '.tsv', '.json', '.yaml', '.yml', '.toml',
+    '.lock', '.map', '.min.js', '.min.css', '.bundle.js',
   ]
 
   // Max total lines per file before skipping word diff (avoids blocking main thread)
@@ -193,19 +194,17 @@
   )
 
   $effect(() => {
-    if (parsedDiff.length > 0) {
-      if (diffContent === lastHighlightedDiff) return
+    clearTimeout(highlightTimer)
+    if (parsedDiff.length > 0 && diffContent !== lastHighlightedDiff) {
       lastHighlightedDiff = diffContent
       // Clear stale highlights immediately to prevent wrong-color flicker
       // when old and new diffs share the same file/hunk/line keys
       highlightedLines = new Map()
       // Defer Shiki so it doesn't block the keydown → paint path.
       // Plain text + word-diff renders instantly; syntax colors appear ~150ms later.
-      clearTimeout(highlightTimer)
       highlightTimer = setTimeout(() => highlightDiff(effectiveFiles), 150)
-    } else {
+    } else if (parsedDiff.length === 0) {
       lastHighlightedDiff = ''
-      clearTimeout(highlightTimer)
       highlightedLines = new Map()
     }
     return () => clearTimeout(highlightTimer)
@@ -254,7 +253,7 @@
   async function expandFile(filePath: string) {
     if (!activeRevset) return
     try {
-      const result = await api.diff(activeRevset!, filePath, 10000)
+      const result = await api.diff(activeRevset, filePath, 10000)
       const parsed = parseDiffContent(result.diff)
       if (parsed.length > 0) {
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
@@ -317,7 +316,7 @@
       <div class="detail-header">
         <div class="detail-ids">
           <span class="detail-change-id">{selectedRevision.commit.change_id.slice(0, 8)}</span>
-          <span class="detail-description-inline">{selectedRevision.description || '(no description)'}</span>
+          <span class="detail-description-inline">{(fullDescription || selectedRevision.description) || '(no description)'}</span>
         </div>
         <div class="panel-actions">
           {#if describeSaved}
@@ -361,7 +360,7 @@
     <div class="squash-banner split-banner">
       Split — checked files stay, unchecked move to new revision
     </div>
-  {:else if squashMode}
+  {:else if fileSelectionMode}
     <div class="squash-banner">
       Squash source — select files to move
     </div>
@@ -382,7 +381,7 @@
             onclick={() => scrollToFile(file.path)}
             title={file.path}
           >
-            {#if squashMode}
+            {#if fileSelectionMode}
               <input
                 type="checkbox"
                 checked={squashSelectedFiles.has(file.path)}
@@ -578,7 +577,7 @@
 
   .detail-header {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
   }
@@ -589,7 +588,6 @@
     gap: 8px;
     min-width: 0;
     flex: 1;
-    overflow: hidden;
   }
 
   .detail-change-id {
@@ -603,10 +601,9 @@
   .detail-description-inline {
     color: var(--text);
     font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     min-width: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .detail-bookmarks {

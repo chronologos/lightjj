@@ -12,6 +12,7 @@
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
+  import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   type SourceMode = '-r' | '-s' | '-b'
   type TargetMode = '-d' | '--insert-after' | '--insert-before'
 
@@ -34,6 +35,7 @@
   let changedFiles: FileChange[] = $state([])
   let filesLoading: boolean = $state(false)
   let describeSaved: boolean = $state(false)
+  let fullDescription: string = $state('')
   let splitView: boolean = $state(false)
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
@@ -41,6 +43,7 @@
   let logGeneration: number = 0
   let diffGeneration: number = 0
   let filesGeneration: number = 0
+  let descGeneration: number = 0
   let evologGeneration: number = 0
   // Debounce timer for diff/files loading during rapid j/k navigation
   let navDebounceTimer: number | undefined
@@ -74,7 +77,12 @@
 
   let activeView: 'log' | 'branches' | 'operations' = $state('log')
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
+  let contextMenuItems: ContextMenuItem[] = $state([])
+  let contextMenuX: number = $state(0)
+  let contextMenuY: number = $state(0)
+  let contextMenuOpen: boolean = $state(false)
+
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen)
   let inlineMode = $derived(rebaseMode || squashMode || splitMode)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
@@ -166,9 +174,10 @@
 
   // After mutations that re-render the DOM, focus can land on the revset input,
   // silently blocking all keyboard shortcuts via the INPUT tagName guard.
+  // Only blur empty inputs — if the user is actively typing (has content), leave it.
   function blurActiveInput() {
-    const el = document.activeElement as HTMLElement
-    if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA') el.blur()
+    const el = document.activeElement as HTMLInputElement
+    if ((el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA') && !el.value) el.blur()
   }
 
   // --- Command palette ---
@@ -292,9 +301,22 @@
     }
   }
 
+  async function loadDescription(changeId: string) {
+    const gen = ++descGeneration
+    try {
+      const result = await api.description(changeId)
+      if (gen !== descGeneration) return
+      fullDescription = result.description
+    } catch {
+      if (gen !== descGeneration) return
+      fullDescription = ''
+    }
+  }
+
   function loadDiffAndFiles(changeId: string) {
     loadDiffForRevset(changeId)
     loadFilesForRevset(changeId)
+    loadDescription(changeId)
   }
 
   // Move cursor without loading diff/files — used in squash mode where
@@ -331,6 +353,35 @@
     if (evologOpen) {
       loadEvolog(entry.commit.change_id)
     }
+  }
+
+  function selectByChangeId(changeId: string) {
+    const idx = revisions.findIndex(r => r.commit.change_id === changeId)
+    if (idx >= 0) selectRevision(idx)
+  }
+
+  function openRevisionContextMenu(changeId: string, x: number, y: number) {
+    const entry = revisions.find(r => r.commit.change_id === changeId)
+    const commitId = entry?.commit.commit_id ?? ''
+    contextMenuItems = [
+      { label: 'Edit working copy', action: () => handleEdit(changeId) },
+      { label: 'New revision', shortcut: 'n', action: () => handleNew(changeId) },
+      { label: 'Describe', shortcut: 'e', action: () => { selectByChangeId(changeId); startDescriptionEdit() } },
+      { separator: true },
+      { label: 'Rebase...', shortcut: 'R', action: () => { selectByChangeId(changeId); enterRebaseMode() } },
+      { label: 'Squash...', shortcut: 'S', action: () => { selectByChangeId(changeId); enterSquashMode() } },
+      { label: 'Split...', shortcut: 's', action: () => { selectByChangeId(changeId); enterSplitMode() } },
+      { separator: true },
+      { label: 'Set bookmark...', shortcut: 'B', action: () => { selectByChangeId(changeId); bookmarkInputOpen = true } },
+      { separator: true },
+      { label: `Copy change ID (${changeId.slice(0, 8)})`, action: () => navigator.clipboard.writeText(changeId) },
+      { label: `Copy commit ID (${commitId.slice(0, 8)})`, action: () => navigator.clipboard.writeText(commitId) },
+      { separator: true },
+      { label: 'Abandon', action: () => handleAbandon(changeId), danger: true },
+    ]
+    contextMenuX = x
+    contextMenuY = y
+    contextMenuOpen = true
   }
 
   // Reload diff/files when checked revisions change
@@ -426,6 +477,7 @@
       const result = await api.describe(selectedRevision.commit.change_id, descriptionDraft)
       lastAction = `Updated description for ${selectedRevision.commit.change_id.slice(0, 8)}`
       commandOutput = result.output
+      fullDescription = descriptionDraft
       descriptionEditing = false
       describeSaved = true
       setTimeout(() => { describeSaved = false }, 1500)
@@ -667,6 +719,7 @@
     bookmarkModalOpen = false
     bookmarkInputOpen = false
     gitModalOpen = false
+    contextMenuOpen = false
   }
 
   function closeAllModals() {
@@ -729,13 +782,16 @@
 
   async function startDescriptionEdit() {
     if (!selectedRevision) return
-    try {
-      const result = await api.description(selectedRevision.commit.change_id)
-      descriptionDraft = result.description
-    } catch (e) {
-      // Fall back to cached description but warn the user
-      descriptionDraft = selectedRevision.description
-      lastAction = 'Using cached description (could not fetch latest)'
+    if (fullDescription) {
+      descriptionDraft = fullDescription
+    } else {
+      try {
+        const result = await api.description(selectedRevision.commit.change_id)
+        descriptionDraft = result.description
+      } catch {
+        descriptionDraft = selectedRevision.description
+        lastAction = 'Using cached description (could not fetch latest)'
+      }
     }
     descriptionEditing = true
     requestAnimationFrame(() => {
@@ -1078,9 +1134,7 @@
           onselect={selectRevision}
           oncheck={toggleCheck}
           onrangecheck={rangeCheck}
-          onedit={handleEdit}
-          onnew={handleNew}
-          onabandon={handleAbandon}
+          oncontextmenu={openRevisionContextMenu}
           onnewfromchecked={handleNewFromChecked}
           onabandonchecked={handleAbandonChecked}
           onclearchecks={clearChecksAndReload}
@@ -1108,6 +1162,7 @@
           {diffContent}
           {changedFiles}
           {selectedRevision}
+          {fullDescription}
           {checkedRevisions}
           {diffLoading}
           {filesLoading}
@@ -1120,7 +1175,7 @@
           oncanceldescribe={() => { descriptionEditing = false }}
           ondraftchange={(v) => { descriptionDraft = v }}
           onbookmarkclick={openBookmarkModal}
-          squashMode={squashMode || splitMode}
+          fileSelectionMode={squashMode || splitMode}
           {squashSelectedFiles}
           ontogglefile={toggleSquashFile}
           {splitMode}
@@ -1181,6 +1236,13 @@
   </div>
 
   <CommandPalette bind:open={paletteOpen} {commands} />
+
+  <ContextMenu
+    items={contextMenuItems}
+    x={contextMenuX}
+    y={contextMenuY}
+    bind:open={contextMenuOpen}
+  />
 
   <GitModal
     bind:open={gitModalOpen}

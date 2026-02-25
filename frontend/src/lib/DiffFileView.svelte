@@ -98,20 +98,19 @@
 </script>
 
 {#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[])}
-  {@const nums = lineNumbers}
   {#if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
       class:diff-add={line.type === 'add'}
       class:diff-remove={line.type === 'remove'}
       class:diff-context={line.type === 'context'}
-    >{#each nums as n}<span class="line-num">{n ?? ''}</span>{/each}{@html highlightedLines.get(hlKey)}</div>
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
       class="diff-line"
       class:diff-add={line.type === 'add'}
       class:diff-remove={line.type === 'remove'}
-    >{#each nums as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{line.content[0]}</span>{#each spans as span}{#if span.changed}<span
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{line.content[0]}</span>{#each spans as span}{#if span.changed}<span
           class="word-change"
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
   {:else}
@@ -120,7 +119,7 @@
       class:diff-add={line.type === 'add'}
       class:diff-remove={line.type === 'remove'}
       class:diff-context={line.type === 'context'}
-    >{#each nums as n}<span class="line-num">{n ?? ''}</span>{/each}{line.content}</div>
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{line.content}</div>
   {/if}
 {/snippet}
 

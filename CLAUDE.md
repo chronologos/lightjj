@@ -54,6 +54,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     DiffFileView.svelte    — Individual file diff with collapsible sections, context expansion
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
+    ContextMenu.svelte     — Reusable right-click context menu (positioned at cursor)
     Sidebar.svelte         — Left sidebar with navigation, actions, and theme toggle
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
     BookmarkModal.svelte   — Bookmark management modal
@@ -91,7 +92,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Svelte 5 runes** — use `$state()`, `$derived()`, `$effect()`. No Svelte 4 stores.
 - **api.ts is the single API boundary** — all backend calls go through the `api` object in `src/lib/api.ts`. Don't use raw `fetch()` in components.
 - **pnpm, not npm** — the project uses pnpm for package management.
-- **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes. **Graph rows must look identical across all modes** (normal, rebase, squash, split). Inline badges must fit within the row's natural line-height — never add elements that expand row height, or the graph pipes will break. No text truncation on descriptions (truncation causes visual inconsistency between normal and inline modes).
+- **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes. **Graph rows use a fixed `height: 18px`** to guarantee identical sizing across all modes (normal, rebase, squash, split). This prevents inline badges, buttons, or text from influencing row height. All inline elements (badges, `@` indicator, action buttons) must fit within 18px. Content is clipped by `overflow: hidden`. Never change this to `min-height` or remove the fixed height — it's the only way to prevent sub-pixel height differences between modes that break graph pipe continuity.
 - **Change IDs show full short form with highlighted prefix.** `commit.change_prefix` determines how many characters to highlight. Same for `commit_prefix`.
 - **Rebase mode is inline, not a modal.** Press `R` to enter rebase mode. `j`/`k` navigate the destination; Enter executes; Escape cancels. Source mode (`r`/`s`/`b`) and target mode (`o`/`a`/`i`) can be switched while in rebase mode. Source and destination commits are marked with inline badges directly in the revision graph.
 - **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` gutter markers are colored blue; working-copy `@` markers are colored green.
@@ -147,3 +148,6 @@ Patterns learned from profiling j/k keyboard navigation:
 - **`user-select: none`** on interactive lists prevents text selection artifacts during click/keyboard navigation.
 - **Svelte 5 effects run after DOM updates** — no need for `requestAnimationFrame` to query updated DOM in `$effect`.
 - **Fire-and-forget async in effects is fine** when the async function has its own error handling and generation counter for cancellation.
+- **Skip word-diff for non-code files.** `shouldSkipWordDiff()` in DiffPanel skips LCS computation for SVG/XML/JSON/lock/map/minified files and any file with >1000 diff lines. The synchronous `$derived` wordDiffMap blocks the main thread — skipping noisy file types keeps it fast.
+- **Auto-collapse large files.** Files with >500 diff lines (`AUTO_COLLAPSE_LINE_LIMIT`) start collapsed to prevent DOM flooding. Collapse state is cached per revision; auto-collapse is suppressed when restoring from cache.
+- **Diff parser uses `b/` (destination) path** from `diff --git a/source b/destination` headers. The `a/` path is the source and can appear in multiple entries for copies/renames, causing duplicate `{#each}` keys.
