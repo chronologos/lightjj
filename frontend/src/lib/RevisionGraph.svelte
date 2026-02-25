@@ -493,8 +493,6 @@
     cursor: pointer;
     outline: none;
     -webkit-tap-highlight-color: transparent;
-    max-height: 15px;
-    overflow: hidden;
   }
 
   .graph-row:hover:not(.selected) {
@@ -591,6 +589,7 @@
     display: inline-flex;
     align-items: baseline;
     overflow: hidden;
+    white-space: nowrap;
     min-width: 0;
     flex: 1;
   }
