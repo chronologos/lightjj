@@ -48,7 +48,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 
 ### Nitpicks
 - [x] `\x1F` vs `\x1f` case inconsistency across files.
-- [ ] Divergent commit `??` suffix is a string hack — a `Divergent bool` field would be cleaner.
+- [x] Divergent commit `??` suffix is a string hack — a `Divergent bool` field would be cleaner.
 - [x] `GET /api/oplog` has no upper bound on `limit` parameter.
 - [x] No `Content-Type: application/json` validation on POST requests.
 - [x] `commitsFromIds` wraps raw strings in fake `Commit` structs with zero-valued fields.
@@ -72,7 +72,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] HTTP response compression (gzip middleware) — mainly benefits SSH mode
 - [x] Integration tests — build-tagged tests against a real jj repo
 - [ ] Frontend DOM integration tests (in progress)
-- [ ] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
+- [x] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
 
 ## Test Gaps — Medium/Low Priority (2026-02-24)
 
@@ -190,6 +190,9 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
+- [x] Divergent commit resolution UI — detect divergent commits via `Divergent` field, show `divergent` badge + dashed ring in graph, DivergencePanel for comparing versions with color-coded cards (red=from, green=to), cross-version diff filtered to union of changed files, parent info display, "Keep" action with bookmark conflict resolution, `/N` offset labels matching jj convention
+- [ ] Bookmark → GitHub PR linking — query GitHub API (`gh pr list --json headRefName,url`) to map bookmark names to open PRs. Make bookmark badges clickable: if a PR exists for the bookmark name, clicking opens the PR URL in a new tab. Cache PR data per op-id. Show a subtle link icon or underline on linked badges.
+- [ ] Cmd+F diff search — intercept `Cmd+F` / `Ctrl+F` in the diff panel to search within the displayed diff content (highlight matches, jump between them) instead of triggering the browser's native find. Scope search to the current revision's diff. Consider: match counter, case sensitivity toggle, regex support.
 
 ## State Synchronization
 
@@ -211,9 +214,7 @@ Current implementation uses option 4 (jj's graph output) with pixel-perfect rend
 - Description lines get a continuation gutter (`│` extended from the node)
 - Working copy `@` detected from graph characters, not template functions
 
-Future: migrate to SVG-based rendering (option 1) for colored lanes, hover interactions, and smooth curves at merge/fork points.
-
-1. **SVG-based**: Each lane is a vertical path, merge/fork points are curves. Interactive (hover, click). This is what Sublime Merge does.
+1. **SVG-based**: ✅ Implemented. Each lane character is mapped to SVG elements (`GraphSvg.svelte`). 10-color "Earth & Sky" palette, hover highlighting, dashed rings for divergent nodes. See `svg-graph-rendering.md` in memory.
 2. **Canvas**: Better performance for large repos but harder to make interactive.
 3. **HTML/CSS grid**: Each cell in the graph is a div with borders. Simple but limited.
-4. **Use jj's graph output**: ✅ Implemented. Parse `jj log` with graph characters and render them as styled HTML.
+4. **Use jj's graph output**: ✅ Implemented. Parse `jj log` with graph characters; SVG renderer maps them to visual elements.

@@ -24,7 +24,7 @@ internal/
   jj/                     — Command builders + data models (PURE — no I/O, no side effects)
     commands.go            — Functions that return []string args for jj subcommands
     commands_test.go       — Command builder tests
-    commit.go              — Commit model with ChangePrefix/CommitPrefix, Immutable, WorkingCopies
+    commit.go              — Commit model with ChangePrefix/CommitPrefix, Immutable, Divergent, WorkingCopies
     commit_test.go         — Commit model tests
     bookmark.go            — Bookmark model + output parsers
     bookmark_test.go       — Bookmark parser tests
@@ -65,6 +65,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     GitModal.svelte        — Git push/fetch modal
     EvologPanel.svelte     — Evolution log panel
     OplogPanel.svelte      — Operation log panel
+    DivergencePanel.svelte — Divergent commit resolution panel (compare versions, keep/abandon)
     diff-parser.ts         — Unified diff parser
     split-view.ts          — Side-by-side diff alignment
     word-diff.ts           — Word-level inline diff computation
@@ -103,6 +104,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Rebase mode is inline, not a modal.** Press `R` to enter rebase mode. `j`/`k` navigate the destination; Enter executes; Escape cancels. Source mode (`r`/`s`/`b`) and target mode (`o`/`a`/`i`) can be switched while in rebase mode. Source and destination commits are marked with inline badges directly in the revision graph.
 - **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` gutter markers are colored blue; working-copy `@` markers are colored green.
 - **View mode toggle** — The revision panel header has a Log/Tracked toggle (click or command palette). Tracked view uses the `tracked_remote_bookmarks()` revset to show remote work. `t` key toggles theme.
+- **Divergent commit handling** — Commits with `divergent: true` share the same `change_id`. Use `effectiveId(commit)` (from `api.ts`) for all identity operations (keys, checks, mutations) — it falls back to `commit_id` for divergent/hidden commits, mirroring Go's `Commit.GetChangeId()`. Display of `change_id` itself is fine (shows the shared ID). The DivergencePanel uses `change_id(X)` revset (not `all:X` which doesn't exist in jj 0.38) to query all versions. Divergence offsets (`/0`, `/1`) are computed client-side by sorting commit IDs lexicographically, matching jj's convention.
 - **Multi-workspace awareness** — Sidebar shows current workspace name with a dropdown to open other workspaces in new tabs. `GET /api/workspaces` returns `{ current, workspaces[] }` (enriched with paths from workspace store). `POST /api/workspace/open` spawns a child lightjj instance. `w` key toggles the dropdown. Single-workspace repos show the name without a dropdown. SSH mode gracefully degrades (no paths, no spawning).
 
 ### Testing patterns

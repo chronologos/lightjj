@@ -4,6 +4,7 @@
   import type { WordSpan } from './word-diff'
   import type { FileChange } from './api'
   import { findConflicts, type ConflictRegion } from './conflict-parser'
+  import type { SearchMatch } from './DiffPanel.svelte'
 
   interface Props {
     file: DiffFile
@@ -16,9 +17,11 @@
     ontoggle: (path: string) => void
     onexpand: (path: string) => void
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
+    searchMatches?: SearchMatch[]
+    currentMatchIdx?: number
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffMap, ontoggle, onexpand, onresolve }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffMap, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0 }: Props = $props()
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
@@ -63,6 +66,41 @@
     sideLabel?: string
   }
 
+  interface LineMatch { startCol: number; endCol: number; isCurrent: boolean }
+
+  // Pre-build per-line search match lookup for O(1) access in the render loop
+  let lineMatchMap = $derived.by(() => {
+    if (searchMatches.length === 0) return new Map<string, LineMatch[]>()
+    const map = new Map<string, LineMatch[]>()
+    for (let i = 0; i < searchMatches.length; i++) {
+      const m = searchMatches[i]
+      if (m.filePath !== filePath) continue
+      const key = `${m.hunkIdx}:${m.lineIdx}`
+      const list = map.get(key) ?? []
+      list.push({ startCol: m.startCol, endCol: m.endCol, isCurrent: i === currentMatchIdx })
+      map.set(key, list)
+    }
+    return map
+  })
+
+  function escapeHtml(text: string): string {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  function highlightSearchInText(text: string, matches: LineMatch[]): string {
+    const sorted = [...matches].sort((a, b) => a.startCol - b.startCol)
+    let result = ''
+    let pos = 0
+    for (const m of sorted) {
+      result += escapeHtml(text.slice(pos, m.startCol))
+      const cls = m.isCurrent ? 'search-match search-match-current' : 'search-match'
+      result += `<mark class="${cls}">${escapeHtml(text.slice(m.startCol, m.endCol))}</mark>`
+      pos = m.endCol
+    }
+    result += escapeHtml(text.slice(pos))
+    return result
+  }
+
   // Pre-build a Map<hunkIdx, Map<lineIdx, ConflictLineMeta>> for O(1) conflict styling lookups.
   // Only computed when the file has conflicts.
   let conflictData = $derived.by(() => {
@@ -97,8 +135,19 @@
   })
 </script>
 
-{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[])}
-  {#if highlightedLines.has(hlKey)}
+{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number)}
+  {@const searchKey = hunkIdx !== undefined && lineIdx !== undefined ? `${hunkIdx}:${lineIdx}` : ''}
+  {@const lm = searchKey ? lineMatchMap.get(searchKey) : undefined}
+  {#if lm && lm.length > 0}
+    {@const hasCurrent = lm.some(m => m.isCurrent)}
+    <div
+      class="diff-line"
+      class:diff-add={line.type === 'add'}
+      class:diff-remove={line.type === 'remove'}
+      class:diff-context={line.type === 'context'}
+      data-search-match-current={hasCurrent ? 'true' : undefined}
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{line.content[0]}</span>{@html highlightSearchInText(line.content.slice(1), lm)}</div>
+  {:else if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
       class:diff-add={line.type === 'add'}
@@ -174,7 +223,7 @@
             {:else if sl.left}
               {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.left.hunkIdx}`)?.get(sl.left.lineIdx)}
-              {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft])}
+              {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft], sl.left.hunkIdx, sl.left.lineIdx)}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
@@ -187,7 +236,7 @@
             {:else if sl.right}
               {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.right.hunkIdx}`)?.get(sl.right.lineIdx)}
-              {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight])}
+              {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight], sl.right.hunkIdx, sl.right.lineIdx)}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
@@ -237,10 +286,10 @@
                     <button class="resolve-btn-inline resolve-inline-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
                   </div>
                 {/if}
-                {@render diffLine(line, hlKey, spans, [ln.old, ln.new])}
+                {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
               </div>
             {:else}
-              {@render diffLine(line, hlKey, spans, [ln.old, ln.new])}
+              {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
             {/if}
           {/each}
         </div>
@@ -434,6 +483,16 @@
   }
   .diff-remove .word-change {
     background: var(--diff-remove-word);
+  }
+
+  :global(.search-match) {
+    background: var(--search-match-bg);
+    border-radius: 2px;
+  }
+
+  :global(.search-match-current) {
+    background: var(--search-match-current-bg);
+    outline: 1px solid var(--amber);
   }
 
   :global(.diff-prefix) {

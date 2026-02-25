@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { api, effectiveId, type LogEntry, type FileChange } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
@@ -304,6 +305,124 @@
     if (lastRevisionId) collapseStateCache.delete(lastRevisionId)
   }
 
+  // --- Diff search ---
+  let searchOpen = $state(false)
+  let searchQuery = $state('')
+  let searchInputEl: HTMLInputElement | undefined = $state(undefined)
+  let currentMatchIdx = $state(0)
+
+  export interface SearchMatch {
+    filePath: string
+    hunkIdx: number
+    lineIdx: number
+    startCol: number
+    endCol: number
+  }
+
+  function findMatchesInFile(file: DiffFile, query: string, matches: SearchMatch[]) {
+    for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
+      const hunk = file.hunks[hunkIdx]
+      for (let lineIdx = 0; lineIdx < hunk.lines.length; lineIdx++) {
+        const text = hunk.lines[lineIdx].content.slice(1) // strip +/-/space prefix
+        let pos = 0
+        const lower = text.toLowerCase()
+        while ((pos = lower.indexOf(query, pos)) !== -1) {
+          matches.push({ filePath: file.filePath, hunkIdx, lineIdx, startCol: pos, endCol: pos + query.length })
+          pos += 1
+        }
+      }
+    }
+  }
+
+  let searchMatches: SearchMatch[] = $derived.by(() => {
+    if (!searchQuery || searchQuery.length < 2) return []
+    const query = searchQuery.toLowerCase()
+    const matches: SearchMatch[] = []
+    const files = effectiveFiles.length > 0 ? effectiveFiles : parsedDiff
+    for (const file of files) findMatchesInFile(file, query, matches)
+    // Include conflict-only files (not in parsedDiff)
+    for (const file of conflictFileDiffs.values()) {
+      if (!files.some(f => f.filePath === file.filePath)) {
+        findMatchesInFile(file, query, matches)
+      }
+    }
+    return matches
+  })
+
+  // Clamp currentMatchIdx when matches change
+  $effect(() => {
+    if (searchMatches.length === 0) {
+      currentMatchIdx = 0
+    } else if (currentMatchIdx >= searchMatches.length) {
+      currentMatchIdx = searchMatches.length - 1
+    }
+  })
+
+  // Reset search when revision changes
+  let lastSearchRevId: string | null = null
+  $effect(() => {
+    const id = selectedRevision ? effectiveId(selectedRevision.commit) : null
+    if (id === lastSearchRevId) return
+    lastSearchRevId = id
+    if (searchOpen) {
+      searchQuery = ''
+      currentMatchIdx = 0
+    }
+  })
+
+  export function openSearch() {
+    if (!selectedRevision && checkedRevisions.size === 0) return
+    if (searchOpen) {
+      // Re-focus and select all
+      searchInputEl?.focus()
+      searchInputEl?.select()
+      return
+    }
+    searchOpen = true
+    requestAnimationFrame(() => searchInputEl?.focus())
+  }
+
+  function closeSearch() {
+    searchOpen = false
+    searchQuery = ''
+    currentMatchIdx = 0
+  }
+
+  function handleSearchKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.shiftKey ? prevMatch() : nextMatch()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      closeSearch()
+    }
+  }
+
+  function nextMatch() {
+    if (searchMatches.length === 0) return
+    currentMatchIdx = (currentMatchIdx + 1) % searchMatches.length
+    scrollToMatch()
+  }
+
+  function prevMatch() {
+    if (searchMatches.length === 0) return
+    currentMatchIdx = (currentMatchIdx - 1 + searchMatches.length) % searchMatches.length
+    scrollToMatch()
+  }
+
+  async function scrollToMatch() {
+    const match = searchMatches[currentMatchIdx]
+    if (!match) return
+    collapsedFiles.delete(match.filePath)
+    // tick() ensures Svelte has flushed DOM updates (e.g. expanding a collapsed file)
+    // before we query for the scroll target
+    await tick()
+    requestAnimationFrame(() => {
+      const el = document.querySelector('[data-search-match-current="true"]')
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }
+
   export function rehighlight() {
     lastHighlightedDiff = ''
     highlightedLines = new Map()
@@ -438,6 +557,27 @@
       </div>
     </div>
   {/if}
+  {#if searchOpen}
+    <div class="search-bar">
+      <input
+        bind:this={searchInputEl}
+        bind:value={searchQuery}
+        class="search-input"
+        placeholder="Search in diff..."
+        onkeydown={handleSearchKeydown}
+      />
+      <span class="search-count">
+        {#if searchMatches.length > 0}
+          {currentMatchIdx + 1} / {searchMatches.length}
+        {:else if searchQuery.length >= 2}
+          No matches
+        {/if}
+      </span>
+      <button class="search-nav-btn" onclick={prevMatch} disabled={searchMatches.length === 0}>&#9650;</button>
+      <button class="search-nav-btn" onclick={nextMatch} disabled={searchMatches.length === 0}>&#9660;</button>
+      <button class="search-close-btn" onclick={closeSearch}>&#10005;</button>
+    </div>
+  {/if}
   <div class="panel-content">
     {#if diffLoading}
       <div class="empty-state">
@@ -469,6 +609,8 @@
             ontoggle={toggleFile}
             onexpand={expandFile}
             {onresolve}
+            searchMatches={searchOpen ? searchMatches : []}
+            {currentMatchIdx}
           />
         {/each}
         {#each conflictOnlyFiles as cf (cf.path)}
@@ -485,6 +627,8 @@
               ontoggle={toggleFile}
               onexpand={expandFile}
               {onresolve}
+              searchMatches={searchOpen ? searchMatches : []}
+              {currentMatchIdx}
             />
           {:else}
             <div class="diff-file" data-file-path={cf.path}>
@@ -897,6 +1041,66 @@
     background: var(--bg-active);
     color: var(--amber);
     font-weight: 600;
+  }
+
+  /* --- Search bar --- */
+  .search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+    flex-shrink: 0;
+  }
+
+  .search-input {
+    flex: 1;
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    color: var(--text);
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+  }
+
+  .search-input:focus {
+    border-color: var(--amber);
+  }
+
+  .search-count {
+    font-size: 11px;
+    color: var(--subtext0);
+    white-space: nowrap;
+    min-width: 60px;
+    text-align: center;
+  }
+
+  .search-nav-btn, .search-close-btn {
+    background: transparent;
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .search-nav-btn:hover, .search-close-btn:hover {
+    background: var(--surface0);
+    color: var(--text);
+  }
+
+  .search-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  .search-nav-btn:disabled:hover {
+    background: transparent;
+    color: var(--subtext0);
   }
 
   /* --- Empty states --- */

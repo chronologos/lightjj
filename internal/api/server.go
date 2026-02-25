@@ -82,6 +82,9 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/bookmark/track", s.handleBookmarkTrack)
 	s.Mux.HandleFunc("POST /api/bookmark/untrack", s.handleBookmarkUntrack)
 
+	s.Mux.HandleFunc("GET /api/aliases", s.handleAliases)
+	s.Mux.HandleFunc("POST /api/alias", s.handleRunAlias)
+
 	s.Mux.HandleFunc("POST /api/git/push", s.handleGitPush)
 	s.Mux.HandleFunc("POST /api/git/fetch", s.handleGitFetch)
 }

@@ -250,7 +250,7 @@
       <div class="empty-state">No revisions found</div>
     {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list"
+      <div class="revision-list" bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list"
         onmouseleave={() => hoveredLane = null}>
         {#each flatLines as line, lineIdx (effectiveId(revisions[line.entryIndex].commit) + ':' + line.lineKey)}
           {@const isChecked = checkedRevisions.has(effectiveId(revisions[line.entryIndex]?.commit))}

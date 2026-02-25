@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace } from './lib/api'
+  import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -70,6 +70,7 @@
 
   let currentWorkspace: string = $state('')
   let workspaceList: Workspace[] = $state([])
+  let aliases: Alias[] = $state([])
 
   let contextMenuItems: ContextMenuItem[] = $state([])
   let contextMenuX: number = $state(0)
@@ -175,6 +176,20 @@
     if ((el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA') && !el.value) el.blur()
   }
 
+  // --- Alias duplicate filtering ---
+  const BUILTIN_COMMANDS = new Set([
+    'new', 'edit', 'abandon', 'rebase', 'squash', 'split', 'commit',
+    'describe', 'bookmark', 'undo', 'restore', 'absorb', 'resolve',
+    'git push', 'git fetch',
+    'log', 'status', 'diff', 'file', 'op',
+  ])
+
+  function isBuiltinAlias(a: Alias): boolean {
+    const cmd = a.command[0]
+    if (cmd === 'git' && a.command[1]) return BUILTIN_COMMANDS.has(`git ${a.command[1]}`)
+    return BUILTIN_COMMANDS.has(cmd)
+  }
+
   // --- Command palette ---
   const noop = () => {}
   let commands: PaletteCommand[] = $derived.by(() => [
@@ -222,6 +237,17 @@
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
     { label: 'Clear checked revisions', shortcut: 'Esc', category: 'Actions', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
     { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop, infoOnly: true },
+
+    // Aliases — filtered to exclude builtins that already have palette entries
+    ...aliases
+      .filter(a => !isBuiltinAlias(a))
+      .map(a => ({
+        label: a.name,
+        hint: a.command.join(' '),
+        category: 'Aliases',
+        action: () => handleRunAlias(a.name),
+        when: () => !inlineMode,
+      })),
   ])
 
   // --- API actions ---
@@ -231,6 +257,15 @@
       currentWorkspace = result.current
       workspaceList = result.workspaces
     } catch { /* ignore — SSH mode or single workspace */ }
+  }
+
+  async function loadAliases() {
+    try { aliases = await api.aliases() }
+    catch { /* ignore — aliases are optional */ }
+  }
+
+  function handleRunAlias(name: string) {
+    runMutation(() => api.runAlias(name), `Ran alias: ${name}`)
   }
 
   async function handleWorkspaceOpen(name: string) {
@@ -841,35 +876,57 @@
       return
     }
 
+    // Cmd+F / Ctrl+F opens diff search
+    if (e.key === 'f' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      diffPanelRef?.openSearch()
+      return
+    }
+
+    // Inline mode Enter/Escape must fire even when a checkbox has focus
+    // (clicking file checkboxes in split/squash steals focus to the <input>)
+    if (split.active && (e.key === 'Enter' || e.key === 'Escape')) {
+      e.preventDefault()
+      if (e.key === 'Enter') executeSplit()
+      else { split.cancel(); squashSelectedFiles.clear() }
+      return
+    }
+    if (squash.active && (e.key === 'Enter' || e.key === 'Escape')) {
+      e.preventDefault()
+      if (e.key === 'Enter') executeSquash()
+      else { squash.cancel(); squashSelectedFiles.clear() }
+      return
+    }
+    if (rebase.active && (e.key === 'Enter' || e.key === 'Escape')) {
+      e.preventDefault()
+      if (e.key === 'Enter') executeRebase()
+      else rebase.cancel()
+      return
+    }
+
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
 
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
 
-    // Split mode: no j/k (operates on fixed revision), Enter/Escape/p
+    // Split mode: no j/k (operates on fixed revision), p toggles parallel
     if (split.active) {
-      if (e.key === 'Enter') { e.preventDefault(); executeSplit(); return }
-      if (e.key === 'Escape') { e.preventDefault(); split.cancel(); squashSelectedFiles.clear(); return }
       if (split.handleKey(e.key)) { e.preventDefault(); return }
       return
     }
 
-    // Squash mode: j/k navigate (cursor only, keep source diff), Enter/Escape, e/d toggles
+    // Squash mode: j/k navigate (cursor only, keep source diff), e/d toggles
     if (squash.active) {
       if (e.key === 'j' && selectedIndex < revisions.length - 1) { e.preventDefault(); selectRevisionCursorOnly(selectedIndex + 1); return }
       if (e.key === 'k' && selectedIndex > 0) { e.preventDefault(); selectRevisionCursorOnly(selectedIndex - 1); return }
-      if (e.key === 'Enter') { e.preventDefault(); executeSquash(); return }
-      if (e.key === 'Escape') { e.preventDefault(); squash.cancel(); squashSelectedFiles.clear(); return }
       if (squash.handleKey(e.key)) { e.preventDefault(); return }
       return
     }
 
-    // Rebase mode: j/k navigate, Enter/Escape, source/target mode keys
+    // Rebase mode: j/k navigate, source/target mode keys
     if (rebase.active) {
       if (e.key === 'j' && selectedIndex < revisions.length - 1) { e.preventDefault(); selectRevision(selectedIndex + 1); return }
       if (e.key === 'k' && selectedIndex > 0) { e.preventDefault(); selectRevision(selectedIndex - 1); return }
-      if (e.key === 'Enter') { e.preventDefault(); executeRebase(); return }
-      if (e.key === 'Escape') { e.preventDefault(); rebase.cancel(); return }
       if (rebase.handleKey(e.key)) { e.preventDefault(); return }
       return
     }
@@ -1027,6 +1084,7 @@
 
   loadLog()
   loadWorkspaces()
+  loadAliases()
 </script>
 
 <svelte:window onkeydown={handleKeydown} />

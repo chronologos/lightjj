@@ -1396,6 +1396,93 @@ func TestHandleEdit_RunnerError(t *testing.T) {
 	assert.Equal(t, "edit failed", resp["error"])
 }
 
+// --- Alias handler tests ---
+
+func TestHandleAliases(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	aliasOutput := "aliases.sync = ['git', 'fetch', '-b', 'glob:iant/*']\naliases.evolve = ['rebase', '--skip-emptied']\n"
+	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/aliases", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var aliases []jj.Alias
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &aliases))
+	assert.Len(t, aliases, 2)
+	assert.Equal(t, "sync", aliases[0].Name)
+	assert.Equal(t, []string{"git", "fetch", "-b", "glob:iant/*"}, aliases[0].Command)
+}
+
+func TestHandleAliases_NoAliases(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.ConfigListAliases()).SetError(errors.New("no aliases"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/aliases", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var aliases []jj.Alias
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &aliases))
+	assert.Len(t, aliases, 0)
+}
+
+func TestHandleRunAlias(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	aliasOutput := "aliases.sync = ['git', 'fetch']\n"
+	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
+	runner.Expect([]string{"sync"}).SetOutput([]byte("fetched from origin"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(runAliasRequest{Name: "sync"})
+	req := jsonPost("/api/alias", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "fetched from origin", resp["output"])
+}
+
+func TestHandleRunAlias_InvalidName(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	aliasOutput := "aliases.sync = ['git', 'fetch']\n"
+	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(runAliasRequest{Name: "evil-command"})
+	req := jsonPost("/api/alias", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "unknown alias")
+}
+
+func TestHandleRunAlias_EmptyName(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(runAliasRequest{Name: ""})
+	req := jsonPost("/api/alias", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 // --- validateFlags equals format tests ---
 
 func TestValidateFlags_EqualsFormat(t *testing.T) {
