@@ -42,10 +42,17 @@
 <style>
   .oplog-panel {
     border-top: 1px solid var(--surface1);
-    flex-shrink: 0;
+    flex: 1;
     max-height: 200px;
     display: flex;
     flex-direction: column;
+    min-height: 0;
+  }
+
+  /* When used as fullwidth view via .fullwidth-panel parent */
+  :global(.fullwidth-panel) .oplog-panel {
+    max-height: none;
+    border-top: none;
   }
 
   .panel-header {
@@ -113,6 +120,7 @@
   }
 
   .oplog-id {
+    font-family: var(--font-mono);
     color: var(--blue);
     font-weight: 600;
     font-size: 11px;

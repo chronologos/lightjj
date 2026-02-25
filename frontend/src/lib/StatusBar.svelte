@@ -132,18 +132,15 @@
   }
 
   .statusbar.rebase-active {
-    background: var(--crust);
-    border-top: 1px solid var(--yellow);
+    border-top-color: var(--yellow);
   }
 
   .statusbar.squash-active {
-    background: var(--crust);
-    border-top: 1px solid var(--green);
+    border-top-color: var(--green);
   }
 
   .statusbar.split-active {
-    background: var(--crust);
-    border-top: 1px solid var(--teal);
+    border-top-color: var(--teal);
   }
 
   .statusbar-left,

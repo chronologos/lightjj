@@ -27,7 +27,13 @@
 <aside class="sidebar">
   <div class="sidebar-top">
     <div class="logo">
-      <span class="logo-diamond">◆</span>
+      <img
+        src={theme === 'dark' ? '/logo.svg' : '/logo-light.svg'}
+        alt=""
+        width="20"
+        height="20"
+        class="logo-img"
+      />
       <span class="logo-text">lightjj</span>
     </div>
 
@@ -73,9 +79,14 @@
       </button>
     </div>
 
-    <button class="theme-toggle" onclick={onthemetoggle} title="Toggle theme (t)">
-      {theme === 'dark' ? '☀' : '☽'}
-      <kbd>t</kbd>
+    <button
+      class="theme-toggle"
+      onclick={onthemetoggle}
+      aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+    >
+      <span>{theme === 'dark' ? '☀' : '🌙'}</span>
+      <span class="theme-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+      <kbd class="theme-key">t</kbd>
     </button>
   </div>
 </aside>
@@ -89,40 +100,39 @@
     background: var(--base);
     border-right: 1px solid var(--surface1);
     user-select: none;
+    padding: 14px 10px;
+    gap: 1px;
   }
 
   .sidebar-top {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding: 16px 12px 12px;
+    gap: 14px;
   }
 
   .sidebar-bottom {
     margin-top: auto;
-    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
 
   .logo {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 0 4px;
+    gap: 7px;
+    padding: 4px 8px;
   }
 
-  .logo-diamond {
-    color: var(--blue);
-    font-size: 16px;
+  .logo-img {
+    flex-shrink: 0;
   }
 
   .logo-text {
-    font-weight: 700;
-    font-size: 15px;
+    font-weight: 600;
+    font-size: 14px;
     color: var(--text);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
   }
 
   .search-trigger {
@@ -130,45 +140,48 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 6px 10px;
-    background: var(--surface0);
-    border: 1px solid var(--surface1);
-    border-radius: 6px;
-    color: var(--subtext0);
+    padding: 6px 9px;
+    background: var(--bg-hover);
+    border: none;
+    border-radius: 7px;
+    color: var(--surface2);
     font-family: inherit;
     font-size: 12px;
     cursor: pointer;
   }
 
   .search-trigger:hover {
-    border-color: var(--surface2);
-    color: var(--text);
+    color: var(--subtext0);
   }
 
-  .search-kbd {
-    font-family: inherit;
-    font-size: 10px;
+  /* Shared kbd styling for search, nav, and theme keys */
+  .search-kbd,
+  .nav-key,
+  .theme-key {
+    font-family: var(--font-mono);
+    font-size: 9px;
     color: var(--surface2);
     background: none;
-    border: none;
-    padding: 0;
+    border: 1px solid var(--surface1);
+    padding: 1px 5px;
+    border-radius: 3px;
   }
 
   .nav {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
   }
 
   .nav-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     width: 100%;
-    padding: 6px 10px;
+    padding: 7px 9px;
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: 7px;
     color: var(--subtext0);
     font-family: inherit;
     font-size: 13px;
@@ -176,7 +189,7 @@
     text-align: left;
   }
 
-  .nav-item:hover {
+  .nav-item:hover:not(.nav-active) {
     background: var(--bg-hover);
     color: var(--text);
   }
@@ -184,11 +197,12 @@
   .nav-item.nav-active {
     background: var(--bg-selected);
     color: var(--blue);
+    font-weight: 500;
   }
 
   .nav-icon {
-    font-size: 14px;
-    width: 18px;
+    font-size: 13px;
+    width: 16px;
     text-align: center;
     flex-shrink: 0;
   }
@@ -198,18 +212,12 @@
   }
 
   .nav-key {
-    font-family: inherit;
-    font-size: 10px;
-    color: var(--surface2);
-    background: var(--bg-btn-kbd);
-    border: none;
-    padding: 1px 4px;
-    border-radius: 3px;
-    opacity: 0.7;
+    opacity: 0.6;
   }
 
   .nav-active .nav-key {
     color: var(--blue);
+    border-color: transparent;
     opacity: 0.5;
   }
 
@@ -266,29 +274,29 @@
   .theme-toggle {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 6px;
     width: 100%;
-    padding: 5px 10px;
+    padding: 6px 9px;
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 5px;
-    color: var(--subtext0);
+    border: none;
+    border-radius: 7px;
+    color: var(--surface2);
     font-family: inherit;
-    font-size: 13px;
+    font-size: 12px;
     cursor: pointer;
   }
 
   .theme-toggle:hover {
     background: var(--bg-hover);
-    color: var(--text);
+    color: var(--subtext0);
   }
 
-  .theme-toggle kbd {
-    font-family: inherit;
-    font-size: 10px;
-    color: var(--surface2);
-    background: none;
-    border: none;
-    padding: 0;
+  .theme-label {
+    flex: 1;
+    text-align: left;
+  }
+
+  .theme-key {
+    opacity: 0.6;
   }
 </style>

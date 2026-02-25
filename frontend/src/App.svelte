@@ -15,7 +15,6 @@
   type SourceMode = '-r' | '-s' | '-b'
   type TargetMode = '-d' | '--insert-after' | '--insert-before'
 
-  const sourceModeLabel: Record<SourceMode, string> = { '-r': 'revision', '-s': 'source', '-b': 'branch' }
   const targetModeLabel: Record<TargetMode, string> = { '-d': 'onto', '--insert-after': 'after', '--insert-before': 'before' }
 
   // --- Global state ---
@@ -165,6 +164,13 @@
     error = ''
   }
 
+  // After mutations that re-render the DOM, focus can land on the revset input,
+  // silently blocking all keyboard shortcuts via the INPUT tagName guard.
+  function blurActiveInput() {
+    const el = document.activeElement as HTMLElement
+    if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA') el.blur()
+  }
+
   // --- Command palette ---
   const noop = () => {}
   let commands: PaletteCommand[] = $derived.by(() => [
@@ -202,11 +208,11 @@
     { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { closeAllModals(); bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
 
     // View
-    { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', shortcut: 't', category: 'View', action: toggleViewMode },
+    { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
+    { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', category: 'View', action: toggleViewMode },
     { label: 'Toggle split/unified diff', category: 'View', action: () => { splitView = !splitView } },
     { label: 'Toggle operation log', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
-    { label: darkMode ? 'Light theme' : 'Dark theme', category: 'View', action: toggleTheme },
 
     // Actions
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
@@ -371,6 +377,7 @@
     } catch (e) {
       showError(e)
     }
+    blurActiveInput()
   }
 
   async function handleNewFromChecked() {
@@ -766,7 +773,16 @@
       return
     }
 
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+    // Allow shortcuts when an input is focused but not actively being used.
+    // The revset input can inadvertently receive focus after DOM re-renders.
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+      // Only Cmd+K and Escape should work from inputs
+      if (e.key === 'Escape') {
+        (target as HTMLElement).blur()
+        return
+      }
+      return
+    }
 
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
@@ -872,6 +888,65 @@
       return
     }
 
+    // Escape works regardless of inline mode
+    if (e.key === 'Escape') {
+      if (descriptionEditing) {
+        descriptionEditing = false
+      } else if (checkedRevisions.size > 0) {
+        clearChecksAndReload()
+      } else if (error) {
+        dismissError()
+      }
+      return
+    }
+
+    // Global shortcuts — work in all views, but blocked during inline modes
+    if (inlineMode) return
+
+    switch (e.key) {
+      case 't':
+        e.preventDefault()
+        toggleTheme()
+        return
+      case 'u':
+        e.preventDefault()
+        handleUndo()
+        return
+      case 'c':
+        e.preventDefault()
+        handleCommit()
+        return
+      case 'f':
+        e.preventDefault()
+        handleGitOp('fetch', [])
+        return
+      case 'p':
+        e.preventDefault()
+        handleGitOp('push', [])
+        return
+      case 'g':
+        e.preventDefault()
+        closeAllModals()
+        gitModalOpen = true
+        return
+      case '1':
+        e.preventDefault()
+        activeView = 'log'
+        return
+      case '2':
+        e.preventDefault()
+        activeView = 'branches'
+        return
+      case '3':
+        e.preventDefault()
+        activeView = 'operations'
+        if (oplogEntries.length === 0) loadOplog()
+        return
+    }
+
+    // Log-view-only shortcuts
+    if (activeView !== 'log') return
+
     switch (e.key) {
       case 'j':
         e.preventDefault()
@@ -896,10 +971,6 @@
           e.preventDefault()
           loadDiffAndFiles(selectedRevision.commit.change_id)
         }
-        break
-      case 'u':
-        e.preventDefault()
-        handleUndo()
         break
       case 'r':
         e.preventDefault()
@@ -950,58 +1021,9 @@
           bookmarkInputOpen = true
         }
         break
-      case 'c':
-        e.preventDefault()
-        handleCommit()
-        break
-      case 'f':
-        e.preventDefault()
-        handleGitOp('fetch', [])
-        break
-      case 'p':
-        e.preventDefault()
-        handleGitOp('push', [])
-        break
-      case 'g':
-        e.preventDefault()
-        closeAllModals()
-        gitModalOpen = true
-        break
-      case 't':
-        e.preventDefault()
-        toggleViewMode()
-        break
       case '/':
         e.preventDefault()
         revisionGraphRef?.focusRevsetInput()
-        break
-      case '1':
-        if (!inlineMode) {
-          e.preventDefault()
-          activeView = 'log'
-        }
-        break
-      case '2':
-        if (!inlineMode) {
-          e.preventDefault()
-          activeView = 'branches'
-        }
-        break
-      case '3':
-        if (!inlineMode) {
-          e.preventDefault()
-          activeView = 'operations'
-          if (oplogEntries.length === 0) loadOplog()
-        }
-        break
-      case 'Escape':
-        if (descriptionEditing) {
-          descriptionEditing = false
-        } else if (checkedRevisions.size > 0) {
-          clearChecksAndReload()
-        } else if (error) {
-          dismissError()
-        }
         break
     }
   }
@@ -1023,6 +1045,7 @@
   <Sidebar
     {activeView}
     onnavigate={(view) => {
+      if (inlineMode) return
       activeView = view
       if (view === 'operations' && oplogEntries.length === 0) loadOplog()
     }}
@@ -1130,6 +1153,12 @@
           onclose={() => { oplogOpen = false }}
         />
       {/if}
+    {:else if activeView === 'branches'}
+      <div class="empty-view">
+        <span class="empty-view-icon">⑂</span>
+        <span class="empty-view-title">Branches</span>
+        <span class="empty-view-hint">Coming soon — use <kbd>b</kbd> for bookmark operations</span>
+      </div>
     {:else if activeView === 'operations'}
       <div class="fullwidth-panel">
         <OplogPanel
@@ -1208,10 +1237,6 @@
     --peach: #ffa726;
     --mauve: #ab47bc;
 
-    --amber: #ffa726;
-    --amber-soft: rgba(255,167,38,0.07);
-    --amber-dim: rgba(255,167,38,0.15);
-
     /* Semantic backgrounds */
     --bg-hover: rgba(255,255,255,0.04);
     --bg-selected: rgba(255,167,38,0.07);
@@ -1285,8 +1310,6 @@
     --peach: #e68a00;
     --mauve: #6a1b9a;
 
-    --amber-soft: rgba(255,167,38,0.06);
-
     --bg-hover: rgba(0,0,0,0.03);
     --bg-selected: rgba(255,167,38,0.08);
     --bg-checked: rgba(46,125,50,0.08);
@@ -1304,8 +1327,8 @@
     --bg-btn-kbd: rgba(0,0,0,0.04);
     --wc-desc-color: #1a1a1e;
 
-    --diff-add-bg: rgba(46,125,50,0.1);
-    --diff-remove-bg: rgba(198,40,40,0.08);
+    --diff-add-bg: rgba(46,125,50,0.14);
+    --diff-remove-bg: rgba(198,40,40,0.1);
     --diff-add-word: rgba(46,125,50,0.2);
     --diff-remove-word: rgba(198,40,40,0.2);
     --diff-add-text: #2e7d32;
@@ -1416,5 +1439,40 @@
 
   .error-dismiss:hover {
     background: var(--bg-error-hover);
+  }
+
+  .empty-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--surface2);
+  }
+
+  .empty-view-icon {
+    font-size: 32px;
+    opacity: 0.4;
+  }
+
+  .empty-view-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--subtext0);
+  }
+
+  .empty-view-hint {
+    font-size: 12px;
+  }
+
+  .empty-view-hint kbd {
+    background: var(--surface0);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
   }
 </style>

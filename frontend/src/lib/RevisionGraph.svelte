@@ -80,6 +80,27 @@
     return result
   }
 
+  // Compute max gutter width across all lines so we can pad gutters
+  // to a uniform width, keeping descriptions vertically aligned.
+  // Cap at MAX_GUTTER to prevent deep graphs from consuming too much space.
+  const MAX_GUTTER = 12
+
+  let maxGutterLen = $derived.by(() => {
+    let max = 0
+    for (const entry of revisions) {
+      for (const gl of entry.graph_lines) {
+        if (gl.gutter.length > max) max = gl.gutter.length
+      }
+    }
+    return Math.min(max, MAX_GUTTER)
+  })
+
+  function padGutter(gutter: string): string {
+    return gutter.length > maxGutterLen
+      ? gutter.slice(0, maxGutterLen)
+      : gutter.padEnd(maxGutterLen)
+  }
+
   let flatLines = $derived.by(() => {
     const lines: FlatLine[] = []
     revisions.forEach((entry, i) => {
@@ -90,7 +111,7 @@
       entry.graph_lines.forEach((gl, j) => {
         const isNode = gl.is_node ?? (j === 0)
         lines.push({
-          gutter: gl.gutter,
+          gutter: padGutter(gl.gutter),
           entryIndex: i,
           lineKey: isNode ? 'node' : `g${graphIdx++}`,
           isNode,
@@ -102,7 +123,7 @@
           isConflicted: isNode && entry.commit.conflicted,
         })
         if (isNode) {
-          const contGutter = continuationGutter(gl.gutter)
+          const contGutter = padGutter(continuationGutter(gl.gutter))
           const hasLabels = (entry.bookmarks?.length ?? 0) + (entry.commit.working_copies?.length ?? 0) > 0
           if (hasLabels) {
             lines.push({
@@ -507,10 +528,13 @@
   .graph-row.bookmark-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
     background: var(--bg-hover);
   }
+  .graph-row.bookmark-row:not(.selected):has(+ .graph-row.desc-row:hover) {
+    background: var(--bg-hover);
+  }
 
   .graph-row.selected {
     background: var(--bg-selected);
-    box-shadow: inset 2px 0 0 var(--amber, var(--blue));
+    box-shadow: inset 2px 0 0 var(--blue);
   }
 
   .graph-row.checked {
@@ -519,7 +543,7 @@
 
   .graph-row.checked.selected {
     background: var(--bg-checked-selected);
-    box-shadow: inset 2px 0 0 var(--amber, var(--blue));
+    box-shadow: inset 2px 0 0 var(--blue);
   }
 
   .graph-row.hidden-rev {
@@ -550,7 +574,6 @@
 
   .gutter.wc-gutter {
     color: var(--green);
-    font-weight: 800;
   }
 
   .gutter.mutable-gutter {
@@ -559,7 +582,6 @@
 
   .gutter.conflict-gutter {
     color: var(--red);
-    font-weight: 800;
   }
 
   .node-line-content,
