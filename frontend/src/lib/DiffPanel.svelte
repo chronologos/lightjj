@@ -282,10 +282,8 @@
     <div class="revision-detail">
       <div class="detail-header">
         <div class="detail-ids">
-          <span class="detail-label">Change</span>
-          <span class="detail-change-id">{selectedRevision.commit.change_id}</span>
-          <span class="detail-label">Commit</span>
-          <span class="detail-commit-id">{selectedRevision.commit.commit_id}</span>
+          <span class="detail-change-id">{selectedRevision.commit.change_id.slice(0, 8)}</span>
+          <span class="detail-description-inline">{selectedRevision.description || '(no description)'}</span>
         </div>
         <div class="panel-actions">
           {#if describeSaved}
@@ -302,9 +300,6 @@
             <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>{bm}</button>
           {/each}
         </div>
-      {/if}
-      {#if selectedRevision.description}
-        <div class="detail-description">{selectedRevision.description}</div>
       {/if}
     </div>
   {:else if checkedRevisions.size > 0}
@@ -346,10 +341,10 @@
           {#if totalStats.del > 0}<span class="stat-del">-{totalStats.del}</span>{/if}
         </span>
       {/if}
-      <div class="file-list">
+      <div class="file-tabs">
         {#each changedFiles as file (file.path)}
           <button
-            class="file-chip"
+            class="file-tab"
             onclick={() => scrollToFile(file.path)}
             title={file.path}
           >
@@ -364,11 +359,17 @@
               />
             {/if}
             {#if file.conflict}
-              <span class="file-type-indicator file-type-C">C</span>
+              <span class="file-dot dot-C"></span>
             {:else}
-              <span class="file-type-indicator" class:file-type-A={file.type === 'A'} class:file-type-D={file.type === 'D'} class:file-type-M={file.type === 'M'}>{file.type}</span>
+              <span class="file-dot" class:dot-A={file.type === 'A'} class:dot-D={file.type === 'D'} class:dot-M={file.type === 'M'}></span>
             {/if}
-            {file.path.split('/').pop()}
+            <span class="file-tab-name">{file.path.split('/').pop()}</span>
+            {#if file.additions > 0 || file.deletions > 0}
+              <span class="file-tab-stats">
+                {#if file.additions > 0}<span class="stat-add">+{file.additions}</span>{/if}
+                {#if file.deletions > 0}<span class="stat-del">-{file.deletions}</span>{/if}
+              </span>
+            {/if}
           </button>
         {/each}
       </div>
@@ -380,15 +381,15 @@
         <button class="toolbar-btn-sm" onclick={collapseAll}>Collapse all</button>
         <button class="toolbar-btn-sm" onclick={expandAll}>Expand all</button>
       </div>
-      <div class="diff-toolbar-right">
+      <div class="diff-toggle-pill">
         <button
-          class="toolbar-btn-sm"
-          class:active={!splitView}
+          class="toggle-pill-btn"
+          class:toggle-active={!splitView}
           onclick={() => splitView = false}
         >Unified</button>
         <button
-          class="toolbar-btn-sm"
-          class:active={splitView}
+          class="toggle-pill-btn"
+          class:toggle-active={splitView}
           onclick={() => splitView = true}
         >Split</button>
       </div>
@@ -551,28 +552,27 @@
   .detail-ids {
     display: flex;
     align-items: baseline;
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 8px;
     min-width: 0;
-  }
-
-  .detail-label {
-    color: var(--surface2);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    flex: 1;
+    overflow: hidden;
   }
 
   .detail-change-id {
+    font-family: var(--font-mono);
     color: var(--blue);
     font-weight: 600;
-    word-break: break-all;
+    font-size: 12px;
+    flex-shrink: 0;
   }
 
-  .detail-commit-id {
-    color: var(--overlay0);
-    word-break: break-all;
+  .detail-description-inline {
+    color: var(--text);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   .detail-bookmarks {
@@ -664,32 +664,62 @@
   .total-stats .stat-add { color: var(--green); }
   .total-stats .stat-del { color: var(--red); }
 
-  .file-list {
+  .file-tabs {
     display: flex;
     align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
+    gap: 0;
+    overflow-x: auto;
+    flex: 1;
   }
 
-  .file-chip {
+  .file-tab {
     display: inline-flex;
     align-items: center;
-    background: var(--surface0);
+    gap: 5px;
+    background: transparent;
     color: var(--subtext0);
-    border: 1px solid var(--surface1);
-    padding: 1px 8px;
-    border-radius: 3px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 4px 10px;
     cursor: pointer;
     font-family: inherit;
     font-size: 11px;
     white-space: nowrap;
-    transition: all 0.15s ease;
+    flex-shrink: 0;
   }
 
-  .file-chip:hover {
-    background: var(--surface1);
+  .file-tab:hover {
     color: var(--text);
+    background: var(--bg-hover);
   }
+
+  .file-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--subtext0);
+    flex-shrink: 0;
+  }
+
+  .file-dot.dot-A { background: var(--green); }
+  .file-dot.dot-D { background: var(--red); }
+  .file-dot.dot-M { background: var(--blue); }
+  .file-dot.dot-C { background: var(--red); }
+
+  .file-tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .file-tab-stats {
+    display: inline-flex;
+    gap: 3px;
+    font-size: 10px;
+    opacity: 0.7;
+  }
+
+  .file-tab-stats .stat-add { color: var(--green); }
+  .file-tab-stats .stat-del { color: var(--red); }
 
   .squash-file-check {
     margin: 0 2px 0 0;
@@ -709,22 +739,10 @@
     color: var(--subtext0);
   }
 
-  .file-type-A {
-    color: var(--green);
-  }
-
-  .file-type-D {
-    color: var(--red);
-  }
-
-  .file-type-M {
-    color: var(--yellow);
-  }
-
-  .file-type-C {
-    color: var(--red);
-    font-weight: 800;
-  }
+  .file-type-A { color: var(--green); }
+  .file-type-D { color: var(--red); }
+  .file-type-M { color: var(--yellow); }
+  .file-type-C { color: var(--red); font-weight: 800; }
 
   .conflict-count-label {
     color: var(--red);
@@ -812,7 +830,6 @@
     cursor: pointer;
     font-family: inherit;
     font-size: 11px;
-    transition: all 0.15s ease;
   }
 
   .toolbar-btn-sm:hover {
@@ -820,10 +837,33 @@
     color: var(--text);
   }
 
-  .toolbar-btn-sm.active {
+  .diff-toggle-pill {
+    display: flex;
+    background: var(--surface0);
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--surface1);
+  }
+
+  .toggle-pill-btn {
+    background: transparent;
+    border: none;
+    color: var(--subtext0);
+    padding: 3px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .toggle-pill-btn:hover:not(.toggle-active) {
+    color: var(--text);
+  }
+
+  .toggle-pill-btn.toggle-active {
     background: var(--bg-active);
-    border-color: var(--blue);
     color: var(--blue);
+    font-weight: 600;
   }
 
   /* --- Empty states --- */

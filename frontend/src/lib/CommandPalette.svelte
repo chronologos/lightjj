@@ -110,15 +110,19 @@
 {#if open}
   <div class="palette-backdrop" onclick={close} role="presentation"></div>
   <div class="palette" class:palette-wide={isCheatsheet} role="dialog" aria-modal="true" aria-label="Command palette">
-    <input
-      bind:this={inputEl}
-      bind:value={query}
-      class="palette-input"
-      type="text"
-      placeholder={isCheatsheet ? 'Filter commands...' : 'Type a command...'}
-      onkeydown={handleKeydown}
-      oninput={() => { index = 0 }}
-    />
+    <div class="palette-input-wrap">
+      <span class="palette-arrow">▸</span>
+      <input
+        bind:this={inputEl}
+        bind:value={query}
+        class="palette-input"
+        type="text"
+        placeholder={isCheatsheet ? 'Filter commands...' : 'Type a command...'}
+        onkeydown={handleKeydown}
+        oninput={() => { index = 0 }}
+      />
+      <kbd class="palette-esc">esc</kbd>
+    </div>
     {#if isCheatsheet}
       <div class="cheatsheet">
         {#each groupedCommands as [category, cmds]}
@@ -170,6 +174,8 @@
     position: fixed;
     inset: 0;
     background: var(--backdrop);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     z-index: 100;
   }
 
@@ -178,11 +184,11 @@
     top: 20%;
     left: 50%;
     transform: translateX(-50%);
-    width: 480px;
+    width: 520px;
     max-height: 400px;
     background: var(--base);
     border: 1px solid var(--surface1);
-    border-radius: 8px;
+    border-radius: 14px;
     box-shadow: var(--shadow-heavy);
     z-index: 101;
     display: flex;
@@ -195,13 +201,27 @@
     max-height: 70vh;
   }
 
-  .palette-input {
-    width: 100%;
+  .palette-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     background: var(--mantle);
-    color: var(--text);
-    border: none;
     border-bottom: 1px solid var(--surface0);
     padding: 12px 16px;
+  }
+
+  .palette-arrow {
+    color: var(--blue);
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  .palette-input {
+    flex: 1;
+    background: transparent;
+    color: var(--text);
+    border: none;
+    padding: 0;
     font-family: inherit;
     font-size: 14px;
     outline: none;
@@ -209,6 +229,17 @@
 
   .palette-input::placeholder {
     color: var(--surface2);
+  }
+
+  .palette-esc {
+    font-family: inherit;
+    font-size: 10px;
+    color: var(--surface2);
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
   }
 
   /* --- Cheatsheet grid --- */
@@ -310,7 +341,7 @@
   }
 
   .palette-item-active {
-    background: var(--surface0);
+    background: var(--bg-selected);
   }
 
   .palette-label {

@@ -12,9 +12,10 @@
     splitMode: boolean
     splitParallel: boolean
     splitFileCount: { selected: number, total: number } | null
+    activeView: 'log' | 'branches' | 'operations'
   }
 
-  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode, squashMode, squashKeepEmptied, squashUseDestMsg, squashFileCount, splitMode, splitParallel, splitFileCount }: Props = $props()
+  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode, squashMode, squashKeepEmptied, squashUseDestMsg, squashFileCount, splitMode, splitParallel, splitFileCount, activeView }: Props = $props()
 
   const sourceKeys: { key: string; flag: string; label: string }[] = [
     { key: 'r', flag: '-r', label: 'revision' },
@@ -89,13 +90,28 @@
     </div>
   {:else}
     <div class="statusbar-left">
-      <span class="status-item">{statusText}</span>
+      {#if statusText}
+        <span class="status-item">{statusText}</span>
+      {:else if activeView === 'log'}
+        <span class="key-hints">
+          <kbd>j</kbd>/<kbd>k</kbd> navigate
+          <kbd>Space</kbd> check
+          <kbd>e</kbd> describe
+          <kbd>R</kbd> rebase
+          <kbd>S</kbd> squash
+          <kbd>/</kbd> filter
+        </span>
+      {:else if activeView === 'operations'}
+        <span class="key-hints">
+          <kbd>j</kbd>/<kbd>k</kbd> navigate
+          <kbd>u</kbd> undo
+        </span>
+      {/if}
     </div>
     <div class="statusbar-right">
       {#if commandOutput}
         <span class="status-item output">{commandOutput.trim().split('\n').pop()}</span>
       {/if}
-      <span class="status-item">lightjj</span>
     </div>
   {/if}
 </footer>
@@ -220,5 +236,23 @@
   .file-count-empty {
     color: var(--red);
     font-weight: 600;
+  }
+
+  .key-hints {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--surface2);
+    font-size: 10px;
+  }
+
+  .key-hints kbd {
+    font-family: inherit;
+    font-size: 10px;
+    color: var(--subtext0);
+    background: var(--surface0);
+    padding: 0 3px;
+    border-radius: 2px;
+    border: none;
   }
 </style>

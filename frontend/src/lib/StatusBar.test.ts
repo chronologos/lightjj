@@ -16,6 +16,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     splitMode: false,
     splitParallel: false,
     splitFileCount: null,
+    activeView: 'log' as const,
     ...overrides,
   }
 }
@@ -36,11 +37,10 @@ describe('StatusBar', () => {
       expect(output?.textContent).toBe('last line')
     })
 
-    it('shows lightjj label', () => {
-      const { container } = render(StatusBar, { props: defaultProps() })
-      const items = container.querySelectorAll('.status-item')
-      const texts = Array.from(items).map(i => i.textContent)
-      expect(texts).toContain('lightjj')
+    it('shows key hints when no statusText', () => {
+      const { container } = render(StatusBar, { props: defaultProps({ statusText: '' }) })
+      const hints = container.querySelector('.key-hints')
+      expect(hints).not.toBeNull()
     })
   })
 
