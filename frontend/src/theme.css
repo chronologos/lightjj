@@ -90,6 +90,9 @@ body {
   --conflict-side2-marker-bg: rgba(171,71,188,0.1);
   --conflict-marker-color: #8a8a94;
 
+  --search-match-bg: rgba(255,167,38,0.2);
+  --search-match-current-bg: rgba(255,167,38,0.45);
+
   --backdrop: rgba(0,0,0,0.5);
   --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
 
@@ -159,6 +162,9 @@ body {
   --conflict-side2-bg: rgba(106,27,154,0.06);
   --conflict-side2-marker-bg: rgba(106,27,154,0.1);
   --conflict-marker-color: #71717a;
+
+  --search-match-bg: rgba(230,138,0,0.2);
+  --search-match-current-bg: rgba(230,138,0,0.45);
 
   --backdrop: rgba(0,0,0,0.3);
   --shadow-heavy: 0 20px 60px rgba(0,0,0,0.15);

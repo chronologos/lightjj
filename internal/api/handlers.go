@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -712,4 +713,45 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runMutation(w, r, jj.Resolve(req.Revision, req.File, req.Tool))
+}
+
+func (s *Server) handleAliases(w http.ResponseWriter, r *http.Request) {
+	output, err := s.Runner.Run(r.Context(), jj.ConfigListAliases())
+	if err != nil {
+		// No aliases configured is not an error — return empty list
+		s.writeJSON(w, r, http.StatusOK, []jj.Alias{})
+		return
+	}
+	aliases := jj.ParseAliases(string(output))
+	s.writeJSON(w, r, http.StatusOK, aliases)
+}
+
+type runAliasRequest struct {
+	Name string `json:"name"`
+}
+
+func (s *Server) handleRunAlias(w http.ResponseWriter, r *http.Request) {
+	var req runAliasRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Validate alias name against actual alias list to prevent arbitrary command execution
+	output, err := s.Runner.Run(r.Context(), jj.ConfigListAliases())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to list aliases")
+		return
+	}
+	aliases := jj.ParseAliases(string(output))
+	if !slices.ContainsFunc(aliases, func(a jj.Alias) bool { return a.Name == req.Name }) {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown alias: %s", req.Name))
+		return
+	}
+
+	s.runMutation(w, r, []string{req.Name})
 }

@@ -158,6 +158,11 @@ export interface WorkspacesResponse {
   workspaces: Workspace[]
 }
 
+export interface Alias {
+  name: string
+  command: string[]
+}
+
 /** Returns the best unique identifier for a commit.
  *  Divergent and hidden commits share change_id, so we fall back to commit_id.
  *  Mirrors the Go Commit.GetChangeId() logic. */
@@ -284,6 +289,11 @@ export const api = {
 
   resolve: (revision: string, file: string, tool: ':ours' | ':theirs') =>
     post<{ output: string }>('/api/resolve', { revision, file, tool }),
+
+  aliases: () => request<Alias[]>('/api/aliases'),
+
+  runAlias: (name: string) =>
+    post<{ output: string }>('/api/alias', { name }),
 }
 
 // Test-only exports for cache inspection/reset

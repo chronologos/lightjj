@@ -4,6 +4,7 @@
   export interface PaletteCommand {
     label: string
     shortcut?: string
+    hint?: string
     category?: string
     action: () => void
     when?: () => boolean
@@ -28,7 +29,7 @@
 
   let filteredCommands = $derived.by(() => {
     if (!query) return availableCommands
-    return availableCommands.filter(c => fuzzyMatch(query, c.label))
+    return availableCommands.filter(c => fuzzyMatch(query, c.label) || (c.hint && fuzzyMatch(query, c.hint)))
   })
 
   let groupedCommands = $derived.by(() => {
@@ -133,11 +134,13 @@
                 <div class="cheatsheet-item cheatsheet-item-info">
                   <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
                   <span class="cheatsheet-label">{cmd.label}</span>
+                  {#if cmd.hint}<span class="palette-hint">{cmd.hint}</span>{/if}
                 </div>
               {:else}
                 <button class="cheatsheet-item" onclick={() => execute(cmd)}>
                   <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
                   <span class="cheatsheet-label">{cmd.label}</span>
+                  {#if cmd.hint}<span class="palette-hint">{cmd.hint}</span>{/if}
                 </button>
               {/if}
             {/each}
@@ -156,7 +159,11 @@
             onclick={() => execute(cmd)}
             onmouseenter={() => { index = i }}
           >
-            <span class="palette-label">{cmd.label}</span>
+            <span class="palette-label">
+              {cmd.label}
+              {#if cmd.hint}<span class="palette-badge">alias</span>{/if}
+            </span>
+            {#if cmd.hint}<span class="palette-hint" title={cmd.hint}>{cmd.hint}</span>{/if}
             {#if cmd.shortcut}
               <kbd class="palette-shortcut">{cmd.shortcut}</kbd>
             {/if}
@@ -345,7 +352,8 @@
   }
 
   .palette-label {
-    flex: 1;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .palette-shortcut {
@@ -361,6 +369,32 @@
 
   .palette-item-active .palette-shortcut {
     background: var(--surface1);
+  }
+
+  .palette-badge {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--purple);
+    background: rgba(171, 71, 188, 0.1);
+    border: 1px solid rgba(171, 71, 188, 0.2);
+    padding: 0 4px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+
+  .palette-hint {
+    color: var(--surface2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    margin-left: auto;
+    padding-left: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex-shrink: 1;
   }
 
   .palette-empty {

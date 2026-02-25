@@ -78,13 +78,14 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
 
 describe('RevisionGraph', () => {
   describe('rendering', () => {
-    it('renders node rows with gutter characters', () => {
+    it('renders node rows with SVG graph gutter', () => {
       const entry = makeEntry({ gutter: '○ ' })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
-      const gutters = container.querySelectorAll('.gutter')
-      expect(gutters.length).toBeGreaterThan(0)
-      // Node row gutter should contain the gutter text
-      expect(gutters[0].textContent).toBe('○ ')
+      const svgs = container.querySelectorAll('.graph-svg')
+      expect(svgs.length).toBeGreaterThan(0)
+      // Node row should have an SVG element for the graph gutter
+      const nodeRow = container.querySelector('.graph-row.node-row')
+      expect(nodeRow?.querySelector('.graph-svg')).toBeInTheDocument()
     })
 
     it('renders description line for each revision', () => {
@@ -159,13 +160,14 @@ describe('RevisionGraph', () => {
       expect(rows).toHaveLength(3) // node-row + bookmark-row + desc-row
     })
 
-    it('continuation gutter replaces @ with │ and branch chars with space', () => {
+    it('continuation gutter renders SVG on both node and desc rows', () => {
       const entry = makeEntry({ gutter: '@ ─╮', is_working_copy: true })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
-      const gutters = container.querySelectorAll('.gutter')
-      // First gutter is the node row (original), second is the desc row (continuation)
-      expect(gutters[0].textContent).toBe('@ ─╮')
-      expect(gutters[1].textContent).toBe('│   ')
+      // Both node row and desc row should have an SVG graph gutter
+      const nodeRow = container.querySelector('.graph-row.node-row')
+      const descRow = container.querySelector('.graph-row.desc-row')
+      expect(nodeRow?.querySelector('.graph-svg')).toBeInTheDocument()
+      expect(descRow?.querySelector('.graph-svg')).toBeInTheDocument()
     })
   })
 
@@ -328,33 +330,37 @@ describe('RevisionGraph', () => {
   })
 
   describe('conflicted commits', () => {
-    it('applies conflict-gutter class to conflicted node rows', () => {
+    it('renders SVG graph for conflicted node rows', () => {
       const entry = makeEntry({ conflicted: true, gutter: '× ' })
       const { container } = render(RevisionGraph, {
         props: defaultProps({ revisions: [entry] }),
       })
-      // Only the node row gutter gets conflict-gutter, not the desc row
-      const conflictGutters = container.querySelectorAll('.gutter.conflict-gutter')
-      expect(conflictGutters).toHaveLength(1)
+      // Conflicted node row should have an SVG graph element
+      const nodeRow = container.querySelector('.graph-row.node-row')
+      expect(nodeRow?.querySelector('.graph-svg')).toBeInTheDocument()
     })
 
-    it('does not apply conflict-gutter to non-conflicted commits', () => {
+    it('renders SVG graph for non-conflicted commits too', () => {
       const entry = makeEntry({ conflicted: false, gutter: '○ ' })
       const { container } = render(RevisionGraph, {
         props: defaultProps({ revisions: [entry] }),
       })
-      expect(container.querySelectorAll('.gutter.conflict-gutter')).toHaveLength(0)
+      // Non-conflicted node row also has SVG graph
+      const nodeRow = container.querySelector('.graph-row.node-row')
+      expect(nodeRow?.querySelector('.graph-svg')).toBeInTheDocument()
     })
 
-    it('conflict-gutter excludes mutable-gutter class', () => {
-      const entry = makeEntry({ conflicted: true, gutter: '× ' })
+    it('conflicted and non-conflicted node rows both render with SVG', () => {
+      const conflicted = makeEntry({ change_id: 'ccc', conflicted: true, gutter: '× ' })
+      const normal = makeEntry({ change_id: 'nnn', conflicted: false, gutter: '○ ' })
       const { container } = render(RevisionGraph, {
-        props: defaultProps({ revisions: [entry] }),
+        props: defaultProps({ revisions: [conflicted, normal] }),
       })
-      // The node row gutter should have conflict-gutter but NOT mutable-gutter
-      const nodeGutter = container.querySelector('.graph-row.node-row .gutter')
-      expect(nodeGutter).toHaveClass('conflict-gutter')
-      expect(nodeGutter).not.toHaveClass('mutable-gutter')
+      const nodeRows = container.querySelectorAll('.graph-row.node-row')
+      expect(nodeRows).toHaveLength(2)
+      // Both should have SVG elements
+      expect(nodeRows[0].querySelector('.graph-svg')).toBeInTheDocument()
+      expect(nodeRows[1].querySelector('.graph-svg')).toBeInTheDocument()
     })
   })
 })

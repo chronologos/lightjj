@@ -362,6 +362,10 @@ func ConfigListAll() CommandArgs {
 	return []string{"config", "list", "--color", "never", "--include-defaults", "--ignore-working-copy"}
 }
 
+func ConfigListAliases() CommandArgs {
+	return []string{"config", "list", "aliases", "--color", "never", "--ignore-working-copy"}
+}
+
 // FileShow returns args for `jj file show` to get a file's content at a revision.
 // Uses EscapeFileName for consistency and to prevent dash-prefix flag injection.
 func FileShow(revision string, path string) CommandArgs {

@@ -24,8 +24,9 @@ lightjj is a browser-based UI for the Jujutsu (jj) version control system. It fo
 │  │  HTTP Server (net/http)                                     │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
 │  │  │  API Handlers (internal/api/)                         │  │ │
-│  │  │  GET  /api/log, /api/diff, /api/files, /api/status   │  │ │
-│  │  │       /api/bookmarks, /api/description, /api/remotes  │  │ │
+│  │  │  GET  /api/log, /api/diff, /api/diff-range,            │  │ │
+│  │  │       /api/files, /api/status, /api/bookmarks,        │  │ │
+│  │  │       /api/description, /api/remotes,                  │  │ │
 │  │  │       /api/oplog, /api/evolog, /api/workspaces        │  │ │
 │  │  │  POST /api/new, /api/edit, /api/abandon, /api/undo   │  │ │
 │  │  │       /api/rebase, /api/squash, /api/describe         │  │ │
@@ -63,7 +64,7 @@ func Rebase(from SelectedRevisions, to string, ...) CommandArgs
 ```
 
 Also contains data models and parsers:
-- `Commit` — includes `ChangePrefix`/`CommitPrefix` for highlighted IDs, `Immutable` bool (from `◆` glyph), `WorkingCopies []string` (for multi-workspace display)
+- `Commit` — includes `ChangePrefix`/`CommitPrefix` for highlighted IDs, `Immutable` bool (from `◆` glyph), `Divergent` bool (from template `divergent` expression), `WorkingCopies []string` (for multi-workspace display)
 - `Bookmark` — bookmark model + output parsers
 - `FileChange` — file change model, `DiffStat`/`DiffSummary` parsers
 - `SelectedRevisions` — multi-revision selection helper
@@ -95,7 +96,7 @@ Handlers use `httptest.NewRecorder` + `testutil.MockRunner` for testing, so they
 
 ### Graph Parser (`internal/parser/`)
 
-Parses `jj log` graph output (with `_PREFIX:` field markers and `\x1F` field delimiters) into `[]GraphRow` structs. Each row contains the graph gutter characters and parsed commit data. The parser detects node glyphs (`◆` immutable, `○` mutable, `@` working copy, `×` conflicted, `◌` hidden) and sets the corresponding flags on the `Commit` struct.
+Parses `jj log` graph output (with `_PREFIX:` field markers and `\x1F` field delimiters) into `[]GraphRow` structs. Each row contains the graph gutter characters and parsed commit data. The parser detects node glyphs (`◆` immutable, `○` mutable, `@` working copy, `×` conflicted, `◌` hidden) and sets the corresponding flags on the `Commit` struct. The `divergent` boolean is parsed from the template's `divergent` expression and stored as a separate field (not as a `??` suffix on the change ID).
 
 ### Frontend (`frontend/`)
 
@@ -133,6 +134,23 @@ User triggers rebase (inline mode, Enter key)
 
 Every API response carries an `X-JJ-Op-Id` header with jj's current operation ID. The frontend tracks this value; when it changes (due to mutations from the UI or external CLI usage detected on next request), the API client clears its cache and fires stale callbacks that trigger a log refresh.
 
+### Divergence resolution
+
+Divergent commits (multiple commits sharing the same change ID) are detected via the `Divergent` field on the `Commit` struct. The frontend uses `effectiveId(commit)` — which falls back to `commit_id` for divergent/hidden commits — for all identity operations (DOM keys, checked sets, mutation API calls), since `change_id` is ambiguous for divergent commits.
+
+```
+User selects divergent commit → "Divergence ⚠" button appears in DiffPanel header
+  → Click opens DivergencePanel (replaces DiffPanel)
+  → Panel fetches api.log('change_id(X)') → all divergent versions
+  → Fetches api.files(commitId) for each version in parallel → computes file union
+  → Fetches api.log('parents(commitId)') for each version → shows parent info
+  → User selects two versions to compare → api.diffRange(from, to, unionFiles)
+  → Cross-version diff rendered with DiffFileView (reuses existing diff infrastructure)
+  → "Keep" button abandons all other versions, resolves bookmark conflicts
+```
+
+The `diff-range` endpoint (`GET /api/diff-range?from=X&to=Y&files=a&files=b`) compares two arbitrary commits. File filtering uses repeated query params (not comma-separated) to handle paths with commas. Version cards are color-coded to match the diff: red for the "from" (deletions) side, green for the "to" (additions) side.
+
 ### Inline rebase UX
 
 Rebase does not use a modal. Instead, pressing `R` activates an inline rebase mode directly in the revision graph. The source commit is marked with a badge; `j`/`k` move a destination cursor through the graph (also badged); Enter fires the API call. Source mode (`-r`/`-s`/`-b`) and target mode (`-d`/`--insert-after`/`--insert-before`) are toggled with keyboard shortcuts while in rebase mode. Escape cancels without any API call.
@@ -160,7 +178,9 @@ Rebase does not use a modal. Instead, pressing `R` activates an inline rebase mo
 │  └── Fuzzy search: command palette matching     │
 ├─────────────────────────────────────────────────┤
 │  Integration tests (real jj repo in tmpdir)     │
-│  └── TODO                                       │
+│  └── go test -tags integration ./internal/api/  │
+│      CRUD endpoints, journey tests, divergence  │
+│      resolution, diff-range, bookmark lifecycle │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -189,6 +209,8 @@ defer runner.Verify()  // asserts all expectations called
 7. **Tracked view** — The revision panel supports a Log/Tracked toggle (`t` key). Tracked view issues a `jj log` request with the `tracked_remote_bookmarks()` revset, giving a focused view of remote branches without changing any global state.
 
 8. **Op-ID staleness detection** — Every response carries `X-JJ-Op-Id`. The frontend detects operation changes and auto-refreshes. Mutation endpoints refresh the cached op-id asynchronously to avoid adding latency.
+
+9. **Divergent commit identity** — Divergent commits share the same `change_id`, so the frontend uses `effectiveId()` (falls back to `commit_id`) for identity operations. The `change_id()` revset function (not `all:` which doesn't exist in jj 0.38) resolves all divergent versions. Divergence offsets (`/0`, `/1`) are computed client-side by lexicographic commit ID sort, matching jj's convention. The DivergencePanel is self-fetching — it receives only a `changeId` and manages its own data loading with separate generation counters for version fetching and diff fetching.
 
 ## Graph View
 

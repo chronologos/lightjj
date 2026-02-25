@@ -100,6 +100,7 @@
           <kbd>R</kbd> rebase
           <kbd>S</kbd> squash
           <kbd>/</kbd> filter
+          <kbd>⌘F</kbd> search
         </span>
       {:else if activeView === 'operations'}
         <span class="key-hints">
