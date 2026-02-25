@@ -132,7 +132,7 @@
   }
 
   .statusbar.rebase-active {
-    border-top-color: var(--yellow);
+    border-top-color: var(--amber);
   }
 
   .statusbar.squash-active {
@@ -140,7 +140,7 @@
   }
 
   .statusbar.split-active {
-    border-top-color: var(--teal);
+    border-top-color: var(--cyan);
   }
 
   .statusbar-left,
@@ -160,7 +160,7 @@
 
   /* --- Rebase mode --- */
   .mode-badge {
-    background: var(--yellow);
+    background: var(--amber);
     color: var(--crust);
     font-weight: 800;
     font-size: 10px;
@@ -201,9 +201,9 @@
   }
 
   .key.key-active {
-    background: var(--blue);
+    background: var(--amber);
     color: var(--crust);
-    border-color: var(--blue);
+    border-color: var(--amber);
   }
 
   .key-label {
@@ -222,7 +222,7 @@
   }
 
   .mode-badge-split {
-    background: var(--teal);
+    background: var(--cyan);
   }
 
   .file-count {

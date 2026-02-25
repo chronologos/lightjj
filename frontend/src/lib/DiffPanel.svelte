@@ -528,7 +528,7 @@
   }
 
   .header-change-id {
-    color: var(--blue);
+    color: var(--amber);
     text-transform: none;
     letter-spacing: normal;
     font-weight: 700;
@@ -592,7 +592,7 @@
 
   .detail-change-id {
     font-family: var(--font-mono);
-    color: var(--blue);
+    color: var(--amber);
     font-weight: 600;
     font-size: 12px;
     flex-shrink: 0;
@@ -654,8 +654,8 @@
 
   .split-banner {
     background: var(--badge-workspace-bg);
-    border-bottom-color: var(--teal);
-    color: var(--teal);
+    border-bottom-color: var(--cyan);
+    color: var(--cyan);
   }
 
   .file-list-bar {
@@ -730,7 +730,7 @@
 
   .file-dot.dot-A { background: var(--green); }
   .file-dot.dot-D { background: var(--red); }
-  .file-dot.dot-M { background: var(--blue); }
+  .file-dot.dot-M { background: var(--amber); }
   .file-dot.dot-C { background: var(--red); }
 
   .file-tab-name {
@@ -756,7 +756,7 @@
   }
 
   .split-file-check {
-    accent-color: var(--teal);
+    accent-color: var(--cyan);
   }
 
   .conflict-count-label {
@@ -809,14 +809,14 @@
 
   .resolve-ours:hover {
     background: var(--conflict-side1-bg);
-    border-color: var(--peach);
-    color: var(--peach);
+    border-color: var(--amber);
+    color: var(--amber);
   }
 
   .resolve-theirs:hover {
     background: var(--conflict-side2-bg);
-    border-color: var(--mauve);
-    color: var(--mauve);
+    border-color: var(--purple);
+    color: var(--purple);
   }
   /* --- Diff toolbar --- */
   .diff-toolbar {
@@ -876,7 +876,7 @@
 
   .toggle-pill-btn.toggle-active {
     background: var(--bg-active);
-    color: var(--blue);
+    color: var(--amber);
     font-weight: 600;
   }
 
@@ -916,7 +916,7 @@
     width: 20px;
     height: 20px;
     border: 2px solid var(--surface0);
-    border-top-color: var(--blue);
+    border-top-color: var(--amber);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }

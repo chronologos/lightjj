@@ -302,7 +302,7 @@
 
   .badge-M {
     background: var(--badge-modify-bg);
-    color: var(--blue);
+    color: var(--amber);
   }
 
   .badge-D {
@@ -312,7 +312,7 @@
 
   .badge-R {
     background: var(--badge-other-bg);
-    color: var(--yellow);
+    color: var(--amber);
   }
 
   .diff-file-path {
@@ -365,13 +365,13 @@
 
   .expand-btn:hover {
     background: var(--bg-hover);
-    color: var(--teal);
+    color: var(--cyan);
   }
 
   .diff-hunk-header {
     padding: 4px 12px;
     background: var(--bg-hunk-header);
-    color: var(--teal);
+    color: var(--cyan);
     font-size: 12px;
     border-bottom: 1px solid var(--border-hunk-header);
     font-style: italic;
@@ -491,14 +491,14 @@
 
   .resolve-ours:hover {
     background: var(--conflict-side1-bg);
-    border-color: var(--peach);
-    color: var(--peach);
+    border-color: var(--amber);
+    color: var(--amber);
   }
 
   .resolve-theirs:hover {
     background: var(--conflict-side2-bg);
-    border-color: var(--mauve);
-    color: var(--mauve);
+    border-color: var(--purple);
+    color: var(--purple);
   }
 
   /* --- Conflict region card --- */

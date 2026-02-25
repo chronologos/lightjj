@@ -69,6 +69,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     splitMode: false,
     splitRevision: '',
     splitParallel: false,
+    isDark: true,
     ...overrides,
   }
 }

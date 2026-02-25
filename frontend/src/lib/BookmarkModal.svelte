@@ -147,9 +147,9 @@
   }
 
   const actionColors: Record<string, string> = {
-    move: 'var(--blue)',
+    move: 'var(--amber)',
     delete: 'var(--red)',
-    forget: 'var(--yellow)',
+    forget: 'var(--amber)',
     track: 'var(--green)',
     untrack: 'var(--overlay0)',
   }

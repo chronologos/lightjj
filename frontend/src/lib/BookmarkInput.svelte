@@ -174,7 +174,7 @@
   }
 
   .bm-set-move-hint {
-    color: var(--blue);
+    color: var(--amber);
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;

@@ -261,7 +261,7 @@
   }
 
   .git-cmd.git-fetch {
-    color: var(--teal);
+    color: var(--cyan);
   }
 
   .git-desc {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import type { LogEntry } from './api'
+  import GraphSvg from './GraphSvg.svelte'
 
   interface Props {
     revisions: LogEntry[]
@@ -34,6 +35,7 @@
     splitMode: boolean
     splitRevision: string
     splitParallel: boolean
+    isDark: boolean
   }
 
   let {
@@ -44,9 +46,11 @@
     rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
     squashMode, squashSources, squashKeepEmptied, squashUseDestMsg,
     splitMode, splitRevision, splitParallel,
+    isDark,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
+  let hoveredLane: number | null = $state(null)
 
   interface FlatLine {
     gutter: string
@@ -93,6 +97,8 @@
     }
     return Math.min(max, MAX_GUTTER)
   })
+
+  let maxLanes = $derived(Math.ceil(maxGutterLen / 2))
 
   function padGutter(gutter: string): string {
     return gutter.length > maxGutterLen
@@ -220,7 +226,9 @@
     {:else if revisions.length === 0}
       <div class="empty-state">No revisions found</div>
     {:else}
-      <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list"
+        onmouseleave={() => hoveredLane = null}>
         {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineKey)}
           {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -252,7 +260,18 @@
             aria-selected={selectedIndex === line.entryIndex}
           >
             <span class="check-gutter">{#if line.isNode && isChecked}✓{/if}</span>
-            <span class="gutter" class:wc-gutter={line.isWorkingCopy} class:mutable-gutter={!line.isWorkingCopy && !line.isImmutable && !line.isHidden && !line.isConflicted} class:conflict-gutter={line.isConflicted}>{line.gutter}</span>
+            <GraphSvg
+              gutter={line.gutter}
+              isNode={line.isNode}
+              isWorkingCopy={line.isWorkingCopy}
+              isImmutable={line.isImmutable ?? false}
+              isConflicted={line.isConflicted ?? false}
+              isHidden={line.isHidden}
+              {maxLanes}
+              {hoveredLane}
+              {isDark}
+              onlanehover={(lane) => hoveredLane = lane}
+            />
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
               {@const isRebaseSource = rebaseMode && rebaseSources.includes(entry.commit.change_id)}
@@ -387,7 +406,7 @@
   }
 
   .revset-input:focus {
-    border-color: var(--blue);
+    border-color: var(--amber);
   }
 
   .revset-input::placeholder {
@@ -491,7 +510,7 @@
 
   .graph-row {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     height: 18px;
     line-height: 18px;
     font-size: 13px;
@@ -540,7 +559,7 @@
 
   .graph-row.selected {
     background: var(--bg-selected);
-    box-shadow: inset 2px 0 0 var(--blue);
+    box-shadow: inset 2px 0 0 var(--amber);
   }
 
   .graph-row.checked {
@@ -549,7 +568,7 @@
 
   .graph-row.checked.selected {
     background: var(--bg-checked-selected);
-    box-shadow: inset 2px 0 0 var(--blue);
+    box-shadow: inset 2px 0 0 var(--amber);
   }
 
   .graph-row.hidden-rev {
@@ -567,26 +586,6 @@
     color: var(--green);
     font-size: 11px;
     padding-left: 4px;
-  }
-
-  .gutter {
-    white-space: pre;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--surface2);
-    flex-shrink: 0;
-  }
-
-  .gutter.wc-gutter {
-    color: var(--green);
-  }
-
-  .gutter.mutable-gutter {
-    color: var(--blue);
-  }
-
-  .gutter.conflict-gutter {
-    color: var(--red);
   }
 
   .node-line-content,
@@ -626,7 +625,7 @@
   .change-id {
     font-family: var(--font-mono);
     font-size: 11px;
-    color: var(--blue);
+    color: var(--amber);
     font-weight: 600;
     letter-spacing: 0.02em;
     flex-shrink: 0;
@@ -700,7 +699,7 @@
     display: inline-flex;
     align-items: center;
     background: var(--badge-workspace-bg);
-    color: var(--teal);
+    color: var(--cyan);
     padding: 0 5px;
     border-radius: 3px;
     font-size: 10px;
@@ -723,20 +722,20 @@
 
   .rebase-source {
     background: var(--badge-other-bg);
-    color: var(--yellow);
-    border: 1px solid var(--yellow);
+    color: var(--amber);
+    border: 1px solid var(--amber);
   }
 
   .rebase-target {
     background: var(--badge-modify-bg);
-    color: var(--blue);
-    border: 1px solid var(--blue);
+    color: var(--amber);
+    border: 1px solid var(--amber);
   }
 
   .split-source {
     background: var(--badge-workspace-bg);
-    color: var(--teal);
-    border: 1px solid var(--teal);
+    color: var(--cyan);
+    border: 1px solid var(--cyan);
   }
 
   .rebase-preview {
@@ -770,7 +769,7 @@
     width: 20px;
     height: 20px;
     border: 2px solid var(--surface0);
-    border-top-color: var(--blue);
+    border-top-color: var(--amber);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
