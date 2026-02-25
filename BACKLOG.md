@@ -24,7 +24,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] MockRunner `RunWithInput` silently discards stdin — can't verify describe content.
 
 ### Suggestions
-- [ ] `App.svelte` is 1010 lines — rebase/squash/split state is ambient and threaded through multiple components. Extract to shared module.
+- [x] `App.svelte` is 1010 lines — rebase/squash/split state is ambient and threaded through multiple components. Extract to shared module.
 - [x] Rename `squashMode` → `fileSelectionMode` in DiffPanel props — partially done; App.svelte still uses `squashMode` internally.
 - [ ] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to generic names in App.svelte — now shared by squash and split modes.
 - [ ] Rename CSS classes `rebase-badge`/`rebase-source`/`rebase-target` to generic `mode-badge-inline`/`badge-source`/`badge-target` — shared across rebase, squash, split.
@@ -67,7 +67,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [ ] `OplogPanel` inline error display — pass error prop, match GitModal/BookmarkModal pattern
 
 **Larger refactors (half day+):**
-- [ ] `App.svelte` rebase state extraction — move rebase mode, source/target types, keyboard handling into shared module
+- [x] `App.svelte` rebase state extraction — moved rebase/squash/split mode state to `modes.svelte.ts`, theme CSS to `theme.css`, added `runMutation` helper (App.svelte 1590→1269 lines)
 - [ ] List virtualization for large repos — `@tanstack/virtual` for 500+ commit histories
 - [ ] HTTP response compression (gzip middleware) — mainly benefits SSH mode
 - [x] Integration tests — build-tagged tests against a real jj repo
