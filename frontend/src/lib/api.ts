@@ -16,6 +16,7 @@ export interface LogEntry {
     hidden: boolean
     immutable: boolean
     conflicted: boolean
+    divergent: boolean
     working_copies?: string[]
   }
   description: string
@@ -157,6 +158,13 @@ export interface WorkspacesResponse {
   workspaces: Workspace[]
 }
 
+/** Returns the best unique identifier for a commit.
+ *  Divergent and hidden commits share change_id, so we fall back to commit_id.
+ *  Mirrors the Go Commit.GetChangeId() logic. */
+export function effectiveId(commit: LogEntry['commit']): string {
+  return (commit.divergent || commit.hidden) ? commit.commit_id : commit.change_id
+}
+
 export const api = {
   log: (revset?: string, limit?: number) => {
     const params = new URLSearchParams()
@@ -210,6 +218,12 @@ export const api = {
   evolog: (revision: string) => {
     const params = new URLSearchParams({ revision })
     return cachedRequest<{ output: string }>('evolog:' + revision, `/api/evolog?${params}`)
+  },
+
+  diffRange: (from: string, to: string, files?: string[]) => {
+    const params = new URLSearchParams({ from, to })
+    if (files?.length) files.forEach(f => params.append('files', f))
+    return request<{ diff: string }>(`/api/diff-range?${params}`)
   },
 
   // Mutations

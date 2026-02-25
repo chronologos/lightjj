@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import type { LogEntry } from './api'
+  import { effectiveId, type LogEntry } from './api'
   import GraphSvg from './GraphSvg.svelte'
 
   interface Props {
@@ -64,6 +64,7 @@
     isHidden: boolean
     isImmutable?: boolean
     isConflicted?: boolean
+    isDivergent?: boolean
   }
 
   const sourceModeLabel: Record<string, string> = { '-r': 'move', '-s': 'source', '-b': 'branch' }
@@ -106,6 +107,27 @@
       : gutter.padEnd(maxGutterLen)
   }
 
+  // Compute divergence offsets: for divergent commits sharing a change_id,
+  // assign /0, /1, ... sorted by commit_id (matching jj's convention).
+  let divergenceOffsets = $derived.by(() => {
+    const map = new Map<string, string>() // commit_id → "/N"
+    // Group divergent commits by change_id
+    const groups = new Map<string, string[]>() // change_id → [commit_id, ...]
+    for (const entry of revisions) {
+      if (!entry.commit.divergent) continue
+      const cid = entry.commit.change_id
+      if (!groups.has(cid)) groups.set(cid, [])
+      groups.get(cid)!.push(entry.commit.commit_id)
+    }
+    for (const commitIds of groups.values()) {
+      commitIds.sort() // lexicographic, matches jj's offset assignment
+      for (let i = 0; i < commitIds.length; i++) {
+        map.set(commitIds[i], `/${i}`)
+      }
+    }
+    return map
+  })
+
   let flatLines = $derived.by(() => {
     const lines: FlatLine[] = []
     revisions.forEach((entry, i) => {
@@ -127,6 +149,7 @@
           isHidden: entry.commit.hidden,
           isImmutable: entry.commit.immutable,
           isConflicted: isNode && entry.commit.conflicted,
+          isDivergent: isNode && entry.commit.divergent,
         })
         if (isNode) {
           const contGutter = padGutter(continuationGutter(gl.gutter))
@@ -229,8 +252,8 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="revision-list" bind:this={listEl} role="listbox" aria-label="Revision list"
         onmouseleave={() => hoveredLane = null}>
-        {#each flatLines as line, lineIdx (revisions[line.entryIndex].commit.change_id + ':' + line.lineKey)}
-          {@const isChecked = checkedRevisions.has(revisions[line.entryIndex]?.commit.change_id)}
+        {#each flatLines as line, lineIdx (effectiveId(revisions[line.entryIndex].commit) + ':' + line.lineKey)}
+          {@const isChecked = checkedRevisions.has(effectiveId(revisions[line.entryIndex]?.commit))}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
             class="graph-row"
@@ -253,7 +276,7 @@
             oncontextmenu={(e: MouseEvent) => {
               e.preventDefault()
               if (rebaseMode || squashMode || splitMode) return
-              oncontextmenu(revisions[line.entryIndex].commit.change_id, e.clientX, e.clientY)
+              oncontextmenu(effectiveId(revisions[line.entryIndex].commit), e.clientX, e.clientY)
             }}
             role="option"
             tabindex={line.isNode ? 0 : -1}
@@ -266,6 +289,7 @@
               isWorkingCopy={line.isWorkingCopy}
               isImmutable={line.isImmutable ?? false}
               isConflicted={line.isConflicted ?? false}
+              isDivergent={line.isDivergent ?? false}
               isHidden={line.isHidden}
               {maxLanes}
               {hoveredLane}
@@ -274,11 +298,12 @@
             />
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
-              {@const isRebaseSource = rebaseMode && rebaseSources.includes(entry.commit.change_id)}
+              {@const eid = effectiveId(entry.commit)}
+              {@const isRebaseSource = rebaseMode && rebaseSources.includes(eid)}
               {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !isRebaseSource}
-              {@const isSquashSource = squashMode && squashSources.includes(entry.commit.change_id)}
+              {@const isSquashSource = squashMode && squashSources.includes(eid)}
               {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !isSquashSource}
-              {@const isSplitSource = splitMode && entry.commit.change_id === splitRevision}
+              {@const isSplitSource = splitMode && eid === splitRevision}
               {#if isRebaseSource}
                 <span class="rebase-badge rebase-source">&lt;&lt; {sourceModeLabel[rebaseSourceMode]} &gt;&gt;</span>
               {/if}
@@ -293,6 +318,9 @@
               {/if}
               {#if isSplitSource}
                 <span class="rebase-badge split-source">&lt;&lt; split &gt;&gt;</span>
+              {/if}
+              {#if entry.commit.divergent}
+                <span class="divergent-badge">divergent</span>
               {/if}
               <span class="node-line-content">
                 {#if entry.commit.is_working_copy}
@@ -312,9 +340,10 @@
               </span>
             {:else if line.isDescLine}
               {@const entry = revisions[line.entryIndex]}
-              {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !rebaseSources.includes(entry.commit.change_id)}
-              {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !squashSources.includes(entry.commit.change_id)}
-              {@const isSplitPreview = splitMode && entry.commit.change_id === splitRevision}
+              {@const descEid = effectiveId(entry.commit)}
+              {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !rebaseSources.includes(descEid)}
+              {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !squashSources.includes(descEid)}
+              {@const isSplitPreview = splitMode && descEid === splitRevision}
               <span class="desc-line-content">
                 {#if isSplitPreview}
                   <span class="rebase-preview">jj split -r {entry.commit.change_id.slice(0, 8)}{splitParallel ? ' --parallel' : ''}</span>
@@ -323,8 +352,9 @@
                 {:else if isSquashTarget}
                   <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squashKeepEmptied ? ' --keep-emptied' : ''}{squashUseDestMsg ? ' --use-destination-message' : ''}</span>
                 {:else}
+                  {@const divOffset = divergenceOffsets.get(entry.commit.commit_id)}
                   <span class="meta-line">
-                    <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span></span>
+                    <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span>{#if divOffset}<span class="div-offset">{divOffset}</span>{/if}</span>
                     <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span>
                   </span>
                 {/if}
@@ -642,6 +672,11 @@
     font-weight: 400;
   }
 
+  .div-offset {
+    color: var(--red);
+    font-weight: 700;
+  }
+
   .elided-marker {
     display: inline-flex;
     align-items: center;
@@ -736,6 +771,19 @@
     background: var(--badge-workspace-bg);
     color: var(--cyan);
     border: 1px solid var(--cyan);
+  }
+
+  .divergent-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    line-height: 1.15;
+    vertical-align: baseline;
+    background: var(--badge-danger-bg, rgba(235, 100, 100, 0.15));
+    color: var(--red);
+    border: 1px solid var(--red);
   }
 
   .rebase-preview {

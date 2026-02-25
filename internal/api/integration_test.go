@@ -1515,3 +1515,184 @@ func TestIntegrationSplit_Parallel(t *testing.T) {
 	assert.Contains(t, paths, "a.txt")
 	assert.NotContains(t, paths, "b.txt", "b.txt should be in the parallel sibling")
 }
+
+// ---------------------------------------------------------------------------
+// Divergence tests
+// ---------------------------------------------------------------------------
+
+// createDivergence creates a divergent state in the repo by performing
+// concurrent describes from different operation points, producing two
+// commits with the same change ID.
+// Returns the shared change ID.
+func createDivergence(t *testing.T, r *runner.LocalRunner, jjExec func(args ...string) string) string {
+	t.Helper()
+
+	// Create a commit we'll make divergent
+	writeFile(t, r.RepoDir, "file.txt", "original content")
+	jjExec("describe", "-m", "original")
+
+	// Capture op BEFORE creating the child — we'll use this to fork the timeline
+	opOutput := jjExec("op", "log", "--no-graph", "--limit", "1", "-T", "self.id().short()")
+	opBefore := strings.TrimSpace(opOutput)
+
+	jjExec("new")
+
+	// Get the change ID of the commit we'll diverge
+	logOutput := jjExec("log", "--no-graph", "-r", "@-", "--color", "never", "-T", "change_id.short()")
+	changeId := strings.TrimSpace(logOutput)
+
+	// Describe from the current timeline
+	jjExec("describe", "-r", changeId, "-m", "version A")
+
+	// Describe from the past operation to fork the timeline → creates divergence
+	// Both ops modify the same commit concurrently, producing two versions
+	jjExec("describe", "--at-op", opBefore, "-r", changeId, "-m", "version B")
+
+	return changeId
+}
+
+func TestIntegrationDivergentLog(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	changeId := createDivergence(t, r, jjExec)
+
+	srv := NewServer(r, "")
+
+	// Default log may not show all divergent versions (depends on jj's default
+	// revset). Use divergent() to find them, then verify the flag is set.
+	rows := getLogRows(t, srv, "revset=divergent()")
+
+	require.GreaterOrEqual(t, len(rows), 2, "expected at least 2 divergent rows")
+
+	for _, row := range rows {
+		assert.Equal(t, changeId, row.Commit.ChangeId)
+		assert.True(t, row.Commit.Divergent, "divergent commit should have Divergent=true")
+	}
+
+	// Verify they have unique commit IDs
+	assert.NotEqual(t, rows[0].Commit.CommitId, rows[1].Commit.CommitId,
+		"divergent versions should have different commit IDs")
+}
+
+func TestIntegrationDivergentLogChangeIdRevset(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	changeId := createDivergence(t, r, jjExec)
+
+	srv := NewServer(r, "")
+
+	// Use 'all:changeId' revset to explicitly query divergent versions
+	rows := getLogRows(t, srv, fmt.Sprintf("revset=change_id(%s)", changeId))
+
+	require.GreaterOrEqual(t, len(rows), 2, "all: revset should return all divergent versions")
+
+	for _, row := range rows {
+		assert.Equal(t, changeId, row.Commit.ChangeId)
+		assert.True(t, row.Commit.Divergent)
+	}
+}
+
+func TestIntegrationDiffRange(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	// Create two distinct commits to diff between
+	writeFile(t, r.RepoDir, "a.txt", "version A")
+	jjExec("describe", "-m", "commit A")
+	commitA := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "-T", "commit_id.short()"))
+	jjExec("new")
+	writeFile(t, r.RepoDir, "a.txt", "version B")
+	jjExec("describe", "-m", "commit B")
+	commitB := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "-T", "commit_id.short()"))
+
+	srv := NewServer(r, "")
+	w := apiGet(t, srv, fmt.Sprintf("/api/diff-range?from=%s&to=%s", commitA, commitB))
+
+	var result map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Contains(t, result["diff"], "version A")
+	assert.Contains(t, result["diff"], "version B")
+}
+
+func TestIntegrationDiffRange_WithFiles(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	writeFile(t, r.RepoDir, "a.txt", "file a")
+	writeFile(t, r.RepoDir, "b.txt", "file b")
+	jjExec("describe", "-m", "commit A")
+	commitA := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "-T", "commit_id.short()"))
+	jjExec("new")
+	writeFile(t, r.RepoDir, "a.txt", "file a modified")
+	writeFile(t, r.RepoDir, "b.txt", "file b modified")
+	jjExec("describe", "-m", "commit B")
+	commitB := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "-T", "commit_id.short()"))
+
+	srv := NewServer(r, "")
+
+	// Request diff filtered to only a.txt
+	w := apiGet(t, srv, fmt.Sprintf("/api/diff-range?from=%s&to=%s&files=a.txt", commitA, commitB))
+
+	var result map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Contains(t, result["diff"], "a.txt")
+	assert.NotContains(t, result["diff"], "b.txt", "filtered diff should not contain b.txt")
+}
+
+func TestIntegrationDiffRange_MissingParams(t *testing.T) {
+	r, _ := jjTestRepo(t)
+	t.Parallel()
+
+	srv := NewServer(r, "")
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/diff-range", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/diff-range?from=abc", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestJourneyDivergenceResolution(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	changeId := createDivergence(t, r, jjExec)
+
+	srv := NewServer(r, "")
+
+	// 1. Verify divergent state using change_id() revset (like DivergencePanel does)
+	allRows := getLogRows(t, srv, fmt.Sprintf("revset=change_id(%s)", changeId))
+	require.GreaterOrEqual(t, len(allRows), 2, "should have divergent commits")
+
+	// 3. Pick one to keep, abandon the others
+	keptCommitId := allRows[0].Commit.CommitId
+	var abandonIds []string
+	for _, row := range allRows[1:] {
+		abandonIds = append(abandonIds, row.Commit.CommitId)
+	}
+
+	w := apiPost(t, srv, "/api/abandon", map[string]any{
+		"revisions": abandonIds,
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// 4. Verify divergence is resolved — divergent() should return nothing
+	divRows := getLogRows(t, srv, "revset=present(divergent())")
+	assert.Empty(t, divRows, "no commits should be divergent after resolution")
+
+	// 5. Verify the kept commit still exists (not divergent anymore)
+	keptRows := getLogRows(t, srv, fmt.Sprintf("revset=change_id(%s)", changeId))
+	require.Len(t, keptRows, 1, "should have exactly 1 version after resolution")
+	assert.False(t, keptRows[0].Commit.Divergent)
+
+	// 6. Diff-range between the kept commit and root should work
+	dw := apiGet(t, srv, fmt.Sprintf("/api/diff-range?from=root()&to=%s", keptCommitId))
+	var diffResult map[string]string
+	require.NoError(t, json.Unmarshal(dw.Body.Bytes(), &diffResult))
+	// The diff should contain file.txt changes
+	assert.NotEmpty(t, diffResult["diff"])
+}

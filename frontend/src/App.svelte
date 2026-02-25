@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace } from './lib/api'
+  import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -13,7 +13,8 @@
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
-  import { createRebaseMode, createSquashMode, createSplitMode, targetModeLabel } from './lib/modes.svelte'
+  import DivergencePanel from './lib/DivergencePanel.svelte'
+  import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])
@@ -61,6 +62,7 @@
   const rebase = createRebaseMode()
   const squash = createSquashMode()
   const split = createSplitMode()
+  const divergence = createDivergenceMode()
   let squashSelectedFiles = new SvelteSet<string>()
   let squashTotalFiles: number = $state(0) // snapshot of file count at entry time
 
@@ -74,7 +76,7 @@
   let contextMenuY: number = $state(0)
   let contextMenuOpen: boolean = $state(false)
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen)
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen || divergence.active)
   let inlineMode = $derived(rebase.active || squash.active || split.active)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
@@ -107,7 +109,7 @@
     if (checkedRevisions.size > 0) {
       return [...checkedRevisions]
     }
-    return selectedRevision ? [selectedRevision.commit.change_id] : []
+    return selectedRevision ? [effectiveId(selectedRevision.commit)] : []
   })
 
   let statusText = $derived.by(() => {
@@ -138,7 +140,7 @@
     const hi = Math.max(fromIndex, toIndex)
     for (let i = lo; i <= hi; i++) {
       if (i < revisions.length) {
-        checkedRevisions.add(revisions[i].commit.change_id)
+        checkedRevisions.add(effectiveId(revisions[i].commit))
       }
     }
     diffPanelRef?.resetCollapsed()
@@ -152,7 +154,7 @@
 
   function clearChecksAndReload() {
     clearChecks()
-    if (selectedRevision) loadDiffAndFiles(selectedRevision.commit.change_id)
+    if (selectedRevision) loadDiffAndFiles(effectiveId(selectedRevision.commit))
     else { diffContent = ''; changedFiles = [] }
   }
 
@@ -188,11 +190,11 @@
     { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog },
     { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
-      else if (selectedRevision) handleNew(selectedRevision.commit.change_id)
+      else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))
     }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
     { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !!selectedRevision && checkedRevisions.size <= 1 },
-    { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(selectedRevision!.commit.change_id), when: () => !!selectedRevision },
-    { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(selectedRevision!.commit.change_id), when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision },
+    { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
@@ -253,20 +255,20 @@
         selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
       }
       if (checkedRevisions.size > 0) {
-        const validIds = new Set(revisions.map(r => r.commit.change_id))
+        const validIds = new Set(revisions.map(r => effectiveId(r.commit)))
         for (const id of [...checkedRevisions]) {
           if (!validIds.has(id)) checkedRevisions.delete(id)
         }
       }
       lastCheckedIndex = -1
       if (selectedIndex >= 0 && checkedRevisions.size === 0) {
-        loadDiffAndFiles(revisions[selectedIndex].commit.change_id)
+        loadDiffAndFiles(effectiveId(revisions[selectedIndex].commit))
       }
       // Refresh open panels — oplog always reflects new operations,
       // evolog may change if the selected revision was modified
       if (oplogOpen || activeView === 'operations') loadOplog()
       if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
-        loadEvolog(revisions[selectedIndex].commit.change_id)
+        loadEvolog(effectiveId(revisions[selectedIndex].commit))
       }
     } catch (e) {
       if (gen !== logGeneration) return
@@ -345,35 +347,36 @@
     // Debounce diff/files loading: highlight moves instantly, but fetches
     // wait for navigation to settle. Cache hits skip the debounce.
     clearTimeout(navDebounceTimer)
-    const cached = isCached(entry.commit.change_id)
+    const eid = effectiveId(entry.commit)
+    const cached = isCached(eid)
     if (checkedRevisions.size === 0) {
       if (cached) {
-        loadDiffAndFiles(entry.commit.change_id)
+        loadDiffAndFiles(eid)
       } else {
         navDebounceTimer = setTimeout(() => {
           const current = revisions[selectedIndex]
           if (current) {
-            loadDiffAndFiles(current.commit.change_id)
-            if (evologOpen) loadEvolog(current.commit.change_id)
+            loadDiffAndFiles(effectiveId(current.commit))
+            if (evologOpen) loadEvolog(effectiveId(current.commit))
           }
         }, 50)
         return // evolog deferred with the rest
       }
     }
     if (evologOpen) {
-      loadEvolog(entry.commit.change_id)
+      loadEvolog(eid)
     }
   }
 
   function selectByChangeId(changeId: string) {
-    const idx = revisions.findIndex(r => r.commit.change_id === changeId)
+    const idx = revisions.findIndex(r => effectiveId(r.commit) === changeId)
     if (idx >= 0) selectRevision(idx)
   }
 
   function openRevisionContextMenu(changeId: string, x: number, y: number) {
-    const entry = revisions.find(r => r.commit.change_id === changeId)
+    const entry = revisions.find(r => effectiveId(r.commit) === changeId)
     const commitId = entry?.commit.commit_id ?? ''
-    contextMenuItems = [
+    const items: ContextMenuItem[] = [
       { label: 'Edit working copy', action: () => handleEdit(changeId) },
       { label: 'New revision', shortcut: 'n', action: () => handleNew(changeId) },
       { label: 'Describe', shortcut: 'e', action: () => { selectByChangeId(changeId); startDescriptionEdit() } },
@@ -383,12 +386,21 @@
       { label: 'Split...', shortcut: 's', action: () => { selectByChangeId(changeId); enterSplitMode() } },
       { separator: true },
       { label: 'Set bookmark...', shortcut: 'B', action: () => { selectByChangeId(changeId); bookmarkInputOpen = true } },
+    ]
+    if (entry?.commit.divergent) {
+      items.push(
+        { separator: true },
+        { label: 'Resolve divergence...', action: () => divergence.enter(entry.commit.change_id) },
+      )
+    }
+    items.push(
       { separator: true },
-      { label: `Copy change ID (${changeId.slice(0, 8)})`, action: () => navigator.clipboard.writeText(changeId) },
+      { label: `Copy change ID (${(entry?.commit.change_id ?? changeId).slice(0, 8)})`, action: () => navigator.clipboard.writeText(entry?.commit.change_id ?? changeId) },
       { label: `Copy commit ID (${commitId.slice(0, 8)})`, action: () => navigator.clipboard.writeText(commitId) },
       { separator: true },
       { label: 'Abandon', action: () => handleAbandon(changeId), danger: true },
-    ]
+    )
+    contextMenuItems = items
     contextMenuX = x
     contextMenuY = y
     contextMenuOpen = true
@@ -448,9 +460,10 @@
 
   async function handleDescribe() {
     if (!selectedRevision) return
+    const eid = effectiveId(selectedRevision.commit)
     try {
-      const result = await api.describe(selectedRevision.commit.change_id, descriptionDraft)
-      lastAction = `Updated description for ${selectedRevision.commit.change_id.slice(0, 8)}`
+      const result = await api.describe(eid, descriptionDraft)
+      lastAction = `Updated description for ${eid.slice(0, 8)}`
       commandOutput = result.output
       fullDescription = descriptionDraft
       descriptionEditing = false
@@ -470,7 +483,7 @@
       descriptionDraft = fullDescription
     } else {
       try {
-        const result = await api.description(selectedRevision.commit.change_id)
+        const result = await api.description(effectiveId(selectedRevision.commit))
         descriptionDraft = result.description
       } catch {
         descriptionDraft = selectedRevision.description
@@ -506,7 +519,7 @@
   function handleBookmarkSet(name: string) {
     if (!selectedRevision) return
     runMutation(
-      () => api.bookmarkSet(selectedRevision!.commit.change_id, name),
+      () => api.bookmarkSet(effectiveId(selectedRevision!.commit), name),
       `Set bookmark ${name}`,
       { before: () => { bookmarkInputOpen = false } },
     )
@@ -514,7 +527,7 @@
 
   function handleBookmarkOp(op: BookmarkOp) {
     if (op.action === 'move' && !selectedRevision) return
-    const changeId = selectedRevision?.commit.change_id ?? ''
+    const changeId = selectedRevision ? effectiveId(selectedRevision.commit) : ''
     const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
       move: () => api.bookmarkMove(op.bookmark, changeId),
       delete: () => api.bookmarkDelete(op.bookmark),
@@ -530,12 +543,38 @@
   }
 
   function handleResolve(file: string, tool: ':ours' | ':theirs') {
-    const revision = selectedRevision?.commit.change_id
+    const revision = selectedRevision ? effectiveId(selectedRevision.commit) : undefined
     if (!revision) return
     runMutation(
       () => api.resolve(revision, file, tool),
       `Resolved ${file.split('/').pop()} with ${tool.slice(1)}`,
     )
+  }
+
+  async function handleKeepDivergent(keptCommitId: string, abandonIds: string[]) {
+    try {
+      // Snapshot conflicted bookmarks BEFORE abandon — --retain-bookmarks
+      // may auto-resolve them by moving to the parent, losing the conflict flag
+      const bookmarksBefore = await api.bookmarks()
+      const conflictedNames = bookmarksBefore
+        .filter(b => b.conflict && abandonIds.includes(b.commit_id))
+        .map(b => b.name)
+
+      await api.abandon(abandonIds)
+
+      // Move all previously-conflicted bookmarks to the kept commit
+      for (const name of conflictedNames) {
+        await api.bookmarkSet(keptCommitId, name)
+      }
+
+      divergence.cancel()
+      lastAction = `Resolved divergence — kept ${keptCommitId.slice(0, 8)}`
+      await loadLog()
+    } catch (e: any) {
+      // Don't close panel on error — let user see state and retry
+      showError(e.message || 'Failed to resolve divergence')
+      await loadLog() // always refresh to show current reality
+    }
   }
 
   function enterRebaseMode() {
@@ -547,7 +586,7 @@
 
   async function executeRebase() {
     if (!selectedRevision || rebase.sources.length === 0) return
-    const destination = selectedRevision.commit.change_id
+    const destination = effectiveId(selectedRevision.commit)
     if (rebase.sources.includes(destination)) {
       lastAction = 'Cannot rebase onto source revision'
       return
@@ -578,7 +617,7 @@
     squashTotalFiles = changedFiles.length
     squash.enter(revs)
     // Move cursor to parent of first source (default squash target)
-    const sourceIdx = revisions.findIndex(r => r.commit.change_id === revs[0])
+    const sourceIdx = revisions.findIndex(r => effectiveId(r.commit) === revs[0])
     if (sourceIdx >= 0 && sourceIdx < revisions.length - 1) {
       selectRevisionCursorOnly(sourceIdx + 1)
     }
@@ -586,7 +625,7 @@
 
   async function executeSquash() {
     if (!selectedRevision || squash.sources.length === 0) return
-    const destination = selectedRevision.commit.change_id
+    const destination = effectiveId(selectedRevision.commit)
     // C2: exit mode before guard so user isn't stuck
     if (squash.sources.includes(destination)) {
       squash.cancel()
@@ -639,7 +678,7 @@
     cancelInlineModes()
     for (const f of changedFiles) squashSelectedFiles.add(f.path)
     squashTotalFiles = changedFiles.length
-    split.enter(selectedRevision.commit.change_id)
+    split.enter(effectiveId(selectedRevision.commit))
   }
 
   async function executeSplit() {
@@ -691,6 +730,7 @@
     rebase.cancel()
     squash.cancel()
     split.cancel()
+    divergence.cancel()
     squashSelectedFiles.clear()
   }
 
@@ -730,7 +770,7 @@
   async function toggleEvolog() {
     evologOpen = !evologOpen
     if (evologOpen && selectedRevision) {
-      await loadEvolog(selectedRevision.commit.change_id)
+      await loadEvolog(effectiveId(selectedRevision.commit))
     }
   }
 
@@ -756,7 +796,7 @@
       descriptionDraft = fullDescription
     } else {
       try {
-        const result = await api.description(selectedRevision.commit.change_id)
+        const result = await api.description(effectiveId(selectedRevision.commit))
         descriptionDraft = result.description
       } catch {
         descriptionDraft = selectedRevision.description
@@ -914,13 +954,13 @@
       case ' ':
         if (selectedRevision) {
           e.preventDefault()
-          toggleCheck(selectedRevision.commit.change_id, selectedIndex)
+          toggleCheck(effectiveId(selectedRevision.commit), selectedIndex)
         }
         break
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
-          loadDiffAndFiles(selectedRevision.commit.change_id)
+          loadDiffAndFiles(effectiveId(selectedRevision.commit))
         }
         break
       case 'r':
@@ -938,7 +978,7 @@
         if (checkedRevisions.size > 0) {
           handleNewFromChecked()
         } else if (selectedRevision) {
-          handleNew(selectedRevision.commit.change_id)
+          handleNew(effectiveId(selectedRevision.commit))
         }
         break
       case 'b':
@@ -1063,31 +1103,41 @@
           isDark={darkMode}
         />
 
-        <DiffPanel
-          bind:this={diffPanelRef}
-          {diffContent}
-          {changedFiles}
-          {selectedRevision}
-          {fullDescription}
-          {checkedRevisions}
-          {diffLoading}
-          {filesLoading}
-          bind:splitView
-          {descriptionEditing}
-          {descriptionDraft}
-          {describeSaved}
-          {commitMode}
-          onstartdescribe={startDescriptionEdit}
-          ondescribe={commitMode ? executeCommit : handleDescribe}
-          oncanceldescribe={() => { descriptionEditing = false; commitMode = false }}
-          ondraftchange={(v) => { descriptionDraft = v }}
-          onbookmarkclick={openBookmarkModal}
-          fileSelectionMode={squash.active || split.active}
-          {squashSelectedFiles}
-          ontogglefile={toggleSquashFile}
-          splitMode={split.active}
-          onresolve={inlineMode ? undefined : handleResolve}
-        />
+        {#if divergence.active}
+          <DivergencePanel
+            changeId={divergence.changeId}
+            onkeep={handleKeepDivergent}
+            onclose={() => divergence.cancel()}
+          />
+        {:else}
+          <DiffPanel
+            bind:this={diffPanelRef}
+            {diffContent}
+            {changedFiles}
+            {selectedRevision}
+            {fullDescription}
+            {checkedRevisions}
+            {diffLoading}
+            {filesLoading}
+            bind:splitView
+            {descriptionEditing}
+            {descriptionDraft}
+            {describeSaved}
+            {commitMode}
+            onstartdescribe={startDescriptionEdit}
+            ondescribe={commitMode ? executeCommit : handleDescribe}
+            oncanceldescribe={() => { descriptionEditing = false; commitMode = false }}
+            ondraftchange={(v) => { descriptionDraft = v }}
+            onbookmarkclick={openBookmarkModal}
+            fileSelectionMode={squash.active || split.active}
+            {squashSelectedFiles}
+            ontogglefile={toggleSquashFile}
+            splitMode={split.active}
+            onresolve={inlineMode ? undefined : handleResolve}
+            divergentSelected={selectedRevision?.commit.divergent ?? false}
+            onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
+          />
+        {/if}
       </div>
 
       {#if evologOpen}
@@ -1095,7 +1145,7 @@
           content={evologContent}
           loading={evologLoading}
           {selectedRevision}
-          onrefresh={() => { if (selectedRevision) loadEvolog(selectedRevision.commit.change_id) }}
+          onrefresh={() => { if (selectedRevision) loadEvolog(effectiveId(selectedRevision.commit)) }}
           onclose={() => { evologOpen = false }}
         />
       {/if}

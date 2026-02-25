@@ -577,6 +577,51 @@ func TestHandleEvolog_MissingRevision(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandleDiffRange(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffRange("abc", "def", nil)).SetOutput([]byte("diff output"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/diff-range?from=abc&to=def", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+	assert.Equal(t, "diff output", result["diff"])
+}
+
+func TestHandleDiffRange_WithFiles(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffRange("abc", "def", []string{"src/main.go", "README.md"})).SetOutput([]byte("filtered diff"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/diff-range?from=abc&to=def&files=src/main.go&files=README.md", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleDiffRange_MissingParams(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+
+	// Missing both
+	req := httptest.NewRequest("GET", "/api/diff-range", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// Missing to
+	req = httptest.NewRequest("GET", "/api/diff-range?from=abc", nil)
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestHandleBookmarkDelete(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.BookmarkDelete("feature")).SetOutput([]byte(""))

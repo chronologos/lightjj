@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, type LogEntry, type FileChange } from './api'
+  import { api, effectiveId, type LogEntry, type FileChange } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
@@ -30,6 +30,8 @@
     ontogglefile: (path: string) => void
     splitMode: boolean
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
+    divergentSelected?: boolean
+    onresolveDivergence?: () => void
   }
 
   let {
@@ -37,6 +39,7 @@
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
     fileSelectionMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
+    divergentSelected, onresolveDivergence,
   }: Props = $props()
 
   // --- Local state ---
@@ -76,7 +79,7 @@
   let activeRevset = $derived(
     checkedRevisions.size > 0
       ? [...checkedRevisions].join('|')
-      : selectedRevision?.commit.change_id
+      : selectedRevision ? effectiveId(selectedRevision.commit) : undefined
   )
 
   let conflictFileDiffs: Map<string, DiffFile> = $state(new Map())
@@ -214,7 +217,7 @@
   // Save/restore collapse state when revision changes
   let lastRevisionId: string | null = null
   $effect(() => {
-    const currentId = selectedRevision?.commit.change_id ?? null
+    const currentId = selectedRevision ? effectiveId(selectedRevision.commit) : null
     if (currentId === lastRevisionId) return
     // Save current state before switching
     if (lastRevisionId && collapsedFiles.size > 0) {
@@ -326,6 +329,11 @@
           <button class="header-btn" onclick={onstartdescribe} title="Edit description (e)">
             Describe
           </button>
+          {#if divergentSelected}
+            <button class="header-btn divergent-btn" onclick={onresolveDivergence} title="Resolve divergent commit">
+              Divergence
+            </button>
+          {/if}
         </div>
       </div>
       {#if selectedRevision.bookmarks?.length}
@@ -557,6 +565,15 @@
   .header-btn:hover {
     background: var(--surface0);
     color: var(--text);
+  }
+
+  .divergent-btn {
+    color: var(--red);
+    border-color: var(--red);
+  }
+
+  .divergent-btn:hover {
+    background: rgba(235, 100, 100, 0.15);
   }
 
   .panel-content {

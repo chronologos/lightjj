@@ -220,6 +220,15 @@ func Squash(from SelectedRevisions, destination string, files []string, keepEmpt
 	return args
 }
 
+// DiffRange builds args for `jj diff --from X --to Y` to compare two specific commits.
+func DiffRange(from, to string, files []string) CommandArgs {
+	args := []string{"diff", "--from", from, "--to", to, "--tool", ":git", "--color", "never", "--ignore-working-copy"}
+	if len(files) > 0 {
+		args = append(args, escapeFiles(files)...)
+	}
+	return args
+}
+
 const bookmarkListTemplate = `separate("\x1F", name, if(remote, remote, "."), tracked, conflict, 'false', normal_target.commit_id().shortest(1)) ++ "\n"`
 
 func BookmarkList(revset string) CommandArgs {

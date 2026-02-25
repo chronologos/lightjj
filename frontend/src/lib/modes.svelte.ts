@@ -105,6 +105,35 @@ export function createSquashMode(): SquashMode {
   }
 }
 
+export interface DivergenceMode extends ModeBase {
+  readonly changeId: string
+  enter(id: string): void
+}
+
+export function createDivergenceMode(): DivergenceMode {
+  let active = $state(false)
+  let changeId = $state('')
+
+  return {
+    get active() { return active },
+    get changeId() { return changeId },
+
+    enter(id: string) {
+      changeId = id
+      active = true
+    },
+
+    cancel() {
+      active = false
+      changeId = ''
+    },
+
+    handleKey(_key: string): boolean {
+      return false // no keyboard shortcuts yet
+    },
+  }
+}
+
 export function createSplitMode(): SplitMode {
   let active = $state(false)
   let revision = $state('')
