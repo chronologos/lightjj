@@ -254,7 +254,7 @@
       }
       // Refresh open panels — oplog always reflects new operations,
       // evolog may change if the selected revision was modified
-      if (oplogOpen) loadOplog()
+      if (oplogOpen || activeView === 'operations') loadOplog()
       if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
         loadEvolog(revisions[selectedIndex].commit.change_id)
       }
@@ -989,7 +989,7 @@
       case '3':
         e.preventDefault()
         activeView = 'operations'
-        if (oplogEntries.length === 0) loadOplog()
+        loadOplog()
         return
     }
 
