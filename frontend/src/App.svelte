@@ -2,7 +2,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { api, isCached, onStale, type LogEntry, type FileChange, type OpEntry } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
-  import Toolbar from './lib/Toolbar.svelte'
+  import Sidebar from './lib/Sidebar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
   import RevisionGraph from './lib/RevisionGraph.svelte'
@@ -72,6 +72,8 @@
   let splitMode: boolean = $state(false)
   let splitRevision: string = $state('')
   let splitParallel: boolean = $state(false)
+
+  let activeView: 'log' | 'branches' | 'operations' = $state('log')
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen)
   let inlineMode = $derived(rebaseMode || squashMode || splitMode)
@@ -973,6 +975,25 @@
         e.preventDefault()
         revisionGraphRef?.focusRevsetInput()
         break
+      case '1':
+        if (!inlineMode) {
+          e.preventDefault()
+          activeView = 'log'
+        }
+        break
+      case '2':
+        if (!inlineMode) {
+          e.preventDefault()
+          activeView = 'branches'
+        }
+        break
+      case '3':
+        if (!inlineMode) {
+          e.preventDefault()
+          activeView = 'operations'
+          if (oplogEntries.length === 0) loadOplog()
+        }
+        break
       case 'Escape':
         if (descriptionEditing) {
           descriptionEditing = false
@@ -999,106 +1020,143 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="app">
-  <Toolbar
+  <Sidebar
+    {activeView}
+    onnavigate={(view) => {
+      activeView = view
+      if (view === 'operations' && oplogEntries.length === 0) loadOplog()
+    }}
+    onopenpalette={() => { closeModals(); paletteOpen = true }}
+    onthemetoggle={toggleTheme}
+    theme={darkMode ? 'dark' : 'light'}
+    {inlineMode}
     onundo={() => { if (!inlineMode) handleUndo() }}
+    oncommit={() => { if (!inlineMode) handleCommit() }}
     onfetch={() => { if (!inlineMode) handleGitOp('fetch', []) }}
     onpush={() => { if (!inlineMode) handleGitOp('push', []) }}
-    oncommit={() => { if (!inlineMode) handleCommit() }}
     ongitmodal={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }}
-    onopenpalette={() => { closeModals(); paletteOpen = true }}
   />
 
-  {#if error}
-    <div class="error-bar" role="alert">
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 10.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5zM8.75 4.5v4a.75.75 0 0 1-1.5 0v-4a.75.75 0 0 1 1.5 0z"/>
-      </svg>
-      <span class="error-text">{error}</span>
-      <button class="error-dismiss" onclick={dismissError}>Dismiss</button>
-    </div>
-  {/if}
+  <div class="main-content">
+    {#if error}
+      <div class="error-bar" role="alert">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 10.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5zM8.75 4.5v4a.75.75 0 0 1-1.5 0v-4a.75.75 0 0 1 1.5 0z"/>
+        </svg>
+        <span class="error-text">{error}</span>
+        <button class="error-dismiss" onclick={dismissError}>Dismiss</button>
+      </div>
+    {/if}
 
-  <div class="workspace">
-    <RevisionGraph
-      bind:this={revisionGraphRef}
-      {revisions}
-      {selectedIndex}
-      {checkedRevisions}
-      {loading}
-      {revsetFilter}
-      {viewMode}
-      {lastCheckedIndex}
-      onselect={selectRevision}
-      oncheck={toggleCheck}
-      onrangecheck={rangeCheck}
-      onedit={handleEdit}
-      onnew={handleNew}
-      onabandon={handleAbandon}
-      onnewfromchecked={handleNewFromChecked}
-      onabandonchecked={handleAbandonChecked}
-      onclearchecks={clearChecksAndReload}
-      onrevsetsubmit={handleRevsetSubmit}
-      onrevsetclear={clearRevsetFilter}
-      onrevsetchange={(v) => { revsetFilter = v }}
-      onrevsetescaped={clearRevsetFilter}
-      onviewmodechange={toggleViewMode}
-      onbookmarkclick={openBookmarkModal}
+    {#if activeView === 'log'}
+      <div class="workspace">
+        <RevisionGraph
+          bind:this={revisionGraphRef}
+          {revisions}
+          {selectedIndex}
+          {checkedRevisions}
+          {loading}
+          {revsetFilter}
+          {viewMode}
+          {lastCheckedIndex}
+          onselect={selectRevision}
+          oncheck={toggleCheck}
+          onrangecheck={rangeCheck}
+          onedit={handleEdit}
+          onnew={handleNew}
+          onabandon={handleAbandon}
+          onnewfromchecked={handleNewFromChecked}
+          onabandonchecked={handleAbandonChecked}
+          onclearchecks={clearChecksAndReload}
+          onrevsetsubmit={handleRevsetSubmit}
+          onrevsetclear={clearRevsetFilter}
+          onrevsetchange={(v) => { revsetFilter = v }}
+          onrevsetescaped={clearRevsetFilter}
+          onviewmodechange={toggleViewMode}
+          onbookmarkclick={openBookmarkModal}
+          {rebaseMode}
+          {rebaseSources}
+          {rebaseSourceMode}
+          {rebaseTargetMode}
+          {squashMode}
+          {squashSources}
+          {squashKeepEmptied}
+          {squashUseDestMsg}
+          {splitMode}
+          {splitRevision}
+          {splitParallel}
+        />
+
+        <DiffPanel
+          bind:this={diffPanelRef}
+          {diffContent}
+          {changedFiles}
+          {selectedRevision}
+          {checkedRevisions}
+          {diffLoading}
+          {filesLoading}
+          bind:splitView
+          {descriptionEditing}
+          {descriptionDraft}
+          {describeSaved}
+          onstartdescribe={startDescriptionEdit}
+          ondescribe={handleDescribe}
+          oncanceldescribe={() => { descriptionEditing = false }}
+          ondraftchange={(v) => { descriptionDraft = v }}
+          onbookmarkclick={openBookmarkModal}
+          squashMode={squashMode || splitMode}
+          {squashSelectedFiles}
+          ontogglefile={toggleSquashFile}
+          {splitMode}
+          onresolve={inlineMode ? undefined : handleResolve}
+        />
+      </div>
+
+      {#if evologOpen}
+        <EvologPanel
+          content={evologContent}
+          loading={evologLoading}
+          {selectedRevision}
+          onrefresh={() => { if (selectedRevision) loadEvolog(selectedRevision.commit.change_id) }}
+          onclose={() => { evologOpen = false }}
+        />
+      {/if}
+
+      {#if oplogOpen}
+        <OplogPanel
+          entries={oplogEntries}
+          loading={oplogLoading}
+          onrefresh={loadOplog}
+          onclose={() => { oplogOpen = false }}
+        />
+      {/if}
+    {:else if activeView === 'operations'}
+      <div class="fullwidth-panel">
+        <OplogPanel
+          entries={oplogEntries}
+          loading={oplogLoading}
+          onrefresh={loadOplog}
+          onclose={() => { activeView = 'log' }}
+        />
+      </div>
+    {/if}
+
+    <StatusBar
+      {statusText}
+      {commandOutput}
       {rebaseMode}
-      {rebaseSources}
       {rebaseSourceMode}
       {rebaseTargetMode}
       {squashMode}
-      {squashSources}
       {squashKeepEmptied}
       {squashUseDestMsg}
+      {squashFileCount}
       {splitMode}
-      {splitRevision}
       {splitParallel}
-    />
-
-    <DiffPanel
-      bind:this={diffPanelRef}
-      {diffContent}
-      {changedFiles}
-      {selectedRevision}
-      {checkedRevisions}
-      {diffLoading}
-      {filesLoading}
-      bind:splitView
-      {descriptionEditing}
-      {descriptionDraft}
-      {describeSaved}
-      onstartdescribe={startDescriptionEdit}
-      ondescribe={handleDescribe}
-      oncanceldescribe={() => { descriptionEditing = false }}
-      ondraftchange={(v) => { descriptionDraft = v }}
-      onbookmarkclick={openBookmarkModal}
-      squashMode={squashMode || splitMode}
-      {squashSelectedFiles}
-      ontogglefile={toggleSquashFile}
-      {splitMode}
-      onresolve={inlineMode ? undefined : handleResolve}
+      {splitFileCount}
+      {activeView}
     />
   </div>
-
-  {#if evologOpen}
-    <EvologPanel
-      content={evologContent}
-      loading={evologLoading}
-      {selectedRevision}
-      onrefresh={() => { if (selectedRevision) loadEvolog(selectedRevision.commit.change_id) }}
-      onclose={() => { evologOpen = false }}
-    />
-  {/if}
-
-  {#if oplogOpen}
-    <OplogPanel
-      entries={oplogEntries}
-      loading={oplogLoading}
-      onrefresh={loadOplog}
-      onclose={() => { oplogOpen = false }}
-    />
-  {/if}
 
   <CommandPalette bind:open={paletteOpen} {commands} />
 
@@ -1122,157 +1180,160 @@
     onexecute={handleBookmarkOp}
     onclose={() => { bookmarkModalOpen = false }}
   />
-
-  <StatusBar
-    {statusText}
-    {commandOutput}
-    {rebaseMode}
-    {rebaseSourceMode}
-    {rebaseTargetMode}
-    {squashMode}
-    {squashKeepEmptied}
-    {squashUseDestMsg}
-    {squashFileCount}
-    {splitMode}
-    {splitParallel}
-    {splitFileCount}
-  />
 </div>
 
 <style>
-  /* --- Catppuccin Mocha (dark) --- */
+  /* --- Dark theme --- */
   :root {
-    --base: #1e1e2e;
-    --mantle: #181825;
-    --crust: #11111b;
-    --surface0: #313244;
-    --surface1: #45475a;
-    --surface2: #585b70;
-    --overlay0: #6c7086;
-    --overlay1: #7f849c;
-    --subtext0: #a6adc8;
-    --subtext1: #bac2de;
-    --text: #cdd6f4;
-    --blue: #89b4fa;
-    --green: #a6e3a1;
-    --red: #f38ba8;
-    --yellow: #f9e2af;
-    --teal: #74c7ec;
-    --peach: #fab387;
-    --mauve: #cba6f7;
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+    --base: #0f0f13;
+    --mantle: #0f0f13;
+    --crust: #0a0a0e;
+    --surface0: rgba(255,255,255,0.04);
+    --surface1: rgba(255,255,255,0.07);
+    --surface2: #4e4e58;
+    --overlay0: #8a8a94;
+    --overlay1: #8a8a94;
+    --subtext0: #8a8a94;
+    --subtext1: #e2e2e6;
+    --text: #e2e2e6;
+
+    --blue: #ffa726;
+    --green: #66bb6a;
+    --red: #ef5350;
+    --yellow: #ffa726;
+    --teal: #26c6da;
+    --peach: #ffa726;
+    --mauve: #ab47bc;
+
+    --amber: #ffa726;
+    --amber-soft: rgba(255,167,38,0.07);
+    --amber-dim: rgba(255,167,38,0.15);
+
+    /* Semantic backgrounds */
+    --bg-hover: rgba(255,255,255,0.04);
+    --bg-selected: rgba(255,167,38,0.07);
+    --bg-checked: rgba(102,187,106,0.08);
+    --bg-checked-selected: rgba(102,187,106,0.12);
+    --bg-error: rgba(239,83,80,0.1);
+    --bg-error-hover: rgba(239,83,80,0.15);
+    --bg-bookmark: rgba(102,187,106,0.08);
+    --border-bookmark: rgba(102,187,106,0.25);
+    --bg-diff-header-hover: rgba(255,255,255,0.03);
+    --bg-hunk-header: rgba(255,255,255,0.03);
+    --border-hunk-header: rgba(255,255,255,0.05);
+    --bg-diff-empty: rgba(255,255,255,0.02);
+    --bg-active: rgba(255,167,38,0.15);
+    --bg-btn-primary-hover: #ffb74d;
+    --bg-btn-kbd: rgba(255,255,255,0.04);
+    --wc-desc-color: #e2e2e6;
+
+    --diff-add-bg: rgba(102,187,106,0.08);
+    --diff-remove-bg: rgba(239,83,80,0.08);
+    --diff-add-word: rgba(102,187,106,0.2);
+    --diff-remove-word: rgba(239,83,80,0.2);
+    --diff-add-text: #a5d6a7;
+    --diff-remove-text: #ef9a9a;
+
+    --badge-add-bg: rgba(102,187,106,0.12);
+    --badge-modify-bg: rgba(255,167,38,0.12);
+    --badge-delete-bg: rgba(239,83,80,0.12);
+    --badge-other-bg: rgba(255,167,38,0.12);
+    --badge-workspace-bg: rgba(38,198,218,0.1);
+    --border-workspace: rgba(38,198,218,0.3);
 
     /* Conflict region card */
-    --conflict-boundary-border: #f38ba835;
-    --conflict-boundary-bg: #f38ba810;
-    --conflict-boundary-color: #6c7086;
-    --conflict-side1-border: #fab387;
-    --conflict-side1-bg: #fab38710;
-    --conflict-side1-marker-bg: #fab38718;
-    --conflict-side2-border: #cba6f7;
-    --conflict-side2-bg: #cba6f710;
-    --conflict-side2-marker-bg: #cba6f718;
-    --conflict-marker-color: #6c7086;
+    --conflict-boundary-border: rgba(239,83,80,0.2);
+    --conflict-boundary-bg: rgba(239,83,80,0.06);
+    --conflict-boundary-color: #8a8a94;
+    --conflict-side1-border: #ffa726;
+    --conflict-side1-bg: rgba(255,167,38,0.06);
+    --conflict-side1-marker-bg: rgba(255,167,38,0.1);
+    --conflict-side2-border: #ab47bc;
+    --conflict-side2-bg: rgba(171,71,188,0.06);
+    --conflict-side2-marker-bg: rgba(171,71,188,0.1);
+    --conflict-marker-color: #8a8a94;
 
-    /* Semantic tinted backgrounds */
-    --bg-hover: #262637;
-    --bg-selected: #2a2a40;
-    --bg-checked: #1e2a1e;
-    --bg-checked-selected: #243024;
-    --bg-error: #45171a;
-    --bg-error-hover: #f38ba822;
-    --bg-bookmark: #1e3a2a;
-    --border-bookmark: #2d5a3d;
-    --bg-diff-header-hover: #1e1e30;
-    --bg-hunk-header: #1a1a2e;
-    --border-hunk-header: #21212e;
-    --bg-diff-empty: #1a1a2a;
-    --bg-active: #89b4fa22;
-    --bg-btn-primary-hover: #b4d0fb;
-    --bg-btn-kbd: #1e1e2e33;
-    --wc-desc-color: #e0e0e0;
+    --backdrop: rgba(0,0,0,0.5);
+    --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
 
-    /* Diff line backgrounds */
-    --diff-add-bg: #a6e3a112;
-    --diff-remove-bg: #f38ba812;
-    --diff-add-word: #a6e3a133;
-    --diff-remove-word: #f38ba833;
-
-    /* File type badge backgrounds */
-    --badge-add-bg: #a6e3a120;
-    --badge-modify-bg: #89b4fa20;
-    --badge-delete-bg: #f38ba820;
-    --badge-other-bg: #f9e2af20;
-    --badge-workspace-bg: #74c7ec15;
-    --border-workspace: #74c7ec40;
-
-    /* Palette overlay */
-    --backdrop: #00000066;
-    --shadow-heavy: 0 16px 48px #00000088;
+    --scrollbar-thumb: rgba(255,255,255,0.1);
+    --scrollbar-track: transparent;
   }
 
-  /* --- Catppuccin Latte (light) --- */
+  /* --- Light theme --- */
   :root.light {
-    --base: #eff1f5;
-    --mantle: #e6e9ef;
-    --crust: #dce0e8;
-    --surface0: #ccd0da;
-    --surface1: #bcc0cc;
-    --surface2: #acb0be;
-    --overlay0: #9ca0b0;
-    --overlay1: #8c8fa1;
-    --subtext0: #6c6f85;
-    --subtext1: #5c5f77;
-    --text: #4c4f69;
-    --blue: #1e66f5;
-    --green: #40a02b;
-    --red: #d20f39;
-    --yellow: #df8e1d;
-    --teal: #04a5e5;
-    --peach: #fe640b;
-    --mauve: #8839ef;
+    --base: #f8f8f6;
+    --mantle: #f8f8f6;
+    --crust: #eeeeec;
+    --surface0: rgba(0,0,0,0.03);
+    --surface1: rgba(0,0,0,0.07);
+    --surface2: #a1a1aa;
+    --overlay0: #71717a;
+    --overlay1: #71717a;
+    --subtext0: #71717a;
+    --subtext1: #1a1a1e;
+    --text: #1a1a1e;
 
-    --conflict-boundary-border: #d20f3935;
-    --conflict-boundary-bg: #d20f3910;
-    --conflict-boundary-color: #8c8fa1;
-    --conflict-side1-border: #fe640b;
-    --conflict-side1-bg: #fe640b10;
-    --conflict-side1-marker-bg: #fe640b18;
-    --conflict-side2-border: #8839ef;
-    --conflict-side2-bg: #8839ef10;
-    --conflict-side2-marker-bg: #8839ef18;
-    --conflict-marker-color: #8c8fa1;
+    --blue: #e68a00;
+    --green: #2e7d32;
+    --red: #c62828;
+    --yellow: #e68a00;
+    --teal: #00838f;
+    --peach: #e68a00;
+    --mauve: #6a1b9a;
 
-    --bg-hover: #d9dbe5;
-    --bg-selected: #cbd0e0;
-    --bg-checked: #d4e8d0;
-    --bg-checked-selected: #c0ddb8;
-    --bg-error: #fce4e8;
-    --bg-error-hover: #d20f3918;
-    --bg-bookmark: #d8f0d0;
-    --border-bookmark: #90c480;
-    --bg-diff-header-hover: #d8dae5;
-    --bg-hunk-header: #d5d8e2;
-    --border-hunk-header: #c8ccd8;
-    --bg-diff-empty: #e0e2ea;
-    --bg-active: #1e66f522;
-    --bg-btn-primary-hover: #1555d0;
-    --bg-btn-kbd: #ffffff55;
-    --wc-desc-color: #2a2d3a;
+    --amber-soft: rgba(255,167,38,0.06);
 
-    --diff-add-bg: #40a02b15;
-    --diff-remove-bg: #d20f3915;
-    --diff-add-word: #40a02b30;
-    --diff-remove-word: #d20f3930;
+    --bg-hover: rgba(0,0,0,0.03);
+    --bg-selected: rgba(255,167,38,0.08);
+    --bg-checked: rgba(46,125,50,0.08);
+    --bg-checked-selected: rgba(46,125,50,0.12);
+    --bg-error: rgba(198,40,40,0.08);
+    --bg-error-hover: rgba(198,40,40,0.12);
+    --bg-bookmark: rgba(46,125,50,0.08);
+    --border-bookmark: rgba(46,125,50,0.25);
+    --bg-diff-header-hover: rgba(0,0,0,0.02);
+    --bg-hunk-header: rgba(0,0,0,0.03);
+    --border-hunk-header: rgba(0,0,0,0.05);
+    --bg-diff-empty: rgba(0,0,0,0.02);
+    --bg-active: rgba(230,138,0,0.12);
+    --bg-btn-primary-hover: #cc7a00;
+    --bg-btn-kbd: rgba(0,0,0,0.04);
+    --wc-desc-color: #1a1a1e;
 
-    --badge-add-bg: #40a02b20;
-    --badge-modify-bg: #1e66f520;
-    --badge-delete-bg: #d20f3920;
-    --badge-other-bg: #df8e1d20;
-    --badge-workspace-bg: #04a5e515;
-    --border-workspace: #04a5e540;
+    --diff-add-bg: rgba(46,125,50,0.1);
+    --diff-remove-bg: rgba(198,40,40,0.08);
+    --diff-add-word: rgba(46,125,50,0.2);
+    --diff-remove-word: rgba(198,40,40,0.2);
+    --diff-add-text: #2e7d32;
+    --diff-remove-text: #c62828;
 
-    --backdrop: #00000033;
-    --shadow-heavy: 0 16px 48px #00000044;
+    --badge-add-bg: rgba(46,125,50,0.12);
+    --badge-modify-bg: rgba(230,138,0,0.12);
+    --badge-delete-bg: rgba(198,40,40,0.12);
+    --badge-other-bg: rgba(230,138,0,0.12);
+    --badge-workspace-bg: rgba(0,131,143,0.1);
+    --border-workspace: rgba(0,131,143,0.3);
+
+    --conflict-boundary-border: rgba(198,40,40,0.2);
+    --conflict-boundary-bg: rgba(198,40,40,0.06);
+    --conflict-boundary-color: #71717a;
+    --conflict-side1-border: #e68a00;
+    --conflict-side1-bg: rgba(230,138,0,0.06);
+    --conflict-side1-marker-bg: rgba(230,138,0,0.1);
+    --conflict-side2-border: #6a1b9a;
+    --conflict-side2-bg: rgba(106,27,154,0.06);
+    --conflict-side2-marker-bg: rgba(106,27,154,0.1);
+    --conflict-marker-color: #71717a;
+
+    --backdrop: rgba(0,0,0,0.3);
+    --shadow-heavy: 0 20px 60px rgba(0,0,0,0.15);
+
+    --scrollbar-thumb: rgba(0,0,0,0.12);
+    --scrollbar-track: transparent;
   }
 
   /* --- Reset & Globals --- */
@@ -1283,25 +1344,46 @@
   :global(body) {
     margin: 0;
     padding: 0;
-    font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+    font-family: var(--font-ui);
     font-size: 13px;
     background: var(--base);
     color: var(--text);
     overflow: hidden;
   }
 
+  :global(::-webkit-scrollbar) { width: 6px; height: 6px; }
+  :global(::-webkit-scrollbar-track) { background: var(--scrollbar-track); }
+  :global(::-webkit-scrollbar-thumb) {
+    background: var(--scrollbar-thumb);
+    border-radius: 3px;
+  }
+  :global(::selection) { background: rgba(255,167,38,0.25); }
+
   /* --- Layout --- */
   .app {
     display: flex;
-    flex-direction: column;
     height: 100vh;
     overflow: hidden;
+  }
+
+  .main-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    min-width: 0;
   }
 
   .workspace {
     display: flex;
     flex: 1;
     overflow: hidden;
+  }
+
+  .fullwidth-panel {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
   }
 
   /* --- Error bar --- */

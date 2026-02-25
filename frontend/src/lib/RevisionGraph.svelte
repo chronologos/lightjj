@@ -250,8 +250,10 @@
                 <span class="rebase-badge split-source">&lt;&lt; split &gt;&gt;</span>
               {/if}
               <span class="node-line-content">
-                <span class="change-id"><span class="id-prefix">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}</span><span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix)}</span></span>
-                <span class="commit-id"><span class="commit-id-prefix">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span><span class="commit-id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix)}</span></span>
+                {#if entry.commit.is_working_copy}
+                  <span class="wc-badge">@</span>
+                {/if}
+                <span class="description-text">{entry.description || '(no description)'}</span>
               </span>
               {#if !rebaseMode && !squashMode && !splitMode}
                 <span class="rev-actions" role="group">
@@ -283,7 +285,10 @@
                 {:else if isSquashTarget}
                   <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squashKeepEmptied ? ' --keep-emptied' : ''}{squashUseDestMsg ? ' --use-destination-message' : ''}</span>
                 {:else}
-                  <span class="description-text">{entry.description || '(no description)'}</span>
+                  <span class="meta-line">
+                    <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span></span>
+                    <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span>
+                  </span>
                 {/if}
               </span>
             {/if}
@@ -505,7 +510,7 @@
 
   .graph-row.selected {
     background: var(--bg-selected);
-    box-shadow: inset 2px 0 0 var(--blue);
+    box-shadow: inset 2px 0 0 var(--amber, var(--blue));
   }
 
   .graph-row.checked {
@@ -514,7 +519,7 @@
 
   .graph-row.checked.selected {
     background: var(--bg-checked-selected);
-    box-shadow: inset 2px 0 0 var(--blue);
+    box-shadow: inset 2px 0 0 var(--amber, var(--blue));
   }
 
   .graph-row.hidden-rev {
@@ -536,7 +541,8 @@
 
   .gutter {
     white-space: pre;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 12px;
     line-height: 1.15;
     color: var(--surface2);
     flex-shrink: 0;
@@ -575,15 +581,34 @@
     gap: 4px;
   }
 
+  .wc-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--green);
+    color: var(--crust);
+    font-size: 10px;
+    font-weight: 800;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
   .change-id {
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--blue);
+    font-weight: 600;
     letter-spacing: 0.02em;
     flex-shrink: 0;
   }
 
-  .id-prefix {
-    color: var(--blue);
-    font-weight: 700;
+  .meta-line {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
   }
 
   .id-rest {
@@ -591,24 +616,11 @@
     font-weight: 400;
   }
 
-  .wc .id-prefix {
-    color: var(--green);
-  }
-
   .commit-id {
+    font-family: var(--font-mono);
     font-size: 10px;
-    letter-spacing: 0.04em;
-    flex-shrink: 0;
-  }
-
-  .commit-id-prefix {
-    color: var(--overlay1);
-    font-weight: 600;
-  }
-
-  .commit-id-rest {
-    color: var(--surface1);
-    font-weight: 400;
+    color: var(--overlay0);
+    letter-spacing: 0.02em;
   }
 
   .bookmark-badge {
