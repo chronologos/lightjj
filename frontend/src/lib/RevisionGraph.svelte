@@ -488,12 +488,13 @@
   .graph-row {
     display: flex;
     align-items: baseline;
-    min-height: 0;
     line-height: 1.15;
     font-size: 13px;
     cursor: pointer;
     outline: none;
     -webkit-tap-highlight-color: transparent;
+    max-height: 15px;
+    overflow: hidden;
   }
 
   .graph-row:hover:not(.selected) {
@@ -596,7 +597,6 @@
 
   .node-line-content {
     gap: 6px;
-    white-space: nowrap;
   }
 
   .bookmark-line-content {
@@ -683,11 +683,13 @@
   }
 
   .rebase-badge {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    padding: 0 5px;
+    padding: 0 4px;
     border-radius: 3px;
     flex-shrink: 0;
+    line-height: 1.15;
+    vertical-align: baseline;
   }
 
   .rebase-source {
@@ -717,10 +719,6 @@
   .description-text {
     color: var(--text);
     font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
   }
 
   .wc .description-text {
