@@ -9,6 +9,7 @@
     isWorkingCopy: boolean
     isImmutable: boolean
     isConflicted: boolean
+    isDivergent: boolean
     isHidden: boolean
     maxLanes: number
     hoveredLane: number | null
@@ -17,8 +18,8 @@
   }
 
   let {
-    gutter, isNode, isWorkingCopy, isImmutable, isConflicted, isHidden,
-    maxLanes, hoveredLane, isDark, onlanehover,
+    gutter, isNode, isWorkingCopy, isImmutable, isConflicted, isDivergent,
+    isHidden, maxLanes, hoveredLane, isDark, onlanehover,
   }: Props = $props()
 
   // --- Constants ---
@@ -226,6 +227,10 @@
 
         {:else}
           <circle cx={x} cy={cy} r={NODE_R} fill={color} />
+        {/if}
+        {#if isDivergent}
+          <circle cx={x} cy={cy} r={NODE_R + 3} fill="none"
+            stroke={color} stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
         {/if}
       </g>
     {/if}

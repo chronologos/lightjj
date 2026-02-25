@@ -122,9 +122,7 @@ func parseNodeLine(line string) GraphRow {
 		row.Description = parts[3]
 	}
 
-	if divergent {
-		row.Commit.ChangeId += "??"
-	}
+	row.Commit.Divergent = divergent
 
 	// working_copies outputs "base2@ default@" — space-separated workspace names with @ suffix
 	if len(parts) > 4 && parts[4] != "" {

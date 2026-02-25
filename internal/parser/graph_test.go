@@ -132,7 +132,8 @@ func TestParseGraphLog_DivergentCommit(t *testing.T) {
 	output := "○  _PREFIX:d_PREFIX:4_PREFIX:true\x1fdddddddd\x1f44444444\x1fdivergent change\x1f\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "dddddddd??", rows[0].Commit.ChangeId)
+	assert.Equal(t, "dddddddd", rows[0].Commit.ChangeId)
+	assert.True(t, rows[0].Commit.Divergent)
 	assert.Equal(t, "44444444", rows[0].Commit.CommitId)
 	assert.Equal(t, "divergent change", rows[0].Description)
 }

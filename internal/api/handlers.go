@@ -512,6 +512,22 @@ func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, entries)
 }
 
+func (s *Server) handleDiffRange(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		s.writeError(w, http.StatusBadRequest, "from and to are required")
+		return
+	}
+	files := r.URL.Query()["files"] // repeated params: ?files=a&files=b
+	output, err := s.Runner.Run(r.Context(), jj.DiffRange(from, to, files))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"diff": string(output)})
+}
+
 func (s *Server) handleEvolog(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {

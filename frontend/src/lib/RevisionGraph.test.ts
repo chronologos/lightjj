@@ -13,6 +13,7 @@ function makeEntry(overrides: Partial<{
   hidden: boolean
   immutable: boolean
   conflicted: boolean
+  divergent: boolean
   working_copies: string[]
   bookmarks: string[]
   description: string
@@ -28,6 +29,7 @@ function makeEntry(overrides: Partial<{
       hidden: overrides.hidden ?? false,
       immutable: overrides.immutable ?? false,
       conflicted: overrides.conflicted ?? false,
+      divergent: overrides.divergent ?? false,
       working_copies: overrides.working_copies,
     },
     description: overrides.description ?? 'test commit',

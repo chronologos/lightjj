@@ -1,7 +1,5 @@
 package jj
 
-import "strings"
-
 const RootChangeId = "zzzzzzzz"
 
 type Commit struct {
@@ -13,6 +11,7 @@ type Commit struct {
 	Hidden         bool     `json:"hidden"`
 	Immutable      bool     `json:"immutable"`
 	Conflicted     bool     `json:"conflicted"`
+	Divergent      bool     `json:"divergent"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
 }
 
@@ -20,14 +19,11 @@ func (c Commit) IsRoot() bool {
 	return c.ChangeId == RootChangeId
 }
 
-func (c Commit) IsConflicting() bool {
-	return strings.HasSuffix(c.ChangeId, "??")
-}
-
 // GetChangeId returns the best identifier for this commit.
-// For hidden or conflicting revisions, the commit ID is more reliable.
+// For hidden or divergent revisions, the commit ID is more reliable
+// since the change ID may be ambiguous.
 func (c Commit) GetChangeId() string {
-	if c.Hidden || c.IsConflicting() {
+	if c.Hidden || c.Divergent {
 		return c.CommitId
 	}
 	return c.ChangeId

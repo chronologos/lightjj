@@ -442,6 +442,19 @@ func TestParseOpLog_Malformed(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestDiffRange(t *testing.T) {
+	got := DiffRange("abc", "def", nil)
+	assert.Equal(t, []string{"diff", "--from", "abc", "--to", "def", "--tool", ":git", "--color", "never", "--ignore-working-copy"}, got)
+}
+
+func TestDiffRange_WithFiles(t *testing.T) {
+	got := DiffRange("abc", "def", []string{"src/main.go", "README.md"})
+	assert.Contains(t, got, `file:"src/main.go"`)
+	assert.Contains(t, got, `file:"README.md"`)
+	assert.Equal(t, "abc", got[2]) // --from value
+	assert.Equal(t, "def", got[4]) // --to value
+}
+
 func TestEvolog(t *testing.T) {
 	got := Evolog("abc")
 	assert.Contains(t, got, "evolog")
