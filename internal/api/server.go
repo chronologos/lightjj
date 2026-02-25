@@ -5,9 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chronologos/lightjj/internal/jj"
 	"github.com/chronologos/lightjj/internal/runner"
@@ -15,16 +20,33 @@ import (
 
 // Server holds the HTTP handler and its dependencies.
 type Server struct {
-	Runner    runner.CommandRunner
-	Mux       *http.ServeMux
-	cachedOp  string // last known op-id, refreshed after mutations
-	cachedMu  sync.RWMutex
+	Runner   runner.CommandRunner
+	Mux      *http.ServeMux
+	RepoDir  string // absolute path to repo root (empty for SSH mode)
+	cachedOp string // last known op-id, refreshed after mutations
+	cachedMu sync.RWMutex
+
+	spawnedWorkspaces map[string]string // workspace name → URL of spawned instance
+	children          []*exec.Cmd       // spawned workspace instances
+	childrenMu        sync.Mutex
 }
 
-func NewServer(r runner.CommandRunner) *Server {
-	s := &Server{Runner: r, Mux: http.NewServeMux()}
+func NewServer(r runner.CommandRunner, repoDir string) *Server {
+	s := &Server{Runner: r, Mux: http.NewServeMux(), RepoDir: repoDir}
 	s.routes()
 	return s
+}
+
+// Shutdown kills any child lightjj processes spawned for other workspaces.
+func (s *Server) Shutdown() {
+	s.childrenMu.Lock()
+	defer s.childrenMu.Unlock()
+	for _, cmd := range s.children {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
+	s.children = nil
 }
 
 func (s *Server) routes() {
@@ -39,6 +61,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/evolog", s.handleEvolog)
 	s.Mux.HandleFunc("GET /api/file-show", s.handleFileShow)
 	s.Mux.HandleFunc("GET /api/workspaces", s.handleWorkspaces)
+	s.Mux.HandleFunc("POST /api/workspace/open", s.handleWorkspaceOpen)
 
 	s.Mux.HandleFunc("POST /api/new", s.handleNew)
 	s.Mux.HandleFunc("POST /api/edit", s.handleEdit)
@@ -108,6 +131,87 @@ func (s *Server) getOpId() string {
 	s.cachedMu.RLock()
 	defer s.cachedMu.RUnlock()
 	return s.cachedOp
+}
+
+// spawnWorkspaceInstance starts a new lightjj instance for a workspace at the given path.
+// Returns the URL of the new instance. The process is tracked for cleanup on shutdown.
+// If an instance was already spawned for this workspace name, returns its URL.
+func (s *Server) spawnWorkspaceInstance(name, workspacePath string) (string, error) {
+	// Validate path before spawning
+	workspacePath = filepath.Clean(workspacePath)
+	if !filepath.IsAbs(workspacePath) {
+		return "", fmt.Errorf("workspace path must be absolute: %s", workspacePath)
+	}
+	if info, err := os.Stat(workspacePath); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("workspace path is not a directory: %s", workspacePath)
+	}
+
+	s.childrenMu.Lock()
+	// Return existing instance if already spawned
+	if url, ok := s.spawnedWorkspaces[name]; ok {
+		s.childrenMu.Unlock()
+		return url, nil
+	}
+	s.childrenMu.Unlock()
+
+	// Find a free port
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return "", fmt.Errorf("finding free port: %w", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	// Find our own binary path
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("finding executable: %w", err)
+	}
+
+	cmd := exec.Command(exe, "-R", workspacePath, "--addr", addr, "--no-browser")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("starting lightjj: %w", err)
+	}
+
+	// Reap child process to prevent zombies
+	go cmd.Wait()
+
+	url := "http://" + addr
+	s.childrenMu.Lock()
+	s.children = append(s.children, cmd)
+	if s.spawnedWorkspaces == nil {
+		s.spawnedWorkspaces = make(map[string]string)
+	}
+	s.spawnedWorkspaces[name] = url
+	s.childrenMu.Unlock()
+
+	// Wait briefly for the server to accept connections
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return url, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return url, nil // return URL even if poll timed out — server may just be slow
+}
+
+// readWorkspaceStore reads and parses the workspace store index file.
+// Returns nil map if RepoDir is empty (SSH mode) or if the file can't be read.
+func (s *Server) readWorkspaceStore() (map[string]string, error) {
+	if s.RepoDir == "" {
+		return nil, nil
+	}
+	storePath := filepath.Join(s.RepoDir, ".jj", "repo", "workspace_store", "index")
+	data, err := os.ReadFile(storePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading workspace store: %w", err)
+	}
+	return jj.ParseWorkspaceStorePaths(data)
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {

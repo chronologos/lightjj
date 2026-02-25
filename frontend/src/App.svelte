@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, isCached, onStale, type LogEntry, type FileChange, type OpEntry } from './lib/api'
+  import { api, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -77,6 +77,9 @@
 
   let activeView: 'log' | 'branches' | 'operations' = $state('log')
 
+  let currentWorkspace: string = $state('')
+  let workspaceList: Workspace[] = $state([])
+
   let contextMenuItems: ContextMenuItem[] = $state([])
   let contextMenuX: number = $state(0)
   let contextMenuY: number = $state(0)
@@ -102,6 +105,7 @@
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
+  let sidebarRef: ReturnType<typeof Sidebar> | undefined = $state(undefined)
 
   // --- Derived ---
   let selectedRevision: LogEntry | null = $derived(
@@ -230,6 +234,23 @@
   ])
 
   // --- API actions ---
+  async function loadWorkspaces() {
+    try {
+      const result = await api.workspaces()
+      currentWorkspace = result.current
+      workspaceList = result.workspaces
+    } catch { /* ignore — SSH mode or single workspace */ }
+  }
+
+  async function handleWorkspaceOpen(name: string) {
+    try {
+      const result = await api.workspaceOpen(name)
+      window.open(result.url, '_blank')
+    } catch (e) {
+      showError(e)
+    }
+  }
+
   async function loadLog(resetSelection = false) {
     const gen = ++logGeneration
     if (revisions.length === 0) loading = true
@@ -978,6 +999,10 @@
         closeAllModals()
         gitModalOpen = true
         return
+      case 'w':
+        e.preventDefault()
+        sidebarRef?.toggleWorkspaceDropdown()
+        return
       case '1':
         e.preventDefault()
         activeView = 'log'
@@ -1086,12 +1111,14 @@
   })
 
   loadLog()
+  loadWorkspaces()
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="app">
   <Sidebar
+    bind:this={sidebarRef}
     {activeView}
     onnavigate={(view) => {
       if (inlineMode) return
@@ -1107,6 +1134,9 @@
     onfetch={() => { if (!inlineMode) handleGitOp('fetch', []) }}
     onpush={() => { if (!inlineMode) handleGitOp('push', []) }}
     ongitmodal={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }}
+    {currentWorkspace}
+    workspaces={workspaceList}
+    onworkspaceopen={handleWorkspaceOpen}
   />
 
   <div class="main-content">

@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chronologos/lightjj/internal/api"
@@ -29,6 +31,7 @@ func main() {
 	flag.Parse()
 
 	var cmdRunner runner.CommandRunner
+	var resolvedRepoDir string // absolute path for local mode, empty for SSH
 
 	if *remote != "" {
 		host, path, err := parseRemoteSpec(*remote)
@@ -45,10 +48,12 @@ func main() {
 				log.Fatalf("failed to get working directory: %v", err)
 			}
 		}
-		cmdRunner = runner.NewLocalRunner(dir)
+		lr := runner.NewLocalRunner(dir)
+		resolvedRepoDir = lr.RepoDir
+		cmdRunner = lr
 	}
 
-	srv := api.NewServer(cmdRunner)
+	srv := api.NewServer(cmdRunner, resolvedRepoDir)
 
 	// Serve embedded frontend static files
 	feFS, err := fs.Sub(frontendFS, "frontend-dist")
@@ -68,6 +73,15 @@ func main() {
 	if !*noBrowser {
 		openBrowser(url)
 	}
+
+	// Clean up child workspace instances on shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		srv.Shutdown()
+		os.Exit(0)
+	}()
 
 	httpServer := &http.Server{
 		Handler:           localhostOnly(srv.Mux),

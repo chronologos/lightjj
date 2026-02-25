@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { Workspace } from './api'
+
   interface Props {
     activeView: 'log' | 'branches' | 'operations'
     onnavigate: (view: 'log' | 'branches' | 'operations') => void
@@ -11,9 +13,21 @@
     onfetch: () => void
     onpush: () => void
     ongitmodal: () => void
+    currentWorkspace: string
+    workspaces: Workspace[]
+    onworkspaceopen: (name: string) => void
   }
 
-  let { activeView, onnavigate, onopenpalette, onthemetoggle, theme, inlineMode, onundo, oncommit, onfetch, onpush, ongitmodal }: Props = $props()
+  let { activeView, onnavigate, onopenpalette, onthemetoggle, theme, inlineMode, onundo, oncommit, onfetch, onpush, ongitmodal, currentWorkspace, workspaces, onworkspaceopen }: Props = $props()
+
+  let dropdownOpen: boolean = $state(false)
+  let selectorEl: HTMLDivElement | undefined = $state(undefined)
+
+  function handleWindowClick(e: MouseEvent) {
+    if (dropdownOpen && selectorEl && !selectorEl.contains(e.target as Node)) {
+      dropdownOpen = false
+    }
+  }
 
   const navItems: { view: 'log' | 'branches' | 'operations'; icon: string; label: string; key: string }[] = [
     { view: 'log', icon: '◉', label: 'Revisions', key: '1' },
@@ -22,7 +36,13 @@
   ]
 
   const cmdKey = typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'
+
+  export function toggleWorkspaceDropdown() {
+    if (workspaces.length > 1) dropdownOpen = !dropdownOpen
+  }
 </script>
+
+<svelte:window onclick={handleWindowClick} />
 
 <aside class="sidebar">
   <div class="sidebar-top">
@@ -36,6 +56,40 @@
       />
       <span class="logo-text">lightjj</span>
     </div>
+
+    {#if currentWorkspace}
+      <div class="workspace-selector" bind:this={selectorEl}>
+        <button
+          class="workspace-current"
+          onclick={toggleWorkspaceDropdown}
+          title={workspaces.length > 1 ? 'Switch workspace (w)' : currentWorkspace}
+        >
+          <span class="ws-dot ws-dot-active">●</span>
+          <span class="ws-name">{currentWorkspace}</span>
+          {#if workspaces.length > 1}
+            <span class="ws-chevron">{dropdownOpen ? '▴' : '▾'}</span>
+          {/if}
+        </button>
+        {#if dropdownOpen && workspaces.length > 1}
+          <div class="workspace-dropdown">
+            {#each workspaces as ws (ws.name)}
+              {#if ws.name === currentWorkspace}
+                <div class="ws-option ws-active">
+                  <span class="ws-dot ws-dot-active">●</span>
+                  <span class="ws-label">{ws.name}</span>
+                </div>
+              {:else}
+                <button class="ws-option" onclick={() => { onworkspaceopen(ws.name); dropdownOpen = false }}>
+                  <span class="ws-dot">○</span>
+                  <span class="ws-label">{ws.name}</span>
+                  <span class="ws-open-icon" title="Open in new tab">↗</span>
+                </button>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <button class="search-trigger" onclick={onopenpalette}>
       <span class="search-text">Search…</span>
@@ -133,6 +187,109 @@
     font-size: 14px;
     color: var(--text);
     letter-spacing: -0.01em;
+  }
+
+  /* Workspace selector */
+  .workspace-selector {
+    position: relative;
+  }
+
+  .workspace-current {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 5px 9px;
+    background: transparent;
+    border: 1px solid var(--surface1);
+    border-radius: 7px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .workspace-current:hover {
+    background: var(--bg-hover);
+    border-color: var(--surface2);
+  }
+
+  .ws-dot {
+    font-size: 8px;
+    color: var(--surface2);
+  }
+
+  .ws-dot-active {
+    color: var(--amber);
+  }
+
+  .ws-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ws-chevron {
+    font-size: 10px;
+    color: var(--surface2);
+  }
+
+  .workspace-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--mantle);
+    border: 1px solid var(--surface1);
+    border-radius: 7px;
+    padding: 3px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .ws-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 5px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: var(--subtext0);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .ws-option:not(.ws-active):hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .ws-active {
+    color: var(--amber);
+    cursor: default;
+  }
+
+  .ws-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ws-open-icon {
+    font-size: 10px;
+    color: var(--surface2);
+    opacity: 0;
+  }
+
+  .ws-option:hover .ws-open-icon {
+    opacity: 1;
   }
 
   .search-trigger {

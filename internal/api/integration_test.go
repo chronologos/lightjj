@@ -162,7 +162,7 @@ func TestIntegrationLog(t *testing.T) {
 	writeFile(t, r.RepoDir, "second.txt", "second file")
 	jjExec("describe", "-m", "second commit")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 
 	require.GreaterOrEqual(t, len(rows), 3, "expected at least 3 rows (wc, initial, root)")
@@ -192,7 +192,7 @@ func TestIntegrationLogWithRevset(t *testing.T) {
 	jjExec("new")
 	jjExec("describe", "-m", "third")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Limit to 1 should return only the working copy.
 	rows := getLogRows(t, srv, "limit=1")
@@ -212,7 +212,7 @@ func TestIntegrationDiff(t *testing.T) {
 	writeFile(t, r.RepoDir, "new_file.txt", "line one\nline two\nline three\n")
 	jjExec("describe", "-m", "add new file")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/diff?revision=@")
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -231,7 +231,7 @@ func TestIntegrationDiffSingleFile(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "bbb\n")
 	jjExec("describe", "-m", "two files")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/diff?revision=@&file=a.txt")
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -252,7 +252,7 @@ func TestIntegrationFiles(t *testing.T) {
 	writeFile(t, r.RepoDir, "extra.txt", "extra content")
 	jjExec("describe", "-m", "modify and add")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/files?revision=@")
 	var files []jj.FileChange
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
@@ -276,7 +276,7 @@ func TestIntegrationStatus(t *testing.T) {
 	writeFile(t, r.RepoDir, "tracked.txt", "content")
 	jjExec("describe", "-m", "wip")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/status?revision=@")
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -291,7 +291,7 @@ func TestIntegrationBookmarks(t *testing.T) {
 	jjExec("describe", "-m", "bookmarked commit")
 	jjExec("bookmark", "set", "my-feature")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	bookmarks := getBookmarks(t, srv)
 	b := findBookmark(t, bookmarks, "my-feature")
 	assert.NotNil(t, b.Local)
@@ -304,7 +304,7 @@ func TestIntegrationDescription(t *testing.T) {
 
 	jjExec("describe", "-m", "test description with special chars: <>&\"")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/description?revision=@")
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -320,7 +320,7 @@ func TestIntegrationOplog(t *testing.T) {
 	jjExec("new")
 	jjExec("describe", "-m", "second")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/oplog")
 	var entries []jj.OpEntry
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
@@ -351,7 +351,7 @@ func TestIntegrationOplogLimit(t *testing.T) {
 		jjExec("new")
 	}
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/oplog?limit=3")
 	var entries []jj.OpEntry
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
@@ -367,7 +367,7 @@ func TestIntegrationEvolog(t *testing.T) {
 	jjExec("describe", "-m", "original description")
 	jjExec("describe", "-m", "updated description")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/evolog?revision=@")
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -378,7 +378,7 @@ func TestIntegrationWorkspaces(t *testing.T) {
 	r, _ := jjTestRepo(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/workspaces")
 	var workspaces []jj.Workspace
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &workspaces))
@@ -401,7 +401,7 @@ func TestIntegrationRemotes(t *testing.T) {
 	t.Parallel()
 
 	// A freshly initialized colocated repo has no remotes.
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/remotes")
 	var remotes []string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &remotes))
@@ -419,7 +419,7 @@ func TestIntegrationNew(t *testing.T) {
 	writeFile(t, r.RepoDir, "file.txt", "content")
 	jjExec("describe", "-m", "parent commit")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiPost(t, srv, "/api/new", map[string]any{
 		"revisions": []string{"@"},
 	})
@@ -436,7 +436,7 @@ func TestIntegrationDescribePost(t *testing.T) {
 	r, _ := jjTestRepo(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Describe the working copy via POST.
 	w := apiPost(t, srv, "/api/describe", map[string]any{
@@ -463,7 +463,7 @@ func TestIntegrationEdit(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "b")
 	jjExec("describe", "-m", "commit B")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Get commit A's change ID.
 	rows := getLogRows(t, srv, "")
@@ -490,7 +490,7 @@ func TestIntegrationAbandon(t *testing.T) {
 	jjExec("new")
 	jjExec("describe", "-m", "successor")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Get the change ID of the commit to abandon.
 	rows := getLogRows(t, srv, "")
@@ -520,7 +520,7 @@ func TestIntegrationRebase(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "b")
 	jjExec("describe", "-m", "commit B")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	commitB := findRow(t, rows, "commit B")
 
@@ -555,7 +555,7 @@ func TestIntegrationSquash(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "bbb")
 	jjExec("describe", "-m", "child with b")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	child := findRow(t, rows, "child with b")
 	parent := findRow(t, rows, "parent with a")
@@ -588,7 +588,7 @@ func TestIntegrationUndo(t *testing.T) {
 
 	jjExec("describe", "-m", "original description")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Mutate: re-describe.
 	w := apiPost(t, srv, "/api/describe", map[string]any{
@@ -619,7 +619,7 @@ func TestIntegrationBookmarkSet(t *testing.T) {
 	writeFile(t, r.RepoDir, "f.txt", "x")
 	jjExec("describe", "-m", "target")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	w := apiPost(t, srv, "/api/bookmark/set", map[string]any{
 		"revision": "@",
 		"name":     "test-bm",
@@ -637,7 +637,7 @@ func TestIntegrationBookmarkDelete(t *testing.T) {
 	jjExec("describe", "-m", "target")
 	jjExec("bookmark", "set", "to-delete")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	// Verify it exists first.
 	assert.True(t, hasBookmark(getBookmarks(t, srv), "to-delete"))
 
@@ -662,7 +662,7 @@ func TestIntegrationBookmarkMove(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "b")
 	jjExec("describe", "-m", "commit B")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	commitB := findRow(t, rows, "commit B")
 
@@ -689,7 +689,7 @@ func TestIntegrationBookmarkForget(t *testing.T) {
 	jjExec("describe", "-m", "target")
 	jjExec("bookmark", "set", "forgettable")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	assert.True(t, hasBookmark(getBookmarks(t, srv), "forgettable"))
 
 	w := apiPost(t, srv, "/api/bookmark/forget", map[string]any{
@@ -715,7 +715,7 @@ func TestJourneyFeatureBranch(t *testing.T) {
 	writeFile(t, r.RepoDir, "README.md", "# project")
 	jjExec("describe", "-m", "initial setup")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// 1. Create new change.
 	w := apiPost(t, srv, "/api/new", map[string]any{
@@ -775,7 +775,7 @@ func TestJourneySquashStack(t *testing.T) {
 	writeFile(t, r.RepoDir, "top.txt", "top")
 	jjExec("describe", "-m", "top commit")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	top := findRow(t, rows, "top commit")
 	middle := findRow(t, rows, "middle commit")
@@ -824,7 +824,7 @@ func TestJourneyRebaseAndVerify(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "b content")
 	jjExec("describe", "-m", "branch B")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	// Use all() since A may fall outside default revset after rebase.
 	rows := getLogRows(t, srv, "revset=all()")
 	branchB := findRow(t, rows, "branch B")
@@ -863,7 +863,7 @@ func TestJourneyBookmarkLifecycle(t *testing.T) {
 	writeFile(t, r.RepoDir, "v2.txt", "v2")
 	jjExec("describe", "-m", "version 2")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	v1 := findRow(t, rows, "version 1")
 	v2 := findRow(t, rows, "version 2")
@@ -914,7 +914,7 @@ func TestJourneyAbandonAndUndo(t *testing.T) {
 	jjExec("new")
 	jjExec("describe", "-m", "successor")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	important := findRow(t, rows, "important commit")
 
@@ -953,7 +953,7 @@ func TestJourneyEditModifyReturn(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "b content")
 	jjExec("describe", "-m", "commit B")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	commitA := findRow(t, rows, "commit A")
 	commitB := findRow(t, rows, "commit B")
@@ -992,7 +992,7 @@ func TestJourneyDescribeMultiline(t *testing.T) {
 	r, _ := jjTestRepo(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	multiline := "feat: add auth\n\nThis adds OAuth2 support.\n\n- Google provider\n- GitHub provider"
 
 	w := apiPost(t, srv, "/api/describe", map[string]any{
@@ -1018,7 +1018,7 @@ func TestJourneyOpIdTracking(t *testing.T) {
 	r, _ := jjTestRepo(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// First log call seeds the op-id cache.
 	w1 := apiGet(t, srv, "/api/log")
@@ -1082,7 +1082,7 @@ func TestIntegrationFilesWithConflicts(t *testing.T) {
 	r, _ := createConflict(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// The working copy should be the conflicted "right change" commit.
 	w := apiGet(t, srv, "/api/files?revision=@")
@@ -1110,7 +1110,7 @@ func TestIntegrationResolveOurs(t *testing.T) {
 	r, _ := createConflict(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Verify conflict exists first.
 	w := apiGet(t, srv, "/api/files?revision=@")
@@ -1147,7 +1147,7 @@ func TestIntegrationResolveTheirs(t *testing.T) {
 	r, _ := createConflict(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Resolve with :theirs.
 	w := apiPost(t, srv, "/api/resolve", map[string]any{
@@ -1187,7 +1187,7 @@ func TestJourneyConflictResolution(t *testing.T) {
 	r, _ := createConflict(t)
 	t.Parallel()
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// 1. Log should show the conflicted commit at the working copy.
 	rows := getLogRows(t, srv, "revset=@")
@@ -1308,7 +1308,7 @@ func TestJourneyConflictBubbleUp(t *testing.T) {
 	t.Parallel()
 	rightId, childAId, childBId := ids[0], ids[1], ids[2]
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// 1. Verify all three commits are conflicted.
 	for _, id := range []string{rightId, childAId, childBId} {
@@ -1370,7 +1370,7 @@ func TestJourneyConflictResolveChildNotParent(t *testing.T) {
 	t.Parallel()
 	rightId, childAId, _ := ids[0], ids[1], ids[2]
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 
 	// Resolve the conflict in childA (a descendant, not the root).
 	w := apiPost(t, srv, "/api/resolve", map[string]any{
@@ -1417,7 +1417,7 @@ func TestIntegrationFilesFromSubdirectory(t *testing.T) {
 	require.NoError(t, os.MkdirAll(subdir, 0o755))
 	subRunner := runner.NewLocalRunner(subdir)
 
-	srv := NewServer(subRunner)
+	srv := NewServer(subRunner, "")
 	w := apiGet(t, srv, "/api/files?revision=@")
 	var files []jj.FileChange
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
@@ -1453,7 +1453,7 @@ func TestIntegrationSplit(t *testing.T) {
 	writeFile(t, r.RepoDir, "move.txt", "move me")
 	jjExec("describe", "-m", "before split")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	rev := findRow(t, rows, "before split")
 
@@ -1490,7 +1490,7 @@ func TestIntegrationSplit_Parallel(t *testing.T) {
 	writeFile(t, r.RepoDir, "b.txt", "b")
 	jjExec("describe", "-m", "to split")
 
-	srv := NewServer(r)
+	srv := NewServer(r, "")
 	rows := getLogRows(t, srv, "")
 	rev := findRow(t, rows, "to split")
 
