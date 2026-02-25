@@ -149,6 +149,12 @@ export interface Workspace {
   name: string
   change_id: string
   commit_id: string
+  path?: string
+}
+
+export interface WorkspacesResponse {
+  current: string
+  workspaces: Workspace[]
 }
 
 export const api = {
@@ -190,7 +196,10 @@ export const api = {
 
   remotes: () => request<string[]>('/api/remotes'),
 
-  workspaces: () => cachedRequest<Workspace[]>('workspaces', '/api/workspaces'),
+  workspaces: () => cachedRequest<WorkspacesResponse>('workspaces', '/api/workspaces'),
+
+  workspaceOpen: (name: string) =>
+    post<{ url: string }>('/api/workspace/open', { name }),
 
   oplog: (limit?: number) => {
     const params = new URLSearchParams()

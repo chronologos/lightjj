@@ -75,8 +75,8 @@ func New(revisions SelectedRevisions) CommandArgs {
 	return args
 }
 
-func CommitWorkingCopy() CommandArgs {
-	return []string{"commit"}
+func CommitWorkingCopy(message string) CommandArgs {
+	return []string{"commit", "-m", message}
 }
 
 func Edit(changeId string, ignoreImmutable bool) CommandArgs {

@@ -162,7 +162,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	summaryOutput, err := s.Runner.Run(r.Context(), jj.DiffSummary(revision))
 	if err != nil {
-		<-statCh     // drain buffered channels (goroutines self-exit)
+		<-statCh // drain buffered channels (goroutines self-exit)
 		<-conflictCh
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -228,6 +228,18 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
 }
 
+type workspacesResponse struct {
+	Current    string              `json:"current"`
+	Workspaces []workspaceWithPath `json:"workspaces"`
+}
+
+type workspaceWithPath struct {
+	Name     string `json:"name"`
+	ChangeId string `json:"change_id"`
+	CommitId string `json:"commit_id"`
+	Path     string `json:"path,omitempty"`
+}
+
 func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	args := jj.WorkspaceList()
 	output, err := s.Runner.Run(r.Context(), args)
@@ -236,7 +248,66 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaces := jj.ParseWorkspaceList(string(output))
-	s.writeJSON(w, r, http.StatusOK, workspaces)
+
+	// Enrich with paths from workspace store (best-effort)
+	pathMap, _ := s.readWorkspaceStore()
+
+	// Determine current workspace by matching RepoDir against paths
+	current := ""
+	resp := workspacesResponse{Workspaces: make([]workspaceWithPath, len(workspaces))}
+	for i, ws := range workspaces {
+		wsPath := pathMap[ws.Name]
+		resp.Workspaces[i] = workspaceWithPath{
+			Name:     ws.Name,
+			ChangeId: ws.ChangeId,
+			CommitId: ws.CommitId,
+			Path:     wsPath,
+		}
+		if s.RepoDir != "" && wsPath == s.RepoDir {
+			current = ws.Name
+		}
+	}
+	resp.Current = current
+	s.writeJSON(w, r, http.StatusOK, resp)
+}
+
+type workspaceOpenRequest struct {
+	Name string `json:"name"`
+}
+
+func (s *Server) handleWorkspaceOpen(w http.ResponseWriter, r *http.Request) {
+	var req workspaceOpenRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Look up workspace path from store
+	pathMap, err := s.readWorkspaceStore()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if pathMap == nil {
+		s.writeError(w, http.StatusBadRequest, "workspace paths unavailable (SSH mode)")
+		return
+	}
+	wsPath, ok := pathMap[req.Name]
+	if !ok {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("workspace %q not found", req.Name))
+		return
+	}
+
+	url, err := s.spawnWorkspaceInstance(req.Name, wsPath)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"url": url})
 }
 
 // --- Write handlers ---
@@ -409,11 +480,14 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
-	if err := decodeBody(w, r, &struct{}{}); err != nil {
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.runMutation(w, r, jj.CommitWorkingCopy())
+	s.runMutation(w, r, jj.CommitWorkingCopy(req.Message))
 }
 
 func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
