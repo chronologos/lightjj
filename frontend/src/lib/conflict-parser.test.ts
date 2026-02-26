@@ -165,4 +165,56 @@ describe('findConflicts', () => {
     expect(regions[0].sides[0].label).toBe('Changes from base to side #1')
     expect(regions[0].sides[1].label).toBe('Contents of side #2')
   })
+
+  it('parses 3-way conflict (2 diff + 1 snapshot)', () => {
+    const lines = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% diff from: "side A"'),
+      addLine('+-old line A'),
+      addLine('++new line A'),
+      addLine('+%%%%%%% diff from: "side B"'),
+      addLine('+-old line B'),
+      addLine('++new line B'),
+      addLine('++++++++ "side C"'),
+      addLine('+content from C'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(1)
+    expect(regions[0].sides).toHaveLength(3)
+    expect(regions[0].sides[0].type).toBe('diff')
+    expect(regions[0].sides[1].type).toBe('diff')
+    expect(regions[0].sides[2].type).toBe('snapshot')
+    // Side boundaries are correct
+    expect(regions[0].sides[0].startIdx).toBe(1)
+    expect(regions[0].sides[0].endIdx).toBe(3)
+    expect(regions[0].sides[1].startIdx).toBe(4)
+    expect(regions[0].sides[1].endIdx).toBe(6)
+    expect(regions[0].sides[2].startIdx).toBe(7)
+    expect(regions[0].sides[2].endIdx).toBe(8)
+  })
+
+  it('parses multiple conflict regions in one file', () => {
+    const lines = [
+      addLine('+<<<<<<< Conflict 1 of 2'),
+      addLine('+%%%%%%% "first diff"'),
+      addLine('+-a'),
+      addLine('++++++++ "first snap"'),
+      addLine('+b'),
+      addLine('+>>>>>>> Conflict 1 of 2 ends'),
+      { type: 'add' as const, content: '+normal line between conflicts' },
+      addLine('+<<<<<<< Conflict 2 of 2'),
+      addLine('+%%%%%%% "second diff"'),
+      addLine('+-c'),
+      addLine('++++++++ "second snap"'),
+      addLine('+d'),
+      addLine('+>>>>>>> Conflict 2 of 2 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions).toHaveLength(2)
+    expect(regions[0].label).toBe('Conflict 1 of 2')
+    expect(regions[1].label).toBe('Conflict 2 of 2')
+    expect(regions[0].sides).toHaveLength(2)
+    expect(regions[1].sides).toHaveLength(2)
+  })
 })

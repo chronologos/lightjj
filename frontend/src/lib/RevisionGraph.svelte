@@ -593,7 +593,7 @@
   }
 
   .graph-row.selected {
-    background: var(--bg-hover);
+    background: rgba(from var(--amber) r g b / 0.04);
     box-shadow: inset 2px 0 0 var(--amber);
   }
 
@@ -646,7 +646,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: var(--green);
+    background: var(--amber);
     color: var(--crust);
     font-size: 9px;
     font-weight: 800;

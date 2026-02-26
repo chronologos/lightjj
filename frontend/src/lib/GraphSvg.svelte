@@ -245,9 +245,4 @@
     display: block;
     overflow: visible;
   }
-
-  .node-glyph {
-    pointer-events: none;
-    user-select: none;
-  }
 </style>
