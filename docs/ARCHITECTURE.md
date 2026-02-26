@@ -24,15 +24,18 @@ lightjj is a browser-based UI for the Jujutsu (jj) version control system. It fo
 │  │  HTTP Server (net/http)                                     │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
 │  │  │  API Handlers (internal/api/)                         │  │ │
-│  │  │  GET  /api/log, /api/diff, /api/diff-range,            │  │ │
-│  │  │       /api/files, /api/bookmarks,                      │  │ │
-│  │  │       /api/description, /api/remotes,                  │  │ │
-│  │  │       /api/oplog, /api/evolog, /api/workspaces        │  │ │
-│  │  │  POST /api/new, /api/edit, /api/abandon, /api/undo   │  │ │
-│  │  │       /api/rebase, /api/squash, /api/describe         │  │ │
+│  │  │  GET  /api/log, /api/diff, /api/diff-range,           │  │ │
+│  │  │       /api/files, /api/bookmarks, /api/description,   │  │ │
+│  │  │       /api/remotes, /api/oplog, /api/evolog,          │  │ │
+│  │  │       /api/file-show, /api/workspaces, /api/aliases,  │  │ │
+│  │  │       /api/pull-requests                              │  │ │
+│  │  │  POST /api/new, /api/edit, /api/abandon, /api/undo,   │  │ │
+│  │  │       /api/rebase, /api/squash, /api/split,           │  │ │
+│  │  │       /api/describe, /api/commit, /api/resolve,       │  │ │
 │  │  │       /api/bookmark/{set,delete,move,forget,track,    │  │ │
 │  │  │                      untrack}                         │  │ │
-│  │  │       /api/git/push, /api/git/fetch                   │  │ │
+│  │  │       /api/git/{push,fetch}, /api/alias,              │  │ │
+│  │  │       /api/workspace/open                             │  │ │
 │  │  └───────────────────────┬──────────────────────────────┘  │ │
 │  │                          │                                  │ │
 │  │  ┌───────────────────────┴──────────────────────────────┐  │ │
@@ -211,6 +214,21 @@ defer runner.Verify()  // asserts all expectations called
 8. **Op-ID staleness detection** — Every response carries `X-JJ-Op-Id`. The frontend detects operation changes and auto-refreshes. Mutation endpoints refresh the cached op-id asynchronously to avoid adding latency.
 
 9. **Divergent commit identity** — Divergent commits share the same `change_id`, so the frontend uses `effectiveId()` (falls back to `commit_id`) for identity operations. The `change_id()` revset function (not `all:` which doesn't exist in jj 0.38) resolves all divergent versions. Divergence offsets (`/0`, `/1`) are computed client-side by lexicographic commit ID sort, matching jj's convention. The DivergencePanel is self-fetching — it receives only a `changeId` and manages its own data loading with separate generation counters for version fetching and diff fetching.
+
+## Frontend Performance Patterns
+
+**Per-file prop scoping** — `DiffPanel` passes per-file slices of global state to each `DiffFileView` rather than the full dataset. This localizes reactive invalidation:
+
+- `highlightsByFile: Map<filePath, Map<key, html>>` — progressive Shiki highlighting publishes per-file inner Maps. Already-highlighted files keep their inner Map reference, so only the newly-highlighted `DiffFileView` re-renders on each publish. Stable `EMPTY_HL` singleton for not-yet-highlighted files.
+- `matchesByFile` — search matches pre-grouped by `filePath` via `groupByWithIndex()`, preserving global indices so `currentMatchIdx` comparison still works. Match-free files receive `EMPTY_MATCHES` (stable singleton), so their `lineMatchMap` `$derived` never reads `currentMatchIdx` → no dependency → no recompute on Enter/Shift+Enter.
+
+**Mode objects over individual props** — `RevisionGraph` and `StatusBar` receive `{rebase, squash, split}` mode objects (from `modes.svelte.ts` factories with reactive getters) instead of 11+ individual props. Reactivity is preserved (Svelte tracks `.active`, `.sources`, etc. access); prop count drops 31→23 / 12→8.
+
+**`$derived` over `@const` for expensive template computations** — `toSplitView`, `computeSplitLineNumbers`, `computeLineNumbers` moved from `{@const}` (re-evaluates every render) to `$derived` (recomputes only when `file.hunks`/`splitView` change). This matters because `highlightedLines` updates trigger template re-renders without those dependencies changing.
+
+**Bounded log fetch** — `GET /api/log` defaults to `--limit 500`, caps at 1000. Prevents unbounded payload/DOM on large repos.
+
+**Serial mutations** — Concurrent jj mutations can produce divergent operation history (jj auto-reconciles, but avoidable). Multi-step flows (e.g., abandon N divergent versions → set N bookmarks) run serially. The perf cost is negligible for rare manual actions.
 
 ## Graph View
 

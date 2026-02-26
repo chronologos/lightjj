@@ -58,7 +58,7 @@ func TestDiff_WithFile(t *testing.T) {
 func TestSquash(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
 	got := Squash(from, "def", nil, false, false, false, false)
-	assert.Equal(t, []string{"squash", "--from", "abc", "--into", "def"}, got)
+	assert.Equal(t, []string{"squash", "--from", "abc", "--into", "def", "--use-destination-message"}, got)
 }
 
 func TestSquash_AllFlags(t *testing.T) {

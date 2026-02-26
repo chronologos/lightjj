@@ -99,6 +99,12 @@ func Split(revision string, files []string, parallel bool, interactive bool) Com
 	if interactive {
 		args = append(args, "--interactive")
 	}
+	// When filesets are provided non-interactively, suppress the description
+	// editor by passing an empty message. The second commit keeps the original
+	// description automatically.
+	if !interactive && len(files) > 0 {
+		args = append(args, "-m", "")
+	}
 	args = append(args, escapeFiles(files)...)
 	return args
 }
@@ -200,7 +206,10 @@ func Squash(from SelectedRevisions, destination string, files []string, keepEmpt
 	if keepEmptied {
 		args = append(args, "--keep-emptied")
 	}
-	if useDestinationMessage {
+	// Always pass --use-destination-message in non-interactive mode to prevent
+	// jj from opening an editor when both source and destination have descriptions.
+	// The web UI has no way to interactively compose a combined description.
+	if useDestinationMessage || !interactive {
 		args = append(args, "--use-destination-message")
 	}
 	if interactive {

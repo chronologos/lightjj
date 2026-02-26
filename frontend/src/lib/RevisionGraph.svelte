@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import { effectiveId, type LogEntry, type PullRequest } from './api'
-  import type { RebaseMode, SquashMode, SplitMode } from './modes.svelte'
+  import { targetModeLabel, type RebaseMode, type SquashMode, type SplitMode } from './modes.svelte'
   import GraphSvg from './GraphSvg.svelte'
 
   interface Props {
@@ -62,7 +62,6 @@
   }
 
   const sourceModeLabel: Record<string, string> = { '-r': 'move', '-s': 'source', '-b': 'branch' }
-  const targetModeLabel: Record<string, string> = { '-d': 'onto', '--insert-after': 'after', '--insert-before': 'before' }
 
   // Build a continuation gutter: replace node symbols with │, keep pipes and spaces
   const nodeChars = new Set(['@', '○', '◆', '×', '◌'])
@@ -555,6 +554,7 @@
     -webkit-tap-highlight-color: transparent;
     overflow: hidden;
     position: relative;
+    transition: box-shadow var(--anim-duration) var(--anim-ease);
   }
 
   .graph-row:hover:not(.selected) {
@@ -753,6 +753,8 @@
     cursor: pointer;
     font-family: inherit;
     text-decoration: none;
+    transition: border-color var(--anim-duration) var(--anim-ease),
+                filter var(--anim-duration) var(--anim-ease);
   }
 
   .pr-badge:hover {
@@ -804,6 +806,7 @@
     flex-shrink: 0;
     line-height: 1.15;
     vertical-align: baseline;
+    animation: badge-in var(--anim-duration) var(--anim-ease);
   }
 
   .rebase-source {
