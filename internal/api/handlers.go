@@ -67,6 +67,11 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Cap unbounded requests to prevent runaway fetches on large repos.
+	// Default: 500 commits (typically covers months of history).
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
 
 	args := jj.LogGraph(revset, limit)
 	output, err := s.Runner.Run(r.Context(), args)
@@ -120,22 +125,6 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"diff": string(output)})
-}
-
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	revision := r.URL.Query().Get("revision")
-	if revision == "" {
-		s.writeError(w, http.StatusBadRequest, "revision is required")
-		return
-	}
-
-	args := jj.Status(revision)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": string(output)})
 }
 
 // asyncResult holds the output of a background goroutine.
@@ -774,6 +763,7 @@ type PullRequest struct {
 var execGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
+		"--author", "@me",
 		"--json", "headRefName,url,number,isDraft",
 		"--limit", "100")
 	cmd.Dir = repoDir

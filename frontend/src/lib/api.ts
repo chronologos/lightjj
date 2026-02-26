@@ -86,11 +86,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, signal ? { ...init, signal } : init)
     if (timeoutId !== undefined) clearTimeout(timeoutId) // disarm after headers arrive
     trackOpId(res)
-    const data = await res.json()
     if (!res.ok) {
-      throw new Error(data.error || `HTTP ${res.status}`)
+      // Parse error body defensively — non-JSON bodies (Go panic, proxy error)
+      // should surface the HTTP status, not a JSON parse error.
+      const data = await res.json().catch(() => null) as { error?: string } | null
+      throw new Error(data?.error || `HTTP ${res.status}: ${res.statusText}`)
     }
-    return data as T
+    return await res.json() as T
   } catch (e) {
     if (timeoutId !== undefined) clearTimeout(timeoutId)
     if (e instanceof DOMException && e.name === 'AbortError') {

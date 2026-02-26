@@ -59,6 +59,16 @@
     })
   }
 
+  // Memoized split-view data — depends only on file.hunks, not on
+  // highlightedLines/wordDiffMap which update frequently during rendering
+  let splitLines = $derived(splitView ? toSplitView(file.hunks) : [])
+  let splitNums = $derived(splitView ? computeSplitLineNumbers(file.hunks, splitLines) : [])
+
+  // Memoized unified-view line numbers — keyed by hunk index
+  let lineNumsByHunk = $derived(
+    splitView ? [] : file.hunks.map(h => computeLineNumbers(h))
+  )
+
   interface ConflictLineMeta {
     cssClass: string
     isRegionStart?: boolean
@@ -213,8 +223,6 @@
           ↕ Expand full context
         </button>
       {/if}
-      {@const splitLines = toSplitView(file.hunks)}
-      {@const splitNums = computeSplitLineNumbers(file.hunks, splitLines)}
       <div class="split-view">
         <div class="split-col split-left">
           {#each splitLines as sl, si}
@@ -264,7 +272,7 @@
           {/if}
           <div class="diff-hunk-header">{hunk.header}</div>
         {/if}
-        {@const lineNums = computeLineNumbers(hunk)}
+        {@const lineNums = lineNumsByHunk[hunkIdx]}
         <div class="diff-lines">
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}

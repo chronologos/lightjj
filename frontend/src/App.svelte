@@ -391,22 +391,17 @@
     clearTimeout(navDebounceTimer)
     const eid = effectiveId(entry.commit)
     const cached = isCached(eid)
-    if (checkedRevisions.size === 0) {
-      if (cached) {
-        loadDiffAndFiles(eid)
-      } else {
-        navDebounceTimer = setTimeout(() => {
-          const current = revisions[selectedIndex]
-          if (current) {
-            loadDiffAndFiles(effectiveId(current.commit))
-            if (evologOpen) loadEvolog(effectiveId(current.commit))
-          }
-        }, 50)
-        return // evolog deferred with the rest
-      }
+    const doLoad = (id: string) => {
+      if (checkedRevisions.size === 0) loadDiffAndFiles(id)
+      if (evologOpen) loadEvolog(id)
     }
-    if (evologOpen) {
-      loadEvolog(eid)
+    if (cached) {
+      doLoad(eid)
+    } else {
+      navDebounceTimer = setTimeout(() => {
+        const current = revisions[selectedIndex]
+        if (current) doLoad(effectiveId(current.commit))
+      }, 50)
     }
   }
 
@@ -1148,17 +1143,9 @@
           onrevsetescaped={clearRevsetFilter}
           onviewmodechange={toggleViewMode}
           onbookmarkclick={openBookmarkModal}
-          rebaseMode={rebase.active}
-          rebaseSources={rebase.sources}
-          rebaseSourceMode={rebase.sourceMode}
-          rebaseTargetMode={rebase.targetMode}
-          squashMode={squash.active}
-          squashSources={squash.sources}
-          squashKeepEmptied={squash.keepEmptied}
-          squashUseDestMsg={squash.useDestMsg}
-          splitMode={split.active}
-          splitRevision={split.revision}
-          splitParallel={split.parallel}
+          {rebase}
+          {squash}
+          {split}
           isDark={darkMode}
           {prByBookmark}
         />
@@ -1239,15 +1226,10 @@
     <StatusBar
       {statusText}
       {commandOutput}
-      rebaseMode={rebase.active}
-      rebaseSourceMode={rebase.sourceMode}
-      rebaseTargetMode={rebase.targetMode}
-      squashMode={squash.active}
-      squashKeepEmptied={squash.keepEmptied}
-      squashUseDestMsg={squash.useDestMsg}
+      {rebase}
+      {squash}
       {squashFileCount}
-      splitMode={split.active}
-      splitParallel={split.parallel}
+      {split}
       {splitFileCount}
       {activeView}
     />

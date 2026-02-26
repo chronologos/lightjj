@@ -53,7 +53,6 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/log", s.handleLog)
 	s.Mux.HandleFunc("GET /api/bookmarks", s.handleBookmarks)
 	s.Mux.HandleFunc("GET /api/diff", s.handleDiff)
-	s.Mux.HandleFunc("GET /api/status", s.handleStatus)
 	s.Mux.HandleFunc("GET /api/files", s.handleFiles)
 	s.Mux.HandleFunc("GET /api/description", s.handleGetDescription)
 	s.Mux.HandleFunc("GET /api/remotes", s.handleRemotes)
@@ -152,48 +151,15 @@ func (s *Server) spawnWorkspaceInstance(name, workspacePath string) (string, err
 		return "", fmt.Errorf("workspace path is not a directory: %s", workspacePath)
 	}
 
-	s.childrenMu.Lock()
-	// Return existing instance if already spawned
-	if url, ok := s.spawnedWorkspaces[name]; ok {
-		s.childrenMu.Unlock()
-		return url, nil
-	}
-	s.childrenMu.Unlock()
-
-	// Find a free port
-	ln, err := net.Listen("tcp", "localhost:0")
+	url, addr, err := s.spawnLocked(name, workspacePath)
 	if err != nil {
-		return "", fmt.Errorf("finding free port: %w", err)
+		return "", err
 	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	// Find our own binary path
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("finding executable: %w", err)
+	if addr == "" {
+		return url, nil // already-spawned instance, no need to poll
 	}
 
-	cmd := exec.Command(exe, "-R", workspacePath, "--addr", addr, "--no-browser")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("starting lightjj: %w", err)
-	}
-
-	// Reap child process to prevent zombies
-	go cmd.Wait()
-
-	url := "http://" + addr
-	s.childrenMu.Lock()
-	s.children = append(s.children, cmd)
-	if s.spawnedWorkspaces == nil {
-		s.spawnedWorkspaces = make(map[string]string)
-	}
-	s.spawnedWorkspaces[name] = url
-	s.childrenMu.Unlock()
-
-	// Wait briefly for the server to accept connections
+	// Wait briefly for the new server to accept connections
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
@@ -204,6 +170,51 @@ func (s *Server) spawnWorkspaceInstance(name, workspacePath string) (string, err
 		time.Sleep(50 * time.Millisecond)
 	}
 	return url, nil // return URL even if poll timed out — server may just be slow
+}
+
+// spawnLocked holds childrenMu across dedup check, port allocation, and exec.Start
+// to prevent concurrent requests from spawning duplicate instances.
+// Lock duration is ~50ms — acceptable for a manual, infrequent action.
+func (s *Server) spawnLocked(name, workspacePath string) (url string, addr string, err error) {
+	s.childrenMu.Lock()
+	defer s.childrenMu.Unlock()
+
+	// Return existing instance if already spawned
+	if existing, ok := s.spawnedWorkspaces[name]; ok {
+		return existing, "", nil
+	}
+
+	// Find a free port
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return "", "", fmt.Errorf("finding free port: %w", err)
+	}
+	addr = ln.Addr().String()
+	ln.Close()
+
+	// Find our own binary path
+	exe, err := os.Executable()
+	if err != nil {
+		return "", "", fmt.Errorf("finding executable: %w", err)
+	}
+
+	cmd := exec.Command(exe, "-R", workspacePath, "--addr", addr, "--no-browser")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return "", "", fmt.Errorf("starting lightjj: %w", err)
+	}
+
+	// Reap child process to prevent zombies
+	go cmd.Wait()
+
+	url = "http://" + addr
+	s.children = append(s.children, cmd)
+	if s.spawnedWorkspaces == nil {
+		s.spawnedWorkspaces = make(map[string]string)
+	}
+	s.spawnedWorkspaces[name] = url
+	return url, addr, nil
 }
 
 // readWorkspaceStore reads and parses the workspace store index file.

@@ -269,20 +269,6 @@ func TestIntegrationFiles(t *testing.T) {
 		"modified file should have non-zero stat counts")
 }
 
-func TestIntegrationStatus(t *testing.T) {
-	r, jjExec := jjTestRepo(t)
-	t.Parallel()
-
-	writeFile(t, r.RepoDir, "tracked.txt", "content")
-	jjExec("describe", "-m", "wip")
-
-	srv := NewServer(r, "")
-	w := apiGet(t, srv, "/api/status?revision=@")
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["status"], "tracked.txt")
-}
-
 func TestIntegrationBookmarks(t *testing.T) {
 	r, jjExec := jjTestRepo(t)
 	t.Parallel()

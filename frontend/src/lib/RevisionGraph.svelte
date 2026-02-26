@@ -1,6 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import { effectiveId, type LogEntry, type PullRequest } from './api'
+  import type { RebaseMode, SquashMode, SplitMode } from './modes.svelte'
   import GraphSvg from './GraphSvg.svelte'
 
   interface Props {
@@ -24,17 +25,9 @@
     onrevsetescaped: () => void
     onviewmodechange: () => void
     onbookmarkclick: (name: string) => void
-    rebaseMode: boolean
-    rebaseSources: string[]
-    rebaseSourceMode: string
-    rebaseTargetMode: string
-    squashMode: boolean
-    squashSources: string[]
-    squashKeepEmptied: boolean
-    squashUseDestMsg: boolean
-    splitMode: boolean
-    splitRevision: string
-    splitParallel: boolean
+    rebase: RebaseMode
+    squash: SquashMode
+    split: SplitMode
     isDark: boolean
     prByBookmark: Map<string, PullRequest>
   }
@@ -44,11 +37,11 @@
     onselect, oncheck, onrangecheck, oncontextmenu,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
-    rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
-    squashMode, squashSources, squashKeepEmptied, squashUseDestMsg,
-    splitMode, splitRevision, splitParallel,
+    rebase, squash, split,
     isDark, prByBookmark,
   }: Props = $props()
+
+  let anyModeActive = $derived(rebase.active || squash.active || split.active)
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
   let hoveredLane: number | null = $state(null)
@@ -233,7 +226,7 @@
       <button class="revset-clear" onclick={onrevsetclear} title="Clear filter (Escape)">x</button>
     {/if}
   </div>
-  {#if checkedRevisions.size > 0 && !rebaseMode && !squashMode && !splitMode}
+  {#if checkedRevisions.size > 0 && !anyModeActive}
     <div class="batch-actions-bar">
       <span class="batch-label">{checkedRevisions.size} checked</span>
       <button class="action-btn" onclick={onnewfromchecked} title="New from checked (n)">new</button>
@@ -276,7 +269,7 @@
             }}
             oncontextmenu={(e: MouseEvent) => {
               e.preventDefault()
-              if (rebaseMode || squashMode || splitMode) return
+              if (anyModeActive) return
               oncontextmenu(effectiveId(revisions[line.entryIndex].commit), e.clientX, e.clientY)
             }}
             role="option"
@@ -300,16 +293,16 @@
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
               {@const eid = effectiveId(entry.commit)}
-              {@const isRebaseSource = rebaseMode && rebaseSources.includes(eid)}
-              {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !isRebaseSource}
-              {@const isSquashSource = squashMode && squashSources.includes(eid)}
-              {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !isSquashSource}
-              {@const isSplitSource = splitMode && eid === splitRevision}
+              {@const isRebaseSource = rebase.active && rebase.sources.includes(eid)}
+              {@const isRebaseTarget = rebase.active && selectedIndex === line.entryIndex && !isRebaseSource}
+              {@const isSquashSource = squash.active && squash.sources.includes(eid)}
+              {@const isSquashTarget = squash.active && selectedIndex === line.entryIndex && !isSquashSource}
+              {@const isSplitSource = split.active && eid === split.revision}
               {#if isRebaseSource}
-                <span class="rebase-badge rebase-source">&lt;&lt; {sourceModeLabel[rebaseSourceMode]} &gt;&gt;</span>
+                <span class="rebase-badge rebase-source">&lt;&lt; {sourceModeLabel[rebase.sourceMode]} &gt;&gt;</span>
               {/if}
               {#if isRebaseTarget}
-                <span class="rebase-badge rebase-target">&lt;&lt; {targetModeLabel[rebaseTargetMode]} &gt;&gt;</span>
+                <span class="rebase-badge rebase-target">&lt;&lt; {targetModeLabel[rebase.targetMode]} &gt;&gt;</span>
               {/if}
               {#if isSquashSource}
                 <span class="rebase-badge rebase-source">&lt;&lt; from &gt;&gt;</span>
@@ -338,10 +331,13 @@
                 {#each entry.bookmarks ?? [] as bm}
                   {@const pr = prByBookmark.get(bm)}
                   {#if pr}
-                    <a class="bookmark-badge has-pr" class:is-draft={pr.is_draft}
+                    <a class="pr-badge" class:is-draft={pr.is_draft}
                        href={pr.url} target="_blank" rel="noopener"
-                       onclick={(e: MouseEvent) => e.stopPropagation()}>
-                      {bm}<span class="pr-number">#{pr.number}</span>
+                       onclick={(e: MouseEvent) => e.stopPropagation()}
+                       title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
+                      <svg class="pr-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.254V3.25a.75.75 0 110 .005v5.45a2.5 2.5 0 101.5 0V5.558a4 4 0 002.74 1.353v1.839a2.5 2.5 0 101.5 0V6.25a.75.75 0 01-1.5 0v-1a.75.75 0 01.75-.75A2.5 2.5 0 007.5 2H7V.75a.25.25 0 00-.4-.2l-1.8 1.35a.25.25 0 000 .4L6.6 3.65a.25.25 0 00.4-.2V2.5h.5a1 1 0 010 2H7a.75.75 0 01-.75-.75v-.001A.75.75 0 015 3.254zM5.75 12a1 1 0 100-2 1 1 0 000 2zm5.5 0a1 1 0 100-2 1 1 0 000 2z"/></svg>
+                      <span class="pr-name">{bm}</span>
+                      <span class="pr-number">#{pr.number}</span>
                     </a>
                   {:else}
                     <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>{bm}</button>
@@ -351,21 +347,21 @@
             {:else if line.isDescLine}
               {@const entry = revisions[line.entryIndex]}
               {@const descEid = effectiveId(entry.commit)}
-              {@const isRebaseTarget = rebaseMode && selectedIndex === line.entryIndex && !rebaseSources.includes(descEid)}
-              {@const isSquashTarget = squashMode && selectedIndex === line.entryIndex && !squashSources.includes(descEid)}
-              {@const isSplitPreview = splitMode && descEid === splitRevision}
+              {@const isRebaseTarget = rebase.active && selectedIndex === line.entryIndex && !rebase.sources.includes(descEid)}
+              {@const isSquashTarget = squash.active && selectedIndex === line.entryIndex && !squash.sources.includes(descEid)}
+              {@const isSplitPreview = split.active && descEid === split.revision}
               <span class="desc-line-content">
                 {#if isSplitPreview}
-                  <span class="rebase-preview">jj split -r {entry.commit.change_id.slice(0, 8)}{splitParallel ? ' --parallel' : ''}</span>
+                  <span class="rebase-preview">jj split -r {entry.commit.change_id.slice(0, 8)}{split.parallel ? ' --parallel' : ''}</span>
                 {:else if isRebaseTarget}
-                  <span class="rebase-preview">rebase {rebaseSourceMode} {rebaseSources.map(s => s.slice(0, 8)).join(' ')} {rebaseTargetMode} {entry.commit.change_id.slice(0, 8)}</span>
+                  <span class="rebase-preview">rebase {rebase.sourceMode} {rebase.sources.map(s => s.slice(0, 8)).join(' ')} {rebase.targetMode} {entry.commit.change_id.slice(0, 8)}</span>
                 {:else if isSquashTarget}
-                  <span class="rebase-preview">jj squash --from {squashSources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squashKeepEmptied ? ' --keep-emptied' : ''}{squashUseDestMsg ? ' --use-destination-message' : ''}</span>
+                  <span class="rebase-preview">jj squash --from {squash.sources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squash.keepEmptied ? ' --keep-emptied' : ''}{squash.useDestMsg ? ' --use-destination-message' : ''}</span>
                 {:else}
                   {@const divOffset = divergenceOffsets.get(entry.commit.commit_id)}
                   <span class="meta-line">
                     <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span>{#if divOffset}<span class="div-offset">{divOffset}</span>{/if}</span>
-                    <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}</span>
+                    <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}<span class="id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix, 12)}</span></span>
                   </span>
                 {/if}
               </span>
@@ -740,24 +736,48 @@
     filter: brightness(1.2);
   }
 
-  .bookmark-badge.has-pr {
+  .pr-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg-pr);
+    color: var(--blue);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid var(--border-pr);
+    line-height: 1.15;
+    letter-spacing: 0.02em;
+    vertical-align: baseline;
+    cursor: pointer;
+    font-family: inherit;
     text-decoration: none;
-    color: var(--blue, var(--amber));
-    background: rgba(66, 165, 245, 0.08);
-    border-color: rgba(66, 165, 245, 0.25);
   }
 
-  .bookmark-badge.has-pr:hover {
-    border-color: var(--blue, var(--amber));
+  .pr-badge:hover {
+    border-color: var(--border-pr-hover);
+    filter: brightness(1.15);
   }
 
-  .bookmark-badge.is-draft {
+  .pr-badge.is-draft {
+    border-style: dashed;
+    opacity: 0.75;
+  }
+
+  .pr-icon {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
     opacity: 0.7;
+  }
+
+  .pr-name {
+    color: var(--blue);
   }
 
   .pr-number {
     color: var(--overlay0);
-    margin-left: 3px;
     font-weight: 400;
   }
 

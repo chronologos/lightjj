@@ -78,6 +78,11 @@ body {
   --badge-workspace-bg: rgba(38,198,218,0.1);
   --border-workspace: rgba(38,198,218,0.3);
 
+  /* PR badges */
+  --bg-pr: rgba(66,165,245,0.1);
+  --border-pr: rgba(66,165,245,0.3);
+  --border-pr-hover: rgba(66,165,245,0.6);
+
   /* Conflict region card */
   --conflict-boundary-border: rgba(239,83,80,0.2);
   --conflict-boundary-bg: rgba(239,83,80,0.06);
@@ -151,6 +156,10 @@ body {
   --badge-other-bg: rgba(230,138,0,0.12);
   --badge-workspace-bg: rgba(0,131,143,0.1);
   --border-workspace: rgba(0,131,143,0.3);
+
+  --bg-pr: rgba(25,118,210,0.1);
+  --border-pr: rgba(25,118,210,0.3);
+  --border-pr-hover: rgba(25,118,210,0.6);
 
   --conflict-boundary-border: rgba(198,40,40,0.2);
   --conflict-boundary-bg: rgba(198,40,40,0.06);

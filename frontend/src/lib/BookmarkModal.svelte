@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type Bookmark } from './api'
   import { fuzzyMatch } from './fuzzy'
+  import { recentActions } from './recent-actions.svelte'
 
   export interface BookmarkOp {
     action: 'move' | 'delete' | 'forget' | 'track' | 'untrack'
@@ -27,6 +28,12 @@
   let fetchError: string | null = $state(null)
   let previousFocus: HTMLElement | null = null
   let fetchGen: number = 0
+
+  const history = recentActions('bookmark-ops')
+
+  function opKey(op: BookmarkOp): string {
+    return op.remote ? `${op.action}:${op.bookmark}@${op.remote}` : `${op.action}:${op.bookmark}`
+  }
 
   function opLabel(op: BookmarkOp): string {
     const suffix = op.remote ? `@${op.remote}` : ''
@@ -60,17 +67,31 @@
 
   let allOps = $derived(buildOps(bookmarks, currentCommitId, remotes))
 
-  let filteredOps = $derived.by(() => {
-    if (!open) return []
+  // Split ops into recent (previously used) and the rest, sorted by frequency
+  let { recent: recentOps, rest: otherOps } = $derived.by(() => {
+    if (!open) return { recent: [] as BookmarkOp[], rest: [] as BookmarkOp[] }
     let ops = allOps
     if (filterBookmark) {
       ops = ops.filter(op => op.bookmark === filterBookmark)
     }
     if (query) {
       ops = ops.filter(op => fuzzyMatch(query, opLabel(op)))
+      // When searching, don't split — show flat results ranked by relevance
+      return { recent: [] as BookmarkOp[], rest: ops }
     }
-    return ops
+    const recent: BookmarkOp[] = []
+    const rest: BookmarkOp[] = []
+    for (const op of ops) {
+      if (history.count(opKey(op)) > 0) recent.push(op)
+      else rest.push(op)
+    }
+    // Sort recent by frequency (most used first)
+    recent.sort((a, b) => history.count(opKey(b)) - history.count(opKey(a)))
+    return { recent, rest }
   })
+
+  // Flat list for keyboard navigation (recent + rest)
+  let flatOps = $derived([...recentOps, ...otherOps])
 
   $effect(() => {
     if (open) {
@@ -80,10 +101,11 @@
       loading = true
       fetchError = null
       const gen = ++fetchGen
-      Promise.all([api.bookmarks(), api.remotes()]).then(([bms, rms]) => {
+      api.bookmarks().then(async (bms) => {
         if (gen !== fetchGen) return
         bookmarks = bms
-        remotes = rms
+        // Remotes are optional (only for track/untrack) — don't fail the modal if jj can't list them
+        try { remotes = await api.remotes() } catch { /* ignore */ }
         loading = false
       }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
       inputEl?.focus()
@@ -92,8 +114,8 @@
 
   // Clamp index when filtered list shrinks
   $effect(() => {
-    if (open && index >= filteredOps.length && filteredOps.length > 0) {
-      index = filteredOps.length - 1
+    if (open && index >= flatOps.length && flatOps.length > 0) {
+      index = flatOps.length - 1
     }
   })
 
@@ -105,6 +127,7 @@
   }
 
   function execute(op: BookmarkOp) {
+    history.record(opKey(op))
     close()
     onexecute(op)
   }
@@ -123,7 +146,7 @@
       case 'j':
         if (e.key === 'j' && inInput) break
         e.preventDefault()
-        index = Math.min(index + 1, Math.max(filteredOps.length - 1, 0))
+        index = Math.min(index + 1, Math.max(flatOps.length - 1, 0))
         scrollActiveIntoView()
         break
       case 'ArrowUp':
@@ -136,7 +159,7 @@
       case 'Enter':
         e.preventDefault()
         e.stopPropagation()
-        if (filteredOps[index]) execute(filteredOps[index])
+        if (flatOps[index]) execute(flatOps[index])
         break
       case 'Escape':
         e.preventDefault()
@@ -172,15 +195,36 @@
         <div class="bm-empty">Loading bookmarks...</div>
       {:else if fetchError}
         <div class="bm-empty" style="color: var(--red)">{fetchError}</div>
-      {:else if filteredOps.length === 0}
+      {:else if flatOps.length === 0}
         <div class="bm-empty">No matching operations</div>
       {:else}
-        {#each filteredOps as op, i}
+        {#if recentOps.length > 0}
+          <div class="bm-section-label">Recent</div>
+          {#each recentOps as op, i}
+            <button
+              class="bm-item"
+              class:bm-item-active={i === index}
+              onclick={() => execute(op)}
+              onmouseenter={() => { index = i }}
+            >
+              <span class="bm-action" style="color: {actionColors[op.action]}">{op.action}</span>
+              <span class="bm-label">{op.bookmark}{#if op.remote}@{op.remote}{/if}</span>
+              {#if op.action === 'move'}
+                <span class="bm-arrow">→ here</span>
+              {/if}
+            </button>
+          {/each}
+          {#if otherOps.length > 0}
+            <div class="bm-section-label">All</div>
+          {/if}
+        {/if}
+        {#each otherOps as op, i}
+          {@const flatIdx = recentOps.length + i}
           <button
             class="bm-item"
-            class:bm-item-active={i === index}
+            class:bm-item-active={flatIdx === index}
             onclick={() => execute(op)}
-            onmouseenter={() => { index = i }}
+            onmouseenter={() => { index = flatIdx }}
           >
             <span class="bm-action" style="color: {actionColors[op.action]}">{op.action}</span>
             <span class="bm-label">{op.bookmark}{#if op.remote}@{op.remote}{/if}</span>
@@ -282,6 +326,15 @@
   .bm-arrow {
     color: var(--surface2);
     font-size: 11px;
+  }
+
+  .bm-section-label {
+    padding: 6px 16px 2px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--surface2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
   .bm-empty {
