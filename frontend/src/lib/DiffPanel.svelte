@@ -28,7 +28,7 @@
     ondraftchange: (value: string) => void
     onbookmarkclick: (name: string) => void
     fileSelectionMode: boolean
-    squashSelectedFiles: SvelteSet<string>
+    selectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
     splitMode: boolean
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
@@ -41,7 +41,7 @@
     diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions,
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
-    fileSelectionMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
+    fileSelectionMode, selectedFiles, ontogglefile, splitMode, onresolve,
     divergentSelected, onresolveDivergence, prByBookmark,
   }: Props = $props()
 
@@ -135,20 +135,35 @@
     return SKIP_WORD_DIFF_SUFFIXES.some(suffix => lower.endsWith(suffix))
   }
 
-  // Memoize word diffs — recomputed when parsedDiff or expandedDiffs change
-  let wordDiffMap = $derived.by(() => {
-    const map = new Map<string, Map<number, WordSpan[]>>()
-    for (const file of parsedDiff) {
-      const effectiveFile = expandedDiffs.get(file.filePath) ?? file
-      const filePath = effectiveFile.filePath
-      const lineCount = effectiveFile.hunks.reduce((sum, h) => sum + h.lines.length, 0)
-      if (shouldSkipWordDiff(filePath, lineCount)) continue
-      for (let hunkIdx = 0; hunkIdx < effectiveFile.hunks.length; hunkIdx++) {
-        map.set(`${filePath}:${hunkIdx}`, computeWordDiffs(effectiveFile.hunks[hunkIdx]))
-      }
+  // Per-file word diff maps. Computed asynchronously like Shiki highlighting
+  // to avoid blocking paint on multi-file diffs. Each file's entry is a Map
+  // from "hunkIdx" to Map<lineIdx, WordSpan[]>.
+  const EMPTY_WD: Map<string, Map<number, WordSpan[]>> = new Map()
+  let wordDiffsByFile: Map<string, Map<string, Map<number, WordSpan[]>>> = $state(new Map())
+  let wordDiffGeneration = 0
+
+  function computeWordDiffsForFile(file: DiffFile): Map<string, Map<number, WordSpan[]>> {
+    const fileMap = new Map<string, Map<number, WordSpan[]>>()
+    for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
+      fileMap.set(String(hunkIdx), computeWordDiffs(file.hunks[hunkIdx]))
     }
-    return map
-  })
+    return fileMap
+  }
+
+  async function computeAllWordDiffs(files: DiffFile[]) {
+    const gen = ++wordDiffGeneration
+    const done = new Map<string, Map<string, Map<number, WordSpan[]>>>()
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const lineCount = file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
+      if (shouldSkipWordDiff(file.filePath, lineCount)) continue
+      // Yield between files to avoid blocking paint
+      if (i > 0) await new Promise<void>(r => setTimeout(r, 0))
+      if (gen !== wordDiffGeneration) return
+      done.set(file.filePath, computeWordDiffsForFile(file))
+      if (gen === wordDiffGeneration) wordDiffsByFile = new Map(done)
+    }
+  }
 
   // --- Syntax highlighting ---
   // Per-file highlight maps. highlightDiff updates individual file entries,
@@ -248,6 +263,35 @@
     return () => clearTimeout(highlightTimer)
   })
 
+  // Compute word diffs progressively when effective files change.
+  // Uses the same yield-between-files pattern as Shiki highlighting.
+  let lastWordDiffFiles: DiffFile[] = []
+  $effect(() => {
+    const files = effectiveFiles
+    if (files.length === 0) {
+      lastWordDiffFiles = []
+      wordDiffsByFile = new Map()
+      return
+    }
+    // Check if only a single file changed (context expansion) — recompute just that file
+    if (files.length === lastWordDiffFiles.length && files.length > 0) {
+      const changedIdx = files.findIndex((f, i) => f !== lastWordDiffFiles[i])
+      if (changedIdx >= 0 && files.every((f, i) => i === changedIdx || f === lastWordDiffFiles[i])) {
+        const file = files[changedIdx]
+        lastWordDiffFiles = files
+        const lineCount = file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
+        if (!shouldSkipWordDiff(file.filePath, lineCount)) {
+          const updated = new Map(wordDiffsByFile)
+          updated.set(file.filePath, computeWordDiffsForFile(file))
+          wordDiffsByFile = updated
+        }
+        return
+      }
+    }
+    lastWordDiffFiles = files
+    computeAllWordDiffs(files)
+  })
+
   // Save/restore collapse state when revision changes
   let lastRevisionId: string | null = null
   $effect(() => {
@@ -299,9 +343,17 @@
       const parsed = parseDiffContent(result.diff)
       if (parsed.length > 0) {
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
-        const files = parsedDiff.map(f => expandedDiffs.get(f.filePath) ?? f)
-        clearTimeout(highlightTimer)
-        highlightTimer = setTimeout(() => highlightDiff(files, false), 50)
+        // Only re-highlight the expanded file, not all files
+        const gen = ++highlightGeneration
+        const expandedFile = parsed[0]
+        setTimeout(async () => {
+          if (gen !== highlightGeneration) return
+          const fileHighlights = await highlightFile(expandedFile)
+          if (gen !== highlightGeneration) return
+          const updated = new Map(highlightsByFile)
+          updated.set(filePath, fileHighlights)
+          highlightsByFile = updated
+        }, 50)
       }
     } catch {
       // Silently fail — the unexpanded diff remains visible
@@ -498,13 +550,13 @@
       case 'a':
         e.preventDefault()
         for (const f of changedFiles) {
-          if (!squashSelectedFiles.has(f.path)) ontogglefile(f.path)
+          if (!selectedFiles.has(f.path)) ontogglefile(f.path)
         }
         break
       case 'n':
         e.preventDefault()
         for (const f of changedFiles) {
-          if (squashSelectedFiles.has(f.path)) ontogglefile(f.path)
+          if (selectedFiles.has(f.path)) ontogglefile(f.path)
         }
         break
     }
@@ -636,7 +688,7 @@
         {:else}
           <span class="file-selection-title">Squash — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
         {/if}
-        <span class="file-selection-count">{squashSelectedFiles.size}/{changedFiles.length} {splitMode ? 'stay' : 'selected'}</span>
+        <span class="file-selection-count">{selectedFiles.size}/{changedFiles.length} {splitMode ? 'stay' : 'to move'}</span>
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="file-selection-list" tabindex="-1"
@@ -647,14 +699,14 @@
           <div
             class="file-select-row"
             class:file-select-active={i === fileSelectIdx}
-            class:file-checked={squashSelectedFiles.has(file.path)}
+            class:file-checked={selectedFiles.has(file.path)}
             onclick={() => { fileSelectIdx = i; ontogglefile(file.path) }}
             onmouseenter={() => { fileSelectIdx = i }}
             role="option"
             tabindex="-1"
-            aria-selected={squashSelectedFiles.has(file.path)}
+            aria-selected={selectedFiles.has(file.path)}
           >
-            <span class="file-check-indicator">{squashSelectedFiles.has(file.path) ? '✓' : ' '}</span>
+            <span class="file-check-indicator">{selectedFiles.has(file.path) ? '✓' : ' '}</span>
             {#if file.conflict}
               <span class="file-dot dot-C"></span>
             {:else}
@@ -775,7 +827,7 @@
             isExpanded={expandedDiffs.has(filePath)}
             {splitView}
             highlightedLines={highlightsByFile.get(filePath) ?? EMPTY_HL}
-            {wordDiffMap}
+            wordDiffs={wordDiffsByFile.get(filePath) ?? EMPTY_WD}
             ontoggle={toggleFile}
             onexpand={expandFile}
             {onresolve}
@@ -793,7 +845,7 @@
               isExpanded={false}
               {splitView}
               highlightedLines={EMPTY_HL}
-              {wordDiffMap}
+              wordDiffs={EMPTY_WD}
               ontoggle={toggleFile}
               onexpand={expandFile}
               {onresolve}

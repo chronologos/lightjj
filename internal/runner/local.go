@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -48,7 +49,16 @@ func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]b
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return nil, errors.New(string(exitErr.Stderr))
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if stderr != "" {
+				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stderr)
+			}
+			// Empty stderr — include stdout (some jj errors print there)
+			stdout := strings.TrimSpace(string(output))
+			if stdout != "" {
+				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stdout)
+			}
+			return nil, fmt.Errorf("jj exited with code %d", exitErr.ExitCode())
 		}
 		return nil, err
 	}

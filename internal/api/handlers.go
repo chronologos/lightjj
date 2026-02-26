@@ -614,8 +614,8 @@ func (s *Server) handleBookmarkTrack(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "name is required")
+	if req.Name == "" || req.Remote == "" {
+		s.writeError(w, http.StatusBadRequest, "name and remote are required")
 		return
 	}
 	s.runMutation(w, r, jj.BookmarkTrack(req.Name, req.Remote))
@@ -627,8 +627,8 @@ func (s *Server) handleBookmarkUntrack(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "name is required")
+	if req.Name == "" || req.Remote == "" {
+		s.writeError(w, http.StatusBadRequest, "name and remote are required")
 		return
 	}
 	s.runMutation(w, r, jj.BookmarkUntrack(req.Name, req.Remote))

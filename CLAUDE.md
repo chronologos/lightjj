@@ -29,6 +29,7 @@ internal/
     bookmark.go            — Bookmark model + output parsers
     bookmark_test.go       — Bookmark parser tests
     file_change.go         — FileChange model, DiffStat/DiffSummary parsers, MergeStats
+    file_change_test.go    — Parser edge case tests (binary, rename, suffix fallback, conflicts)
     selected_revisions.go  — Multi-revision selection helper
     workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (name→path map)
     workspace_store_test.go — Parser tests with real binary data
@@ -50,7 +51,7 @@ testutil/                  — Test infrastructure
 frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
   src/App.svelte           — Main app shell: layout, keyboard handling, state management
   src/lib/
-    api.ts                 — Typed API client, op-id tracking, cache invalidation
+    api.ts                 — Typed API client, op-id tracking, two-tier cache (mutable + immutable)
     api.test.ts            — API client tests
     RevisionGraph.svelte   — Revision list with graph gutter rendering
     DiffPanel.svelte       — Diff viewer: unified/split toggle, syntax highlighting
@@ -58,7 +59,6 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
     ContextMenu.svelte     — Reusable right-click context menu (positioned at cursor)
-    Sidebar.svelte         — Left sidebar with navigation, actions, workspace selector, theme toggle
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
     BookmarkModal.svelte   — Bookmark management modal
     BookmarkInput.svelte   — Bookmark name input with autocomplete
@@ -67,10 +67,16 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     OplogPanel.svelte      — Operation log panel
     DivergencePanel.svelte — Divergent commit resolution panel (compare versions, keep/abandon)
     diff-parser.ts         — Unified diff parser
+    conflict-parser.ts     — jj conflict marker parser (<<<, %%%, +++, >>>)
     split-view.ts          — Side-by-side diff alignment
     word-diff.ts           — Word-level inline diff computation
     highlighter.ts         — Shiki syntax highlighting integration
     fuzzy.ts               — Fuzzy string matching
+    group-by.ts            — groupByWithIndex utility for per-file match scoping
+    loader.svelte.ts       — createLoader() async factory with generation counter
+    modes.svelte.ts        — Rebase/squash/split mode state factories
+    config.svelte.ts       — Reactive config singleton synced to localStorage
+    recent-actions.svelte.ts — localStorage-backed frequency counter for bookmarks
   vite.config.ts           — Dev proxy + build output to ../cmd/lightjj/frontend-dist/
 ```
 
@@ -102,10 +108,10 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes. **Graph rows use a fixed `height: 18px`** to guarantee identical sizing across all modes (normal, rebase, squash, split). This prevents inline badges, buttons, or text from influencing row height. All inline elements (badges, `@` indicator, action buttons) must fit within 18px. Content is clipped by `overflow: hidden`. Never change this to `min-height` or remove the fixed height — it's the only way to prevent sub-pixel height differences between modes that break graph pipe continuity.
 - **Change IDs show full short form with highlighted prefix.** `commit.change_prefix` determines how many characters to highlight. Same for `commit_prefix`.
 - **Rebase mode is inline, not a modal.** Press `R` to enter rebase mode. `j`/`k` navigate the destination; Enter executes; Escape cancels. Source mode (`r`/`s`/`b`) and target mode (`o`/`a`/`i`) can be switched while in rebase mode. Source and destination commits are marked with inline badges directly in the revision graph.
-- **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` gutter markers are colored blue; working-copy `@` markers are colored green.
+- **Immutable commits** (`◆` in jj graph output) are dimmed in the UI. Mutable `○` nodes use graph palette colors; working-copy `@` is an amber concentric circle. Graph colors come from `--graph-N` CSS vars (Tier 3: muted, decorative) with opacity-based hover (lines 0.45→0.7, nodes 0.8→1.0).
 - **View mode toggle** — The revision panel header has a Log/Tracked toggle (click or command palette). Tracked view uses the `tracked_remote_bookmarks()` revset to show remote work. `t` key toggles theme.
 - **Divergent commit handling** — Commits with `divergent: true` share the same `change_id`. Use `effectiveId(commit)` (from `api.ts`) for all identity operations (keys, checks, mutations) — it falls back to `commit_id` for divergent/hidden commits, mirroring Go's `Commit.GetChangeId()`. Display of `change_id` itself is fine (shows the shared ID). The DivergencePanel uses `change_id(X)` revset (not `all:X` which doesn't exist in jj 0.38) to query all versions. Divergence offsets (`/0`, `/1`) are computed client-side by sorting commit IDs lexicographically, matching jj's convention.
-- **Multi-workspace awareness** — Sidebar shows current workspace name with a dropdown to open other workspaces in new tabs. `GET /api/workspaces` returns `{ current, workspaces[] }` (enriched with paths from workspace store). `POST /api/workspace/open` spawns a child lightjj instance. `w` key toggles the dropdown. Single-workspace repos show the name without a dropdown. SSH mode gracefully degrades (no paths, no spawning).
+- **Top toolbar (no sidebar)** — Navigation, workspace selector, search trigger, and action buttons live in a compact top toolbar in `App.svelte`. Nav tabs (`◉ Revisions`, `⑂ Branches`, `⟲ Operations`) switch views; keyboard shortcuts `1`/`2`/`3` still work. Workspace selector uses `◇` glyph with dropdown for multi-workspace repos (`w` key toggles). `GET /api/workspaces` returns `{ current, workspaces[] }` (enriched with paths from workspace store). `POST /api/workspace/open` spawns a child lightjj instance. SSH mode gracefully degrades (no paths, no spawning).
 
 ### Testing patterns
 
@@ -148,14 +154,15 @@ func TestHandleAbandon(t *testing.T) {
 Patterns learned from profiling j/k keyboard navigation:
 
 - **Scope `:hover` to exclude `.selected`.** Use `.row:hover:not(.selected)` to prevent visual artifacts when mouse hover and keyboard selection overlap.
-- **Debounce expensive work, not the selection state.** Update `selectedIndex` synchronously for instant visual feedback. Debounce network fetches and derived computations (diff loading, file loading) with a short timer (~50ms). Skip debounce on cache hits.
-- **Guard state assignments with equality checks.** `if (diffContent !== result.diff) diffContent = result.diff` prevents the entire `$derived` chain (`parsedDiff` → `wordDiffMap` → `highlightDiff`) from re-running when the value hasn't changed (e.g., cache hits returning the same reference).
+- **Debounce expensive work, not the selection state.** Update `selectedIndex` synchronously for instant visual feedback. Debounce network fetches (~50ms). Skip debounce on cache hits — `isCached()` checks all three (diff, files, desc); returning true for a partial cache hit defeats the debounce.
+- **`createLoader()` factory** (`loader.svelte.ts`) encapsulates the generation-counter race-safe async pattern. Its `loading` flag is deferred via `setTimeout(0)` so cache hits (microtask-fast) never flip it — zero reactive updates on cached j/k navigation. Use `loader.set()` for optimistic updates, `loader.reset()` to cancel + restore initial.
 - **Guard `$derived` in hidden components.** `CommandPalette`'s `availableCommands` uses `if (!open) return []` to avoid recomputing when the palette is closed but its `commands` prop changes.
-- **Defer Shiki highlighting.** `highlightDiff` is called via `setTimeout(fn, 150)` so syntax highlighting doesn't block the keydown → paint path. The diff renders immediately with plain text + word-diff spans; syntax colors appear progressively ~150ms later.
-- **Progressive highlighting.** `highlightDiff` yields between files (`setTimeout(0)`) and updates `highlightedLines` after each file. This prevents Shiki from blocking the main thread for large diffs (5000+ lines) and lets colors appear incrementally.
+- **Defer Shiki highlighting.** `highlightDiff` is called via `setTimeout(fn, 0)` so the browser paints the selection highlight before Shiki runs. The diff renders immediately with plain text; syntax colors appear one frame later.
+- **Progressive highlighting.** `highlightDiff` yields between files (`setTimeout(0)`) and updates `highlightsByFile` per-file. Already-highlighted files keep their inner Map reference, so only newly-highlighted `DiffFileView`s re-render.
 - **`user-select: none`** on interactive lists prevents text selection artifacts during click/keyboard navigation.
 - **Svelte 5 effects run after DOM updates** — no need for `requestAnimationFrame` to query updated DOM in `$effect`.
 - **Fire-and-forget async in effects is fine** when the async function has its own error handling and generation counter for cancellation.
-- **Skip word-diff for non-code files.** `shouldSkipWordDiff()` in DiffPanel skips LCS computation for SVG/XML/JSON/lock/map/minified files and any file with >1000 diff lines. The synchronous `$derived` wordDiffMap blocks the main thread — skipping noisy file types keeps it fast.
+- **Skip word-diff for non-code files.** `shouldSkipWordDiff()` in DiffPanel skips LCS computation for SVG/XML/JSON/lock/map/minified files and any file with >1000 diff lines.
+- **Progressive word diffs.** `computeAllWordDiffs` yields between files (`setTimeout(0)`) and publishes per-file `wordDiffsByFile` entries incrementally (same pattern as Shiki). Single-file context expansion only recomputes that file's word diffs.
 - **Auto-collapse large files.** Files with >500 diff lines (`AUTO_COLLAPSE_LINE_LIMIT`) start collapsed to prevent DOM flooding. Collapse state is cached per revision; auto-collapse is suppressed when restoring from cache.
 - **Diff parser uses `b/` (destination) path** from `diff --git a/source b/destination` headers. The `a/` path is the source and can appear in multiple entries for copies/renames, causing duplicate `{#each}` keys.

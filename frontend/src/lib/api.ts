@@ -38,9 +38,13 @@ let lastOpId: string | null = null
 const staleCallbacks = new Set<() => void>()
 let refreshQueued = false
 
-// Response cache: keyed by "${cacheId}@${opId}", cleared on op-id change
+// Response cache: keyed by "${cacheId}@${opId}", cleared on op-id change.
+// Immutable commits use a separate cache keyed by bare cacheId (no opId suffix) —
+// they can't change, so there's no need to re-key them on op-id changes.
 const MAX_CACHE_SIZE = 200
+const MAX_IMMUTABLE_CACHE_SIZE = 300
 const responseCache = new Map<string, unknown>()
+const immutableCache = new Map<string, unknown>()
 
 // Default timeout for read-only requests (30s). Mutations get no timeout.
 const READ_TIMEOUT_MS = 30_000
@@ -54,19 +58,20 @@ function trackOpId(res: Response) {
   // Track op-id even on error responses — a failed mutation may still advance the op-id
   const opId = res.headers.get('X-JJ-Op-Id')
   if (!opId) return
-  if (lastOpId !== null && opId !== lastOpId) {
-    lastOpId = opId
-    responseCache.clear()
-    if (staleCallbacks.size > 0 && !refreshQueued) {
-      refreshQueued = true
-      // Deduplicates within a single tick; resets after callbacks fire
-      queueMicrotask(() => {
-        refreshQueued = false
-        for (const cb of [...staleCallbacks]) cb()
-      })
-    }
-  } else {
-    lastOpId = opId
+  const changed = lastOpId !== null && opId !== lastOpId
+  lastOpId = opId
+  if (!changed) return
+
+  // Mutable cache is invalidated on any op-id change. Immutable cache is
+  // untouched — immutable commits' diffs/files/descriptions can't change.
+  responseCache.clear()
+  if (staleCallbacks.size > 0 && !refreshQueued) {
+    refreshQueued = true
+    // Deduplicates within a single tick; resets after callbacks fire
+    queueMicrotask(() => {
+      refreshQueued = false
+      for (const cb of [...staleCallbacks]) cb()
+    })
   }
 }
 
@@ -110,13 +115,24 @@ function post<T>(url: string, body: unknown): Promise<T> {
   })
 }
 
-async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
+async function cachedRequest<T>(cacheId: string, url: string, immutable = false): Promise<T> {
+  if (immutable && immutableCache.has(cacheId)) return immutableCache.get(cacheId) as T
   if (lastOpId) {
     const key = `${cacheId}@${lastOpId}`
     if (responseCache.has(key)) return responseCache.get(key) as T
   }
   const opIdAtStart = lastOpId
   const result = await request<T>(url)
+  if (immutable) {
+    // Immutable commits' data is stable across operations — safe to cache
+    // regardless of op-id churn. Map preserves insertion order, so evicting
+    // the first key under pressure gives LRU-ish behaviour.
+    if (immutableCache.size >= MAX_IMMUTABLE_CACHE_SIZE) {
+      immutableCache.delete(immutableCache.keys().next().value!)
+    }
+    immutableCache.set(cacheId, result)
+    return result
+  }
   // Only cache if op-id hasn't been advanced by a concurrent request.
   // If opIdAtStart was null (first request seeding the op-id), caching is safe.
   if (lastOpId && (opIdAtStart === null || lastOpId === opIdAtStart)) {
@@ -126,11 +142,20 @@ async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
   return result
 }
 
-// Check if a revision's diff + files are both cached (useful for debounce decisions)
+// Check if a revision's diff + files + description are all cached.
+// Used by selectRevision to skip the 50ms debounce on cache hits. All three
+// must be cached — otherwise the "fast path" still triggers a network request
+// on every keypress, defeating the debounce.
 export function isCached(revision: string): boolean {
+  if (immutableCache.has(`diff:${revision}`) &&
+      immutableCache.has(`files:${revision}`) &&
+      immutableCache.has(`desc:${revision}`)) {
+    return true
+  }
   if (!lastOpId) return false
   return responseCache.has(`diff:${revision}@${lastOpId}`) &&
-         responseCache.has(`files:${revision}@${lastOpId}`)
+         responseCache.has(`files:${revision}@${lastOpId}`) &&
+         responseCache.has(`desc:${revision}@${lastOpId}`)
 }
 
 export interface FileChange {
@@ -193,22 +218,22 @@ export const api = {
     return request<Bookmark[]>(`/api/bookmarks?${params}`)
   },
 
-  diff: (revision: string, file?: string, context?: number) => {
+  diff: (revision: string, file?: string, context?: number, immutable = false) => {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
     if (context) params.set('context', String(context))
     const cacheId = 'diff:' + revision + (file ? ':' + file : '') + (context ? ':ctx' + context : '')
-    return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`)
+    return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`, immutable)
   },
 
-  description: (revision: string) => {
+  description: (revision: string, immutable = false) => {
     const params = new URLSearchParams({ revision })
-    return cachedRequest<{ description: string }>('desc:' + revision, `/api/description?${params}`)
+    return cachedRequest<{ description: string }>('desc:' + revision, `/api/description?${params}`, immutable)
   },
 
-  files: (revision: string) => {
+  files: (revision: string, immutable = false) => {
     const params = new URLSearchParams({ revision })
-    return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`)
+    return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`, immutable)
   },
 
   fileShow: (revision: string, path: string) => {
@@ -312,7 +337,9 @@ export const _testInternals = {
   get lastOpId() { return lastOpId },
   set lastOpId(v: string | null) { lastOpId = v },
   get cache() { return responseCache },
+  get immutableCache() { return immutableCache },
   get MAX_CACHE_SIZE() { return MAX_CACHE_SIZE },
+  get MAX_IMMUTABLE_CACHE_SIZE() { return MAX_IMMUTABLE_CACHE_SIZE },
   get staleCallbacks() { return staleCallbacks },
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },

@@ -49,9 +49,9 @@
   // counter. See loader.svelte.ts for semantics. Aliases below preserve existing
   // names for backward-compatible reads throughout the component + templates.
   const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
-  const diff = createLoader((id: string) => api.diff(id).then(r => r.diff), '', showError)
-  const files = createLoader((id: string) => api.files(id), [] as FileChange[], showError)
-  const description = createLoader((id: string) => api.description(id).then(r => r.description), '')
+  const diff = createLoader((id: string, immutable?: boolean) => api.diff(id, undefined, undefined, immutable).then(r => r.diff), '', showError)
+  const files = createLoader((id: string, immutable?: boolean) => api.files(id, immutable), [] as FileChange[], showError)
+  const description = createLoader((id: string, immutable?: boolean) => api.description(id, immutable).then(r => r.description), '')
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[], showError)
   const evolog = createLoader((id: string) => api.evolog(id).then(r => r.output), '', showError)
 
@@ -76,8 +76,8 @@
   const squash = createSquashMode()
   const split = createSplitMode()
   const divergence = createDivergenceMode()
-  let squashSelectedFiles = new SvelteSet<string>()
-  let squashTotalFiles: number = $state(0) // snapshot of file count at entry time
+  let selectedFiles = new SvelteSet<string>()
+  let totalFileCount: number = $state(0) // snapshot of file count at entry time
 
   let activeView: 'log' | 'branches' | 'operations' = $state('log')
 
@@ -173,7 +173,7 @@
 
   function clearChecksAndReload() {
     clearChecks()
-    if (selectedRevision) loadDiffAndFiles(effectiveId(selectedRevision.commit))
+    if (selectedRevision) loadDiffAndFiles(effectiveId(selectedRevision.commit), selectedRevision.commit.immutable)
     else { diff.reset(); files.reset() }
   }
 
@@ -310,7 +310,8 @@
     }
     lastCheckedIndex = -1
     if (selectedIndex >= 0 && checkedRevisions.size === 0) {
-      loadDiffAndFiles(effectiveId(revisions[selectedIndex].commit))
+      const sel = revisions[selectedIndex]
+      loadDiffAndFiles(effectiveId(sel.commit), sel.commit.immutable)
     }
     // Refresh open panels — oplog always reflects new operations,
     // evolog may change if the selected revision was modified
@@ -326,10 +327,10 @@
   const loadOplog = oplog.load
   const loadEvolog = evolog.load
 
-  function loadDiffAndFiles(changeId: string) {
-    diff.load(changeId)
-    files.load(changeId)
-    description.load(changeId)
+  function loadDiffAndFiles(changeId: string, immutable = false) {
+    diff.load(changeId, immutable)
+    files.load(changeId, immutable)
+    description.load(changeId, immutable)
   }
 
   // Move cursor without loading diff/files — used in squash mode where
@@ -350,16 +351,16 @@
     clearTimeout(navDebounceTimer)
     const eid = effectiveId(entry.commit)
     const cached = isCached(eid)
-    const doLoad = (id: string) => {
-      if (checkedRevisions.size === 0) loadDiffAndFiles(id)
+    const doLoad = (id: string, immutable: boolean) => {
+      if (checkedRevisions.size === 0) loadDiffAndFiles(id, immutable)
       if (evologOpen) loadEvolog(id)
     }
     if (cached) {
-      doLoad(eid)
+      doLoad(eid, entry.commit.immutable)
     } else {
       navDebounceTimer = setTimeout(() => {
         const current = revisions[selectedIndex]
-        if (current) doLoad(effectiveId(current.commit))
+        if (current) doLoad(effectiveId(current.commit), current.commit.immutable)
       }, 50)
     }
   }
@@ -612,8 +613,8 @@
     if (revs.length === 0) return
     cancelInlineModes()
     // Initialize with all current changed files (source's files) and snapshot the count
-    for (const f of changedFiles) squashSelectedFiles.add(f.path)
-    squashTotalFiles = changedFiles.length
+    for (const f of changedFiles) selectedFiles.add(f.path)
+    totalFileCount = changedFiles.length
     squash.enter(revs)
     // Move cursor to parent of first source (default squash target)
     const sourceIdx = revisions.findIndex(r => effectiveId(r.commit) === revs[0])
@@ -633,14 +634,14 @@
     }
     // C1: block execution when no files selected (empty array would squash ALL files).
     // Exception: empty commits have 0 total files — squash is still valid (moves metadata).
-    if (squashSelectedFiles.size === 0 && squashTotalFiles > 0) {
+    if (selectedFiles.size === 0 && totalFileCount > 0) {
       lastAction = 'Select at least one file to squash'
       return
     }
     try {
       // W3: compare against snapshotted total, not live changedFiles
-      const files = squashSelectedFiles.size < squashTotalFiles
-        ? [...squashSelectedFiles]
+      const files = selectedFiles.size < totalFileCount
+        ? [...selectedFiles]
         : undefined
       const { sources, keepEmptied, useDestMsg } = squash
       const result = await api.squash(sources, destination, {
@@ -662,35 +663,35 @@
     }
   }
 
-  function toggleSquashFile(path: string) {
-    if (squashSelectedFiles.has(path)) {
-      squashSelectedFiles.delete(path)
+  function toggleFileSelection(path: string) {
+    if (selectedFiles.has(path)) {
+      selectedFiles.delete(path)
     } else {
-      squashSelectedFiles.add(path)
+      selectedFiles.add(path)
     }
   }
 
   function enterSplitMode() {
     if (!selectedRevision || checkedRevisions.size > 0) return
     cancelInlineModes()
-    for (const f of changedFiles) squashSelectedFiles.add(f.path)
-    squashTotalFiles = changedFiles.length
+    for (const f of changedFiles) selectedFiles.add(f.path)
+    totalFileCount = changedFiles.length
     split.enter(effectiveId(selectedRevision.commit))
   }
 
   async function executeSplit() {
     if (!split.revision) return
     // Validate: at least one file must stay (checked) and one must move (unchecked)
-    if (squashSelectedFiles.size === squashTotalFiles) {
+    if (selectedFiles.size === totalFileCount) {
       error = 'Uncheck at least one file to split out'
       return
     }
-    if (squashSelectedFiles.size === 0) {
+    if (selectedFiles.size === 0) {
       error = 'Select at least one file to keep'
       return
     }
     try {
-      const files = [...squashSelectedFiles]
+      const files = [...selectedFiles]
       const revision = split.revision
       const result = await api.split(revision, files, split.parallel || undefined)
       cancelInlineModes()
@@ -705,13 +706,13 @@
   }
 
   let squashFileCount = $derived.by(() => {
-    if (!squash.active || squashTotalFiles === 0) return null
-    return { selected: squashSelectedFiles.size, total: squashTotalFiles }
+    if (!squash.active || totalFileCount === 0) return null
+    return { selected: selectedFiles.size, total: totalFileCount }
   })
 
   let splitFileCount = $derived.by(() => {
-    if (!split.active || squashTotalFiles === 0) return null
-    return { selected: squashSelectedFiles.size, total: squashTotalFiles }
+    if (!split.active || totalFileCount === 0) return null
+    return { selected: selectedFiles.size, total: totalFileCount }
   })
 
   function closeModals() {
@@ -727,8 +728,8 @@
     squash.cancel()
     split.cancel()
     divergence.cancel()
-    squashSelectedFiles.clear()
-    squashTotalFiles = 0
+    selectedFiles.clear()
+    totalFileCount = 0
     // Restore focus to the revision list so j/k keys work immediately
     blurActiveInput()
   }
@@ -939,7 +940,7 @@
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
-          loadDiffAndFiles(effectiveId(selectedRevision.commit))
+          loadDiffAndFiles(effectiveId(selectedRevision.commit), selectedRevision.commit.immutable)
         }
         break
       case 'r':
@@ -1197,8 +1198,8 @@
             ondraftchange={(v) => { descriptionDraft = v }}
             onbookmarkclick={openBookmarkModal}
             fileSelectionMode={squash.active || split.active}
-            {squashSelectedFiles}
-            ontogglefile={toggleSquashFile}
+            {selectedFiles}
+            ontogglefile={toggleFileSelection}
             splitMode={split.active}
             onresolve={inlineMode ? undefined : handleResolve}
             divergentSelected={selectedRevision?.commit.divergent ?? false}

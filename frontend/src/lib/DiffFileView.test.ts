@@ -34,7 +34,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     isExpanded: false,
     splitView: false,
     highlightedLines: new Map<string, string>(),
-    wordDiffMap: new Map<string, Map<number, WordSpan[]>>(),
+    wordDiffs: new Map<string, Map<number, WordSpan[]>>(),
     ontoggle: vi.fn(),
     onexpand: vi.fn(),
     ...overrides,

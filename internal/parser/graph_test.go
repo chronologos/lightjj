@@ -250,3 +250,25 @@ func TestParseGraphLog_ElidedRevisions(t *testing.T) {
 	assert.Equal(t, "(elided revisions)", rows[0].GraphLines[1].Content)
 	assert.False(t, rows[0].GraphLines[1].IsNode)
 }
+
+func TestParseGraphLog_EmptyInput(t *testing.T) {
+	rows := ParseGraphLog("")
+	assert.NotNil(t, rows, "should return empty slice, not nil")
+	assert.Len(t, rows, 0)
+}
+
+func TestParseGraphLog_OnlyBlankLines(t *testing.T) {
+	rows := ParseGraphLog("\n\n\n")
+	assert.Len(t, rows, 0)
+}
+
+func TestParseGraphLog_ConnectorWithoutPrecedingNode(t *testing.T) {
+	// Connector lines before any node line should be dropped gracefully
+	output := "│\n" +
+		"@  _PREFIX:a_PREFIX:1_PREFIX:false\x1faaaaaaaa\x1f11111111\x1ftest\x1f\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "aaaaaaaa", rows[0].Commit.ChangeId)
+	// Orphaned connector line was dropped (current != nil only after first node)
+	assert.Len(t, rows[0].GraphLines, 1)
+}

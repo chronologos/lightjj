@@ -19,19 +19,19 @@ Four-agent deep analysis (Go backend, Svelte frontend, performance paths, API de
 - [x] **Cmd+F diff search** — search bar with match counter, Enter/Shift+Enter navigation, `<mark>` highlights, auto-expand collapsed files.
 
 ### Remaining — Performance
-- [ ] **`wordDiffMap` is sync `$derived`** — `computeWordDiffs` (LCS) runs synchronously for every hunk on diff load. 50-file commit × 20 hunks × 5 pairs × 40k ops ≈ 10-50ms blocked paint. **Fix:** defer to async with `setTimeout` like Shiki; word-diff spans appear progressively ~30ms after initial render. Medium effort.
+- [x] **`wordDiffMap` is sync `$derived`** — `computeWordDiffs` (LCS) runs synchronously for every hunk on diff load. Fixed: progressive async computation per-file with `setTimeout(0)` yields between files. Single-file expand only recomputes that file.
 - [ ] **`hoveredLane` fans out to every GraphSvg** — ~1200 equality checks per mousemove. Cross-row highlighting (hover lane N anywhere → lane N highlighted everywhere) requires shared state so CSS `:hover` doesn't work. Needs profiling to verify actual impact before optimizing.
 - [ ] **No virtualization for mega-files** — manual expand of 5000-line file renders all lines. Auto-collapse at 500 is the mitigation; `@tanstack/virtual` would be the full fix.
 
 ### Remaining — Maintainability
-- [ ] **Extract `diffLoader.svelte.ts`** — App.svelte has 44 `$state` vars and 53 functions. The diff-loading cluster (~15 vars, ~6 generation counters, ~5 load functions, debounce in selectRevision) could be a factory module like `modes.svelte.ts`. Would also let DiffPanel import it directly, dropping ~8 props. Medium effort.
+- [x] **Extract `diffLoader.svelte.ts`** — Done as `createLoader()` factory in `loader.svelte.ts`. 6 copy-pasted load functions collapsed to 6 one-line declarations; 11 `$state` vars replaced with `$derived` aliases. 17 tests covering races, cancellation, cache-hit fast path (macrotask-deferred loading flag).
 - [ ] **`gh pr list` bypasses runner interface** — `handlers.go:774` uses `exec.Command` directly instead of `CommandRunner`. A generic `ExternalRunner` would restore the pattern. Low priority — `gh` is a different binary and test replacement via `var execGhPRList` works.
 - [ ] **Backend fields unexposed in frontend** — `rebaseRequest.SkipEmptied`, `rebaseRequest.IgnoreImmutable`, `squashRequest.IgnoreImmutable` accepted by Go but `api.rebase()`/`api.squash()` don't send them. Wire up when UI needs them. YAGNI for now.
 
 ### Remaining — Reliability
-- [ ] **`handleBookmarkTrack/Untrack` don't validate `Remote`** — empty remote passes validation, jj errors instead of 400.
-- [ ] **JSON encoding errors silently dropped** — `json.Encode()` return value discarded in `writeJSON`/`writeError`. Partial responses possible (rare).
-- [ ] **`LocalRunner` discards exit code** — `errors.New(stderr)` loses `ExitError` type. Empty stderr → empty error message.
+- [x] **`handleBookmarkTrack/Untrack` don't validate `Remote`** — empty remote passes validation, jj errors instead of 400. Fixed: both now return 400 if `Remote` is empty.
+- [x] **JSON encoding errors silently dropped** — `json.Encode()` return value discarded in `writeJSON`/`writeError`. Fixed: now logged via `log.Printf`.
+- [x] **`LocalRunner` discards exit code** — `errors.New(stderr)` loses `ExitError` type. Fixed: error message now includes exit code, falls back to stdout when stderr empty.
 
 ## Architecture Review Findings (2026-02-23)
 
@@ -48,8 +48,8 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] Repeated mutation handler boilerplate — `refreshOpId` is manually called at 15 sites, easy to forget.
 - [x] `handleNew` and `handleAbandon` accept empty revision lists (inconsistent with rebase/squash).
 - [x] No frontend fetch timeouts — stuck spinners with no escape if backend hangs.
-- [ ] Response cache clears entirely on any op-id change; immutable commits' diffs should be preserved.
-- [ ] `wordDiffMap` recomputes all hunks when a single file is expanded.
+- [x] Response cache clears entirely on any op-id change; immutable commits' diffs should be preserved. Fixed: separate `immutableCache` Map keyed by bare `cacheId` (no opId) — survives op-id changes with no re-keying needed. Bounded at 300 entries with insertion-order eviction.
+- [x] `wordDiffMap` recomputes all hunks when a single file is expanded. Fixed: per-file word diff computation, single-file expand only recomputes that file.
 - [x] `MaxBytesReader` called with `nil` ResponseWriter — violates Go API contract.
 - [x] `ParseGraphLog` returns nil instead of empty slice — produces JSON `null` not `[]`.
 - [x] Modal fetch errors silently swallowed (GitModal, BookmarkModal).
@@ -59,13 +59,13 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 ### Suggestions
 - [x] `App.svelte` is 1010 lines — rebase/squash/split state is ambient and threaded through multiple components. Extract to shared module.
 - [x] Rename `squashMode` → `fileSelectionMode` in DiffPanel props — partially done; App.svelte still uses `squashMode` internally.
-- [ ] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to generic names in App.svelte — now shared by squash and split modes.
-- [ ] Rename CSS classes `rebase-badge`/`rebase-source`/`rebase-target` to generic `mode-badge-inline`/`badge-source`/`badge-target` — shared across rebase, squash, split.
-- [ ] Squash mode StatusBar file count should say "N/M files to move" (not just "N/M files") for parity with split's "N/M files stay".
+- [x] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to `selectedFiles`/`totalFileCount`/`toggleFileSelection` in App.svelte — now shared by squash and split modes.
+- [x] Rename CSS classes `rebase-badge`/`rebase-source`/`rebase-target` to `mode-badge`/`badge-source`/`badge-target` — shared across rebase, squash, split.
+- [x] Squash mode StatusBar file count now says "N/M files to move" for parity with split's "N/M files stay".
 - [ ] Add bulk select/deselect toggle for file checkboxes (applies to squash + split modes).
 - [ ] No list virtualization for large repos (500+ commits).
 - [ ] No HTTP response compression (especially impacts SSH mode).
-- [ ] `highlightDiff` re-highlights all files when one is expanded.
+- [x] `highlightDiff` re-highlights all files when one is expanded. Fixed: `expandFile()` now only highlights the expanded file.
 - [x] Diff parser uses `a/` (source) path from git headers — duplicate keys crash on copy/rename. Fixed to use `b/` (destination).
 - [x] No word-diff skip for non-code files — SVGs/XML/JSON/lock files cause freeze. Added `shouldSkipWordDiff` with extension + line-count limits.
 - [x] No auto-collapse for large diffs — files >500 lines now start collapsed.
@@ -93,9 +93,9 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] `commitsFromIds` → `jj.FromIDs(ids)` on SelectedRevisions
 
 **Medium effort (1-2 hours):**
-- [ ] Immutable commit cache preservation — don't clear cached diffs for `◆` commits on op-id change
-- [ ] `wordDiffMap` per-file computation — move to component-local `$derived` in `DiffFileView`
-- [ ] `highlightDiff` partial re-highlight — only re-tokenize the expanded file, merge into existing highlights
+- [x] Immutable commit cache preservation — don't clear cached diffs for `◆` commits on op-id change
+- [x] `wordDiffMap` per-file computation — moved to progressive async in DiffPanel with per-file `wordDiffsByFile` Map
+- [x] `highlightDiff` partial re-highlight — `expandFile()` now only re-tokenizes the expanded file, merges into existing `highlightsByFile`
 - [ ] `"origin"` hardcoded as preferred remote — make configurable via startup flag or jj config query
 - [ ] `OplogPanel` inline error display — pass error prop, match GitModal/BookmarkModal pattern
 
@@ -113,27 +113,27 @@ Remaining test coverage gaps identified during the Round 2 test audit. These are
 
 ### Runner error tests (13 handlers)
 Unit tests verifying 500 response when runner returns an error. Already covered for `handleNew`, `handleAbandon`, `handleDescribe`, `handleRebase`, `handleGitPush`, `handleCommit`, `handleWorkspaces`. Missing for:
-- [ ] `handleBookmarks`
-- [ ] `handleDiff`
+- [x] `handleBookmarks`
+- [x] `handleDiff`
 - [x] `handleStatus` — endpoint removed (dead code)
-- [ ] `handleGetDescription`
-- [ ] `handleRemotes`
-- [ ] `handleUndo`
-- [ ] `handleOpLog`
-- [ ] `handleEvolog`
-- [ ] `handleBookmarkSet`
-- [ ] `handleBookmarkDelete`
-- [ ] `handleBookmarkMove`
-- [ ] `handleBookmarkForget`
-- [ ] `handleBookmarkTrack`
+- [x] `handleGetDescription`
+- [x] `handleRemotes`
+- [x] `handleUndo`
+- [x] `handleOpLog`
+- [x] `handleEvolog`
+- [x] `handleBookmarkSet`
+- [x] `handleBookmarkDelete`
+- [x] `handleBookmarkMove`
+- [x] `handleBookmarkForget`
+- [x] `handleBookmarkTrack`
 
 ### Edge case tests
-- [ ] `decodeBody` with body exceeding 1MB `MaxBytesReader` limit
-- [ ] `ParseBookmarkListOutput` with `conflict=true` or `backwards=true`
-- [ ] `ParseDiffStat` with binary files
-- [ ] `LogGraph` / `Status` / `FileShow` command builder direct tests
-- [ ] HTTP 405 for wrong method
-- [ ] `ParseGraphLog("")` empty input
+- [x] `decodeBody` with body exceeding 1MB `MaxBytesReader` limit
+- [x] `ParseBookmarkListOutput` with `conflict=true` or `backwards=true`
+- [x] `ParseDiffStat` with binary files
+- [x] `LogGraph` / `FileShow` command builder direct tests (`Status` removed as dead code)
+- [x] HTTP 405 for wrong method — Go 1.22 method-prefixed routes auto-return 405; test locks in the behaviour
+- [x] `ParseGraphLog("")` empty input
 
 ## UI Inspirations
 
@@ -152,7 +152,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - **Keyboard-first navigation**: j/k up/down, enter for details, r for rebase, S for squash, etc.
 - **Status bar**: shows current mode + available shortcuts
 - **Revset bar**: editable revset filter at the top
-- **Working copy `@` indicator**: prominent, green-colored
+- **Working copy `@` indicator**: amber concentric circle in graph, amber `@` badge inline
 - **Conflict markers**: `×` symbol, red-colored for conflicting revisions
 - **Multi-select**: check multiple revisions for batch operations
 - **Preview panel**: diff preview without leaving the revision list
@@ -247,7 +247,7 @@ Current implementation uses option 4 (jj's graph output) with pixel-perfect rend
 - Description lines get a continuation gutter (`│` extended from the node)
 - Working copy `@` detected from graph characters, not template functions
 
-1. **SVG-based**: ✅ Implemented. Each lane character is mapped to SVG elements (`GraphSvg.svelte`). 10-color "Earth & Sky" palette, hover highlighting, dashed rings for divergent nodes. See `svg-graph-rendering.md` in memory.
+1. **SVG-based**: ✅ Implemented. Each lane character is mapped to SVG elements (`GraphSvg.svelte`). 8-color muted palette from `--graph-N` CSS vars, opacity-based hover (lines 0.45→0.7, nodes 0.8→1.0), dashed rings for divergent nodes.
 2. **Canvas**: Better performance for large repos but harder to make interactive.
 3. **HTML/CSS grid**: Each cell in the graph is a div with borders. Simple but limited.
 4. **Use jj's graph output**: ✅ Implemented. Parse `jj log` with graph characters; SVG renderer maps them to visual elements.
