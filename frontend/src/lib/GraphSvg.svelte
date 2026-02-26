@@ -40,14 +40,19 @@
   const LINE_HOVER_OPACITY = 0.7
   const NODE_OPACITY = 0.8
   const NODE_HOVER_OPACITY = 1.0
+  const ELIDED_OPACITY = 0.3
+  const ELIDED_HOVER_OPACITY = 0.5
 
   const NODE_CHARS = new Set(['@', '○', '◆', '×', '◌'])
 
-  // Read --graph-N CSS vars from theme.css. Re-reads when isDark changes.
-  let palette = $derived.by(() => {
-    void isDark // dependency: re-read on theme toggle
+  // Read --graph-N CSS vars from theme.css after DOM updates.
+  // Must use $effect (not $derived) because the .light class toggle
+  // happens in an $effect in App.svelte — $derived would read stale vars.
+  let palette: string[] = $state(Array(GRAPH_COLORS).fill('#888'))
+  $effect(() => {
+    void isDark // dependency: re-read after theme class toggle
     const style = getComputedStyle(document.documentElement)
-    return Array.from({ length: GRAPH_COLORS }, (_, i) =>
+    palette = Array.from({ length: GRAPH_COLORS }, (_, i) =>
       style.getPropertyValue(`--graph-${i}`).trim()
     )
   })
@@ -104,6 +109,19 @@
   }
 
   const cy = ROW_H / 2
+
+  // Contrast color for glyphs rendered on top of semantic-colored nodes
+  let contrastFill = $derived(isDark ? '#0f0f13' : '#f8f8f6')
+
+  // Stroke props (color, width, opacity) for a given lane, accounting for hover
+  function laneStroke(lane: number): { color: string; sw: number; op: number } {
+    const hovered = hoveredLane === lane
+    return {
+      color: laneColor(lane),
+      sw: hovered ? HOVER_W : LINE_W,
+      op: hovered ? LINE_HOVER_OPACITY : LINE_OPACITY,
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -135,7 +153,7 @@
     {:else if cell.char === '~'}
       <line x1={x} y1={0} x2={x} y2={ROW_H}
         stroke={color} stroke-width={sw}
-        stroke-dasharray="2 3" opacity={hovered ? 0.5 : 0.3}
+        stroke-dasharray="2 3" opacity={hovered ? ELIDED_HOVER_OPACITY : ELIDED_OPACITY}
         pointer-events="none" />
 
     {:else if cell.char === '─'}
@@ -143,26 +161,18 @@
         stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
 
     {:else if cell.char === '├'}
-      {@const branchLane = cell.lane + 1}
-      {@const branchHovered = hoveredLane === branchLane}
-      {@const branchColor = laneColor(branchLane)}
-      {@const branchOp = branchHovered ? LINE_HOVER_OPACITY : LINE_OPACITY}
-      {@const branchSw = branchHovered ? HOVER_W : LINE_W}
+      {@const b = laneStroke(cell.lane + 1)}
       <line x1={x} y1={0} x2={x} y2={ROW_H}
         stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
       <line x1={x} y1={cy} x2={x + CELL_W / 2} y2={cy}
-        stroke={branchColor} stroke-width={branchSw} opacity={branchOp} pointer-events="none" />
+        stroke={b.color} stroke-width={b.sw} opacity={b.op} pointer-events="none" />
 
     {:else if cell.char === '┤'}
-      {@const branchLane = cell.lane - 1}
-      {@const branchHovered = hoveredLane === branchLane}
-      {@const branchColor = laneColor(branchLane)}
-      {@const branchOp = branchHovered ? LINE_HOVER_OPACITY : LINE_OPACITY}
-      {@const branchSw = branchHovered ? HOVER_W : LINE_W}
+      {@const b = laneStroke(cell.lane - 1)}
       <line x1={x} y1={0} x2={x} y2={ROW_H}
         stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
       <line x1={x - CELL_W / 2} y1={cy} x2={x} y2={cy}
-        stroke={branchColor} stroke-width={branchSw} opacity={branchOp} pointer-events="none" />
+        stroke={b.color} stroke-width={b.sw} opacity={b.op} pointer-events="none" />
 
     {:else if cell.char === '╮'}
       <path d="M {x - CELL_W / 2} {cy} Q {x} {cy} {x} {ROW_H}"
@@ -192,13 +202,10 @@
           stroke={color} stroke-width={LINE_W} opacity={hovered ? 0.35 : 0.2} />
 
         {#if cell.char === '@'}
-          <!-- Working copy: semantic green, no graph opacity -->
-          <circle cx={x} cy={cy} r={WC_R} fill="var(--green)" />
-          <text x={x} y={cy + 0.5}
-            text-anchor="middle" dominant-baseline="central"
-            fill={isDark ? '#0f0f13' : '#f8f8f6'}
-            font-size="7" font-weight="800"
-            class="node-glyph">@</text>
+          <!-- Working copy: amber concentric circle (matches sidebar icon) -->
+          <circle cx={x} cy={cy} r={WC_R + 1} fill="none"
+            stroke="var(--amber)" stroke-width={1.8} />
+          <circle cx={x} cy={cy} r={2.5} fill="var(--amber)" />
 
         {:else if cell.char === '◆'}
           <!-- Immutable: dimmer than normal nodes -->
@@ -210,9 +217,9 @@
           <!-- Conflict: semantic red, no graph opacity -->
           <circle cx={x} cy={cy} r={NODE_R} fill="var(--red)" />
           <line x1={x - 2} y1={cy - 2} x2={x + 2} y2={cy + 2}
-            stroke={isDark ? '#0f0f13' : '#f8f8f6'} stroke-width={1.5} />
+            stroke={contrastFill} stroke-width={1.5} />
           <line x1={x + 2} y1={cy - 2} x2={x - 2} y2={cy + 2}
-            stroke={isDark ? '#0f0f13' : '#f8f8f6'} stroke-width={1.5} />
+            stroke={contrastFill} stroke-width={1.5} />
 
         {:else if cell.char === '◌'}
           <!-- Hidden: subtler than normal nodes -->

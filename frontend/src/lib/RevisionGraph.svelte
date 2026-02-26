@@ -593,7 +593,7 @@
   }
 
   .graph-row.selected {
-    background: var(--bg-selected);
+    background: var(--bg-hover);
     box-shadow: inset 2px 0 0 var(--amber);
   }
 
@@ -799,18 +799,8 @@
     animation: badge-in var(--anim-duration) var(--anim-ease);
   }
 
-  .rebase-source {
-    background: var(--badge-other-bg);
-    color: var(--amber);
-    border: 1px solid var(--amber);
-  }
-
-  .rebase-target {
-    background: var(--badge-modify-bg);
-    color: var(--amber);
-    border: 1px solid var(--amber);
-  }
-
+  .rebase-source,
+  .rebase-target,
   .split-source {
     background: var(--badge-other-bg);
     color: var(--amber);

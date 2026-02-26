@@ -3,7 +3,7 @@
   import { toSplitView, type SplitLine } from './split-view'
   import type { WordSpan } from './word-diff'
   import type { FileChange } from './api'
-  import { findConflicts, type ConflictRegion } from './conflict-parser'
+  import { findConflicts, extractSideLabel, type ConflictRegion } from './conflict-parser'
   import type { SearchMatch } from './DiffPanel.svelte'
 
   interface Props {
@@ -25,6 +25,7 @@
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
+  let hoveredResolveSide: number | null = $state(null)
 
   function computeLineNumbers(hunk: DiffHunk): { old: number | null; new: number | null }[] {
     let oldLine = hunk.oldStart
@@ -59,14 +60,17 @@
     })
   }
 
+  // Conflicted files force unified view — split view makes no sense when all lines are additions
+  let effectiveSplit = $derived(splitView && !isConflict)
+
   // Memoized split-view data — depends only on file.hunks, not on
   // highlightedLines/wordDiffMap which update frequently during rendering
-  let splitLines = $derived(splitView ? toSplitView(file.hunks) : [])
-  let splitNums = $derived(splitView ? computeSplitLineNumbers(file.hunks, splitLines) : [])
+  let splitLines = $derived(effectiveSplit ? toSplitView(file.hunks) : [])
+  let splitNums = $derived(effectiveSplit ? computeSplitLineNumbers(file.hunks, splitLines) : [])
 
   // Memoized unified-view line numbers — keyed by hunk index
   let lineNumsByHunk = $derived(
-    splitView ? [] : file.hunks.map(h => computeLineNumbers(h))
+    effectiveSplit ? [] : file.hunks.map(h => computeLineNumbers(h))
   )
 
   interface ConflictLineMeta {
@@ -74,6 +78,10 @@
     isRegionStart?: boolean
     isRegionEnd?: boolean
     sideLabel?: string
+    sideIndex?: number       // 0-based side index within the conflict region
+    sideCount?: number       // number of sides in this conflict region
+    sideLabels?: string[]    // labels for each side (for resolve buttons)
+    regionLabel?: string     // e.g. "Conflict 1 of 3"
   }
 
   interface LineMatch { startCol: number; endCol: number; isCurrent: boolean }
@@ -92,6 +100,32 @@
     }
     return map
   })
+
+  // Determine inner diff type within a %%%%%%% conflict region.
+  // Inside conflict-diff-line, the second character (+/-) indicates the change direction.
+  function conflictInnerType(meta: ConflictLineMeta | undefined, content: string): 'remove' | 'add' | 'context' | null {
+    if (!meta || meta.cssClass !== 'conflict-diff-line') return null
+    if (content.length > 1 && content[1] === '-') return 'remove'
+    if (content.length > 1 && content[1] === '+') return 'add'
+    return 'context'
+  }
+
+  // Extract display content — strips prefix character(s) from line content
+  function getDisplayContent(isMarker: boolean, innerType: string | null, inConflict: boolean, content: string): string {
+    if (isMarker) return ''
+    if (innerType) return content.slice(2) // strip outer `+` and inner `-`/`+`
+    // All lines: strip the first character (diff format prefix +/-/space)
+    return content.slice(1)
+  }
+
+  // Extract display prefix character for the line gutter
+  function getDisplayPrefix(isMarker: boolean, innerType: string | null, inConflict: boolean, content: string): string {
+    if (isMarker) return ''
+    if (innerType === 'remove') return '-'
+    if (innerType === 'add') return '+'
+    if (inConflict) return '' // no prefix for conflict content lines
+    return content[0] // +/-/space
+  }
 
   function escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -123,19 +157,28 @@
       totalConflicts += regions.length
       const metaMap = new Map<number, ConflictLineMeta>()
       for (const region of regions) {
-        metaMap.set(region.startIdx, { cssClass: 'conflict-boundary', isRegionStart: true })
-        metaMap.set(region.endIdx, { cssClass: 'conflict-boundary', isRegionEnd: true })
+        const sideLabels = region.sides.map(s => s.label || (s.type === 'diff' ? 'changes' : 'content'))
+        metaMap.set(region.startIdx, { cssClass: 'conflict-boundary', isRegionStart: true, regionLabel: region.label })
+        metaMap.set(region.endIdx, {
+          cssClass: 'conflict-boundary', isRegionEnd: true,
+          sideCount: region.sides.length, sideLabels, regionLabel: region.label,
+        })
         for (let sideIdx = 0; sideIdx < region.sides.length; sideIdx++) {
           const side = region.sides[sideIdx]
           const isDiff = side.type === 'diff'
           const label = side.label || (isDiff ? 'changes' : 'content')
           metaMap.set(side.startIdx, {
             cssClass: isDiff ? 'conflict-diff-marker' : 'conflict-snap-marker',
-            sideLabel: label,
+            sideLabel: label, sideIndex: sideIdx,
           })
           const lineClass = isDiff ? 'conflict-diff-line' : 'conflict-snap-line'
           for (let i = side.startIdx + 1; i <= side.endIdx; i++) {
-            metaMap.set(i, { cssClass: lineClass })
+            const lineContent = file.hunks[hunkIdx].lines[i]?.content ?? ''
+            if (isDiff && /^\+\\{7}\s/.test(lineContent)) {
+              metaMap.set(i, { cssClass: 'conflict-diff-marker', sideLabel: extractSideLabel(lineContent.slice(8)), sideIndex: sideIdx })
+            } else {
+              metaMap.set(i, { cssClass: lineClass, sideIndex: sideIdx })
+            }
           }
         }
       }
@@ -149,10 +192,10 @@
   {@const searchKey = hunkIdx !== undefined && lineIdx !== undefined ? `${hunkIdx}:${lineIdx}` : ''}
   {@const lm = searchKey ? lineMatchMap.get(searchKey) : undefined}
   {@const inConflict = !!conflictMeta}
-  {@const isMarker = inConflict && (conflictMeta.cssClass === 'conflict-boundary' || conflictMeta.cssClass === 'conflict-diff-marker' || conflictMeta.cssClass === 'conflict-snap-marker')}
-  {@const innerType = inConflict && conflictMeta.cssClass === 'conflict-diff-line' ? (line.content.length > 1 && line.content[1] === '-' ? 'remove' : line.content.length > 1 && line.content[1] === '+' ? 'add' : 'context') : null}
-  {@const displayContent = isMarker ? '' : innerType ? line.content.slice(2) : inConflict ? line.content.slice(1) : line.content}
-  {@const displayPrefix = isMarker ? '' : innerType === 'remove' ? '-' : innerType === 'add' ? '+' : inConflict ? ' ' : line.content[0]}
+  {@const isMarker = inConflict && (conflictMeta.cssClass === 'conflict-boundary' || conflictMeta.cssClass.endsWith('-marker'))}
+  {@const innerType = conflictInnerType(conflictMeta, line.content)}
+  {@const displayContent = getDisplayContent(isMarker, innerType, inConflict, line.content)}
+  {@const displayPrefix = getDisplayPrefix(isMarker, innerType, inConflict, line.content)}
   {#if isMarker}
     <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
   {:else if lm && lm.length > 0}
@@ -223,15 +266,22 @@
       </span>
     {/if}
     {#if isConflict && conflictData && conflictData.totalConflicts > 0}
+      {@const firstRegionEnd = [...(conflictData.lineMeta.values().next().value?.values() ?? [])].find(m => m.isRegionEnd)}
       <span class="conflict-indicator">{conflictData.totalConflicts} conflict{conflictData.totalConflicts !== 1 ? 's' : ''}</span>
-      {#if onresolve}
-        <button class="resolve-btn resolve-ours" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}>Accept Ours</button>
-        <button class="resolve-btn resolve-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
+      {#if onresolve && firstRegionEnd?.sideCount === 2}
+        <button class="resolve-btn resolve-ours"
+          onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
+          onmouseenter={() => hoveredResolveSide = 0}
+          onmouseleave={() => hoveredResolveSide = null}>Keep {firstRegionEnd.sideLabels?.[0] ?? 'side 1'}</button>
+        <button class="resolve-btn resolve-theirs"
+          onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
+          onmouseenter={() => hoveredResolveSide = 1}
+          onmouseleave={() => hoveredResolveSide = null}>Keep {firstRegionEnd.sideLabels?.[1] ?? 'side 2'}</button>
       {/if}
     {/if}
   </div>
   {#if !isCollapsed}
-    {#if splitView}
+    {#if effectiveSplit}
       <!-- Split (side-by-side) view -->
       {#if !isExpanded && file.hunks.length > 1}
         <button class="expand-btn" onclick={() => onexpand(filePath)}>
@@ -301,14 +351,20 @@
                 class="conflict-line {cm.cssClass}"
                 class:conflict-region-start={cm.isRegionStart}
                 class:conflict-region-end={cm.isRegionEnd}
+                class:conflict-side-kept={hoveredResolveSide !== null && cm.sideIndex === hoveredResolveSide}
+                class:conflict-side-discarded={hoveredResolveSide !== null && cm.sideIndex !== undefined && cm.sideIndex !== hoveredResolveSide}
               >
                 {#if cm.sideLabel}
                   <span class="conflict-side-label">{cm.sideLabel}</span>
                 {/if}
-                {#if cm.isRegionEnd && onresolve}
-                  <div class="conflict-resolve-inline">
-                    <button class="resolve-btn-inline resolve-inline-ours" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}>Accept Ours</button>
-                    <button class="resolve-btn-inline resolve-inline-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
+                {#if cm.isRegionEnd && onresolve && cm.sideCount === 2}
+                  <div class="conflict-resolve-inline" onmouseleave={() => hoveredResolveSide = null}>
+                    <button class="resolve-btn-inline resolve-inline-ours"
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
+                      onmouseenter={() => hoveredResolveSide = 0}>Keep {cm.sideLabels?.[0] ?? 'side 1'}</button>
+                    <button class="resolve-btn-inline resolve-inline-theirs"
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
+                      onmouseenter={() => hoveredResolveSide = 1}>Keep {cm.sideLabels?.[1] ?? 'side 2'}</button>
                   </div>
                 {/if}
                 {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx, cm)}
@@ -680,14 +736,30 @@
     transform: translateY(-50%);
     font-size: 10px;
     font-weight: 600;
+    font-style: italic;
     letter-spacing: 0.3px;
     color: var(--conflict-side-color, var(--subtext0));
-    opacity: 0.8;
+    opacity: 0.9;
     pointer-events: none;
+    background: var(--base);
+    padding: 0 6px;
+    border-radius: 3px;
+    z-index: 1;
     z-index: 1;
   }
 
   /* --- Per-region resolve buttons (on >>>>>>> line) --- */
+  /* Hover preview: subtly tint kept side, dim discarded side */
+  .conflict-side-kept :global(.diff-line) {
+    background: var(--diff-add-bg);
+    border-left-color: var(--green);
+  }
+
+  .conflict-side-discarded {
+    opacity: 0.3;
+    transition: opacity var(--anim-duration) var(--anim-ease);
+  }
+
   .conflict-resolve-inline {
     position: absolute;
     left: 50%;

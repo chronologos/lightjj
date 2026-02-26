@@ -63,7 +63,6 @@ body {
   --surface1: rgba(255,255,255,0.07);
   --surface2: #4e4e58;
   --overlay0: #8a8a94;
-  --overlay1: #8a8a94;
   --subtext0: #8a8a94;
   --subtext1: #e2e2e6;
   --text: #e2e2e6;
@@ -153,7 +152,6 @@ body {
   --surface1: rgba(0,0,0,0.07);
   --surface2: #a1a1aa;
   --overlay0: #71717a;
-  --overlay1: #71717a;
   --subtext0: #71717a;
   --subtext1: #1a1a1e;
   --text: #1a1a1e;
