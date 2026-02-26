@@ -134,7 +134,7 @@ describe('StatusBar', () => {
         props: defaultProps({ squash: activeSquash(), squashFileCount: { selected: 2, total: 5 } }),
       })
       const fileCount = container.querySelector('.file-count')
-      expect(fileCount?.textContent).toBe('2/5 files')
+      expect(fileCount?.textContent).toBe('2/5 files to move')
     })
 
     it('file-count-empty class when selected=0', () => {

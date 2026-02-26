@@ -135,7 +135,7 @@ User triggers rebase (inline mode, Enter key)
 
 ### State synchronization
 
-Every API response carries an `X-JJ-Op-Id` header with jj's current operation ID. The frontend tracks this value; when it changes (due to mutations from the UI or external CLI usage detected on next request), the API client clears its cache and fires stale callbacks that trigger a log refresh.
+Every API response carries an `X-JJ-Op-Id` header with jj's current operation ID. The frontend tracks this value; when it changes (due to mutations from the UI or external CLI usage detected on next request), the API client clears its mutable response cache and fires stale callbacks that trigger a log refresh. Cached data for immutable commits lives in a separate cache that survives op-id changes — immutable commits' diffs/files/descriptions are stable by definition.
 
 ### Divergence resolution
 
@@ -220,7 +220,12 @@ defer runner.Verify()  // asserts all expectations called
 **Per-file prop scoping** — `DiffPanel` passes per-file slices of global state to each `DiffFileView` rather than the full dataset. This localizes reactive invalidation:
 
 - `highlightsByFile: Map<filePath, Map<key, html>>` — progressive Shiki highlighting publishes per-file inner Maps. Already-highlighted files keep their inner Map reference, so only the newly-highlighted `DiffFileView` re-renders on each publish. Stable `EMPTY_HL` singleton for not-yet-highlighted files.
+- `wordDiffsByFile: Map<filePath, Map<hunkIdx, Map<lineIdx, spans>>>` — same progressive-async pattern as Shiki. LCS computation yields between files; single-file context expansion only recomputes that file's entry. Stable `EMPTY_WD` singleton.
 - `matchesByFile` — search matches pre-grouped by `filePath` via `groupByWithIndex()`, preserving global indices so `currentMatchIdx` comparison still works. Match-free files receive `EMPTY_MATCHES` (stable singleton), so their `lineMatchMap` `$derived` never reads `currentMatchIdx` → no dependency → no recompute on Enter/Shift+Enter.
+
+**Two-tier response cache** — `api.ts` maintains two Maps: `responseCache` (keyed by `${cacheId}@${opId}`, cleared on every op-id change) and `immutableCache` (keyed by bare `cacheId`, survives op-id changes, bounded at 300 entries with insertion-order eviction). Immutable commits' diffs/files/descriptions can't change, so they're cached across operations. The separate cache avoids any re-keying logic on op-id changes — `trackOpId` just calls `responseCache.clear()`.
+
+**`createLoader()` factory** — `loader.svelte.ts` encapsulates the generation-counter async pattern. Each `load()` supersedes any in-flight call; only the latest-started result is applied. The `loading` flag is deferred via `setTimeout(0)` so microtask-fast cache hits never flip it, preventing reactive-update cascades during cached j/k navigation. App.svelte declares 6 loaders instead of 6 hand-rolled load functions + 6 generation counters + 11 `$state` vars.
 
 **Mode objects over individual props** — `RevisionGraph` and `StatusBar` receive `{rebase, squash, split}` mode objects (from `modes.svelte.ts` factories with reactive getters) instead of 11+ individual props. Reactivity is preserved (Svelte tracks `.active`, `.sources`, etc. access); prop count drops 31→23 / 12→8.
 

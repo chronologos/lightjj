@@ -220,7 +220,7 @@ describe('RevisionGraph', () => {
           rebase: activeRebase(['src1']),
         }),
       })
-      const badge = container.querySelector('.rebase-source')
+      const badge = container.querySelector('.badge-source')
       expect(badge).toBeInTheDocument()
       expect(badge?.textContent).toContain('move')
     })
@@ -234,8 +234,8 @@ describe('RevisionGraph', () => {
           rebase: activeRebase(['src1'], 's', 'a'),
         }),
       })
-      const source = container.querySelector('.rebase-source')
-      const target = container.querySelector('.rebase-target')
+      const source = container.querySelector('.badge-source')
+      const target = container.querySelector('.badge-target')
       expect(source?.textContent).toContain('source')
       expect(target?.textContent).toContain('after')
     })
@@ -250,7 +250,7 @@ describe('RevisionGraph', () => {
           squash: activeSquash(['sq1']),
         }),
       })
-      const badge = container.querySelector('.rebase-source')
+      const badge = container.querySelector('.badge-source')
       expect(badge).toBeInTheDocument()
       expect(badge?.textContent).toContain('from')
     })
@@ -264,7 +264,7 @@ describe('RevisionGraph', () => {
           squash: activeSquash(['sq1']),
         }),
       })
-      const target = container.querySelector('.rebase-target')
+      const target = container.querySelector('.badge-target')
       expect(target?.textContent).toContain('into')
     })
   })

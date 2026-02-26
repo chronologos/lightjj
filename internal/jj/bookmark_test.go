@@ -165,3 +165,23 @@ func TestBookmark_IsTrackable(t *testing.T) {
 	assert.False(t, Bookmark{Local: &BookmarkRemote{}, Remotes: []BookmarkRemote{{}}}.IsTrackable())
 	assert.False(t, Bookmark{}.IsTrackable())
 }
+
+func TestParseBookmarkListOutput_ConflictAndBackwards(t *testing.T) {
+	// conflict=true, backwards=true
+	input := "main\x1f.\x1ffalse\x1ftrue\x1ftrue\x1fabc"
+	bookmarks := ParseBookmarkListOutput(input)
+	assert.Len(t, bookmarks, 1)
+	assert.True(t, bookmarks[0].Conflict)
+	assert.True(t, bookmarks[0].Backwards)
+	assert.Equal(t, "main", bookmarks[0].Name)
+}
+
+func TestParseBookmarkListOutput_MultipleRemotes(t *testing.T) {
+	// Bookmark with local + two remotes — origin should be first regardless of input order
+	input := "main\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fabc\nmain\x1fupstream\x1ftrue\x1ffalse\x1ffalse\x1fdef\nmain\x1forigin\x1ftrue\x1ffalse\x1ffalse\x1fghi"
+	bookmarks := ParseBookmarkListOutput(input)
+	assert.Len(t, bookmarks, 1)
+	assert.Len(t, bookmarks[0].Remotes, 2)
+	assert.Equal(t, "origin", bookmarks[0].Remotes[0].Remote, "origin should be first")
+	assert.Equal(t, "upstream", bookmarks[0].Remotes[1].Remote)
+}

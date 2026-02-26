@@ -20,6 +20,7 @@ beforeEach(() => {
   mockFetch.mockReset()
   _testInternals.lastOpId = null
   _testInternals.cache.clear()
+  _testInternals.immutableCache.clear()
   _testInternals.staleCallbacks.clear()
   _testInternals.refreshQueued = false
 })
@@ -185,6 +186,74 @@ describe('response cache', () => {
   })
 })
 
+describe('immutable cache', () => {
+  it('preserves immutable entries across op-id changes', async () => {
+    // Cache an immutable diff — goes to immutableCache, not responseCache
+    const immutableDiff = { diff: '+immutable content' }
+    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, 'op1'))
+    await api.diff('immutable-rev', undefined, undefined, true)
+    expect(_testInternals.immutableCache.size).toBe(1)
+    expect(_testInternals.cache.size).toBe(0)
+
+    // Cache a mutable diff — goes to responseCache
+    const mutableDiff = { diff: '+mutable content' }
+    mockFetch.mockResolvedValueOnce(mockResponse(mutableDiff, 'op1'))
+    await api.diff('mutable-rev')
+    expect(_testInternals.cache.size).toBe(1)
+
+    // Op-id changes — mutable entry evicted, immutable preserved
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op2'))
+    await api.log()
+    expect(_testInternals.cache.size).toBe(0)
+    expect(_testInternals.immutableCache.size).toBe(1)
+
+    // Immutable diff still cached — no fetch needed
+    const result = await api.diff('immutable-rev', undefined, undefined, true)
+    expect(result).toEqual(immutableDiff)
+    // 3 fetches total: immutable diff, mutable diff, log. No 4th fetch for immutable.
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('stores immutable entries under bare cacheId (no opId suffix)', async () => {
+    const immutableDiff = { diff: '+immutable' }
+    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, 'op1'))
+    await api.diff('imm-rev', undefined, undefined, true)
+
+    const keys = [..._testInternals.immutableCache.keys()]
+    expect(keys).toEqual(['diff:imm-rev'])
+  })
+
+  it('serves immutable entries even when lastOpId is null', async () => {
+    // Immutable data doesn't depend on opId, so it should serve even before
+    // any opId is established (e.g., first request is for an immutable commit).
+    const immutableDiff = { diff: '+immutable' }
+    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, null))
+    await api.diff('imm-rev', undefined, undefined, true)
+
+    _testInternals.lastOpId = null // simulate fresh session
+    const result = await api.diff('imm-rev', undefined, undefined, true)
+    expect(result).toEqual(immutableDiff)
+    expect(mockFetch).toHaveBeenCalledTimes(1) // second call hit cache
+  })
+
+  it('bounds immutable cache size via LRU eviction on insert', async () => {
+    const MAX = _testInternals.MAX_IMMUTABLE_CACHE_SIZE
+    mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
+
+    // Fill to MAX
+    for (let i = 0; i < MAX; i++) {
+      await api.diff(`rev${i}`, undefined, undefined, true)
+    }
+    expect(_testInternals.immutableCache.size).toBe(MAX)
+
+    // One more insert evicts the oldest
+    await api.diff('revNew', undefined, undefined, true)
+    expect(_testInternals.immutableCache.size).toBe(MAX)
+    expect(_testInternals.immutableCache.has('diff:rev0')).toBe(false)
+    expect(_testInternals.immutableCache.has('diff:revNew')).toBe(true)
+  })
+})
+
 describe('onStale', () => {
   it('fires callback when op-id changes', async () => {
     const cb = vi.fn()
@@ -250,11 +319,21 @@ describe('isCached', () => {
     expect(isCached('abc')).toBe(false)
   })
 
-  it('returns true when both diff and files are cached', () => {
+  it('returns true when diff + files + desc are all cached', () => {
     _testInternals.lastOpId = 'op1'
     _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
     _testInternals.cache.set('files:abc@op1', [])
+    _testInternals.cache.set('desc:abc@op1', { description: 'msg' })
     expect(isCached('abc')).toBe(true)
+  })
+
+  it('returns false when description is missing', () => {
+    // Regression guard: isCached() must check desc too — otherwise after an
+    // op-id change the debounce skip path fires a desc fetch on every keypress.
+    _testInternals.lastOpId = 'op1'
+    _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
+    _testInternals.cache.set('files:abc@op1', [])
+    expect(isCached('abc')).toBe(false)
   })
 
   it('returns false when only diff is cached', () => {
@@ -263,10 +342,12 @@ describe('isCached', () => {
     expect(isCached('abc')).toBe(false)
   })
 
-  it('returns false when only files are cached', () => {
-    _testInternals.lastOpId = 'op1'
-    _testInternals.cache.set('files:abc@op1', [])
-    expect(isCached('abc')).toBe(false)
+  it('returns true when all three are in immutable cache', () => {
+    // No opId required for immutable cache hits
+    _testInternals.immutableCache.set('diff:abc', { diff: '+x' })
+    _testInternals.immutableCache.set('files:abc', [])
+    _testInternals.immutableCache.set('desc:abc', { description: 'msg' })
+    expect(isCached('abc')).toBe(true)
   })
 })
 

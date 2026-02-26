@@ -17,6 +17,42 @@ func TestLogJSON(t *testing.T) {
 	assert.Contains(t, args, "5")
 }
 
+func TestLogGraph(t *testing.T) {
+	args := LogGraph("main..@", 500)
+	assert.Equal(t, "log", args[0])
+	assert.Contains(t, args, "--color")
+	assert.Contains(t, args, "never")
+	assert.Contains(t, args, "-r")
+	assert.Contains(t, args, "main..@")
+	assert.Contains(t, args, "--limit")
+	assert.Contains(t, args, "500")
+	// Must NOT contain --no-graph (unlike LogJSON) — graph chars encode topology
+	assert.NotContains(t, args, "--no-graph")
+	// Template must use \x1F field separator (not tabs, which appear in descriptions)
+	assert.Contains(t, args, "-T")
+	tmpl := args[len(args)-1]
+	assert.Contains(t, tmpl, `\x1F`)
+	assert.Contains(t, tmpl, JJUIPrefix)
+	assert.Contains(t, tmpl, "divergent")
+}
+
+func TestLogGraph_NoRevset(t *testing.T) {
+	args := LogGraph("", 0)
+	assert.NotContains(t, args, "-r")
+	assert.NotContains(t, args, "--limit")
+}
+
+func TestFileShow(t *testing.T) {
+	got := FileShow("abc", "src/main.go")
+	assert.Equal(t, []string{"file", "show", "-r", "abc", `file:"src/main.go"`}, got)
+}
+
+func TestFileShow_EscapesPath(t *testing.T) {
+	// Dash-prefixed paths could be interpreted as flags without EscapeFileName
+	got := FileShow("abc", "-rm")
+	assert.Equal(t, `file:"-rm"`, got[len(got)-1])
+}
+
 func TestNew(t *testing.T) {
 	revs := NewSelectedRevisions(&Commit{ChangeId: "abc"})
 	got := New(revs)
