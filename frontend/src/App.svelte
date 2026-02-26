@@ -207,7 +207,7 @@
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))
     }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
-    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !!selectedRevision && checkedRevisions.size <= 1 },
+    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size <= 1 },
     { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision },
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
@@ -767,6 +767,7 @@
     split.cancel()
     divergence.cancel()
     squashSelectedFiles.clear()
+    squashTotalFiles = 0
   }
 
   function closeAllModals() {
@@ -885,22 +886,15 @@
 
     // Inline mode Enter/Escape must fire even when a checkbox has focus
     // (clicking file checkboxes in split/squash steals focus to the <input>)
-    if (split.active && (e.key === 'Enter' || e.key === 'Escape')) {
+    if (inlineMode && (e.key === 'Enter' || e.key === 'Escape')) {
       e.preventDefault()
-      if (e.key === 'Enter') executeSplit()
-      else { split.cancel(); squashSelectedFiles.clear() }
-      return
-    }
-    if (squash.active && (e.key === 'Enter' || e.key === 'Escape')) {
-      e.preventDefault()
-      if (e.key === 'Enter') executeSquash()
-      else { squash.cancel(); squashSelectedFiles.clear() }
-      return
-    }
-    if (rebase.active && (e.key === 'Enter' || e.key === 'Escape')) {
-      e.preventDefault()
-      if (e.key === 'Enter') executeRebase()
-      else rebase.cancel()
+      if (e.key === 'Enter') {
+        if (split.active) executeSplit()
+        else if (squash.active) executeSquash()
+        else if (rebase.active) executeRebase()
+      } else {
+        cancelInlineModes()
+      }
       return
     }
 
@@ -931,7 +925,7 @@
       return
     }
 
-    // Escape works regardless of inline mode
+    // Escape: description editor, checked revisions, errors (inline modes handled above)
     if (e.key === 'Escape') {
       if (descriptionEditing) {
         descriptionEditing = false
@@ -944,9 +938,7 @@
       return
     }
 
-    // Global shortcuts — work in all views, but blocked during inline modes
-    if (inlineMode) return
-
+    // Global shortcuts — inline modes already returned above
     switch (e.key) {
       case 't':
         e.preventDefault()
