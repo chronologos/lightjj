@@ -1,5 +1,38 @@
 # lightjj Backlog
 
+## Architecture Review Round 2 (2026-02-26)
+
+Four-agent deep analysis (Go backend, Svelte frontend, performance paths, API design). Items marked ✅ are fixed.
+
+### Fixed
+- [x] **No default log limit** — unbounded fetch on large repos. Now defaults to 500, caps at 1000.
+- [x] **Workspace spawn race condition** — two concurrent requests could both spawn child processes. Fixed: lock held across check + spawn + write (extracted to `spawnLocked` with `defer Unlock()`).
+- [x] **Dead `/api/status` endpoint** — route + handler + `jj.Status()` builder + tests removed.
+- [x] **Evolog not debounced** — holding j/k with evolog open fired requests on every keypress. Now included in the 50ms debounce for all paths.
+- [x] **`@const` recomputation** — `toSplitView`/`computeLineNumbers` in `DiffFileView` re-evaluated on every render (including every Shiki update). Moved to `$derived`.
+- [x] **`api.ts` fails on non-JSON error bodies** — Go panic / proxy error returns plain text, `res.json()` threw, user saw JSON parse error instead of HTTP status. Now parsed defensively.
+- [x] **Mode prop drilling** — RevisionGraph/StatusBar received 11 individual mode props. Now pass mode objects directly (RevisionGraph 31→23 props, StatusBar 12→8 props).
+- [x] **Log limit clamp policy** — `>1000` was clamping to 500 instead of 1000.
+- [x] **`highlightedLines` invalidates all DiffFileViews** — progressive Shiki updates replaced global Map → every file re-rendered. Now `highlightsByFile: Map<filePath, Map<key, html>>`; inner Maps for unchanged files keep their reference, so only newly-highlighted files re-render.
+- [x] **`searchMatches` O(files × matches)** — every DiffFileView received full match array and filtered per-file. Pre-grouped by filePath in parent via `groupByWithIndex()`. O(matches) total.
+- [x] **Sequential bookmark loop in divergence resolution** — `for await` → `Promise.all`.
+- [x] **Cmd+F diff search** — search bar with match counter, Enter/Shift+Enter navigation, `<mark>` highlights, auto-expand collapsed files.
+
+### Remaining — Performance
+- [ ] **`wordDiffMap` is sync `$derived`** — `computeWordDiffs` (LCS) runs synchronously for every hunk on diff load. 50-file commit × 20 hunks × 5 pairs × 40k ops ≈ 10-50ms blocked paint. **Fix:** defer to async with `setTimeout` like Shiki; word-diff spans appear progressively ~30ms after initial render. Medium effort.
+- [ ] **`hoveredLane` fans out to every GraphSvg** — ~1200 equality checks per mousemove. Cross-row highlighting (hover lane N anywhere → lane N highlighted everywhere) requires shared state so CSS `:hover` doesn't work. Needs profiling to verify actual impact before optimizing.
+- [ ] **No virtualization for mega-files** — manual expand of 5000-line file renders all lines. Auto-collapse at 500 is the mitigation; `@tanstack/virtual` would be the full fix.
+
+### Remaining — Maintainability
+- [ ] **Extract `diffLoader.svelte.ts`** — App.svelte has 44 `$state` vars and 53 functions. The diff-loading cluster (~15 vars, ~6 generation counters, ~5 load functions, debounce in selectRevision) could be a factory module like `modes.svelte.ts`. Would also let DiffPanel import it directly, dropping ~8 props. Medium effort.
+- [ ] **`gh pr list` bypasses runner interface** — `handlers.go:774` uses `exec.Command` directly instead of `CommandRunner`. A generic `ExternalRunner` would restore the pattern. Low priority — `gh` is a different binary and test replacement via `var execGhPRList` works.
+- [ ] **Backend fields unexposed in frontend** — `rebaseRequest.SkipEmptied`, `rebaseRequest.IgnoreImmutable`, `squashRequest.IgnoreImmutable` accepted by Go but `api.rebase()`/`api.squash()` don't send them. Wire up when UI needs them. YAGNI for now.
+
+### Remaining — Reliability
+- [ ] **`handleBookmarkTrack/Untrack` don't validate `Remote`** — empty remote passes validation, jj errors instead of 400.
+- [ ] **JSON encoding errors silently dropped** — `json.Encode()` return value discarded in `writeJSON`/`writeError`. Partial responses possible (rare).
+- [ ] **`LocalRunner` discards exit code** — `errors.New(stderr)` loses `ExitError` type. Empty stderr → empty error message.
+
 ## Architecture Review Findings (2026-02-23)
 
 Deep review across 6 perspectives (maintainability, performance, reliability, correctness, testability, API design/security). Items marked ✅ are fixed.
@@ -82,7 +115,7 @@ Remaining test coverage gaps identified during the Round 2 test audit. These are
 Unit tests verifying 500 response when runner returns an error. Already covered for `handleNew`, `handleAbandon`, `handleDescribe`, `handleRebase`, `handleGitPush`, `handleCommit`, `handleWorkspaces`. Missing for:
 - [ ] `handleBookmarks`
 - [ ] `handleDiff`
-- [ ] `handleStatus`
+- [x] `handleStatus` — endpoint removed (dead code)
 - [ ] `handleGetDescription`
 - [ ] `handleRemotes`
 - [ ] `handleUndo`
@@ -191,8 +224,8 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
 - [x] Divergent commit resolution UI — detect divergent commits via `Divergent` field, show `divergent` badge + dashed ring in graph, DivergencePanel for comparing versions with color-coded cards (red=from, green=to), cross-version diff filtered to union of changed files, parent info display, "Keep" action with bookmark conflict resolution, `/N` offset labels matching jj convention
-- [ ] Bookmark → GitHub PR linking — query GitHub API (`gh pr list --json headRefName,url`) to map bookmark names to open PRs. Make bookmark badges clickable: if a PR exists for the bookmark name, clicking opens the PR URL in a new tab. Cache PR data per op-id. Show a subtle link icon or underline on linked badges.
-- [ ] Cmd+F diff search — intercept `Cmd+F` / `Ctrl+F` in the diff panel to search within the displayed diff content (highlight matches, jump between them) instead of triggering the browser's native find. Scope search to the current revision's diff. Consider: match counter, case sensitivity toggle, regex support.
+- [x] Bookmark → GitHub PR linking — `GET /api/pull-requests` shells `gh pr list`, `prByBookmark` map in App.svelte, bookmark badges linked to PRs with `#number` suffix. Draft PRs dimmed.
+- [x] Cmd+F diff search — intercept `Cmd+F` / `Ctrl+F` in the diff panel, search bar with match counter, Enter/Shift+Enter navigation, `<mark>` highlights, auto-expand collapsed files. Case-insensitive, 2-char minimum. Future: case toggle, regex.
 
 ## State Synchronization
 

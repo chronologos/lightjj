@@ -127,6 +127,7 @@
     user-select: none;
     font-size: 11px;
     color: var(--subtext0);
+    transition: border-top-color var(--anim-duration) var(--anim-ease);
   }
 
   .statusbar.rebase-active {
@@ -166,6 +167,7 @@
     letter-spacing: 0.08em;
     padding: 1px 7px;
     border-radius: 3px;
+    animation: badge-in var(--anim-duration) var(--anim-ease);
   }
 
   .key-group {

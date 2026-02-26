@@ -1,3 +1,32 @@
+/* --- Animations --- */
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes badge-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+:root {
+  --anim-duration: 150ms;
+  --anim-ease: cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/* Disable animations globally for reduced-motion preference or config */
+@media (prefers-reduced-motion: reduce) {
+  :root { --anim-duration: 0ms; }
+}
+.reduce-motion {
+  --anim-duration: 0ms;
+}
+
 /* --- Reset & Globals --- */
 *, *::before, *::after {
   box-sizing: border-box;

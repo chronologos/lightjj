@@ -56,7 +56,7 @@
         ops.push({ action, bookmark: bm.name, remote: remote.remote })
       }
       // Offer track for local-only bookmarks against available remotes
-      if (bm.local && (!bm.remotes || bm.remotes.length === 0)) {
+      if (bm.local && !bm.remotes?.length) {
         for (const remote of availableRemotes) {
           ops.push({ action: 'track', bookmark: bm.name, remote })
         }

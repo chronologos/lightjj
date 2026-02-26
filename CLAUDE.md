@@ -147,7 +147,6 @@ func TestHandleAbandon(t *testing.T) {
 
 Patterns learned from profiling j/k keyboard navigation:
 
-- **No CSS transitions on keyboard-navigated lists.** `transition: background 0.1s ease` on list rows makes selection feel sluggish. Instant background changes feel responsive.
 - **Scope `:hover` to exclude `.selected`.** Use `.row:hover:not(.selected)` to prevent visual artifacts when mouse hover and keyboard selection overlap.
 - **Debounce expensive work, not the selection state.** Update `selectedIndex` synchronously for instant visual feedback. Debounce network fetches and derived computations (diff loading, file loading) with a short timer (~50ms). Skip debounce on cache hits.
 - **Guard state assignments with equality checks.** `if (diffContent !== result.diff) diffContent = result.diff` prevents the entire `$derived` chain (`parsedDiff` → `wordDiffMap` → `highlightDiff`) from re-running when the value hasn't changed (e.g., cache hits returning the same reference).

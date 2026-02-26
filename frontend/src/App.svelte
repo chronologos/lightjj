@@ -15,6 +15,7 @@
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import DivergencePanel from './lib/DivergencePanel.svelte'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
+  import { config } from './lib/config.svelte'
 
   // --- Global state ---
   let revisions: LogEntry[] = $state([])
@@ -84,17 +85,18 @@
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
   // --- Theme ---
-  let darkMode: boolean = $state(localStorage.getItem('lightjj-theme') !== 'light')
+  let darkMode = $derived(config.theme === 'dark')
 
   function toggleTheme() {
-    darkMode = !darkMode
-    document.documentElement.classList.toggle('light', !darkMode)
-    localStorage.setItem('lightjj-theme', darkMode ? 'dark' : 'light')
+    config.theme = darkMode ? 'light' : 'dark'
     diffPanelRef?.rehighlight()
   }
 
-  // Apply saved theme on load
-  if (localStorage.getItem('lightjj-theme') === 'light') document.documentElement.classList.add('light')
+  // Sync theme class + reduce-motion class to <html>
+  $effect(() => {
+    document.documentElement.classList.toggle('light', !darkMode)
+    document.documentElement.classList.toggle('reduce-motion', config.reduceMotion)
+  })
 
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
@@ -230,6 +232,7 @@
 
     // View
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
+    { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
     { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', category: 'View', action: toggleViewMode },
     { label: 'Toggle split/unified diff', category: 'View', action: () => { splitView = !splitView } },
     { label: 'Toggle operation log', category: 'View', action: toggleOplog },
@@ -600,7 +603,9 @@
 
       await api.abandon(abandonIds)
 
-      // Move all previously-conflicted bookmarks to the kept commit
+      // Move all previously-conflicted bookmarks to the kept commit.
+      // Serial (not Promise.all): concurrent jj mutations can produce divergent
+      // op history. N is tiny (1-3) and this is a rare manual action.
       for (const name of conflictedNames) {
         await api.bookmarkSet(keptCommitId, name)
       }
@@ -1305,6 +1310,7 @@
     color: var(--red);
     font-size: 12px;
     flex-shrink: 0;
+    animation: slide-down var(--anim-duration) var(--anim-ease);
   }
 
   .error-text {
