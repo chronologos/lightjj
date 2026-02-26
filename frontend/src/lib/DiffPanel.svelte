@@ -235,9 +235,12 @@
       // Clear stale highlights immediately to prevent wrong-color flicker
       // when old and new diffs share the same file/hunk/line keys
       highlightsByFile = new Map()
-      // Highlight first ~100 lines immediately (no delay) to avoid visible
-      // flicker. Remaining files are deferred and yield between each.
-      highlightDiff(effectiveFiles, true)
+      // Defer even the immediate phase by one macrotask. This lets the
+      // browser paint the selection highlight BEFORE Shiki runs (~5-20ms for
+      // 100 lines) so j/k navigation stays snappy. The 0ms delay is too
+      // short to produce a visible plain-text flash.
+      const filesToHighlight = effectiveFiles
+      highlightTimer = setTimeout(() => highlightDiff(filesToHighlight, true), 0)
     } else if (parsedDiff.length === 0) {
       lastHighlightedDiff = ''
       highlightsByFile = new Map()
@@ -261,8 +264,12 @@
     // Restore saved state or start expanded
     collapsedFiles.clear()
     expandedDiffs = new Map()
+    activeFilePath = null
     conflictFetchGen++ // invalidate any in-flight fileShow requests
     conflictFileDiffs = new Map()
+    // Suppress chevron transition during revision switch (prevents j/k flapping)
+    panelContentEl?.classList.add('skip-transitions')
+    requestAnimationFrame(() => panelContentEl?.classList.remove('skip-transitions'))
     const saved = currentId ? collapseStateCache.get(currentId) : null
     if (saved) {
       for (const path of saved) collapsedFiles.add(path)
@@ -503,42 +510,50 @@
     }
   }
 
-  // Auto-focus file selection list when entering split/squash mode
+  // Auto-focus file selection list when entering split/squash mode,
+  // blur when exiting to prevent j/k from being swallowed
   $effect(() => {
     if (fileSelectionMode && fileSelectionListEl) {
       fileSelectIdx = 0
       fileSelectionListEl.focus()
+    } else if (!fileSelectionMode) {
+      fileSelectionListEl?.blur()
     }
   })
 
-  // Track visible file via IntersectionObserver on file headers
+  // Track visible file via IntersectionObserver on file headers.
+  // Defers DOM query with rAF so Svelte can flush new elements first.
   $effect(() => {
     const container = panelContentEl
-    if (!container || parsedDiff.length === 0) return
-    const headers = container.querySelectorAll('.diff-file-header')
-    if (headers.length === 0) return
+    const diff = parsedDiff // track dependency
+    if (!container || diff.length === 0) { activeFilePath = null; return }
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Find the topmost visible file header
-        let topEntry: IntersectionObserverEntry | null = null
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            if (!topEntry || entry.boundingClientRect.top < topEntry.boundingClientRect.top) {
-              topEntry = entry
+    let observer: IntersectionObserver | null = null
+    const raf = requestAnimationFrame(() => {
+      const headers = container.querySelectorAll('.diff-file-header')
+      if (headers.length === 0) return
+
+      observer = new IntersectionObserver(
+        (entries) => {
+          let topEntry: IntersectionObserverEntry | null = null
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              if (!topEntry || entry.boundingClientRect.top < topEntry.boundingClientRect.top) {
+                topEntry = entry
+              }
             }
           }
-        }
-        if (topEntry) {
-          const fileEl = topEntry.target.closest('[data-file-path]')
-          if (fileEl) activeFilePath = fileEl.getAttribute('data-file-path')
-        }
-      },
-      { root: container, rootMargin: '0px 0px -80% 0px', threshold: 0 }
-    )
+          if (topEntry) {
+            const fileEl = topEntry.target.closest('[data-file-path]')
+            if (fileEl) activeFilePath = fileEl.getAttribute('data-file-path')
+          }
+        },
+        { root: container, rootMargin: '0px 0px -80% 0px', threshold: 0 }
+      )
 
-    headers.forEach(h => observer.observe(h))
-    return () => observer.disconnect()
+      headers.forEach(h => observer!.observe(h))
+    })
+    return () => { cancelAnimationFrame(raf); observer?.disconnect() }
   })
 
   export function rehighlight() {
@@ -666,13 +681,14 @@
           {#if totalStats.del > 0}<span class="stat-del">-{totalStats.del}</span>{/if}
         </span>
       {/if}
-      <div class="file-tabs">
+      <div class="file-tabs" role="navigation" aria-label="Changed files">
         {#each changedFiles as file (file.path)}
           <button
             class="file-tab"
             class:file-tab-active={activeFilePath === file.path}
             onclick={() => scrollToFile(file.path)}
             title={file.path}
+            aria-current={activeFilePath === file.path ? 'true' : undefined}
           >
             {#if file.conflict}
               <span class="file-dot dot-C"></span>
@@ -872,6 +888,11 @@
 
   .divergent-btn:hover {
     background: rgba(235, 100, 100, 0.15);
+  }
+
+  /* Suppress transitions during revision switch to prevent j/k flapping */
+  .panel-content.skip-transitions :global(.collapse-icon) {
+    transition: none !important;
   }
 
   .panel-content {
