@@ -48,6 +48,8 @@
   // --- Local state ---
   let fileSelectIdx: number = $state(0)
   let fileSelectionListEl: HTMLElement | undefined = $state(undefined)
+  let panelContentEl: HTMLElement | undefined = $state(undefined)
+  let activeFilePath: string | null = $state(null)
   let collapsedFiles = new SvelteSet<string>()
   // Persist collapse state per revision so switching back restores it
   let collapseStateCache = new Map<string, Set<string>>()
@@ -468,6 +470,8 @@
     })
   }
 
+  // Enter/Escape are intentionally NOT handled here — they bubble to
+  // App.svelte's global keydown handler which executes/cancels the inline mode.
   function handleFileSelectionKeydown(e: KeyboardEvent) {
     switch (e.key) {
       case 'ArrowDown':
@@ -505,6 +509,36 @@
       fileSelectIdx = 0
       fileSelectionListEl.focus()
     }
+  })
+
+  // Track visible file via IntersectionObserver on file headers
+  $effect(() => {
+    const container = panelContentEl
+    if (!container || parsedDiff.length === 0) return
+    const headers = container.querySelectorAll('.diff-file-header')
+    if (headers.length === 0) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Find the topmost visible file header
+        let topEntry: IntersectionObserverEntry | null = null
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            if (!topEntry || entry.boundingClientRect.top < topEntry.boundingClientRect.top) {
+              topEntry = entry
+            }
+          }
+        }
+        if (topEntry) {
+          const fileEl = topEntry.target.closest('[data-file-path]')
+          if (fileEl) activeFilePath = fileEl.getAttribute('data-file-path')
+        }
+      },
+      { root: container, rootMargin: '0px 0px -80% 0px', threshold: 0 }
+    )
+
+    headers.forEach(h => observer.observe(h))
+    return () => observer.disconnect()
   })
 
   export function rehighlight() {
@@ -636,6 +670,7 @@
         {#each changedFiles as file (file.path)}
           <button
             class="file-tab"
+            class:file-tab-active={activeFilePath === file.path}
             onclick={() => scrollToFile(file.path)}
             title={file.path}
           >
@@ -697,7 +732,7 @@
       <button class="search-close-btn" onclick={closeSearch}>&#10005;</button>
     </div>
   {/if}
-  <div class="panel-content">
+  <div class="panel-content" bind:this={panelContentEl}>
     {#if diffLoading}
       <div class="empty-state">
         <div class="spinner"></div>
@@ -1114,11 +1149,21 @@
     font-size: 11px;
     white-space: nowrap;
     flex-shrink: 0;
+    transition: all var(--anim-duration) var(--anim-ease);
   }
 
   .file-tab:hover {
     color: var(--text);
     background: var(--bg-hover);
+  }
+
+  .file-tab-active {
+    color: var(--text);
+    border-bottom-color: var(--amber);
+  }
+
+  .file-tab-active .file-tab-name {
+    font-weight: 600;
   }
 
   .file-dot {
