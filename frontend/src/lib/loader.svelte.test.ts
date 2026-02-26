@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createLoader } from './loader.svelte'
 
+// Yield to the macrotask queue — lets setTimeout(0) timers fire.
+const macrotask = () => new Promise(r => setTimeout(r, 0))
+
 describe('createLoader', () => {
   it('starts with initial value and not loading', () => {
     const loader = createLoader(async () => 42, 0)
@@ -16,14 +19,31 @@ describe('createLoader', () => {
     expect(loader.loading).toBe(false)
   })
 
-  it('sets loading true during fetch, false after', async () => {
+  it('defers loading = true to next macrotask, clears after fetch', async () => {
     let resolve!: (v: number) => void
     const promise = new Promise<number>(r => { resolve = r })
     const loader = createLoader(() => promise, 0)
     const loadPromise = loader.load()
-    expect(loader.loading).toBe(true)
+    expect(loader.loading).toBe(false) // deferred — not set yet
+    await macrotask()
+    expect(loader.loading).toBe(true)  // timer fired
     resolve(42)
     await loadPromise
+    expect(loader.loading).toBe(false)
+  })
+
+  it('never flips loading for microtask-fast resolves (cache hits)', async () => {
+    // api.ts cache hits return within one microtask (async function with
+    // synchronous return). The loading timer schedules for the next macrotask,
+    // which is AFTER microtasks drain — so it gets cleared before firing.
+    const loader = createLoader(async () => 42, 0) // resolves in one microtask
+    const p = loader.load()
+    expect(loader.loading).toBe(false)
+    await p
+    expect(loader.loading).toBe(false) // never flipped
+    expect(loader.value).toBe(42)
+    // Verify timer was truly cancelled — wait a macrotask, still false
+    await macrotask()
     expect(loader.loading).toBe(false)
   })
 
@@ -79,6 +99,8 @@ describe('createLoader', () => {
 
     const p1 = loader.load()
     loader.load()
+    await macrotask() // let p2's loading timer fire
+    expect(loader.loading).toBe(true)
     resolves[0](111)
     await p1
     expect(loader.loading).toBe(true) // p2 still in flight
@@ -136,6 +158,7 @@ describe('createLoader', () => {
     const loader = createLoader(() => promise, 0)
 
     const p = loader.load()
+    await macrotask()
     expect(loader.loading).toBe(true)
 
     loader.reset()
@@ -145,6 +168,19 @@ describe('createLoader', () => {
     resolve(42)
     expect(await p).toBe(false)
     expect(loader.value).toBe(0) // unchanged — in-flight was superseded by reset
+  })
+
+  it('reset clears pending loading timer', async () => {
+    let resolve!: (v: number) => void
+    const promise = new Promise<number>(r => { resolve = r })
+    const loader = createLoader(() => promise, 0)
+
+    loader.load() // timer scheduled
+    loader.reset() // should clear timer
+    await macrotask()
+    expect(loader.loading).toBe(false) // timer never fired
+
+    resolve(42) // cleanup
   })
 
   it('reset after successful load restores initial', async () => {
