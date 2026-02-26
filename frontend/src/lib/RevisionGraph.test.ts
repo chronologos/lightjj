@@ -72,6 +72,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     splitRevision: '',
     splitParallel: false,
     isDark: true,
+    prByBookmark: new Map(),
     ...overrides,
   }
 }

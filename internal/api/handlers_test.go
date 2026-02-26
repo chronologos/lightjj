@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -1491,4 +1493,94 @@ func TestValidateFlags_EqualsFormat(t *testing.T) {
 	err := validateFlags([]string{"--force=true"}, allowedGitPushFlags)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "flag not allowed: --force=true")
+}
+
+// stubGhPRList replaces execGhPRList for the duration of a test.
+func stubGhPRList(t *testing.T, fn func(ctx context.Context, repoDir string) ([]byte, error)) {
+	t.Helper()
+	original := execGhPRList
+	t.Cleanup(func() { execGhPRList = original })
+	execGhPRList = fn
+}
+
+func TestHandlePullRequests(t *testing.T) {
+	ghJSON := `[{"headRefName":"iant/feature-x","url":"https://github.com/org/repo/pull/123","number":123,"isDraft":false},{"headRefName":"iant/wip","url":"https://github.com/org/repo/pull/42","number":42,"isDraft":true}]`
+	stubGhPRList(t, func(ctx context.Context, repoDir string) ([]byte, error) {
+		return []byte(ghJSON), nil
+	})
+
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.RepoDir = "/tmp/test-repo"
+
+	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var prs []PullRequest
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
+	assert.Len(t, prs, 2)
+	assert.Equal(t, "iant/feature-x", prs[0].Bookmark)
+	assert.Equal(t, 123, prs[0].Number)
+	assert.False(t, prs[0].IsDraft)
+	assert.Equal(t, "iant/wip", prs[1].Bookmark)
+	assert.Equal(t, 42, prs[1].Number)
+	assert.True(t, prs[1].IsDraft)
+}
+
+func TestHandlePullRequests_SSHMode(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner) // RepoDir is "" (SSH mode)
+
+	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var prs []PullRequest
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
+	assert.Empty(t, prs)
+}
+
+func TestHandlePullRequests_GhError(t *testing.T) {
+	stubGhPRList(t, func(ctx context.Context, repoDir string) ([]byte, error) {
+		return nil, fmt.Errorf("gh: not authenticated")
+	})
+
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.RepoDir = "/tmp/test-repo"
+
+	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var prs []PullRequest
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
+	assert.Empty(t, prs)
+}
+
+func TestHandlePullRequests_InvalidJSON(t *testing.T) {
+	stubGhPRList(t, func(ctx context.Context, repoDir string) ([]byte, error) {
+		return []byte("not json"), nil
+	})
+
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.RepoDir = "/tmp/test-repo"
+
+	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var prs []PullRequest
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
+	assert.Empty(t, prs)
 }

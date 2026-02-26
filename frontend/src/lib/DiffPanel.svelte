@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, type LogEntry, type FileChange } from './api'
+  import { api, effectiveId, type LogEntry, type FileChange, type PullRequest } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
@@ -33,6 +33,7 @@
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
     divergentSelected?: boolean
     onresolveDivergence?: () => void
+    prByBookmark: Map<string, PullRequest>
   }
 
   let {
@@ -40,7 +41,7 @@
     diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
     fileSelectionMode, squashSelectedFiles, ontogglefile, splitMode, onresolve,
-    divergentSelected, onresolveDivergence,
+    divergentSelected, onresolveDivergence, prByBookmark,
   }: Props = $props()
 
   // --- Local state ---
@@ -458,7 +459,15 @@
       {#if selectedRevision.bookmarks?.length}
         <div class="detail-bookmarks">
           {#each selectedRevision.bookmarks as bm}
-            <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>{bm}</button>
+            {@const pr = prByBookmark.get(bm)}
+            {#if pr}
+              <a class="detail-bookmark-badge has-pr" class:is-draft={pr.is_draft}
+                 href={pr.url} target="_blank" rel="noopener">
+                {bm}<span class="pr-number">#{pr.number}</span>
+              </a>
+            {:else}
+              <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>{bm}</button>
+            {/if}
           {/each}
         </div>
       {/if}
@@ -790,6 +799,27 @@
     letter-spacing: 0.02em;
     cursor: pointer;
     font-family: inherit;
+  }
+
+  .detail-bookmark-badge.has-pr {
+    text-decoration: none;
+    color: var(--blue, var(--amber));
+    background: rgba(66, 165, 245, 0.08);
+    border-color: rgba(66, 165, 245, 0.25);
+  }
+
+  .detail-bookmark-badge.has-pr:hover {
+    border-color: var(--blue, var(--amber));
+  }
+
+  .detail-bookmark-badge.is-draft {
+    opacity: 0.7;
+  }
+
+  .pr-number {
+    color: var(--overlay0);
+    margin-left: 3px;
+    font-weight: 400;
   }
 
   .describe-saved {

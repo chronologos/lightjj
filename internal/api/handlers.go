@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -754,4 +757,62 @@ func (s *Server) handleRunAlias(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.runMutation(w, r, []string{req.Name})
+}
+
+// --- Pull requests ---
+
+// PullRequest maps a GitHub PR to a bookmark (branch) name.
+type PullRequest struct {
+	Bookmark string `json:"bookmark"`
+	URL      string `json:"url"`
+	Number   int    `json:"number"`
+	IsDraft  bool   `json:"is_draft"`
+}
+
+// execGhPRList runs `gh pr list` and returns the raw JSON output.
+// Package-level var to allow test replacement.
+var execGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+		"--state", "open",
+		"--json", "headRefName,url,number,isDraft",
+		"--limit", "100")
+	cmd.Dir = repoDir
+	return cmd.Output()
+}
+
+func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
+	empty := []PullRequest{}
+
+	if s.RepoDir == "" {
+		s.writeJSON(w, r, http.StatusOK, empty)
+		return
+	}
+
+	out, err := execGhPRList(r.Context(), s.RepoDir)
+	if err != nil {
+		s.writeJSON(w, r, http.StatusOK, empty)
+		return
+	}
+
+	var ghPRs []struct {
+		HeadRefName string `json:"headRefName"`
+		URL         string `json:"url"`
+		Number      int    `json:"number"`
+		IsDraft     bool   `json:"isDraft"`
+	}
+	if err := json.Unmarshal(out, &ghPRs); err != nil {
+		s.writeJSON(w, r, http.StatusOK, empty)
+		return
+	}
+
+	prs := make([]PullRequest, len(ghPRs))
+	for i, gh := range ghPRs {
+		prs[i] = PullRequest{
+			Bookmark: gh.HeadRefName,
+			URL:      gh.URL,
+			Number:   gh.Number,
+			IsDraft:  gh.IsDraft,
+		}
+	}
+	s.writeJSON(w, r, http.StatusOK, prs)
 }

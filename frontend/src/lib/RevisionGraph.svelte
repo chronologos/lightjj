@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { effectiveId, type LogEntry } from './api'
+  import { effectiveId, type LogEntry, type PullRequest } from './api'
   import GraphSvg from './GraphSvg.svelte'
 
   interface Props {
@@ -36,6 +36,7 @@
     splitRevision: string
     splitParallel: boolean
     isDark: boolean
+    prByBookmark: Map<string, PullRequest>
   }
 
   let {
@@ -46,7 +47,7 @@
     rebaseMode, rebaseSources, rebaseSourceMode, rebaseTargetMode,
     squashMode, squashSources, squashKeepEmptied, squashUseDestMsg,
     splitMode, splitRevision, splitParallel,
-    isDark,
+    isDark, prByBookmark,
   }: Props = $props()
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
@@ -335,7 +336,16 @@
                   <span class="workspace-badge">{ws}@</span>
                 {/each}
                 {#each entry.bookmarks ?? [] as bm}
-                  <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>{bm}</button>
+                  {@const pr = prByBookmark.get(bm)}
+                  {#if pr}
+                    <a class="bookmark-badge has-pr" class:is-draft={pr.is_draft}
+                       href={pr.url} target="_blank" rel="noopener"
+                       onclick={(e: MouseEvent) => e.stopPropagation()}>
+                      {bm}<span class="pr-number">#{pr.number}</span>
+                    </a>
+                  {:else}
+                    <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>{bm}</button>
+                  {/if}
                 {/each}
               </span>
             {:else if line.isDescLine}
@@ -728,6 +738,27 @@
   .bookmark-badge:hover {
     border-color: var(--green);
     filter: brightness(1.2);
+  }
+
+  .bookmark-badge.has-pr {
+    text-decoration: none;
+    color: var(--blue, var(--amber));
+    background: rgba(66, 165, 245, 0.08);
+    border-color: rgba(66, 165, 245, 0.25);
+  }
+
+  .bookmark-badge.has-pr:hover {
+    border-color: var(--blue, var(--amber));
+  }
+
+  .bookmark-badge.is-draft {
+    opacity: 0.7;
+  }
+
+  .pr-number {
+    color: var(--overlay0);
+    margin-left: 3px;
+    font-weight: 400;
   }
 
   .workspace-badge {
