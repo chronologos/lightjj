@@ -73,6 +73,11 @@
     effectiveSplit ? [] : file.hunks.map(h => computeLineNumbers(h))
   )
 
+  // Memoize hunk header parsing — only re-runs when file.hunks changes
+  let parsedHunkHeaders = $derived(
+    file.hunks.map(h => parseHunkHeader(h.header))
+  )
+
   interface ConflictLineMeta {
     cssClass: string
     isRegionStart?: boolean
@@ -106,13 +111,14 @@
   // Inside conflict-diff-line, the second character (+/-) indicates the change direction.
   function conflictInnerType(meta: ConflictLineMeta | undefined, content: string): 'remove' | 'add' | 'context' | null {
     if (!meta || meta.cssClass !== 'conflict-diff-line') return null
-    if (content.length > 1 && content[1] === '-') return 'remove'
-    if (content.length > 1 && content[1] === '+') return 'add'
+    const ch = content[1]
+    if (ch === '-') return 'remove'
+    if (ch === '+') return 'add'
     return 'context'
   }
 
   // Extract display content — strips prefix character(s) from line content
-  function getDisplayContent(isMarker: boolean, innerType: string | null, inConflict: boolean, content: string): string {
+  function getDisplayContent(isMarker: boolean, innerType: string | null, content: string): string {
     if (isMarker) return ''
     if (innerType) return content.slice(2) // strip outer `+` and inner `-`/`+`
     // All lines: strip the first character (diff format prefix +/-/space)
@@ -158,6 +164,7 @@
   let conflictData = $derived.by(() => {
     if (!isConflict) return null
     const lineMeta = new Map<number, Map<number, ConflictLineMeta>>()
+    const allRegionEnds: ConflictLineMeta[] = []
     let totalConflicts = 0
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
       const regions = findConflicts(file.hunks[hunkIdx].lines)
@@ -168,10 +175,12 @@
         const region = regions[regionIdx]
         const sideLabels = region.sides.map(s => s.label || (s.type === 'diff' ? 'changes' : 'content'))
         metaMap.set(region.startIdx, { cssClass: 'conflict-boundary', isRegionStart: true, regionLabel: region.label, regionIdx })
-        metaMap.set(region.endIdx, {
+        const endMeta: ConflictLineMeta = {
           cssClass: 'conflict-boundary', isRegionEnd: true,
           sideCount: region.sides.length, sideLabels, regionLabel: region.label, regionIdx,
-        })
+        }
+        metaMap.set(region.endIdx, endMeta)
+        allRegionEnds.push(endMeta)
         for (let sideIdx = 0; sideIdx < region.sides.length; sideIdx++) {
           const side = region.sides[sideIdx]
           const isDiff = side.type === 'diff'
@@ -193,7 +202,9 @@
       }
       lineMeta.set(hunkIdx, metaMap)
     }
-    return { lineMeta, totalConflicts }
+    // allRegionEnds collected during the loop above for file-level resolve button visibility
+    const allTwoWay = allRegionEnds.length > 0 && allRegionEnds.every(m => m.sideCount === 2)
+    return { lineMeta, totalConflicts, allRegionEnds, allTwoWay }
   })
 </script>
 
@@ -203,7 +214,7 @@
   {@const inConflict = !!conflictMeta}
   {@const isMarker = inConflict && (conflictMeta.cssClass === 'conflict-boundary' || conflictMeta.cssClass.endsWith('-marker'))}
   {@const innerType = conflictInnerType(conflictMeta, line.content)}
-  {@const displayContent = getDisplayContent(isMarker, innerType, inConflict, line.content)}
+  {@const displayContent = getDisplayContent(isMarker, innerType, line.content)}
   {@const displayPrefix = getDisplayPrefix(isMarker, innerType, inConflict, line.content)}
   {#if isMarker}
     <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
@@ -255,9 +266,11 @@
     onclick={() => ontoggle(filePath)}
     role="button"
     tabindex="0"
+    aria-expanded={!isCollapsed}
+    aria-label="{isCollapsed ? 'Expand' : 'Collapse'} {filePath}"
     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ontoggle(filePath) }}}
   >
-    <span class="collapse-icon" class:is-collapsed={isCollapsed}><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1L6 4L2 7z"/></svg></span>
+    <span class="collapse-icon" class:is-collapsed={isCollapsed} aria-hidden="true"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1L6 4L2 7z"/></svg></span>
     {#if fileStats}
       <span class="file-type-badge" class:badge-A={fileStats.type === 'A'} class:badge-M={fileStats.type === 'M'} class:badge-D={fileStats.type === 'D'} class:badge-R={fileStats.type === 'R'}>{fileStats.type}</span>
     {/if}
@@ -275,18 +288,22 @@
       </span>
     {/if}
     {#if isConflict && conflictData && conflictData.totalConflicts > 0}
-      {@const allRegionEnds = [...(conflictData.lineMeta.values())].flatMap(m => [...m.values()]).filter(m => m.isRegionEnd)}
-      {@const allTwoWay = allRegionEnds.length > 0 && allRegionEnds.every(m => m.sideCount === 2)}
       <span class="conflict-indicator">{conflictData.totalConflicts} conflict{conflictData.totalConflicts !== 1 ? 's' : ''}</span>
-      {#if onresolve && allTwoWay}
+      {#if onresolve && conflictData.allTwoWay}
         <button class="resolve-btn resolve-ours"
           onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
           onmouseenter={() => hoveredResolve = { regionIdx: -1, side: 0 }}
-          onmouseleave={() => hoveredResolve = null}>Keep {allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}</button>
+          onfocus={() => hoveredResolve = { regionIdx: -1, side: 0 }}
+          onmouseleave={() => hoveredResolve = null}
+          onblur={() => hoveredResolve = null}
+          aria-description="Discards {conflictData.allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}">Keep {conflictData.allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}</button>
         <button class="resolve-btn resolve-theirs"
           onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
           onmouseenter={() => hoveredResolve = { regionIdx: -1, side: 1 }}
-          onmouseleave={() => hoveredResolve = null}>Keep {allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}</button>
+          onfocus={() => hoveredResolve = { regionIdx: -1, side: 1 }}
+          onmouseleave={() => hoveredResolve = null}
+          onblur={() => hoveredResolve = null}
+          aria-description="Discards {conflictData.allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}">Keep {conflictData.allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}</button>
       {/if}
     {/if}
   </div>
@@ -294,8 +311,8 @@
     {#if effectiveSplit}
       <!-- Split (side-by-side) view -->
       {#if !isExpanded && file.hunks.length > 1}
-        <button class="expand-btn" onclick={() => onexpand(filePath)}>
-          <span class="expand-dots">···</span>
+        <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show full context for {filePath}">
+          <span class="expand-dots" aria-hidden="true">···</span>
           <span class="expand-label">full context</span>
         </button>
       {/if}
@@ -335,8 +352,8 @@
         {@const wordDiffs = wordDiffMap.get(`${filePath}:${hunkIdx}`) ?? new Map()}
         {#if !isExpanded}
           {#if hunkIdx === 0 && hunk.newStart > 1}
-            <button class="expand-btn" onclick={() => onexpand(filePath)}>
-              <span class="expand-dots">···</span>
+            <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show {hunk.newStart - 1} hidden lines above">
+              <span class="expand-dots" aria-hidden="true">···</span>
               <span class="expand-label">{hunk.newStart - 1} lines</span>
             </button>
           {/if}
@@ -344,13 +361,13 @@
             {@const prev = file.hunks[hunkIdx - 1]}
             {@const gap = hunk.newStart - (prev.newStart + prev.newCount)}
             {#if gap > 0}
-              <button class="expand-btn" onclick={() => onexpand(filePath)}>
-                <span class="expand-dots">···</span>
+              <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show {gap} hidden lines">
+                <span class="expand-dots" aria-hidden="true">···</span>
                 <span class="expand-label">{gap} lines</span>
               </button>
             {/if}
           {/if}
-          {@const parsed = parseHunkHeader(hunk.header)}
+          {@const parsed = parsedHunkHeaders[hunkIdx]}
           <div class="diff-hunk-header">
             <span class="hunk-range">{parsed.range}</span>
             {#if parsed.context}<span class="hunk-context">{parsed.context}</span>{/if}
@@ -378,10 +395,16 @@
                   <div class="conflict-resolve-inline" onmouseleave={() => hoveredResolve = null}>
                     <button class="resolve-btn-inline resolve-inline-ours"
                       onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
-                      onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}>Keep {cm.sideLabels?.[0] ?? 'side 1'}</button>
+                      onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}
+                      onfocus={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}
+                      onblur={() => hoveredResolve = null}
+                      aria-description="Discards {cm.sideLabels?.[1] ?? 'side 2'}">Keep {cm.sideLabels?.[0] ?? 'side 1'}</button>
                     <button class="resolve-btn-inline resolve-inline-theirs"
                       onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
-                      onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}>Keep {cm.sideLabels?.[1] ?? 'side 2'}</button>
+                      onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}
+                      onfocus={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}
+                      onblur={() => hoveredResolve = null}
+                      aria-description="Discards {cm.sideLabels?.[0] ?? 'side 1'}">Keep {cm.sideLabels?.[1] ?? 'side 2'}</button>
                   </div>
                 {/if}
                 {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx, cm)}
@@ -520,7 +543,8 @@
     font-size: 11px;
     cursor: pointer;
     text-align: center;
-    transition: all var(--anim-duration) var(--anim-ease);
+    transition: background var(--anim-duration) var(--anim-ease),
+                color var(--anim-duration) var(--anim-ease);
   }
 
   .expand-dots {
@@ -690,7 +714,7 @@
     font-family: inherit;
     font-size: 10px;
     flex-shrink: 0;
-    transition: all 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
 
   .resolve-btn:hover {
@@ -793,7 +817,7 @@
   .conflict-snap-line :global(.diff-line) {
     background: var(--conflict-side2-bg);
     border-left-color: var(--conflict-side2-border);
-    opacity: 0.6;
+    opacity: 0.7;
   }
 
   /* --- Inline side labels (right-aligned on marker lines) --- */
@@ -813,24 +837,45 @@
     padding: 0 6px;
     border-radius: 3px;
     z-index: 1;
-    z-index: 1;
   }
 
   /* --- Per-region resolve buttons (on >>>>>>> line) --- */
-  /* Hover preview: strikethrough on discarded side, subtle accent on kept side */
-  .conflict-side-kept {
-    border-left-color: var(--amber);
+  /* Hover preview: strikethrough overlay on discarded side, amber accent on kept side */
+
+  /* Transition on kept/discarded so both discard and un-discard animate smoothly */
+  .conflict-side-kept :global(.diff-line),
+  .conflict-side-discarded :global(.diff-line) {
+    transition: opacity var(--anim-duration) var(--anim-ease);
   }
 
   .conflict-side-kept :global(.diff-line) {
     border-left-color: var(--amber);
   }
 
+  /* Preserve inner-diff red/green borders over the amber kept highlight */
+  .conflict-side-kept :global(.conflict-inner-remove) {
+    border-left-color: var(--red);
+  }
+
+  .conflict-side-kept :global(.conflict-inner-add) {
+    border-left-color: var(--green);
+  }
+
+  /* Strikethrough via ::after pseudo-element — avoids layout reflow from text-decoration */
   .conflict-side-discarded :global(.diff-line) {
-    text-decoration: line-through;
-    text-decoration-color: var(--surface2);
-    opacity: 0.45;
-    transition: opacity var(--anim-duration) var(--anim-ease);
+    position: relative;
+    opacity: 0.4;
+  }
+
+  .conflict-side-discarded :global(.diff-line)::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--surface2);
+    pointer-events: none;
   }
 
   .conflict-resolve-inline {
@@ -853,7 +898,7 @@
     font-family: inherit;
     font-size: 9px;
     font-weight: 600;
-    transition: all 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
 
   .resolve-inline-ours:hover {

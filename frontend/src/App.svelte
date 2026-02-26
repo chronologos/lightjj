@@ -98,6 +98,7 @@
 
   // --- Theme ---
   let darkMode = $derived(config.theme === 'dark')
+  const cmdKey = typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'
 
   function toggleTheme() {
     config.theme = darkMode ? 'light' : 'dark'
@@ -1070,6 +1071,35 @@
             {/if}
           </div>
         {/if}
+        <span class="toolbar-divider"></span>
+        <nav class="toolbar-nav">
+          <button
+            class="toolbar-nav-btn"
+            class:toolbar-nav-active={activeView === 'log'}
+            onclick={() => { if (!inlineMode) activeView = 'log' }}
+            disabled={inlineMode}
+            title="Revisions (1)"
+          >◉ Revisions</button>
+          <button
+            class="toolbar-nav-btn"
+            class:toolbar-nav-active={activeView === 'branches'}
+            onclick={() => { if (!inlineMode) activeView = 'branches' }}
+            disabled={inlineMode}
+            title="Branches (2)"
+          >⑂ Branches</button>
+          <button
+            class="toolbar-nav-btn"
+            class:toolbar-nav-active={activeView === 'operations'}
+            onclick={() => { if (!inlineMode) { activeView = 'operations'; loadOplog() } }}
+            disabled={inlineMode}
+            title="Operations (3)"
+          >⟲ Operations</button>
+        </nav>
+        <span class="toolbar-divider"></span>
+        <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">
+          <span class="toolbar-search-text">Search…</span>
+          <kbd class="toolbar-search-kbd">{cmdKey}K</kbd>
+        </button>
       </div>
       <div class="toolbar-right">
         <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleUndo() }} disabled={inlineMode} title="Undo (u)">
@@ -1443,6 +1473,62 @@
     border: none;
     font-size: 13px;
     padding: 3px 6px;
+  }
+
+  .toolbar-nav {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+  }
+
+  .toolbar-nav-btn {
+    padding: 3px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--subtext0);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+
+  .toolbar-nav-btn:hover:not(.toolbar-nav-active) {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .toolbar-nav-active {
+    color: var(--amber);
+    font-weight: 600;
+  }
+
+  .toolbar-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: var(--surface0);
+    border: none;
+    border-radius: 4px;
+    color: var(--surface2);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .toolbar-search:hover {
+    color: var(--subtext0);
+  }
+
+  .toolbar-search-kbd {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--surface2);
+    background: none;
+    border: 1px solid var(--surface1);
+    padding: 0 4px;
+    border-radius: 3px;
   }
 
   /* --- Error bar --- */

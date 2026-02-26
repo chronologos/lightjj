@@ -27,29 +27,44 @@ export function createLoader<T, A extends unknown[]>(
   let value = $state<T>(initial)
   let loading = $state(false)
   let generation = 0
+  let loadingTimer: ReturnType<typeof setTimeout> | undefined
 
   async function load(...args: A): Promise<boolean> {
     const gen = ++generation
-    loading = true
+    // Defer loading = true to the next macrotask. Cache hits resolve within
+    // the microtask queue, so this timer gets cleared before firing — meaning
+    // cached loads never flip the loading flag and trigger zero reactive
+    // updates. This is critical for fast j/k navigation through cached
+    // revisions; without it, every keypress cascades through statusText and
+    // DiffPanel prop updates.
+    clearTimeout(loadingTimer)
+    loadingTimer = setTimeout(() => {
+      if (gen === generation) loading = true
+    }, 0)
     try {
       const result = await fetch(...args)
       if (gen !== generation) return false
+      clearTimeout(loadingTimer)
       // Reference-equality guard: skip assignment on cache hits returning
       // the same value, so downstream $derived chains don't re-run.
       if (value !== result) value = result
       return true
     } catch (e) {
       if (gen !== generation) return false
+      clearTimeout(loadingTimer)
       value = initial
       onError?.(e)
       return false
     } finally {
+      // No-op if loading was never set true (Svelte $state assignment of
+      // the same value doesn't trigger reactivity).
       if (gen === generation) loading = false
     }
   }
 
   function reset() {
     generation++
+    clearTimeout(loadingTimer)
     value = initial
     loading = false
   }
