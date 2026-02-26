@@ -145,40 +145,55 @@
   })
 </script>
 
-{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number)}
+{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number, conflictMeta?: ConflictLineMeta)}
   {@const searchKey = hunkIdx !== undefined && lineIdx !== undefined ? `${hunkIdx}:${lineIdx}` : ''}
   {@const lm = searchKey ? lineMatchMap.get(searchKey) : undefined}
-  {#if lm && lm.length > 0}
+  {@const inConflict = !!conflictMeta}
+  {@const isMarker = inConflict && (conflictMeta.cssClass === 'conflict-boundary' || conflictMeta.cssClass === 'conflict-diff-marker' || conflictMeta.cssClass === 'conflict-snap-marker')}
+  {@const innerType = inConflict && conflictMeta.cssClass === 'conflict-diff-line' ? (line.content.length > 1 && line.content[1] === '-' ? 'remove' : line.content.length > 1 && line.content[1] === '+' ? 'add' : 'context') : null}
+  {@const displayContent = isMarker ? '' : innerType ? line.content.slice(2) : inConflict ? line.content.slice(1) : line.content}
+  {@const displayPrefix = isMarker ? '' : innerType === 'remove' ? '-' : innerType === 'add' ? '+' : inConflict ? ' ' : line.content[0]}
+  {#if isMarker}
+    <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
+  {:else if lm && lm.length > 0}
     {@const hasCurrent = lm.some(m => m.isCurrent)}
     <div
       class="diff-line"
-      class:diff-add={line.type === 'add'}
-      class:diff-remove={line.type === 'remove'}
-      class:diff-context={line.type === 'context'}
+      class:diff-add={!inConflict && line.type === 'add'}
+      class:diff-remove={!inConflict && line.type === 'remove'}
+      class:diff-context={!inConflict && line.type === 'context'}
+      class:conflict-inner-add={innerType === 'add'}
+      class:conflict-inner-remove={innerType === 'remove'}
       data-search-match-current={hasCurrent ? 'true' : undefined}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{line.content[0]}</span>{@html highlightSearchInText(line.content.slice(1), lm)}</div>
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm)}</div>
   {:else if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
-      class:diff-add={line.type === 'add'}
-      class:diff-remove={line.type === 'remove'}
-      class:diff-context={line.type === 'context'}
+      class:diff-add={!inConflict && line.type === 'add'}
+      class:diff-remove={!inConflict && line.type === 'remove'}
+      class:diff-context={!inConflict && line.type === 'context'}
+      class:conflict-inner-add={innerType === 'add'}
+      class:conflict-inner-remove={innerType === 'remove'}
     >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
       class="diff-line"
-      class:diff-add={line.type === 'add'}
-      class:diff-remove={line.type === 'remove'}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{line.content[0]}</span>{#each spans as span}{#if span.changed}<span
+      class:diff-add={!inConflict && line.type === 'add'}
+      class:diff-remove={!inConflict && line.type === 'remove'}
+      class:conflict-inner-add={innerType === 'add'}
+      class:conflict-inner-remove={innerType === 'remove'}
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{#each spans as span}{#if span.changed}<span
           class="word-change"
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
   {:else}
     <div
       class="diff-line"
-      class:diff-add={line.type === 'add'}
-      class:diff-remove={line.type === 'remove'}
-      class:diff-context={line.type === 'context'}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{line.content}</div>
+      class:diff-add={!inConflict && line.type === 'add'}
+      class:diff-remove={!inConflict && line.type === 'remove'}
+      class:diff-context={!inConflict && line.type === 'context'}
+      class:conflict-inner-add={innerType === 'add'}
+      class:conflict-inner-remove={innerType === 'remove'}
+    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{displayContent}</div>
   {/if}
 {/snippet}
 
@@ -231,7 +246,8 @@
             {:else if sl.left}
               {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.left.hunkIdx}`)?.get(sl.left.lineIdx)}
-              {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft], sl.left.hunkIdx, sl.left.lineIdx)}
+              {@const slCm = conflictData?.lineMeta.get(sl.left.hunkIdx)?.get(sl.left.lineIdx)}
+              {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft], sl.left.hunkIdx, sl.left.lineIdx, slCm)}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
@@ -244,7 +260,8 @@
             {:else if sl.right}
               {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
               {@const spans = wordDiffMap.get(`${filePath}:${sl.right.hunkIdx}`)?.get(sl.right.lineIdx)}
-              {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight], sl.right.hunkIdx, sl.right.lineIdx)}
+              {@const srCm = conflictData?.lineMeta.get(sl.right.hunkIdx)?.get(sl.right.lineIdx)}
+              {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight], sl.right.hunkIdx, sl.right.lineIdx, srCm)}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
@@ -294,7 +311,7 @@
                     <button class="resolve-btn-inline resolve-inline-theirs" onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}>Accept Theirs</button>
                   </div>
                 {/if}
-                {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
+                {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx, cm)}
               </div>
             {:else}
               {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
@@ -594,54 +611,64 @@
     margin-bottom: 8px;
   }
 
-  /* Boundary lines (<<<<<<< / >>>>>>>) — visual chrome, de-emphasized */
-  .conflict-boundary :global(.diff-line) {
-    background: var(--conflict-boundary-bg);
-    color: var(--conflict-boundary-color);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.3px;
-    line-height: 2;
-    opacity: 0.7;
+  /* Marker lines (<<<<<<< / %%%%%%% / ++++++++ / >>>>>>>) — hidden content, minimal height */
+  .conflict-marker-line {
+    height: 2px;
+    font-size: 0;
+    overflow: hidden;
+    background: transparent;
   }
 
-  /* Side 1: diff (changes) — peach */
+  /* Boundary lines (<<<<<<< / >>>>>>>) — just the top/bottom bar */
+  .conflict-boundary :global(.conflict-marker-line) {
+    height: 2px;
+    background: var(--conflict-boundary-border);
+  }
+
+  /* Side 1: diff (changes from base) */
   .conflict-diff-marker,
   .conflict-diff-line {
     --conflict-side-color: var(--conflict-side1-border);
   }
 
+  /* Side marker: thin colored bar with side label */
+  .conflict-diff-marker :global(.conflict-marker-line) {
+    height: 2px;
+    background: var(--conflict-side1-border);
+  }
+
   .conflict-diff-line :global(.diff-line) {
     background: var(--conflict-side1-bg);
+    border-left-color: var(--conflict-side1-border);
   }
 
-  .conflict-diff-marker :global(.diff-line) {
-    background: var(--conflict-side1-marker-bg);
-    color: var(--conflict-marker-color);
-    font-size: 10px;
-    font-weight: 400;
-    letter-spacing: 0.3px;
-    line-height: 2;
-    opacity: 0.6;
+  /* Inner diff within %%%%%%% sections: red for removals, green for additions */
+  .conflict-diff-line :global(.conflict-inner-remove) {
+    background: var(--diff-remove-bg);
+    color: var(--red);
+    border-left: 3px solid var(--red);
   }
 
-  /* Side 2: snapshot (content) — mauve */
+  .conflict-diff-line :global(.conflict-inner-add) {
+    background: var(--diff-add-bg);
+    color: var(--green);
+    border-left: 3px solid var(--green);
+  }
+
+  /* Side 2: snapshot (full content) */
   .conflict-snap-marker,
   .conflict-snap-line {
     --conflict-side-color: var(--conflict-side2-border);
   }
 
-  .conflict-snap-line :global(.diff-line) {
-    background: var(--conflict-side2-bg);
+  .conflict-snap-marker :global(.conflict-marker-line) {
+    height: 2px;
+    background: var(--conflict-side2-border);
   }
 
-  .conflict-snap-marker :global(.diff-line) {
-    background: var(--conflict-side2-marker-bg);
-    color: var(--conflict-marker-color);
-    font-size: 10px;
-    font-weight: 400;
-    letter-spacing: 0.3px;
-    line-height: 2;
+  .conflict-snap-line :global(.diff-line) {
+    background: var(--conflict-side2-bg);
+    border-left-color: var(--conflict-side2-border);
     opacity: 0.6;
   }
 

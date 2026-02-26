@@ -15,15 +15,12 @@
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import DivergencePanel from './lib/DivergencePanel.svelte'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
+  import { createLoader } from './lib/loader.svelte'
   import { config } from './lib/config.svelte'
 
   // --- Global state ---
-  let revisions: LogEntry[] = $state([])
   let selectedIndex: number = $state(-1)
-  let diffContent: string = $state('')
   let error: string = $state('')
-  let loading: boolean = $state(true)
-  let diffLoading: boolean = $state(false)
   let lastAction: string = $state('')
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
@@ -32,28 +29,44 @@
   let revsetFilter: string = $state('')
   let viewMode: 'log' | 'tracked' = $state('log')
   const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
-  let changedFiles: FileChange[] = $state([])
-  let filesLoading: boolean = $state(false)
   let describeSaved: boolean = $state(false)
-  let fullDescription: string = $state('')
   let splitView: boolean = $state(false)
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
-  // Non-reactive generation counters for async cancellation
-  let logGeneration: number = 0
-  let diffGeneration: number = 0
-  let filesGeneration: number = 0
-  let descGeneration: number = 0
-  let evologGeneration: number = 0
-  let oplogGeneration: number = 0
-  // Debounce timer for diff/files loading during rapid j/k navigation
   let navDebounceTimer: number | undefined
   let evologOpen: boolean = $state(false)
-  let evologContent: string = $state('')
-  let evologLoading: boolean = $state(false)
   let oplogOpen: boolean = $state(false)
-  let oplogEntries: OpEntry[] = $state([])
-  let oplogLoading: boolean = $state(false)
+
+  // --- Error helpers (defined early — loaders need showError) ---
+  function showError(e: unknown) {
+    error = e instanceof Error ? e.message : String(e)
+  }
+  function dismissError() {
+    error = ''
+  }
+
+  // --- Data loaders ---
+  // Each loader owns its value, loading flag, and race-condition-safe generation
+  // counter. See loader.svelte.ts for semantics. Aliases below preserve existing
+  // names for backward-compatible reads throughout the component + templates.
+  const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
+  const diff = createLoader((id: string) => api.diff(id).then(r => r.diff), '', showError)
+  const files = createLoader((id: string) => api.files(id), [] as FileChange[], showError)
+  const description = createLoader((id: string) => api.description(id).then(r => r.description), '')
+  const oplog = createLoader(() => api.oplog(50), [] as OpEntry[], showError)
+  const evolog = createLoader((id: string) => api.evolog(id).then(r => r.output), '', showError)
+
+  let revisions = $derived(log.value)
+  let loading = $derived(log.loading)
+  let diffContent = $derived(diff.value)
+  let diffLoading = $derived(diff.loading)
+  let changedFiles = $derived(files.value)
+  let filesLoading = $derived(files.loading)
+  let fullDescription = $derived(description.value)
+  let oplogEntries = $derived(oplog.value)
+  let oplogLoading = $derived(oplog.loading)
+  let evologContent = $derived(evolog.value)
+  let evologLoading = $derived(evolog.loading)
 
   let paletteOpen: boolean = $state(false)
   let bookmarkModalOpen: boolean = $state(false)
@@ -160,16 +173,7 @@
   function clearChecksAndReload() {
     clearChecks()
     if (selectedRevision) loadDiffAndFiles(effectiveId(selectedRevision.commit))
-    else { diffContent = ''; changedFiles = [] }
-  }
-
-  // --- Error helper ---
-  function showError(e: unknown) {
-    error = e instanceof Error ? e.message : String(e)
-  }
-
-  function dismissError() {
-    error = ''
+    else { diff.reset(); files.reset() }
   }
 
   // After mutations that re-render the DOM, focus can land on the revset input,
@@ -288,92 +292,43 @@
   }
 
   async function loadLog(resetSelection = false) {
-    const gen = ++logGeneration
-    if (revisions.length === 0) loading = true
     error = ''
-    try {
-      const effectiveRevset = revsetFilter || (viewMode === 'tracked' ? TRACKED_REVSET : undefined)
-      const result = await api.log(effectiveRevset)
-      if (gen !== logGeneration) return
-      revisions = result
-      if (resetSelection || selectedIndex < 0 || selectedIndex >= revisions.length) {
-        selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
+    const revset = revsetFilter || (viewMode === 'tracked' ? TRACKED_REVSET : undefined)
+    const ok = await log.load(revset)
+    blurActiveInput()
+    if (!ok) return // superseded or errored — don't post-process stale state
+
+    if (resetSelection || selectedIndex < 0 || selectedIndex >= revisions.length) {
+      selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
+    }
+    if (checkedRevisions.size > 0) {
+      const validIds = new Set(revisions.map(r => effectiveId(r.commit)))
+      for (const id of [...checkedRevisions]) {
+        if (!validIds.has(id)) checkedRevisions.delete(id)
       }
-      if (checkedRevisions.size > 0) {
-        const validIds = new Set(revisions.map(r => effectiveId(r.commit)))
-        for (const id of [...checkedRevisions]) {
-          if (!validIds.has(id)) checkedRevisions.delete(id)
-        }
-      }
-      lastCheckedIndex = -1
-      if (selectedIndex >= 0 && checkedRevisions.size === 0) {
-        loadDiffAndFiles(effectiveId(revisions[selectedIndex].commit))
-      }
-      // Refresh open panels — oplog always reflects new operations,
-      // evolog may change if the selected revision was modified
-      if (oplogOpen || activeView === 'operations') loadOplog()
-      if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
-        loadEvolog(effectiveId(revisions[selectedIndex].commit))
-      }
-    } catch (e) {
-      if (gen !== logGeneration) return
-      showError(e)
-    } finally {
-      if (gen === logGeneration) {
-        loading = false
-        blurActiveInput()
-      }
+    }
+    lastCheckedIndex = -1
+    if (selectedIndex >= 0 && checkedRevisions.size === 0) {
+      loadDiffAndFiles(effectiveId(revisions[selectedIndex].commit))
+    }
+    // Refresh open panels — oplog always reflects new operations,
+    // evolog may change if the selected revision was modified
+    if (oplogOpen || activeView === 'operations') oplog.load()
+    if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
+      evolog.load(effectiveId(revisions[selectedIndex].commit))
     }
   }
 
-  async function loadDiffForRevset(revset: string, file?: string) {
-    const gen = ++diffGeneration
-    if (!isCached(revset)) diffLoading = true
-    try {
-      const result = await api.diff(revset, file)
-      if (gen !== diffGeneration) return
-      if (diffContent !== result.diff) diffContent = result.diff
-    } catch (e) {
-      if (gen !== diffGeneration) return
-      diffContent = ''
-      showError(e)
-    } finally {
-      if (gen === diffGeneration) diffLoading = false
-    }
-  }
-
-  async function loadFilesForRevset(revset: string) {
-    const gen = ++filesGeneration
-    if (!isCached(revset)) filesLoading = true
-    try {
-      const result = await api.files(revset)
-      if (gen !== filesGeneration) return
-      if (changedFiles !== result) changedFiles = result
-    } catch (e) {
-      if (gen !== filesGeneration) return
-      changedFiles = []
-      showError(e)
-    } finally {
-      if (gen === filesGeneration) filesLoading = false
-    }
-  }
-
-  async function loadDescription(changeId: string) {
-    const gen = ++descGeneration
-    try {
-      const result = await api.description(changeId)
-      if (gen !== descGeneration) return
-      fullDescription = result.description
-    } catch {
-      if (gen !== descGeneration) return
-      fullDescription = ''
-    }
-  }
+  // Thin aliases — preserve existing call-site names across the component.
+  const loadDiffForRevset = diff.load
+  const loadFilesForRevset = files.load
+  const loadOplog = oplog.load
+  const loadEvolog = evolog.load
 
   function loadDiffAndFiles(changeId: string) {
-    loadDiffForRevset(changeId)
-    loadFilesForRevset(changeId)
-    loadDescription(changeId)
+    diff.load(changeId)
+    files.load(changeId)
+    description.load(changeId)
   }
 
   // Move cursor without loading diff/files — used in squash mode where
@@ -505,7 +460,7 @@
       const result = await api.describe(eid, descriptionDraft)
       lastAction = `Updated description for ${eid.slice(0, 8)}`
       commandOutput = result.output
-      fullDescription = descriptionDraft
+      description.set(descriptionDraft)
       descriptionEditing = false
       describeSaved = true
       setTimeout(() => { describeSaved = false }, 1500)
@@ -791,46 +746,13 @@
 
   async function toggleOplog() {
     oplogOpen = !oplogOpen
-    if (oplogOpen) {
-      await loadOplog()
-    }
-  }
-
-  async function loadOplog() {
-    const gen = ++oplogGeneration
-    oplogLoading = true
-    try {
-      const result = await api.oplog(50)
-      if (gen !== oplogGeneration) return
-      oplogEntries = result
-    } catch (e) {
-      if (gen !== oplogGeneration) return
-      showError(e)
-    } finally {
-      if (gen === oplogGeneration) oplogLoading = false
-    }
+    if (oplogOpen) await oplog.load()
   }
 
   async function toggleEvolog() {
     evologOpen = !evologOpen
     if (evologOpen && selectedRevision) {
-      await loadEvolog(effectiveId(selectedRevision.commit))
-    }
-  }
-
-  async function loadEvolog(changeId: string) {
-    const gen = ++evologGeneration
-    evologLoading = true
-    try {
-      const result = await api.evolog(changeId)
-      if (gen !== evologGeneration) return
-      evologContent = result.output
-    } catch (e) {
-      if (gen !== evologGeneration) return
-      evologContent = ''
-      showError(e)
-    } finally {
-      if (gen === evologGeneration) evologLoading = false
+      await evolog.load(effectiveId(selectedRevision.commit))
     }
   }
 
