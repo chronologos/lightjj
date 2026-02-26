@@ -25,7 +25,11 @@ export function recentActions(namespace: string) {
       entries.sort((a, b) => b[1] - a[1])
       data = Object.fromEntries(entries.slice(0, MAX_ENTRIES))
     }
-    localStorage.setItem(storageKey, JSON.stringify(data))
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(data))
+    } catch {
+      // localStorage may be unavailable (private mode, quota, test env)
+    }
   }
 
   return {
@@ -40,7 +44,7 @@ export function recentActions(namespace: string) {
     },
 
     clear() {
-      localStorage.removeItem(storageKey)
+      try { localStorage.removeItem(storageKey) } catch {}
     },
   }
 }

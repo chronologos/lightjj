@@ -25,7 +25,7 @@ lightjj is a browser-based UI for the Jujutsu (jj) version control system. It fo
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
 │  │  │  API Handlers (internal/api/)                         │  │ │
 │  │  │  GET  /api/log, /api/diff, /api/diff-range,            │  │ │
-│  │  │       /api/files, /api/status, /api/bookmarks,        │  │ │
+│  │  │       /api/files, /api/bookmarks,                      │  │ │
 │  │  │       /api/description, /api/remotes,                  │  │ │
 │  │  │       /api/oplog, /api/evolog, /api/workspaces        │  │ │
 │  │  │  POST /api/new, /api/edit, /api/abandon, /api/undo   │  │ │

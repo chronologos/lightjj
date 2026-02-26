@@ -3,6 +3,21 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import RevisionGraph from './RevisionGraph.svelte'
 import type { LogEntry } from './api'
+import { createRebaseMode, createSquashMode, createSplitMode } from './modes.svelte'
+
+function activeRebase(sources: string[], sourceKey?: string, targetKey?: string) {
+  const m = createRebaseMode()
+  m.enter(sources)
+  if (sourceKey) m.handleKey(sourceKey)
+  if (targetKey) m.handleKey(targetKey)
+  return m
+}
+
+function activeSquash(sources: string[]) {
+  const m = createSquashMode()
+  m.enter(sources)
+  return m
+}
 
 function makeEntry(overrides: Partial<{
   change_id: string
@@ -60,17 +75,9 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     onrevsetescaped: vi.fn(),
     onviewmodechange: vi.fn(),
     onbookmarkclick: vi.fn(),
-    rebaseMode: false,
-    rebaseSources: [],
-    rebaseSourceMode: '-r',
-    rebaseTargetMode: '-d',
-    squashMode: false,
-    squashSources: [],
-    squashKeepEmptied: false,
-    squashUseDestMsg: false,
-    splitMode: false,
-    splitRevision: '',
-    splitParallel: false,
+    rebase: createRebaseMode(),
+    squash: createSquashMode(),
+    split: createSplitMode(),
     isDark: true,
     prByBookmark: new Map(),
     ...overrides,
@@ -210,9 +217,7 @@ describe('RevisionGraph', () => {
       const { container } = render(RevisionGraph, {
         props: defaultProps({
           revisions: [entry],
-          rebaseMode: true,
-          rebaseSources: ['src1'],
-          rebaseSourceMode: '-r',
+          rebase: activeRebase(['src1']),
         }),
       })
       const badge = container.querySelector('.rebase-source')
@@ -226,10 +231,7 @@ describe('RevisionGraph', () => {
         props: defaultProps({
           revisions: entries,
           selectedIndex: 1,
-          rebaseMode: true,
-          rebaseSources: ['src1'],
-          rebaseSourceMode: '-s',
-          rebaseTargetMode: '--insert-after',
+          rebase: activeRebase(['src1'], 's', 'a'),
         }),
       })
       const source = container.querySelector('.rebase-source')
@@ -245,8 +247,7 @@ describe('RevisionGraph', () => {
       const { container } = render(RevisionGraph, {
         props: defaultProps({
           revisions: [entry],
-          squashMode: true,
-          squashSources: ['sq1'],
+          squash: activeSquash(['sq1']),
         }),
       })
       const badge = container.querySelector('.rebase-source')
@@ -260,8 +261,7 @@ describe('RevisionGraph', () => {
         props: defaultProps({
           revisions: entries,
           selectedIndex: 1,
-          squashMode: true,
-          squashSources: ['sq1'],
+          squash: activeSquash(['sq1']),
         }),
       })
       const target = container.querySelector('.rebase-target')
