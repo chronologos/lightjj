@@ -339,11 +339,10 @@
     if (!searchQuery || searchQuery.length < 2) return []
     const query = searchQuery.toLowerCase()
     const matches: SearchMatch[] = []
-    const files = effectiveFiles.length > 0 ? effectiveFiles : parsedDiff
-    for (const file of files) findMatchesInFile(file, query, matches)
+    for (const file of effectiveFiles) findMatchesInFile(file, query, matches)
     // Include conflict-only files (not in parsedDiff)
     for (const file of conflictFileDiffs.values()) {
-      if (!files.some(f => f.filePath === file.filePath)) {
+      if (!effectiveFiles.some(f => f.filePath === file.filePath)) {
         findMatchesInFile(file, query, matches)
       }
     }
@@ -461,9 +460,12 @@
           {#each selectedRevision.bookmarks as bm}
             {@const pr = prByBookmark.get(bm)}
             {#if pr}
-              <a class="detail-bookmark-badge has-pr" class:is-draft={pr.is_draft}
-                 href={pr.url} target="_blank" rel="noopener">
-                {bm}<span class="pr-number">#{pr.number}</span>
+              <a class="detail-pr-badge" class:is-draft={pr.is_draft}
+                 href={pr.url} target="_blank" rel="noopener"
+                 title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
+                <svg class="pr-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.254V3.25a.75.75 0 110 .005v5.45a2.5 2.5 0 101.5 0V5.558a4 4 0 002.74 1.353v1.839a2.5 2.5 0 101.5 0V6.25a.75.75 0 01-1.5 0v-1a.75.75 0 01.75-.75A2.5 2.5 0 007.5 2H7V.75a.25.25 0 00-.4-.2l-1.8 1.35a.25.25 0 000 .4L6.6 3.65a.25.25 0 00.4-.2V2.5h.5a1 1 0 010 2H7a.75.75 0 01-.75-.75v-.001A.75.75 0 015 3.254zM5.75 12a1 1 0 100-2 1 1 0 000 2zm5.5 0a1 1 0 100-2 1 1 0 000 2z"/></svg>
+                <span class="pr-name">{bm}</span>
+                <span class="pr-number">#{pr.number}</span>
               </a>
             {:else}
               <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>{bm}</button>
@@ -801,24 +803,47 @@
     font-family: inherit;
   }
 
-  .detail-bookmark-badge.has-pr {
+  .detail-pr-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg-pr);
+    color: var(--blue);
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid var(--border-pr);
+    line-height: 1.15;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
     text-decoration: none;
-    color: var(--blue, var(--amber));
-    background: rgba(66, 165, 245, 0.08);
-    border-color: rgba(66, 165, 245, 0.25);
   }
 
-  .detail-bookmark-badge.has-pr:hover {
-    border-color: var(--blue, var(--amber));
+  .detail-pr-badge:hover {
+    border-color: var(--border-pr-hover);
+    filter: brightness(1.15);
   }
 
-  .detail-bookmark-badge.is-draft {
+  .detail-pr-badge.is-draft {
+    border-style: dashed;
+    opacity: 0.75;
+  }
+
+  .pr-icon {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
     opacity: 0.7;
+  }
+
+  .pr-name {
+    color: var(--blue);
   }
 
   .pr-number {
     color: var(--overlay0);
-    margin-left: 3px;
     font-weight: 400;
   }
 

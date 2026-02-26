@@ -159,11 +159,6 @@ func Snapshot() CommandArgs {
 	return []string{"debug", "snapshot"}
 }
 
-func Status(revision string) CommandArgs {
-	template := `separate(";", diff.files().map(|x| x.target().conflict())) ++ " $\n"`
-	return []string{"log", "-r", revision, "--summary", "--no-graph", "--color", "never", "--quiet", "--template", template, "--ignore-working-copy"}
-}
-
 func BookmarkSet(revision string, name string) CommandArgs {
 	return []string{"bookmark", "set", "-r", revision, name}
 }

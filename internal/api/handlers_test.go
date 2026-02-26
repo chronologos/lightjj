@@ -32,7 +32,7 @@ func jsonPost(url string, body []byte) *http.Request {
 
 func TestOpIdHeader(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
+	runner.Expect(jj.LogGraph("", 500)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -47,7 +47,7 @@ func TestOpIdHeader(t *testing.T) {
 func TestHandleLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1f\x1fmain\n"
-	runner.Expect(jj.LogGraph("@", 0)).SetOutput([]byte(graphOutput))
+	runner.Expect(jj.LogGraph("@", 500)).SetOutput([]byte(graphOutput))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -70,7 +70,7 @@ func TestHandleLog(t *testing.T) {
 
 func TestHandleLog_Empty(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
+	runner.Expect(jj.LogGraph("", 500)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -323,7 +323,7 @@ func TestHandleBookmarkForget(t *testing.T) {
 
 func TestHandleLog_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.LogGraph("@", 0)).SetError(errors.New("jj failed"))
+	runner.Expect(jj.LogGraph("@", 500)).SetError(errors.New("jj failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -457,31 +457,6 @@ func TestHandleGetDescription_MissingRevision(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestHandleStatus(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.Status("abc")).SetOutput([]byte("M src/main.go\n"))
-	defer runner.Verify()
-
-	srv := newTestServer(runner)
-	req := httptest.NewRequest("GET", "/api/status?revision=abc", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["status"], "M src/main.go")
-}
-
-func TestHandleStatus_MissingRevision(t *testing.T) {
-	srv := newTestServer(testutil.NewMockRunner(t))
-	req := httptest.NewRequest("GET", "/api/status", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
 func TestHandleRemotes(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.GitRemoteList()).SetOutput([]byte("origin https://github.com/test/repo.git\n"))
@@ -519,7 +494,7 @@ func TestValidateFlags_SingleDashRejected(t *testing.T) {
 func TestOpIdHeader_Failure(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Allow(jj.CurrentOpId()).SetError(errors.New("op-id fetch failed"))
-	runner.Expect(jj.LogGraph("", 0)).SetOutput([]byte(""))
+	runner.Expect(jj.LogGraph("", 500)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := NewServer(runner, "")

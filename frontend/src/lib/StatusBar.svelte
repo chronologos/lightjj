@@ -1,21 +1,18 @@
 <script lang="ts">
+  import type { RebaseMode, SquashMode, SplitMode } from './modes.svelte'
+
   interface Props {
     statusText: string
     commandOutput: string
-    rebaseMode: boolean
-    rebaseSourceMode: string
-    rebaseTargetMode: string
-    squashMode: boolean
-    squashKeepEmptied: boolean
-    squashUseDestMsg: boolean
+    rebase: RebaseMode
+    squash: SquashMode
     squashFileCount: { selected: number, total: number } | null
-    splitMode: boolean
-    splitParallel: boolean
+    split: SplitMode
     splitFileCount: { selected: number, total: number } | null
     activeView: 'log' | 'branches' | 'operations'
   }
 
-  let { statusText, commandOutput, rebaseMode, rebaseSourceMode, rebaseTargetMode, squashMode, squashKeepEmptied, squashUseDestMsg, squashFileCount, splitMode, splitParallel, splitFileCount, activeView }: Props = $props()
+  let { statusText, commandOutput, rebase, squash, squashFileCount, split, splitFileCount, activeView }: Props = $props()
 
   const sourceKeys: { key: string; flag: string; label: string }[] = [
     { key: 'r', flag: '-r', label: 'revision' },
@@ -30,8 +27,8 @@
   ]
 </script>
 
-<footer class="statusbar" class:rebase-active={rebaseMode} class:squash-active={squashMode} class:split-active={splitMode}>
-  {#if splitMode}
+<footer class="statusbar" class:rebase-active={rebase.active} class:squash-active={squash.active} class:split-active={split.active}>
+  {#if split.active}
     <div class="statusbar-left">
       <span class="mode-badge mode-badge-split">split</span>
       <span class="key-group">
@@ -40,7 +37,7 @@
       </span>
       <span class="key-divider"></span>
       <span class="key-group">
-        <kbd class="key" class:key-active={splitParallel}>p</kbd><span class="key-label" class:key-label-active={splitParallel}>parallel</span>
+        <kbd class="key" class:key-active={split.parallel}>p</kbd><span class="key-label" class:key-label-active={split.parallel}>parallel</span>
       </span>
       {#if splitFileCount}
         <span class="key-divider"></span>
@@ -49,7 +46,7 @@
         </span>
       {/if}
     </div>
-  {:else if squashMode}
+  {:else if squash.active}
     <div class="statusbar-left">
       <span class="mode-badge mode-badge-squash">squash</span>
       <span class="key-group">
@@ -58,8 +55,8 @@
       </span>
       <span class="key-divider"></span>
       <span class="key-group">
-        <kbd class="key" class:key-active={squashKeepEmptied}>e</kbd><span class="key-label" class:key-label-active={squashKeepEmptied}>keep-emptied</span>
-        <kbd class="key" class:key-active={squashUseDestMsg}>d</kbd><span class="key-label" class:key-label-active={squashUseDestMsg}>use-dest-message</span>
+        <kbd class="key" class:key-active={squash.keepEmptied}>e</kbd><span class="key-label" class:key-label-active={squash.keepEmptied}>keep-emptied</span>
+        <kbd class="key" class:key-active={squash.useDestMsg}>d</kbd><span class="key-label" class:key-label-active={squash.useDestMsg}>use-dest-message</span>
       </span>
       {#if squashFileCount}
         <span class="key-divider"></span>
@@ -68,7 +65,7 @@
         </span>
       {/if}
     </div>
-  {:else if rebaseMode}
+  {:else if rebase.active}
     <div class="statusbar-left">
       <span class="mode-badge">rebase</span>
       <span class="key-group">
@@ -78,13 +75,13 @@
       <span class="key-divider"></span>
       <span class="key-group">
         {#each sourceKeys as sk}
-          <kbd class="key" class:key-active={rebaseSourceMode === sk.flag}>{sk.key}</kbd><span class="key-label" class:key-label-active={rebaseSourceMode === sk.flag}>{sk.label}</span>
+          <kbd class="key" class:key-active={rebase.sourceMode === sk.flag}>{sk.key}</kbd><span class="key-label" class:key-label-active={rebase.sourceMode === sk.flag}>{sk.label}</span>
         {/each}
       </span>
       <span class="key-divider"></span>
       <span class="key-group">
         {#each targetKeys as tk}
-          <kbd class="key" class:key-active={rebaseTargetMode === tk.flag}>{tk.key}</kbd><span class="key-label" class:key-label-active={rebaseTargetMode === tk.flag}>{tk.label}</span>
+          <kbd class="key" class:key-active={rebase.targetMode === tk.flag}>{tk.key}</kbd><span class="key-label" class:key-label-active={rebase.targetMode === tk.flag}>{tk.label}</span>
         {/each}
       </span>
     </div>
