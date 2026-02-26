@@ -240,7 +240,7 @@
                   isExpanded={false}
                   splitView={false}
                   highlightedLines={new Map()}
-                  wordDiffMap={new Map()}
+                  wordDiffs={new Map()}
                   ontoggle={() => {}}
                   onexpand={() => {}}
                 />

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/iant/lightjj/internal/jj"
@@ -748,17 +749,14 @@ func TestHandleBookmarkTrack(t *testing.T) {
 }
 
 func TestHandleBookmarkTrack_NoRemote(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.BookmarkTrack("feature", "")).SetOutput([]byte(""))
-	defer runner.Verify()
-
-	srv := newTestServer(runner)
+	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "feature"})
 	req := jsonPost("/api/bookmark/track", body)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "name and remote are required")
 }
 
 func TestHandleBookmarkTrack_MissingName(t *testing.T) {
@@ -769,6 +767,7 @@ func TestHandleBookmarkTrack_MissingName(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "name and remote are required")
 }
 
 func TestHandleBookmarkUntrack(t *testing.T) {
@@ -783,16 +782,6 @@ func TestHandleBookmarkUntrack(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestHandleBookmarkUntrack_MissingName(t *testing.T) {
-	srv := newTestServer(testutil.NewMockRunner(t))
-	body, _ := json.Marshal(bookmarkRemoteRequest{Remote: "origin"})
-	req := jsonPost("/api/bookmark/untrack", body)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // --- Mutation runner-error tests ---
@@ -1558,4 +1547,184 @@ func TestHandlePullRequests_InvalidJSON(t *testing.T) {
 	var prs []PullRequest
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
 	assert.Empty(t, prs)
+}
+
+// --- Runner error tests for read handlers ---
+
+// runnerErrorTest is a helper that creates a server, expects a command to fail,
+// and asserts a 500 response with the error message.
+func runnerErrorTest(t *testing.T, method, url string, expectArgs []string, errMsg string, body []byte) {
+	t.Helper()
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(expectArgs).SetError(errors.New(errMsg))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	var req *http.Request
+	if method == "POST" {
+		req = jsonPost(url, body)
+	} else {
+		req = httptest.NewRequest(method, url, nil)
+	}
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, errMsg, resp["error"])
+}
+
+func TestHandleBookmarks_RunnerError(t *testing.T) {
+	runnerErrorTest(t, "GET", "/api/bookmarks", jj.BookmarkListAll(), "bookmark list failed", nil)
+}
+
+func TestHandleDiff_RunnerError(t *testing.T) {
+	args := jj.Diff("abc", "", "never", "--tool", ":git")
+	runnerErrorTest(t, "GET", "/api/diff?revision=abc", args, "diff failed", nil)
+}
+
+func TestHandleGetDescription_RunnerError(t *testing.T) {
+	runnerErrorTest(t, "GET", "/api/description?revision=abc", jj.GetDescription("abc"), "description failed", nil)
+}
+
+func TestHandleRemotes_RunnerError(t *testing.T) {
+	runnerErrorTest(t, "GET", "/api/remotes", jj.GitRemoteList(), "remote list failed", nil)
+}
+
+func TestHandleUndo_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(struct{}{})
+	runnerErrorTest(t, "POST", "/api/undo", jj.Undo(), "undo failed", body)
+}
+
+func TestHandleOpLog_RunnerError(t *testing.T) {
+	runnerErrorTest(t, "GET", "/api/oplog", jj.OpLog(50), "oplog failed", nil)
+}
+
+func TestHandleEvolog_RunnerError(t *testing.T) {
+	runnerErrorTest(t, "GET", "/api/evolog?revision=abc", jj.Evolog("abc"), "evolog failed", nil)
+}
+
+func TestHandleBookmarkSet_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "main"})
+	runnerErrorTest(t, "POST", "/api/bookmark/set", jj.BookmarkSet("abc", "main"), "set failed", body)
+}
+
+func TestHandleBookmarkDelete_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkNameRequest{Name: "main"})
+	runnerErrorTest(t, "POST", "/api/bookmark/delete", jj.BookmarkDelete("main"), "delete failed", body)
+}
+
+func TestHandleBookmarkMove_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "main"})
+	runnerErrorTest(t, "POST", "/api/bookmark/move", jj.BookmarkMove("abc", "main", "--allow-backwards"), "move failed", body)
+}
+
+func TestHandleBookmarkForget_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkNameRequest{Name: "main"})
+	runnerErrorTest(t, "POST", "/api/bookmark/forget", jj.BookmarkForget("main"), "forget failed", body)
+}
+
+func TestHandleBookmarkTrack_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "main", Remote: "origin"})
+	runnerErrorTest(t, "POST", "/api/bookmark/track", jj.BookmarkTrack("main", "origin"), "track failed", body)
+}
+
+func TestHandleBookmarkUntrack_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "main", Remote: "origin"})
+	runnerErrorTest(t, "POST", "/api/bookmark/untrack", jj.BookmarkUntrack("main", "origin"), "untrack failed", body)
+}
+
+// --- Bookmark track/untrack validation edge cases ---
+
+func TestHandleBookmarkUntrack_NoRemote(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "feature"})
+	req := jsonPost("/api/bookmark/untrack", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "name and remote are required")
+}
+
+func TestHandleBookmarkUntrack_NoName(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRemoteRequest{Remote: "origin"})
+	req := jsonPost("/api/bookmark/untrack", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "name and remote are required")
+}
+
+// --- decodeBody edge case: body exceeding 1MB limit ---
+
+func TestDecodeBody_ExceedsMaxSize(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	// Create a JSON body larger than 1MB
+	bigString := strings.Repeat("x", 1<<20+100)
+	body := []byte(fmt.Sprintf(`{"revision":"%s"}`, bigString))
+	req := jsonPost("/api/new", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Content-Type validation ---
+
+func TestDecodeBody_MissingContentType(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body := []byte(`{"revisions":["abc"]}`)
+	req := httptest.NewRequest("POST", "/api/new", bytes.NewReader(body))
+	// Intentionally no Content-Type header
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Content-Type must be application/json")
+}
+
+func TestDecodeBody_WrongContentType(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body := []byte(`{"revisions":["abc"]}`)
+	req := httptest.NewRequest("POST", "/api/new", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Content-Type must be application/json")
+}
+
+// --- DiffRange runner error test ---
+
+func TestHandleDiffRange_RunnerError(t *testing.T) {
+	runnerErrorTest(t, "GET", "/api/diff-range?from=abc&to=def", jj.DiffRange("abc", "def", nil), "diff-range failed", nil)
+}
+
+// --- HTTP method enforcement ---
+
+func TestMethodNotAllowed(t *testing.T) {
+	// Go 1.22 method-prefixed route patterns ("GET /api/log", "POST /api/new")
+	// automatically return 405 for mismatched methods. This test locks in that
+	// behaviour — removing the method prefix from a route would silently let
+	// POST hit a read handler (or GET hit a mutation), which we want caught.
+	srv := newTestServer(testutil.NewMockRunner(t))
+	cases := []struct {
+		method, path string
+	}{
+		{"POST", "/api/log"},        // read endpoint
+		{"GET", "/api/new"},         // mutation endpoint
+		{"DELETE", "/api/abandon"},  // wrong method entirely
+		{"GET", "/api/bookmark/set"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "%s %s", tc.method, tc.path)
+	}
 }

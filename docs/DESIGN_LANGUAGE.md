@@ -84,6 +84,7 @@ BADGES (entity types — neutral by default):
 GRAPH (isolated, decorative only):
   8 muted colors, 0.45 opacity lines, 0.8 opacity nodes
   Never amber/green/red. Never used outside the graph.
+  Exception: semantic nodes (@=amber, ×=red) use Tier 1 colors at full opacity.
 
 DIFF:
   Added lines   → green bg + green text

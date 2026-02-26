@@ -6,7 +6,7 @@ Jujutsu is a powerful VCS with a steep learning curve. lightjj gives you a visua
 
 ## Features
 
-- **Revision graph** — pixel-perfect DAG rendered from jj's graph output, with colored gutter symbols (`@` green for working copy, `○` blue for mutable, `◆` dimmed for immutable)
+- **Revision graph** — pixel-perfect DAG rendered as SVG from jj's graph output, with muted graph palette colors, amber concentric circle for working copy `@`, and dimmed `◆` for immutable commits
 - **Diff viewer** — unified and split (side-by-side) modes, collapsible file sections, word-level inline diff highlighting, syntax highlighting via Shiki, context expansion at hunk boundaries
 - **Keyboard-first** — `j`/`k` navigation, single-key operations (`n` new, `e` describe, `u` undo, `R` rebase, `S` squash), command palette (`Cmd+K`)
 - **Inline rebase** — press `R` to enter rebase mode directly in the graph. Pick source mode (`-r`/`-s`/`-b`) and target mode (`-d`/`--insert-after`/`--insert-before`) with keyboard shortcuts. `j`/`k` to move the destination cursor, `Enter` to execute

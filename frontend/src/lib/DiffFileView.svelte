@@ -13,7 +13,7 @@
     isExpanded: boolean
     splitView: boolean
     highlightedLines: Map<string, string>
-    wordDiffMap: Map<string, Map<number, WordSpan[]>>
+    wordDiffs: Map<string, Map<number, WordSpan[]>>
     ontoggle: (path: string) => void
     onexpand: (path: string) => void
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
@@ -21,7 +21,7 @@
     currentMatchIdx?: number
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffMap, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0 }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0 }: Props = $props()
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
@@ -64,7 +64,7 @@
   let effectiveSplit = $derived(splitView && !isConflict)
 
   // Memoized split-view data — depends only on file.hunks, not on
-  // highlightedLines/wordDiffMap which update frequently during rendering
+  // highlightedLines/wordDiffs which update frequently during rendering
   let splitLines = $derived(effectiveSplit ? toSplitView(file.hunks) : [])
   let splitNums = $derived(effectiveSplit ? computeSplitLineNumbers(file.hunks, splitLines) : [])
 
@@ -323,7 +323,7 @@
               {#if !isExpanded}<div class="diff-hunk-header">{sl.left.line.content}</div>{/if}
             {:else if sl.left}
               {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
-              {@const spans = wordDiffMap.get(`${filePath}:${sl.left.hunkIdx}`)?.get(sl.left.lineIdx)}
+              {@const spans = wordDiffs.get(String(sl.left.hunkIdx))?.get(sl.left.lineIdx)}
               {@const slCm = conflictData?.lineMeta.get(sl.left.hunkIdx)?.get(sl.left.lineIdx)}
               {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft], sl.left.hunkIdx, sl.left.lineIdx, slCm)}
             {:else}
@@ -337,7 +337,7 @@
               {#if !isExpanded}<div class="diff-hunk-header">{sl.right.line.content}</div>{/if}
             {:else if sl.right}
               {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
-              {@const spans = wordDiffMap.get(`${filePath}:${sl.right.hunkIdx}`)?.get(sl.right.lineIdx)}
+              {@const spans = wordDiffs.get(String(sl.right.hunkIdx))?.get(sl.right.lineIdx)}
               {@const srCm = conflictData?.lineMeta.get(sl.right.hunkIdx)?.get(sl.right.lineIdx)}
               {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight], sl.right.hunkIdx, sl.right.lineIdx, srCm)}
             {:else}
@@ -349,7 +349,7 @@
     {:else}
       <!-- Unified view -->
       {#each file.hunks as hunk, hunkIdx}
-        {@const wordDiffs = wordDiffMap.get(`${filePath}:${hunkIdx}`) ?? new Map()}
+        {@const hunkWordDiffs = wordDiffs.get(String(hunkIdx)) ?? new Map()}
         {#if !isExpanded}
           {#if hunkIdx === 0 && hunk.newStart > 1}
             <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show {hunk.newStart - 1} hidden lines above">
@@ -377,7 +377,7 @@
         <div class="diff-lines">
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
-            {@const spans = wordDiffs.get(lineIdx)}
+            {@const spans = hunkWordDiffs.get(lineIdx)}
             {@const cm = conflictData?.lineMeta.get(hunkIdx)?.get(lineIdx)}
             {@const ln = lineNums[lineIdx]}
             {#if cm}

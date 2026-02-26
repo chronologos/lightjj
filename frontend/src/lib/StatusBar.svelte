@@ -61,7 +61,7 @@
       {#if squashFileCount}
         <span class="key-divider"></span>
         <span class="key-group">
-          <span class="file-count" class:file-count-empty={squashFileCount.selected === 0}>{squashFileCount.selected}/{squashFileCount.total} files</span>
+          <span class="file-count" class:file-count-empty={squashFileCount.selected === 0}>{squashFileCount.selected}/{squashFileCount.total} files to move</span>
         </span>
       {/if}
     </div>
