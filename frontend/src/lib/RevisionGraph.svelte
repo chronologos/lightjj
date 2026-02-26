@@ -325,7 +325,7 @@
               {@const entry = revisions[line.entryIndex]}
               <span class="bookmark-line-content">
                 {#each entry.commit.working_copies ?? [] as ws}
-                  <span class="workspace-badge">{ws}@</span>
+                  <span class="workspace-badge">◇ {ws}@</span>
                 {/each}
                 {#each entry.bookmarks ?? [] as bm}
                   {@const pr = prByBookmark.get(bm)}
@@ -334,12 +334,11 @@
                        href={pr.url} target="_blank" rel="noopener"
                        onclick={(e: MouseEvent) => e.stopPropagation()}
                        title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
-                      <svg class="pr-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.254V3.25a.75.75 0 110 .005v5.45a2.5 2.5 0 101.5 0V5.558a4 4 0 002.74 1.353v1.839a2.5 2.5 0 101.5 0V6.25a.75.75 0 01-1.5 0v-1a.75.75 0 01.75-.75A2.5 2.5 0 007.5 2H7V.75a.25.25 0 00-.4-.2l-1.8 1.35a.25.25 0 000 .4L6.6 3.65a.25.25 0 00.4-.2V2.5h.5a1 1 0 010 2H7a.75.75 0 01-.75-.75v-.001A.75.75 0 015 3.254zM5.75 12a1 1 0 100-2 1 1 0 000 2zm5.5 0a1 1 0 100-2 1 1 0 000 2z"/></svg>
-                      <span class="pr-name">{bm}</span>
+                      <span class="pr-name">↗ {bm}</span>
                       <span class="pr-number">#{pr.number}</span>
                     </a>
                   {:else}
-                    <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>{bm}</button>
+                    <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>⑂ {bm}</button>
                   {/if}
                 {/each}
               </span>
@@ -718,7 +717,7 @@
     display: inline-flex;
     align-items: center;
     background: var(--bg-bookmark);
-    color: var(--green);
+    color: var(--subtext0);
     padding: 0 5px;
     border-radius: 3px;
     font-size: 10px;
@@ -729,11 +728,11 @@
     vertical-align: baseline;
     cursor: pointer;
     font-family: inherit;
+    transition: border-color var(--anim-duration) var(--anim-ease);
   }
 
   .bookmark-badge:hover {
-    border-color: var(--green);
-    filter: brightness(1.2);
+    border-color: var(--surface2);
   }
 
   .pr-badge {
@@ -741,7 +740,7 @@
     align-items: center;
     gap: 3px;
     background: var(--bg-pr);
-    color: var(--blue);
+    color: var(--subtext0);
     padding: 0 5px;
     border-radius: 3px;
     font-size: 10px;
@@ -753,13 +752,11 @@
     cursor: pointer;
     font-family: inherit;
     text-decoration: none;
-    transition: border-color var(--anim-duration) var(--anim-ease),
-                filter var(--anim-duration) var(--anim-ease);
+    transition: border-color var(--anim-duration) var(--anim-ease);
   }
 
   .pr-badge:hover {
     border-color: var(--border-pr-hover);
-    filter: brightness(1.15);
   }
 
   .pr-badge.is-draft {
@@ -767,15 +764,8 @@
     opacity: 0.75;
   }
 
-  .pr-icon {
-    width: 10px;
-    height: 10px;
-    flex-shrink: 0;
-    opacity: 0.7;
-  }
-
   .pr-name {
-    color: var(--blue);
+    color: var(--subtext0);
   }
 
   .pr-number {
@@ -787,7 +777,7 @@
     display: inline-flex;
     align-items: center;
     background: var(--badge-workspace-bg);
-    color: var(--cyan);
+    color: var(--subtext0);
     padding: 0 5px;
     border-radius: 3px;
     font-size: 10px;
@@ -822,9 +812,9 @@
   }
 
   .split-source {
-    background: var(--badge-workspace-bg);
-    color: var(--cyan);
-    border: 1px solid var(--cyan);
+    background: var(--badge-other-bg);
+    color: var(--amber);
+    border: 1px solid var(--amber);
   }
 
   .divergent-badge {

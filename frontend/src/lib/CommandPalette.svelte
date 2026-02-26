@@ -375,9 +375,9 @@
     font-size: 9px;
     font-weight: 500;
     letter-spacing: 0.02em;
-    color: var(--purple);
-    background: rgba(171, 71, 188, 0.1);
-    border: 1px solid rgba(171, 71, 188, 0.2);
+    color: var(--overlay0);
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
     padding: 0 4px;
     border-radius: 3px;
     margin-left: 6px;

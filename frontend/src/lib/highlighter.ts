@@ -16,7 +16,6 @@ import langHtml from 'shiki/langs/html.mjs'
 import langSvelte from 'shiki/langs/svelte.mjs'
 import langJson from 'shiki/langs/json.mjs'
 import langYaml from 'shiki/langs/yaml.mjs'
-import langMarkdown from 'shiki/langs/markdown.mjs'
 import langBash from 'shiki/langs/bash.mjs'
 import langToml from 'shiki/langs/toml.mjs'
 
@@ -29,7 +28,7 @@ export async function getHighlighter(): Promise<HighlighterCore> {
       langs: [
         langTypescript, langJavascript, langGo, langPython, langRust,
         langCss, langHtml, langSvelte, langJson, langYaml,
-        langMarkdown, langBash, langToml,
+        langBash, langToml,
       ],
       engine: createJavaScriptRegexEngine(),
     })
@@ -46,7 +45,7 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   go: 'go', py: 'python', rs: 'rust',
   css: 'css', html: 'html', svelte: 'svelte',
   json: 'json', yaml: 'yaml', yml: 'yaml',
-  md: 'markdown', sh: 'bash', bash: 'bash',
+  sh: 'bash', bash: 'bash',
   toml: 'toml', mod: 'go', sum: 'go',
 }
 
