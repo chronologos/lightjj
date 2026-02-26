@@ -2,7 +2,6 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
-  import Sidebar from './lib/Sidebar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
   import RevisionGraph from './lib/RevisionGraph.svelte'
@@ -114,7 +113,8 @@
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
-  let sidebarRef: ReturnType<typeof Sidebar> | undefined = $state(undefined)
+  let wsDropdownOpen: boolean = $state(false)
+  let wsSelectorEl: HTMLElement | undefined = $state(undefined)
 
   // --- Derived ---
   let selectedRevision: LogEntry | null = $derived(
@@ -210,16 +210,16 @@
     { label: 'Clear revset filter', category: 'Navigation', action: clearRevsetFilter, when: () => revsetFilter !== '' },
 
     // Revisions
-    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog },
+    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog, when: () => !inlineMode },
     { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))
-    }, when: () => !!selectedRevision || checkedRevisions.size > 0 },
+    }, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size <= 1 },
-    { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision },
-    { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision && checkedRevisions.size === 0 },
-    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => checkedRevisions.size > 0 },
-    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => checkedRevisions.size > 0 },
+    { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(effectiveId(selectedRevision!.commit)), when: () => !inlineMode && !!selectedRevision },
+    { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
+    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
@@ -231,8 +231,8 @@
     { label: 'Git operations (advanced)', shortcut: 'g', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true }, when: () => !inlineMode },
 
     // Bookmarks
-    { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal },
-    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { closeAllModals(); bookmarkInputOpen = true }, when: () => !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal, when: () => !inlineMode },
+    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { closeAllModals(); bookmarkInputOpen = true }, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
 
     // View
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
@@ -498,7 +498,7 @@
       commandOutput = result.output
       descriptionEditing = false
       commitMode = false
-      fullDescription = ''
+      description.reset()
       await loadLog()
     } catch (e) {
       showError(e)
@@ -626,8 +626,7 @@
     const destination = effectiveId(selectedRevision.commit)
     // C2: exit mode before guard so user isn't stuck
     if (squash.sources.includes(destination)) {
-      squash.cancel()
-      squashSelectedFiles.clear()
+      cancelInlineModes()
       lastAction = 'Cannot squash into source revision'
       return
     }
@@ -649,8 +648,7 @@
         useDestinationMessage: useDestMsg || undefined,
       })
       // W1: only exit mode after successful API call
-      squash.cancel()
-      squashSelectedFiles.clear()
+      cancelInlineModes()
       lastAction = sources.length > 1
         ? `Squashed ${sources.length} revisions into ${destination.slice(0, 8)}`
         : `Squashed ${sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
@@ -694,8 +692,7 @@
       const files = [...squashSelectedFiles]
       const revision = split.revision
       const result = await api.split(revision, files, split.parallel || undefined)
-      split.cancel()
-      squashSelectedFiles.clear()
+      cancelInlineModes()
       lastAction = `Split ${revision.slice(0, 8)} (${files.length} files stay)`
       commandOutput = result.output
       clearChecks()
@@ -731,6 +728,8 @@
     divergence.cancel()
     squashSelectedFiles.clear()
     squashTotalFiles = 0
+    // Restore focus to the revision list so j/k keys work immediately
+    blurActiveInput()
   }
 
   function closeAllModals() {
@@ -778,8 +777,8 @@
 
   function handleRevsetSubmit() {
     clearTimeout(navDebounceTimer)
-    diffContent = ''
-    changedFiles = []
+    diff.reset()
+    files.reset()
     clearChecks()
     loadLog(true)
   }
@@ -897,7 +896,7 @@
         return
       case 'w':
         e.preventDefault()
-        sidebarRef?.toggleWorkspaceDropdown()
+        if (workspaceList.length > 1) wsDropdownOpen = !wsDropdownOpen
         return
       case '1':
         e.preventDefault()
@@ -998,10 +997,19 @@
 
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
   // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
+  // If stale events occur during inline mode, refresh when mode exits.
+  let staleWhileInMode = false
   $effect(() => {
     return onStale(() => {
       if (!loading && !anyModalOpen && !inlineMode) loadLog()
+      else if (inlineMode) staleWhileInMode = true
     })
+  })
+  $effect(() => {
+    if (!inlineMode && staleWhileInMode) {
+      staleWhileInMode = false
+      loadLog()
+    }
   })
 
   loadLog()
@@ -1010,32 +1018,87 @@
   loadPullRequests()
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onclick={(e: MouseEvent) => {
+  if (wsDropdownOpen && wsSelectorEl && !wsSelectorEl.contains(e.target as Node)) wsDropdownOpen = false
+}} />
 
 <div class="app">
-  <Sidebar
-    bind:this={sidebarRef}
-    {activeView}
-    onnavigate={(view) => {
-      if (inlineMode) return
-      activeView = view
-      if (view === 'operations') loadOplog()
-    }}
-    onopenpalette={() => { closeModals(); paletteOpen = true }}
-    onthemetoggle={toggleTheme}
-    theme={darkMode ? 'dark' : 'light'}
-    {inlineMode}
-    onundo={() => { if (!inlineMode) handleUndo() }}
-    oncommit={() => { if (!inlineMode) handleCommit() }}
-    onfetch={() => { if (!inlineMode) handleGitOp('fetch', []) }}
-    onpush={() => { if (!inlineMode) handleGitOp('push', []) }}
-    ongitmodal={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }}
-    {currentWorkspace}
-    workspaces={workspaceList}
-    onworkspaceopen={handleWorkspaceOpen}
-  />
-
   <div class="main-content">
+    <!-- Top toolbar: replaces sidebar -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-logo">
+          <img
+            src={darkMode ? '/logo.svg' : '/logo-light.svg'}
+            alt=""
+            width="16"
+            height="16"
+          />
+          <span class="toolbar-logo-text">lightjj</span>
+        </span>
+        {#if currentWorkspace}
+          <span class="toolbar-divider"></span>
+          <div class="toolbar-workspace" bind:this={wsSelectorEl}>
+            <button
+              class="toolbar-ws-btn"
+              onclick={() => { if (workspaceList.length > 1) wsDropdownOpen = !wsDropdownOpen }}
+              title={workspaceList.length > 1 ? 'Switch workspace (w)' : currentWorkspace}
+            >
+              <span class="toolbar-ws-glyph">◇</span>
+              <span class="toolbar-ws-name">{currentWorkspace}</span>
+              {#if workspaceList.length > 1}
+                <span class="toolbar-ws-chevron">{wsDropdownOpen ? '▴' : '▾'}</span>
+              {/if}
+            </button>
+            {#if wsDropdownOpen && workspaceList.length > 1}
+              <div class="toolbar-ws-dropdown">
+                {#each workspaceList as ws (ws.name)}
+                  {#if ws.name === currentWorkspace}
+                    <div class="toolbar-ws-option toolbar-ws-active">
+                      <span class="toolbar-ws-glyph">◇</span>
+                      <span>{ws.name}</span>
+                    </div>
+                  {:else}
+                    <button class="toolbar-ws-option" onclick={() => { handleWorkspaceOpen(ws.name); wsDropdownOpen = false }}>
+                      <span class="toolbar-ws-glyph">◇</span>
+                      <span>{ws.name}</span>
+                      <span class="toolbar-ws-open">↗</span>
+                    </button>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <div class="toolbar-right">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleUndo() }} disabled={inlineMode} title="Undo (u)">
+          Undo
+        </button>
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleCommit() }} disabled={inlineMode} title="Commit (c)">
+          Commit
+        </button>
+        <span class="toolbar-divider"></span>
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('fetch', []) }} disabled={inlineMode} title="Fetch (f)">
+          Fetch
+        </button>
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('push', []) }} disabled={inlineMode} title="Push (p)">
+          Push
+        </button>
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }} disabled={inlineMode} title="Git operations (g)">
+          Git…
+        </button>
+        <span class="toolbar-divider"></span>
+        <button
+          class="toolbar-btn toolbar-theme"
+          onclick={toggleTheme}
+          title="Toggle theme (t)"
+        >
+          {darkMode ? '☀' : '●'}
+        </button>
+      </div>
+    </div>
+
     {#if error}
       <div class="error-bar" role="alert">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -1197,6 +1260,7 @@
   /* --- Layout --- */
   .app {
     display: flex;
+    flex-direction: column;
     height: 100vh;
     overflow: hidden;
   }
@@ -1219,6 +1283,166 @@
     flex: 1;
     overflow: hidden;
     display: flex;
+  }
+
+  /* --- Toolbar (replaces sidebar) --- */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 34px;
+    padding: 0 10px;
+    background: var(--crust);
+    border-bottom: 1px solid var(--surface1);
+    flex-shrink: 0;
+    user-select: none;
+    gap: 8px;
+  }
+
+  .toolbar-left,
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .toolbar-logo {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .toolbar-logo-text {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--subtext0);
+    letter-spacing: -0.01em;
+  }
+
+  .toolbar-divider {
+    width: 1px;
+    height: 14px;
+    background: var(--surface1);
+  }
+
+  .toolbar-workspace {
+    position: relative;
+  }
+
+  .toolbar-ws-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    background: transparent;
+    border: 1px solid var(--surface1);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--subtext0);
+    cursor: pointer;
+  }
+
+  .toolbar-ws-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--surface2);
+  }
+
+  .toolbar-ws-glyph {
+    color: var(--subtext0);
+    font-size: 10px;
+  }
+
+  .toolbar-ws-name {
+    color: var(--text);
+  }
+
+  .toolbar-ws-chevron {
+    font-size: 9px;
+    color: var(--surface2);
+  }
+
+  .toolbar-ws-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 160px;
+    background: var(--mantle);
+    border: 1px solid var(--surface1);
+    border-radius: 5px;
+    padding: 3px;
+    z-index: 100;
+    box-shadow: var(--shadow-heavy);
+  }
+
+  .toolbar-ws-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 5px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--subtext0);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .toolbar-ws-option:not(.toolbar-ws-active):hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .toolbar-ws-active {
+    color: var(--amber);
+    cursor: default;
+  }
+
+  .toolbar-ws-active .toolbar-ws-glyph {
+    color: var(--amber);
+  }
+
+  .toolbar-ws-open {
+    font-size: 10px;
+    color: var(--surface2);
+    margin-left: auto;
+    opacity: 0;
+  }
+
+  .toolbar-ws-option:hover .toolbar-ws-open {
+    opacity: 1;
+  }
+
+  .toolbar-btn {
+    padding: 3px 10px;
+    background: transparent;
+    border: 1px solid var(--surface1);
+    border-radius: 4px;
+    color: var(--subtext0);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+
+  .toolbar-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: var(--surface2);
+  }
+
+  .toolbar-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .toolbar-theme {
+    border: none;
+    font-size: 13px;
+    padding: 3px 6px;
   }
 
   /* --- Error bar --- */
