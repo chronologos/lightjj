@@ -17,7 +17,7 @@
     ontoggle: (path: string) => void
     onexpand: (path: string) => void
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
-    searchMatches?: SearchMatch[]
+    searchMatches?: { item: SearchMatch; index: number }[]
     currentMatchIdx?: number
   }
 
@@ -78,16 +78,16 @@
 
   interface LineMatch { startCol: number; endCol: number; isCurrent: boolean }
 
-  // Pre-build per-line search match lookup for O(1) access in the render loop
+  // Pre-build per-line search match lookup for O(1) access in the render loop.
+  // searchMatches is already filtered to this file by the parent; each entry
+  // carries its global index so we can check "is this the current match?"
   let lineMatchMap = $derived.by(() => {
     if (searchMatches.length === 0) return new Map<string, LineMatch[]>()
     const map = new Map<string, LineMatch[]>()
-    for (let i = 0; i < searchMatches.length; i++) {
-      const m = searchMatches[i]
-      if (m.filePath !== filePath) continue
+    for (const { item: m, index } of searchMatches) {
       const key = `${m.hunkIdx}:${m.lineIdx}`
       const list = map.get(key) ?? []
-      list.push({ startCol: m.startCol, endCol: m.endCol, isCurrent: i === currentMatchIdx })
+      list.push({ startCol: m.startCol, endCol: m.endCol, isCurrent: index === currentMatchIdx })
       map.set(key, list)
     }
     return map

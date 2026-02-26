@@ -3,6 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { api, effectiveId, type LogEntry, type FileChange, type PullRequest } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
+  import { groupByWithIndex } from './group-by'
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
@@ -45,6 +46,8 @@
   }: Props = $props()
 
   // --- Local state ---
+  let fileSelectIdx: number = $state(0)
+  let fileSelectionListEl: HTMLElement | undefined = $state(undefined)
   let collapsedFiles = new SvelteSet<string>()
   // Persist collapse state per revision so switching back restores it
   let collapseStateCache = new Map<string, Set<string>>()
@@ -146,7 +149,9 @@
   })
 
   // --- Syntax highlighting ---
-  let highlightedLines: Map<string, string> = $state(new Map())
+  // Per-file highlight maps. highlightDiff updates individual file entries,
+  // so only the DiffFileViews for changed files see a new Map reference.
+  let highlightsByFile: Map<string, Map<string, string>> = $state(new Map())
   let highlightGeneration = 0
 
   let lastHighlightedDiff = ''
@@ -154,7 +159,8 @@
 
   async function highlightDiff(files: DiffFile[]) {
     const gen = ++highlightGeneration
-    const newMap = new Map<string, string>()
+    // Accumulate completed files locally; push to state after each file
+    const done = new Map<string, Map<string, string>>()
     for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
       const file = files[fileIdx]
       // Yield between files so the browser can paint and process input
@@ -163,6 +169,7 @@
 
       const filePath = file.filePath
       const lang = detectLanguage(filePath)
+      const fileMap = new Map<string, string>()
 
       for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
         const hunk = file.hunks[hunkIdx]
@@ -179,7 +186,7 @@
           if (gen !== highlightGeneration) return
           const prefix = type === 'add' ? '+' : type === 'remove' ? '-' : ' '
           group.forEach((g, j) => {
-            newMap.set(
+            fileMap.set(
               `${filePath}:${hunkIdx}:${g.idx}`,
               `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`,
             )
@@ -187,9 +194,13 @@
         }
       }
 
-      // Progressive update every few files to avoid O(n²) Map copies
-      if (gen === highlightGeneration && (fileIdx % 3 === 2 || fileIdx === files.length - 1)) {
-        highlightedLines = new Map(newMap)
+      done.set(filePath, fileMap)
+      // Publish after each file. Files already done keep their existing Map
+      // reference (in `done`); files not yet done are absent. The outer Map
+      // identity changes to trigger template reads, but inner Maps that haven't
+      // changed since last publish are reused so those DiffFileViews don't re-render.
+      if (gen === highlightGeneration) {
+        highlightsByFile = new Map(done)
       }
     }
   }
@@ -205,13 +216,13 @@
       lastHighlightedDiff = diffContent
       // Clear stale highlights immediately to prevent wrong-color flicker
       // when old and new diffs share the same file/hunk/line keys
-      highlightedLines = new Map()
+      highlightsByFile = new Map()
       // Defer Shiki so it doesn't block the keydown → paint path.
       // Plain text + word-diff renders instantly; syntax colors appear ~150ms later.
       highlightTimer = setTimeout(() => highlightDiff(effectiveFiles), 150)
     } else if (parsedDiff.length === 0) {
       lastHighlightedDiff = ''
-      highlightedLines = new Map()
+      highlightsByFile = new Map()
     }
     return () => clearTimeout(highlightTimer)
   })
@@ -349,6 +360,18 @@
     return matches
   })
 
+  // Pre-group search matches by filePath so each DiffFileView receives only its
+  // own matches. Preserves global index for "is this the current match?" checks.
+  const EMPTY_MATCHES: { item: SearchMatch; index: number }[] = []
+  const EMPTY_MATCH_MAP = new Map<string, { item: SearchMatch; index: number }[]>()
+  let matchesByFile = $derived(
+    searchOpen && searchMatches.length > 0
+      ? groupByWithIndex(searchMatches, m => m.filePath)
+      : EMPTY_MATCH_MAP
+  )
+
+  const EMPTY_HL: Map<string, string> = new Map()
+
   // Clamp currentMatchIdx when matches change
   $effect(() => {
     if (searchMatches.length === 0) {
@@ -423,9 +446,54 @@
     })
   }
 
+  function scrollFileSelectIntoView() {
+    requestAnimationFrame(() => {
+      fileSelectionListEl?.querySelector('.file-select-active')?.scrollIntoView({ block: 'nearest' })
+    })
+  }
+
+  function handleFileSelectionKeydown(e: KeyboardEvent) {
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'j':
+        e.preventDefault()
+        if (fileSelectIdx < changedFiles.length - 1) { fileSelectIdx++; scrollFileSelectIntoView() }
+        break
+      case 'ArrowUp':
+      case 'k':
+        e.preventDefault()
+        if (fileSelectIdx > 0) { fileSelectIdx--; scrollFileSelectIntoView() }
+        break
+      case ' ':
+        e.preventDefault()
+        if (changedFiles[fileSelectIdx]) ontogglefile(changedFiles[fileSelectIdx].path)
+        break
+      case 'a':
+        e.preventDefault()
+        for (const f of changedFiles) {
+          if (!squashSelectedFiles.has(f.path)) ontogglefile(f.path)
+        }
+        break
+      case 'n':
+        e.preventDefault()
+        for (const f of changedFiles) {
+          if (squashSelectedFiles.has(f.path)) ontogglefile(f.path)
+        }
+        break
+    }
+  }
+
+  // Auto-focus file selection list when entering split/squash mode
+  $effect(() => {
+    if (fileSelectionMode && fileSelectionListEl) {
+      fileSelectIdx = 0
+      fileSelectionListEl.focus()
+    }
+  })
+
   export function rehighlight() {
     lastHighlightedDiff = ''
-    highlightedLines = new Map()
+    highlightsByFile = new Map()
     clearTimeout(highlightTimer)
     if (parsedDiff.length > 0) {
       highlightTimer = setTimeout(() => highlightDiff(parsedDiff), 50)
@@ -496,16 +564,51 @@
       {commitMode}
     />
   {/if}
-  {#if splitMode}
-    <div class="squash-banner split-banner">
-      Split — checked files stay, unchecked move to new revision
-    </div>
-  {:else if fileSelectionMode}
-    <div class="squash-banner">
-      Squash source — select files to move
+  {#if fileSelectionMode}
+    <div class="file-selection-panel" class:split-selection={splitMode}>
+      <div class="file-selection-header">
+        {#if splitMode}
+          <span class="file-selection-title">Split — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
+        {:else}
+          <span class="file-selection-title">Squash — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
+        {/if}
+        <span class="file-selection-count">{squashSelectedFiles.size}/{changedFiles.length} {splitMode ? 'stay' : 'selected'}</span>
+      </div>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="file-selection-list" tabindex="-1"
+        onkeydown={handleFileSelectionKeydown}
+        bind:this={fileSelectionListEl}>
+        {#each changedFiles as file, i (file.path)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div
+            class="file-select-row"
+            class:file-select-active={i === fileSelectIdx}
+            class:file-checked={squashSelectedFiles.has(file.path)}
+            onclick={() => { fileSelectIdx = i; ontogglefile(file.path) }}
+            onmouseenter={() => { fileSelectIdx = i }}
+            role="option"
+            tabindex="-1"
+            aria-selected={squashSelectedFiles.has(file.path)}
+          >
+            <span class="file-check-indicator">{squashSelectedFiles.has(file.path) ? '✓' : ' '}</span>
+            {#if file.conflict}
+              <span class="file-dot dot-C"></span>
+            {:else}
+              <span class="file-dot" class:dot-A={file.type === 'A'} class:dot-D={file.type === 'D'} class:dot-M={file.type === 'M'}></span>
+            {/if}
+            <span class="file-select-path">{file.path}</span>
+            {#if file.additions > 0 || file.deletions > 0}
+              <span class="file-tab-stats">
+                {#if file.additions > 0}<span class="stat-add">+{file.additions}</span>{/if}
+                {#if file.deletions > 0}<span class="stat-del">-{file.deletions}</span>{/if}
+              </span>
+            {/if}
+          </div>
+        {/each}
+      </div>
     </div>
   {/if}
-  {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0}
+  {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0 && !fileSelectionMode}
     <div class="file-list-bar">
       <span class="file-list-label">Files ({changedFiles.length}){#if conflictCount > 0}<span class="conflict-count-label"> · {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}</span>{/if}</span>
       {#if totalStats.add > 0 || totalStats.del > 0}
@@ -521,16 +624,6 @@
             onclick={() => scrollToFile(file.path)}
             title={file.path}
           >
-            {#if fileSelectionMode}
-              <input
-                type="checkbox"
-                checked={squashSelectedFiles.has(file.path)}
-                onchange={() => ontogglefile(file.path)}
-                onclick={(e: MouseEvent) => e.stopPropagation()}
-                class="squash-file-check"
-                class:split-file-check={splitMode}
-              />
-            {/if}
             {#if file.conflict}
               <span class="file-dot dot-C"></span>
             {:else}
@@ -615,12 +708,12 @@
             isCollapsed={collapsedFiles.has(filePath)}
             isExpanded={expandedDiffs.has(filePath)}
             {splitView}
-            {highlightedLines}
+            highlightedLines={highlightsByFile.get(filePath) ?? EMPTY_HL}
             {wordDiffMap}
             ontoggle={toggleFile}
             onexpand={expandFile}
             {onresolve}
-            searchMatches={searchOpen ? searchMatches : []}
+            searchMatches={matchesByFile.get(filePath) ?? EMPTY_MATCHES}
             {currentMatchIdx}
           />
         {/each}
@@ -633,12 +726,12 @@
               isCollapsed={collapsedFiles.has(cf.path)}
               isExpanded={false}
               {splitView}
-              highlightedLines={new Map()}
+              highlightedLines={EMPTY_HL}
               {wordDiffMap}
               ontoggle={toggleFile}
               onexpand={expandFile}
               {onresolve}
-              searchMatches={searchOpen ? searchMatches : []}
+              searchMatches={matchesByFile.get(cf.path) ?? EMPTY_MATCHES}
               {currentMatchIdx}
             />
           {:else}
@@ -860,22 +953,117 @@
     100% { opacity: 0; }
   }
 
-  /* --- File list bar --- */
-  .squash-banner {
-    padding: 4px 12px;
-    background: var(--bg-checked);
+  /* --- File selection panel (split/squash) --- */
+  .file-selection-panel {
     border-bottom: 1px solid var(--green);
-    color: var(--green);
-    font-size: 11px;
-    font-weight: 600;
+    flex-shrink: 0;
+    animation: slide-down var(--anim-duration) var(--anim-ease);
   }
 
-  .split-banner {
-    background: var(--badge-workspace-bg);
+  .file-selection-panel.split-selection {
     border-bottom-color: var(--cyan);
+  }
+
+  .file-selection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--bg-checked);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green);
+  }
+
+  .split-selection .file-selection-header {
+    background: var(--badge-workspace-bg);
     color: var(--cyan);
   }
 
+  .file-selection-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .file-selection-title kbd {
+    background: var(--surface0);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 10px;
+    border: 1px solid var(--surface1);
+    color: var(--overlay0);
+    font-weight: 500;
+  }
+
+  .file-selection-count {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .file-selection-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 160px;
+    overflow-y: auto;
+    background: var(--mantle);
+    outline: none;
+  }
+
+  .file-select-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color var(--anim-duration) var(--anim-ease);
+  }
+
+  .file-select-row:hover:not(.file-select-active) {
+    background: var(--bg-hover);
+  }
+
+  .file-select-row.file-select-active {
+    background: var(--surface0);
+  }
+
+  .file-check-indicator {
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    transition: color var(--anim-duration) var(--anim-ease),
+                transform var(--anim-duration) var(--anim-ease);
+  }
+
+  .file-checked .file-check-indicator {
+    color: var(--green);
+    transform: scale(1.15);
+  }
+
+  .split-selection .file-checked .file-check-indicator {
+    color: var(--cyan);
+  }
+
+  .file-select-path {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--subtext0);
+  }
+
+  .file-select-row.file-checked .file-select-path {
+    color: var(--text);
+  }
+
+  /* --- File list bar --- */
   .file-list-bar {
     display: flex;
     align-items: center;
@@ -965,17 +1153,6 @@
 
   .file-tab-stats .stat-add { color: var(--green); }
   .file-tab-stats .stat-del { color: var(--red); }
-
-  .squash-file-check {
-    margin: 0 2px 0 0;
-    cursor: pointer;
-    accent-color: var(--green);
-    vertical-align: middle;
-  }
-
-  .split-file-check {
-    accent-color: var(--cyan);
-  }
 
   .conflict-count-label {
     color: var(--red);
