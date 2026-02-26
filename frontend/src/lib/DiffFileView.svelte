@@ -296,14 +296,14 @@
           onfocus={() => hoveredResolve = { regionIdx: -1, side: 0 }}
           onmouseleave={() => hoveredResolve = null}
           onblur={() => hoveredResolve = null}
-          aria-description="Discards {conflictData.allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}">Keep {conflictData.allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}</button>
+          title="Discards {conflictData.allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}">Keep {conflictData.allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}</button>
         <button class="resolve-btn resolve-theirs"
           onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
           onmouseenter={() => hoveredResolve = { regionIdx: -1, side: 1 }}
           onfocus={() => hoveredResolve = { regionIdx: -1, side: 1 }}
           onmouseleave={() => hoveredResolve = null}
           onblur={() => hoveredResolve = null}
-          aria-description="Discards {conflictData.allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}">Keep {conflictData.allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}</button>
+          title="Discards {conflictData.allRegionEnds[0]?.sideLabels?.[0] ?? 'side 1'}">Keep {conflictData.allRegionEnds[0]?.sideLabels?.[1] ?? 'side 2'}</button>
       {/if}
     {/if}
   </div>
@@ -392,19 +392,19 @@
                   <span class="conflict-side-label">{cm.sideLabel}</span>
                 {/if}
                 {#if cm.isRegionEnd && onresolve && cm.sideCount === 2}
-                  <div class="conflict-resolve-inline" onmouseleave={() => hoveredResolve = null}>
+                  <div class="conflict-resolve-inline" role="group" onmouseleave={() => hoveredResolve = null}>
                     <button class="resolve-btn-inline resolve-inline-ours"
                       onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
                       onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}
                       onfocus={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}
                       onblur={() => hoveredResolve = null}
-                      aria-description="Discards {cm.sideLabels?.[1] ?? 'side 2'}">Keep {cm.sideLabels?.[0] ?? 'side 1'}</button>
+                      title="Discards {cm.sideLabels?.[1] ?? 'side 2'}">Keep {cm.sideLabels?.[0] ?? 'side 1'}</button>
                     <button class="resolve-btn-inline resolve-inline-theirs"
                       onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
                       onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}
                       onfocus={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}
                       onblur={() => hoveredResolve = null}
-                      aria-description="Discards {cm.sideLabels?.[0] ?? 'side 1'}">Keep {cm.sideLabels?.[1] ?? 'side 2'}</button>
+                      title="Discards {cm.sideLabels?.[0] ?? 'side 1'}">Keep {cm.sideLabels?.[1] ?? 'side 2'}</button>
                   </div>
                 {/if}
                 {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx, cm)}

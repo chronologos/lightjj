@@ -890,8 +890,10 @@
     background: rgba(235, 100, 100, 0.15);
   }
 
-  /* Suppress transitions during revision switch to prevent j/k flapping */
-  .panel-content.skip-transitions :global(.collapse-icon) {
+  /* Suppress transitions during revision switch to prevent j/k flapping.
+     Fully :global() because skip-transitions is toggled via classList (not
+     class: directive) so Svelte's compiler can't see it matches. */
+  :global(.panel-content.skip-transitions .collapse-icon) {
     transition: none !important;
   }
 
