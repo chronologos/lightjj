@@ -422,13 +422,13 @@
 
   .expand-btn:hover {
     background: var(--bg-hover);
-    color: var(--cyan);
+    color: var(--overlay0);
   }
 
   .diff-hunk-header {
     padding: 4px 12px;
     background: var(--bg-hunk-header);
-    color: var(--cyan);
+    color: var(--overlay0);
     font-size: 12px;
     border-bottom: 1px solid var(--border-hunk-header);
     font-style: italic;
@@ -558,14 +558,14 @@
 
   .resolve-ours:hover {
     background: var(--conflict-side1-bg);
-    border-color: var(--amber);
-    color: var(--amber);
+    border-color: var(--conflict-side1-border);
+    color: var(--red);
   }
 
   .resolve-theirs:hover {
     background: var(--conflict-side2-bg);
-    border-color: var(--purple);
-    color: var(--purple);
+    border-color: var(--conflict-side2-border);
+    color: var(--red);
   }
 
   /* --- Conflict region card --- */

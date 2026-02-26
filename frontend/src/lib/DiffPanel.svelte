@@ -157,51 +157,67 @@
   let lastHighlightedDiff = ''
   let highlightTimer: number | undefined
 
-  async function highlightDiff(files: DiffFile[]) {
+  // Highlight a single file's hunks and return a Map of line keys → HTML
+  async function highlightFile(file: DiffFile): Promise<Map<string, string>> {
+    const lang = detectLanguage(file.filePath)
+    const fileMap = new Map<string, string>()
+    for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
+      const hunk = file.hunks[hunkIdx]
+      const groups = new Map<DiffLine['type'], { idx: number; content: string }[]>()
+      hunk.lines.forEach((line, i) => {
+        const list = groups.get(line.type) ?? []
+        list.push({ idx: i, content: line.content.slice(1) })
+        groups.set(line.type, list)
+      })
+      for (const [type, group] of groups) {
+        const highlighted = await highlightLines(group.map(g => g.content), lang)
+        const prefix = type === 'add' ? '+' : type === 'remove' ? '-' : ' '
+        group.forEach((g, j) => {
+          fileMap.set(
+            `${file.filePath}:${hunkIdx}:${g.idx}`,
+            `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`,
+          )
+        })
+      }
+    }
+    return fileMap
+  }
+
+  // Count total diff lines across files until a budget is reached
+  function countLines(files: DiffFile[]): number {
+    let total = 0
+    for (const f of files) for (const h of f.hunks) total += h.lines.length
+    return total
+  }
+
+  async function highlightDiff(files: DiffFile[], immediate: boolean) {
     const gen = ++highlightGeneration
-    // Accumulate completed files locally; push to state after each file
     const done = new Map<string, Map<string, string>>()
-    for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
-      const file = files[fileIdx]
-      // Yield between files so the browser can paint and process input
+
+    // Phase 1: highlight first files immediately (up to ~100 lines) — no yield
+    // This prevents the visible flicker on revision change.
+    const IMMEDIATE_BUDGET = 100
+    let linesProcessed = 0
+    let immediateEnd = 0
+    if (immediate) {
+      for (let i = 0; i < files.length && linesProcessed < IMMEDIATE_BUDGET; i++) {
+        const file = files[i]
+        let fileLines = 0
+        for (const h of file.hunks) fileLines += h.lines.length
+        done.set(file.filePath, await highlightFile(file))
+        if (gen !== highlightGeneration) return
+        linesProcessed += fileLines
+        immediateEnd = i + 1
+      }
+      if (done.size > 0) highlightsByFile = new Map(done)
+    }
+
+    // Phase 2: highlight remaining files, yielding between each
+    for (let i = immediateEnd; i < files.length; i++) {
       await new Promise<void>(resolve => setTimeout(resolve, 0))
       if (gen !== highlightGeneration) return
-
-      const filePath = file.filePath
-      const lang = detectLanguage(filePath)
-      const fileMap = new Map<string, string>()
-
-      for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
-        const hunk = file.hunks[hunkIdx]
-        // Group lines by type so Shiki highlights each group with correct context
-        const groups = new Map<DiffLine['type'], { idx: number; content: string }[]>()
-        hunk.lines.forEach((line, i) => {
-          const list = groups.get(line.type) ?? []
-          list.push({ idx: i, content: line.content.slice(1) })
-          groups.set(line.type, list)
-        })
-
-        for (const [type, group] of groups) {
-          const highlighted = await highlightLines(group.map(g => g.content), lang)
-          if (gen !== highlightGeneration) return
-          const prefix = type === 'add' ? '+' : type === 'remove' ? '-' : ' '
-          group.forEach((g, j) => {
-            fileMap.set(
-              `${filePath}:${hunkIdx}:${g.idx}`,
-              `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`,
-            )
-          })
-        }
-      }
-
-      done.set(filePath, fileMap)
-      // Publish after each file. Files already done keep their existing Map
-      // reference (in `done`); files not yet done are absent. The outer Map
-      // identity changes to trigger template reads, but inner Maps that haven't
-      // changed since last publish are reused so those DiffFileViews don't re-render.
-      if (gen === highlightGeneration) {
-        highlightsByFile = new Map(done)
-      }
+      done.set(files[i].filePath, await highlightFile(files[i]))
+      if (gen === highlightGeneration) highlightsByFile = new Map(done)
     }
   }
 
@@ -217,9 +233,9 @@
       // Clear stale highlights immediately to prevent wrong-color flicker
       // when old and new diffs share the same file/hunk/line keys
       highlightsByFile = new Map()
-      // Defer Shiki so it doesn't block the keydown → paint path.
-      // Plain text + word-diff renders instantly; syntax colors appear ~150ms later.
-      highlightTimer = setTimeout(() => highlightDiff(effectiveFiles), 150)
+      // Highlight first ~100 lines immediately (no delay) to avoid visible
+      // flicker. Remaining files are deferred and yield between each.
+      highlightDiff(effectiveFiles, true)
     } else if (parsedDiff.length === 0) {
       lastHighlightedDiff = ''
       highlightsByFile = new Map()
@@ -276,7 +292,7 @@
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
         const files = parsedDiff.map(f => expandedDiffs.get(f.filePath) ?? f)
         clearTimeout(highlightTimer)
-        highlightTimer = setTimeout(() => highlightDiff(files), 50)
+        highlightTimer = setTimeout(() => highlightDiff(files, false), 50)
       }
     } catch {
       // Silently fail — the unexpanded diff remains visible
@@ -496,7 +512,7 @@
     highlightsByFile = new Map()
     clearTimeout(highlightTimer)
     if (parsedDiff.length > 0) {
-      highlightTimer = setTimeout(() => highlightDiff(parsedDiff), 50)
+      highlightTimer = setTimeout(() => highlightDiff(parsedDiff, false), 50)
     }
   }
 </script>
@@ -531,12 +547,11 @@
               <a class="detail-pr-badge" class:is-draft={pr.is_draft}
                  href={pr.url} target="_blank" rel="noopener"
                  title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
-                <svg class="pr-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.254V3.25a.75.75 0 110 .005v5.45a2.5 2.5 0 101.5 0V5.558a4 4 0 002.74 1.353v1.839a2.5 2.5 0 101.5 0V6.25a.75.75 0 01-1.5 0v-1a.75.75 0 01.75-.75A2.5 2.5 0 007.5 2H7V.75a.25.25 0 00-.4-.2l-1.8 1.35a.25.25 0 000 .4L6.6 3.65a.25.25 0 00.4-.2V2.5h.5a1 1 0 010 2H7a.75.75 0 01-.75-.75v-.001A.75.75 0 015 3.254zM5.75 12a1 1 0 100-2 1 1 0 000 2zm5.5 0a1 1 0 100-2 1 1 0 000 2z"/></svg>
-                <span class="pr-name">{bm}</span>
+                <span class="pr-name">↗ {bm}</span>
                 <span class="pr-number">#{pr.number}</span>
               </a>
             {:else}
-              <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>{bm}</button>
+              <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>⑂ {bm}</button>
             {/if}
           {/each}
         </div>
@@ -884,7 +899,7 @@
     display: inline-flex;
     align-items: center;
     background: var(--bg-bookmark);
-    color: var(--green);
+    color: var(--subtext0);
     padding: 0 5px;
     border-radius: 3px;
     font-size: 10px;
@@ -901,7 +916,7 @@
     align-items: center;
     gap: 3px;
     background: var(--bg-pr);
-    color: var(--blue);
+    color: var(--subtext0);
     padding: 0 6px;
     border-radius: 3px;
     font-size: 10px;
@@ -912,11 +927,11 @@
     cursor: pointer;
     font-family: inherit;
     text-decoration: none;
+    transition: border-color var(--anim-duration) var(--anim-ease);
   }
 
   .detail-pr-badge:hover {
     border-color: var(--border-pr-hover);
-    filter: brightness(1.15);
   }
 
   .detail-pr-badge.is-draft {
@@ -924,15 +939,8 @@
     opacity: 0.75;
   }
 
-  .pr-icon {
-    width: 10px;
-    height: 10px;
-    flex-shrink: 0;
-    opacity: 0.7;
-  }
-
   .pr-name {
-    color: var(--blue);
+    color: var(--subtext0);
   }
 
   .pr-number {
@@ -955,13 +963,9 @@
 
   /* --- File selection panel (split/squash) --- */
   .file-selection-panel {
-    border-bottom: 1px solid var(--green);
+    border-bottom: 1px solid var(--amber);
     flex-shrink: 0;
     animation: slide-down var(--anim-duration) var(--anim-ease);
-  }
-
-  .file-selection-panel.split-selection {
-    border-bottom-color: var(--cyan);
   }
 
   .file-selection-header {
@@ -969,15 +973,10 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 12px;
-    background: var(--bg-checked);
+    background: var(--bg-selected);
     font-size: 11px;
     font-weight: 600;
-    color: var(--green);
-  }
-
-  .split-selection .file-selection-header {
-    background: var(--badge-workspace-bg);
-    color: var(--cyan);
+    color: var(--amber);
   }
 
   .file-selection-title {
@@ -1041,12 +1040,8 @@
   }
 
   .file-checked .file-check-indicator {
-    color: var(--green);
+    color: var(--amber);
     transform: scale(1.15);
-  }
-
-  .split-selection .file-checked .file-check-indicator {
-    color: var(--cyan);
   }
 
   .file-select-path {
@@ -1210,8 +1205,8 @@
 
   .resolve-theirs:hover {
     background: var(--conflict-side2-bg);
-    border-color: var(--purple);
-    color: var(--purple);
+    border-color: var(--conflict-side2-border);
+    color: var(--red);
   }
   /* --- Diff toolbar --- */
   .diff-toolbar {

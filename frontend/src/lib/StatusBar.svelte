@@ -139,7 +139,7 @@
   }
 
   .statusbar.split-active {
-    border-top-color: var(--cyan);
+    border-top-color: var(--amber);
   }
 
   .statusbar-left,
@@ -217,12 +217,9 @@
     font-weight: 600;
   }
 
-  .mode-badge-squash {
-    background: var(--green);
-  }
-
+  .mode-badge-squash,
   .mode-badge-split {
-    background: var(--cyan);
+    background: var(--amber);
   }
 
   .file-count {

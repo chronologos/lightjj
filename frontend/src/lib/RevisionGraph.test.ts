@@ -107,15 +107,15 @@ describe('RevisionGraph', () => {
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
       const badges = container.querySelectorAll('.bookmark-badge')
       expect(badges).toHaveLength(2)
-      expect(badges[0].textContent).toBe('main')
-      expect(badges[1].textContent).toBe('feature')
+      expect(badges[0].textContent).toBe('⑂ main')
+      expect(badges[1].textContent).toBe('⑂ feature')
     })
 
     it('renders working copy labels when present', () => {
       const entry = makeEntry({ working_copies: ['default'] })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
       const ws = container.querySelector('.workspace-badge')
-      expect(ws?.textContent).toBe('default@')
+      expect(ws?.textContent).toBe('◇ default@')
     })
 
     it('shows revision count in header badge', () => {
