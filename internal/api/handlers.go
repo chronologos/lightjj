@@ -69,8 +69,10 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	}
 	// Cap unbounded requests to prevent runaway fetches on large repos.
 	// Default: 500 commits (typically covers months of history).
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 {
 		limit = 500
+	} else if limit > 1000 {
+		limit = 1000
 	}
 
 	args := jj.LogGraph(revset, limit)

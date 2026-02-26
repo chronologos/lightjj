@@ -1,20 +1,38 @@
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/svelte'
 import StatusBar from './StatusBar.svelte'
+import { createRebaseMode, createSquashMode, createSplitMode } from './modes.svelte'
+
+function activeRebase(sourceKey?: string, targetKey?: string) {
+  const m = createRebaseMode()
+  m.enter(['x'])
+  if (sourceKey) m.handleKey(sourceKey)
+  if (targetKey) m.handleKey(targetKey)
+  return m
+}
+
+function activeSquash(toggle?: 'e' | 'd') {
+  const m = createSquashMode()
+  m.enter(['x'])
+  if (toggle) m.handleKey(toggle)
+  return m
+}
+
+function activeSplit(parallel = false) {
+  const m = createSplitMode()
+  m.enter('x')
+  if (parallel) m.handleKey('p')
+  return m
+}
 
 function defaultProps(overrides: Record<string, unknown> = {}) {
   return {
     statusText: 'Ready',
     commandOutput: '',
-    rebaseMode: false,
-    rebaseSourceMode: '-r',
-    rebaseTargetMode: '-d',
-    squashMode: false,
-    squashKeepEmptied: false,
-    squashUseDestMsg: false,
+    rebase: createRebaseMode(),
+    squash: createSquashMode(),
     squashFileCount: null,
-    splitMode: false,
-    splitParallel: false,
+    split: createSplitMode(),
     splitFileCount: null,
     activeView: 'log' as const,
     ...overrides,
@@ -46,22 +64,22 @@ describe('StatusBar', () => {
 
   describe('rebase mode', () => {
     it('shows rebase mode badge', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ rebaseMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ rebase: activeRebase() }) })
       const badge = container.querySelector('.mode-badge')
       expect(badge?.textContent).toBe('rebase')
     })
 
     it('shows Enter/Esc action keys', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ rebaseMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ rebase: activeRebase() }) })
       const actionKeys = container.querySelectorAll('.action-key')
       const keyTexts = Array.from(actionKeys).map(k => k.textContent)
       expect(keyTexts).toContain('Enter')
       expect(keyTexts).toContain('Esc')
     })
 
-    it('highlights active source key based on rebaseSourceMode', () => {
+    it('highlights active source key based on rebase.sourceMode', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ rebaseMode: true, rebaseSourceMode: '-r' }),
+        props: defaultProps({ rebase: activeRebase() }),
       })
       const keys = container.querySelectorAll('.key:not(.action-key)')
       const activeKeys = Array.from(keys).filter(k => k.classList.contains('key-active'))
@@ -69,19 +87,18 @@ describe('StatusBar', () => {
       expect(activeKeys[0].textContent).toBe('r')
     })
 
-    it('highlights active target key based on rebaseTargetMode', () => {
+    it('highlights active target key based on rebase.targetMode', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ rebaseMode: true, rebaseTargetMode: '--insert-after' }),
+        props: defaultProps({ rebase: activeRebase(undefined, 'a') }),
       })
       const keys = container.querySelectorAll('.key:not(.action-key)')
       const activeKeys = Array.from(keys).filter(k => k.classList.contains('key-active'))
-      // Should have 'r' (source) and 'a' (target) active
       const activeTexts = activeKeys.map(k => k.textContent)
       expect(activeTexts).toContain('a')
     })
 
     it('has rebase-active CSS class on footer', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ rebaseMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ rebase: activeRebase() }) })
       const footer = container.querySelector('footer')
       expect(footer?.classList.contains('rebase-active')).toBe(true)
     })
@@ -89,23 +106,23 @@ describe('StatusBar', () => {
 
   describe('squash mode', () => {
     it('shows squash mode badge', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ squashMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ squash: activeSquash() }) })
       const badge = container.querySelector('.mode-badge')
       expect(badge?.textContent).toBe('squash')
     })
 
-    it('highlights e key when squashKeepEmptied=true', () => {
+    it('highlights e key when keepEmptied is toggled', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ squashMode: true, squashKeepEmptied: true }),
+        props: defaultProps({ squash: activeSquash('e') }),
       })
       const keys = container.querySelectorAll('.key:not(.action-key)')
       const eKey = Array.from(keys).find(k => k.textContent === 'e')
       expect(eKey?.classList.contains('key-active')).toBe(true)
     })
 
-    it('highlights d key when squashUseDestMsg=true', () => {
+    it('highlights d key when useDestMsg is toggled', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ squashMode: true, squashUseDestMsg: true }),
+        props: defaultProps({ squash: activeSquash('d') }),
       })
       const keys = container.querySelectorAll('.key:not(.action-key)')
       const dKey = Array.from(keys).find(k => k.textContent === 'd')
@@ -114,7 +131,7 @@ describe('StatusBar', () => {
 
     it('shows file count', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ squashMode: true, squashFileCount: { selected: 2, total: 5 } }),
+        props: defaultProps({ squash: activeSquash(), squashFileCount: { selected: 2, total: 5 } }),
       })
       const fileCount = container.querySelector('.file-count')
       expect(fileCount?.textContent).toBe('2/5 files')
@@ -122,14 +139,14 @@ describe('StatusBar', () => {
 
     it('file-count-empty class when selected=0', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ squashMode: true, squashFileCount: { selected: 0, total: 5 } }),
+        props: defaultProps({ squash: activeSquash(), squashFileCount: { selected: 0, total: 5 } }),
       })
       const fileCount = container.querySelector('.file-count')
       expect(fileCount?.classList.contains('file-count-empty')).toBe(true)
     })
 
     it('has squash-active CSS class', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ squashMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ squash: activeSquash() }) })
       const footer = container.querySelector('footer')
       expect(footer?.classList.contains('squash-active')).toBe(true)
     })
@@ -137,14 +154,14 @@ describe('StatusBar', () => {
 
   describe('split mode', () => {
     it('shows split mode badge', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ splitMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ split: activeSplit() }) })
       const badge = container.querySelector('.mode-badge')
       expect(badge?.textContent).toBe('split')
     })
 
-    it('highlights p key when splitParallel=true', () => {
+    it('highlights p key when parallel is toggled', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ splitMode: true, splitParallel: true }),
+        props: defaultProps({ split: activeSplit(true) }),
       })
       const keys = container.querySelectorAll('.key:not(.action-key)')
       const pKey = Array.from(keys).find(k => k.textContent === 'p')
@@ -153,14 +170,14 @@ describe('StatusBar', () => {
 
     it('shows file count with stay suffix', () => {
       const { container } = render(StatusBar, {
-        props: defaultProps({ splitMode: true, splitFileCount: { selected: 3, total: 7 } }),
+        props: defaultProps({ split: activeSplit(), splitFileCount: { selected: 3, total: 7 } }),
       })
       const fileCount = container.querySelector('.file-count')
       expect(fileCount?.textContent).toBe('3/7 files stay')
     })
 
     it('has split-active CSS class', () => {
-      const { container } = render(StatusBar, { props: defaultProps({ splitMode: true }) })
+      const { container } = render(StatusBar, { props: defaultProps({ split: activeSplit() }) })
       const footer = container.querySelector('footer')
       expect(footer?.classList.contains('split-active')).toBe(true)
     })
