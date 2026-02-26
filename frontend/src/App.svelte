@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias } from './lib/api'
+  import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -71,6 +71,8 @@
   let currentWorkspace: string = $state('')
   let workspaceList: Workspace[] = $state([])
   let aliases: Alias[] = $state([])
+  let pullRequests: PullRequest[] = $state([])
+  let prByBookmark = $derived(new Map(pullRequests.map(pr => [pr.bookmark, pr])))
 
   let contextMenuItems: ContextMenuItem[] = $state([])
   let contextMenuX: number = $state(0)
@@ -262,6 +264,11 @@
   async function loadAliases() {
     try { aliases = await api.aliases() }
     catch { /* ignore — aliases are optional */ }
+  }
+
+  async function loadPullRequests() {
+    try { pullRequests = await api.pullRequests() }
+    catch { /* ignore — gh may not be available */ }
   }
 
   function handleRunAlias(name: string) {
@@ -549,6 +556,7 @@
     runMutation(
       () => type === 'push' ? api.gitPush(flags) : api.gitFetch(flags),
       `Git ${type} complete`,
+      { after: () => loadPullRequests() },
     )
 
   function handleBookmarkSet(name: string) {
@@ -1077,6 +1085,7 @@
   loadLog()
   loadWorkspaces()
   loadAliases()
+  loadPullRequests()
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -1151,6 +1160,7 @@
           splitRevision={split.revision}
           splitParallel={split.parallel}
           isDark={darkMode}
+          {prByBookmark}
         />
 
         {#if divergence.active}
@@ -1186,6 +1196,7 @@
             onresolve={inlineMode ? undefined : handleResolve}
             divergentSelected={selectedRevision?.commit.divergent ?? false}
             onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
+            {prByBookmark}
           />
         {/if}
       </div>
