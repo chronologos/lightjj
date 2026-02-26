@@ -113,8 +113,10 @@ describe('DiffFileView', () => {
     function conflictProps(onresolve?: (file: string, tool: ':ours' | ':theirs') => void) {
       const file = makeFile('conflict.go', [
         { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
-        { type: 'add', content: '+%%%%%%% Changes' },
-        { type: 'add', content: '+content' },
+        { type: 'add', content: '+%%%%%%% "side A changes"' },
+        { type: 'add', content: '+-old line' },
+        { type: 'add', content: '++++++++ "side B content"' },
+        { type: 'add', content: '+new content' },
         { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
       ])
       const stats = makeStats('conflict.go', { conflict: true })
@@ -127,8 +129,8 @@ describe('DiffFileView', () => {
       })
       const buttons = container.querySelectorAll('.resolve-btn')
       expect(buttons).toHaveLength(2)
-      expect(buttons[0].textContent).toBe('Accept Ours')
-      expect(buttons[1].textContent).toBe('Accept Theirs')
+      expect(buttons[0].textContent).toBe('Keep side A changes')
+      expect(buttons[1].textContent).toBe('Keep side B content')
     })
 
     it('does not show resolve buttons when onresolve is not provided', () => {
@@ -138,7 +140,7 @@ describe('DiffFileView', () => {
       expect(container.querySelectorAll('.resolve-btn')).toHaveLength(0)
     })
 
-    it('clicking Accept Ours calls onresolve with :ours', async () => {
+    it('clicking Keep side 1 calls onresolve with :ours', async () => {
       const onresolve = vi.fn()
       const { container } = render(DiffFileView, {
         props: conflictProps(onresolve),
@@ -149,7 +151,7 @@ describe('DiffFileView', () => {
       expect(onresolve).toHaveBeenCalledWith('conflict.go', ':ours')
     })
 
-    it('clicking Accept Theirs calls onresolve with :theirs', async () => {
+    it('clicking Keep side 2 calls onresolve with :theirs', async () => {
       const onresolve = vi.fn()
       const { container } = render(DiffFileView, {
         props: conflictProps(onresolve),
@@ -332,6 +334,151 @@ describe('DiffFileView', () => {
       const btn = container.querySelector('.expand-btn')!
       await fireEvent.click(btn)
       expect(onexpand).toHaveBeenCalledWith('test.go')
+    })
+  })
+
+  describe('conflict rendering', () => {
+    function twoSideConflict() {
+      return makeFile('fuzzy.ts', [
+        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
+        { type: 'add', content: '+%%%%%%% diff from: "Conflict resolution"' },
+        { type: 'add', content: '+\\\\\\\\\\\\\\        to: suqyukyr f415bb98 "side X"' },
+        { type: 'add', content: '+-  old line' },
+        { type: 'add', content: '++  new line from side X' },
+        { type: 'add', content: '++++++++ wlykovwr 562576c8 "side Y"' },
+        { type: 'add', content: '+  content from side Y' },
+        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
+      ])
+    }
+
+    function conflictStats() {
+      return makeStats('fuzzy.ts', { conflict: true })
+    }
+
+    it('hides conflict marker lines (<<<, %%%, +++, >>>)', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      const markerLines = container.querySelectorAll('.conflict-marker-line')
+      expect(markerLines.length).toBeGreaterThan(0)
+      for (const ml of markerLines) {
+        expect(ml.textContent?.trim()).toBe('')
+      }
+    })
+
+    it('suppresses diff-add class on conflict lines', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      const conflictLines = container.querySelectorAll('.conflict-line .diff-line')
+      for (const cl of conflictLines) {
+        expect(cl.classList.contains('diff-add')).toBe(false)
+      }
+    })
+
+    it('parses inner diff: - lines get conflict-inner-remove class', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      const removals = container.querySelectorAll('.conflict-inner-remove')
+      expect(removals.length).toBeGreaterThan(0)
+      // Content should have the - prefix stripped, showing just the code
+      expect(removals[0].textContent).toContain('old line')
+    })
+
+    it('parses inner diff: + lines get conflict-inner-add class', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      const additions = container.querySelectorAll('.conflict-inner-add')
+      expect(additions.length).toBeGreaterThan(0)
+      expect(additions[0].textContent).toContain('new line from side X')
+    })
+
+    it('strips prefix from snapshot section lines', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      const snapLines = container.querySelectorAll('.conflict-snap-line .diff-line')
+      for (const sl of snapLines) {
+        // Snapshot lines should not start with + prefix
+        const text = sl.textContent ?? ''
+        expect(text).not.toMatch(/^\s*\+/)
+      }
+    })
+
+    it('hides \\\\\\\\\\\\\\  sub-marker within %%%%%%% section', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      // The \\\\\\\ line should render as a conflict-marker-line (2px bar)
+      const allText = container.textContent ?? ''
+      expect(allText).not.toContain('\\\\\\\\\\\\\\')
+    })
+
+    it('shows side labels from conflict markers', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
+      })
+      const labels = container.querySelectorAll('.conflict-side-label')
+      const labelTexts = [...labels].map(l => l.textContent)
+      expect(labelTexts).toContain('Conflict resolution')
+      expect(labelTexts.some(t => t?.includes('side X'))).toBe(true)
+      expect(labelTexts.some(t => t?.includes('side Y'))).toBe(true)
+    })
+
+    it('shows resolve buttons with side labels for 2-way conflicts', () => {
+      const onresolve = vi.fn()
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats(), onresolve }),
+      })
+      const buttons = container.querySelectorAll('.resolve-btn')
+      expect(buttons.length).toBe(2)
+      expect(buttons[0].textContent).toContain('Keep')
+      expect(buttons[1].textContent).toContain('Keep')
+      // Should use side labels, not "Accept Ours/Theirs"
+      expect(buttons[0].textContent).not.toContain('Ours')
+      expect(buttons[1].textContent).not.toContain('Theirs')
+    })
+
+    it('hides resolve buttons for single-side conflicts', () => {
+      const file = makeFile('one-side.ts', [
+        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
+        { type: 'add', content: '+%%%%%%% "only changes"' },
+        { type: 'add', content: '++  changed line' },
+        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, fileStats: makeStats('one-side.ts', { conflict: true }), onresolve: vi.fn() }),
+      })
+      expect(container.querySelectorAll('.resolve-btn')).toHaveLength(0)
+      expect(container.querySelectorAll('.resolve-btn-inline')).toHaveLength(0)
+    })
+
+    it('forces unified view for conflicted files even when splitView=true', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats(), splitView: true }),
+      })
+      // Should NOT render split-view columns
+      expect(container.querySelector('.split-view')).toBeNull()
+      // Should render unified diff-lines
+      expect(container.querySelectorAll('.diff-lines').length).toBeGreaterThan(0)
+    })
+
+    it('does not double-prefix non-conflict lines', () => {
+      const file = makeFile('normal.ts', [
+        { type: 'add', content: '+export function foo() {}' },
+        { type: 'remove', content: '-old function' },
+        { type: 'context', content: ' unchanged' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file }),
+      })
+      const lines = container.querySelectorAll('.diff-line')
+      // First line: prefix should be '+', content should NOT start with another '+'
+      const addLine = container.querySelector('.diff-add')
+      expect(addLine?.textContent).toContain('export function foo')
+      expect(addLine?.textContent).not.toContain('++')
     })
   })
 })

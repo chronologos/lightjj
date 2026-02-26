@@ -30,7 +30,7 @@
 <footer class="statusbar" class:rebase-active={rebase.active} class:squash-active={squash.active} class:split-active={split.active}>
   {#if split.active}
     <div class="statusbar-left">
-      <span class="mode-badge mode-badge-split">split</span>
+      <span class="mode-badge">split</span>
       <span class="key-group">
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
@@ -48,7 +48,7 @@
     </div>
   {:else if squash.active}
     <div class="statusbar-left">
-      <span class="mode-badge mode-badge-squash">squash</span>
+      <span class="mode-badge">squash</span>
       <span class="key-group">
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
@@ -217,10 +217,6 @@
     font-weight: 600;
   }
 
-  .mode-badge-squash,
-  .mode-badge-split {
-    background: var(--amber);
-  }
 
   .file-count {
     color: var(--subtext0);

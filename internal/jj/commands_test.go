@@ -134,7 +134,19 @@ func TestSplit(t *testing.T) {
 	got := Split("abc", []string{"main.go"}, true, false)
 	assert.Contains(t, got, "--parallel")
 	assert.NotContains(t, got, "--interactive")
+	assert.Contains(t, got, "-m")
 	assert.Contains(t, got, `file:"main.go"`)
+}
+
+func TestSplit_NoFilesNoMessage(t *testing.T) {
+	got := Split("abc", nil, false, false)
+	assert.NotContains(t, got, "-m")
+}
+
+func TestSplit_InteractiveNoMessage(t *testing.T) {
+	got := Split("abc", []string{"main.go"}, false, true)
+	assert.Contains(t, got, "--interactive")
+	assert.NotContains(t, got, "-m")
 }
 
 func TestUndoRedo(t *testing.T) {

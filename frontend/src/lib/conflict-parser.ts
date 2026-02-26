@@ -29,6 +29,8 @@ const CONFLICT_START = /^\+<{7}\s*(.*)/
 const CONFLICT_DIFF  = /^\+%{7}\s*(.*)/
 const CONFLICT_SNAP  = /^\+\+{7}\s*(.*)/
 const CONFLICT_END   = /^\+>{7}\s*(.*)/
+// Sub-marker within %%%%%%% sections: `+\\\\\\\` shows the "to" revision
+const CONFLICT_DIFF_TO = /^\+\\{7}\s*(.*)/
 
 // Extract a human-readable label from jj's conflict marker text.
 // Marker text looks like:
@@ -36,7 +38,7 @@ const CONFLICT_END   = /^\+>{7}\s*(.*)/
 //   wlykovwr 562576c8 "side Y: modify existing file differently"
 //   Changes from base to side #1
 // We prefer the quoted commit description, falling back to the raw text.
-function extractSideLabel(markerText: string): string {
+export function extractSideLabel(markerText: string): string {
   const quoted = markerText.match(/"([^"]+)"/)
   if (quoted) return quoted[1]
   return markerText.trim()
@@ -77,6 +79,10 @@ export function findConflicts(lines: DiffLine[]): ConflictRegion[] {
       regions.push(current)
       current = null
       currentSide = null
+    } else if (current && currentSide && currentSide.type === 'diff' && content.match(CONFLICT_DIFF_TO)) {
+      // The \\\\\\\ sub-marker within a %%%%%%% section is metadata, not code.
+      // Keep it part of the current side but mark it separately for styling.
+      currentSide.endIdx = i
     } else if (currentSide) {
       currentSide.endIdx = i
     }
