@@ -211,6 +211,77 @@ func TestCurrentOpId(t *testing.T) {
 	assert.Contains(t, got, "self.id().short()")
 }
 
+func TestDebugSnapshot(t *testing.T) {
+	got := DebugSnapshot()
+	assert.Equal(t, CommandArgs{"debug", "snapshot"}, got)
+}
+
+func TestFilesBatch(t *testing.T) {
+	got := FilesBatch([]string{"abc", "def"})
+	assert.Contains(t, got, "log")
+	assert.Contains(t, got, "-r")
+	assert.Contains(t, got, "abc|def")
+	assert.Contains(t, got, "--no-graph")
+	assert.Contains(t, got, "--ignore-working-copy")
+	assert.Contains(t, got, "-T")
+	// Template must produce structured output with our delimiters
+	tmpl := got[len(got)-1]
+	assert.Contains(t, tmpl, `\x1E`)
+	assert.Contains(t, tmpl, `\x1F`)
+	assert.Contains(t, tmpl, `\x1D`)
+	assert.Contains(t, tmpl, "lines_added")
+	assert.Contains(t, tmpl, "lines_removed")
+	assert.Contains(t, tmpl, "self.conflict()")
+}
+
+func TestFilesBatch_Empty(t *testing.T) {
+	assert.Nil(t, FilesBatch(nil))
+	assert.Nil(t, FilesBatch([]string{}))
+}
+
+func TestParseFilesBatch(t *testing.T) {
+	// Two commits: first with 2 files, second conflicted with 1 file
+	input := "abc123\x1E0\x1E" +
+		"M\x1Fsrc/main.go\x1F10\x1F3\n" +
+		"A\x1Fnew.go\x1F5\x1F0" +
+		"\x1D" +
+		"def456\x1E1\x1E" +
+		"M\x1Fconflicted.go\x1F2\x1F2" +
+		"\x1D"
+
+	got := ParseFilesBatch(input)
+	assert.Len(t, got, 2)
+
+	abc := got["abc123"]
+	assert.False(t, abc.Conflict)
+	assert.Len(t, abc.Files, 2)
+	assert.Equal(t, "M", abc.Files[0].Type)
+	assert.Equal(t, "src/main.go", abc.Files[0].Path)
+	assert.Equal(t, 10, abc.Files[0].Additions)
+	assert.Equal(t, 3, abc.Files[0].Deletions)
+	assert.Equal(t, "A", abc.Files[1].Type)
+	assert.Equal(t, "new.go", abc.Files[1].Path)
+	assert.Equal(t, 5, abc.Files[1].Additions)
+
+	def := got["def456"]
+	assert.True(t, def.Conflict)
+	assert.Len(t, def.Files, 1)
+}
+
+func TestParseFilesBatch_EmptyCommit(t *testing.T) {
+	// Empty commit: no files section after the second \x1E
+	input := "empty123\x1E0\x1E\x1D"
+	got := ParseFilesBatch(input)
+	assert.Len(t, got, 1)
+	assert.Empty(t, got["empty123"].Files)
+	assert.False(t, got["empty123"].Conflict)
+}
+
+func TestParseFilesBatch_EmptyInput(t *testing.T) {
+	got := ParseFilesBatch("")
+	assert.Empty(t, got)
+}
+
 func TestDiffSummary(t *testing.T) {
 	got := DiffSummary("abc")
 	assert.Equal(t, []string{"diff", "--summary", "--color", "never", "-r", "abc", "--ignore-working-copy"}, got)

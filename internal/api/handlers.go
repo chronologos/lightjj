@@ -133,9 +133,24 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 // asyncResult holds the output of a background goroutine.
+// Channels carrying these values are buffered (cap 1) — the goroutine writes
+// and exits immediately. If the handler returns early without reading, the
+// channel is GC'd with its buffered value; no drain required.
 type asyncResult struct {
 	output []byte
 	err    error
+}
+
+// runAsync starts a jj command in a goroutine and returns a buffered channel
+// that will receive exactly one result. Safe to abandon — the goroutine exits
+// after its single write regardless of whether anyone reads.
+func (s *Server) runAsync(ctx context.Context, args []string) <-chan asyncResult {
+	ch := make(chan asyncResult, 1)
+	go func() {
+		out, err := s.Runner.Run(ctx, args)
+		ch <- asyncResult{out, err}
+	}()
+	return ch
 }
 
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -145,47 +160,140 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run summary, stat, and conflict list in parallel to minimize latency.
-	statCh := make(chan asyncResult, 1)
-	go func() {
-		out, err := s.Runner.Run(r.Context(), jj.DiffStat(revision))
-		statCh <- asyncResult{out, err}
-	}()
+	ctx := r.Context()
+	statCh := s.runAsync(ctx, jj.DiffStat(revision))
+	conflictCh := s.runAsync(ctx, jj.ConflictedFiles(revision))
 
-	conflictCh := make(chan asyncResult, 1)
-	go func() {
-		out, err := s.Runner.Run(r.Context(), jj.ConflictedFiles(revision))
-		conflictCh <- asyncResult{out, err}
-	}()
-
-	summaryOutput, err := s.Runner.Run(r.Context(), jj.DiffSummary(revision))
+	summaryOutput, err := s.Runner.Run(ctx, jj.DiffSummary(revision))
 	if err != nil {
-		<-statCh // drain buffered channels (goroutines self-exit)
-		<-conflictCh
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	files := jj.ParseDiffSummary(string(summaryOutput))
 
-	// Collect stat result and merge if successful
-	sr := <-statCh
-	if sr.err == nil {
-		stats := jj.ParseDiffStat(string(sr.output))
-		jj.MergeStats(files, stats)
+	if sr := <-statCh; sr.err == nil {
+		jj.MergeStats(files, jj.ParseDiffStat(string(sr.output)))
 	}
 
 	// Template call exits 0 with empty output on clean revisions — any error
 	// here is genuine (SSH failure, bad revset, jj too old for the template).
 	// Logged for debuggability; response continues with degraded conflict info.
-	cr := <-conflictCh
-	if cr.err == nil {
-		conflicts := jj.ParseConflictedFiles(string(cr.output))
-		files = jj.MergeConflicts(files, conflicts)
+	if cr := <-conflictCh; cr.err == nil {
+		files = jj.MergeConflicts(files, jj.ParseConflictedFiles(string(cr.output)))
 	} else {
 		log.Printf("handleFiles: conflicted_files template failed for %s: %v", revision, cr.err)
 	}
 
 	s.writeJSON(w, r, http.StatusOK, files)
+}
+
+// revisionResponse is the batch payload for diff + files + description.
+// Matches the shape of the three individual endpoints' combined output so the
+// frontend can seed individual cache keys from a single fetch.
+type revisionResponse struct {
+	Diff        string          `json:"diff"`
+	Files       []jj.FileChange `json:"files"`
+	Description string          `json:"description"`
+}
+
+// handleRevision batches diff + files + description into a single response.
+// All five underlying jj commands run in parallel. Over SSH this turns five
+// ~440ms round-trips into one (goroutines share the TCP/SSH setup cost only
+// on LocalRunner; for SSHRunner each is still a separate ssh exec, but the
+// HTTP round-trip is one instead of three).
+//
+// Error policy mirrors handleFiles: diff/summary failures are hard errors
+// (the revision likely doesn't exist); stat/conflict failures degrade
+// gracefully (older jj, unusual repo state). Description failure is soft
+// too — it's not load-bearing for the diff panel.
+func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
+	revision := r.URL.Query().Get("revision")
+	if revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+
+	ctx := r.Context()
+	diffCh := s.runAsync(ctx, jj.Diff(revision, "", "never", "--tool", ":git"))
+	statCh := s.runAsync(ctx, jj.DiffStat(revision))
+	conflictCh := s.runAsync(ctx, jj.ConflictedFiles(revision))
+	descCh := s.runAsync(ctx, jj.GetDescription(revision))
+
+	// Summary runs on the request goroutine — gives us an early hard-error
+	// signal if the revision doesn't exist, before we bother parsing the rest.
+	summaryOutput, err := s.Runner.Run(ctx, jj.DiffSummary(revision))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	files := jj.ParseDiffSummary(string(summaryOutput))
+
+	dr := <-diffCh
+	if dr.err != nil {
+		s.writeError(w, http.StatusInternalServerError, dr.err.Error())
+		return
+	}
+
+	if sr := <-statCh; sr.err == nil {
+		jj.MergeStats(files, jj.ParseDiffStat(string(sr.output)))
+	}
+
+	if cr := <-conflictCh; cr.err == nil {
+		files = jj.MergeConflicts(files, jj.ParseConflictedFiles(string(cr.output)))
+	} else {
+		log.Printf("handleRevision: conflicted_files template failed for %s: %v", revision, cr.err)
+	}
+
+	var desc string
+	if descR := <-descCh; descR.err == nil {
+		desc = string(descR.output)
+	} else {
+		log.Printf("handleRevision: GetDescription failed for %s: %v", revision, descR.err)
+	}
+
+	s.writeJSON(w, r, http.StatusOK, revisionResponse{
+		Diff:        string(dr.output),
+		Files:       files,
+		Description: desc,
+	})
+}
+
+// handleFilesBatch returns file stats for multiple commits in a single jj
+// subprocess call. Used by the frontend to pre-load the file-list sidebar for
+// a window of revisions around the current selection.
+//
+// Query: ?revisions=abc,def,ghi (comma-separated short commit_ids)
+// Response: map[commitId]{conflict: bool, files: FileChange[]}
+//
+// Conflicted commits return files WITHOUT side-count detail; the client should
+// fall back to /api/files for those. This keeps the batch call at one
+// template iteration (DiffStatEntry doesn't expose .target().conflict_side_count()).
+func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
+	revStr := r.URL.Query().Get("revisions")
+	if revStr == "" {
+		s.writeError(w, http.StatusBadRequest, "revisions is required")
+		return
+	}
+	// Filter empty strings — trailing/double commas produce invalid revsets.
+	// The frontend never sends them, but direct API calls might.
+	commitIds := slices.DeleteFunc(strings.Split(revStr, ","), func(s string) bool { return s == "" })
+	if len(commitIds) == 0 {
+		s.writeError(w, http.StatusBadRequest, "revisions is required")
+		return
+	}
+	if len(commitIds) > 50 {
+		s.writeError(w, http.StatusBadRequest, "too many revisions (max 50)")
+		return
+	}
+
+	args := jj.FilesBatch(commitIds)
+	output, err := s.Runner.Run(r.Context(), args)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	result := jj.ParseFilesBatch(string(output))
+	s.writeJSON(w, r, http.StatusOK, result)
 }
 
 func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {
@@ -390,7 +498,7 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	go s.refreshOpId()
+	s.refreshOpId()
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
 }
 

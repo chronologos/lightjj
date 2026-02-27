@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, multiRevset, type LogEntry, type FileChange, type PullRequest } from './api'
+  import { api, effectiveId, type LogEntry, type FileChange, type PullRequest } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { groupByWithIndex } from './group-by'
   import { computeWordDiffs, type WordSpan } from './word-diff'
@@ -16,6 +16,10 @@
     selectedRevision: LogEntry | null
     fullDescription: string
     checkedRevisions: SvelteSet<string>
+    /** Commit_id-based revision identifier for API calls — single commit_id
+     *  or commit_id-based connected() revset. Computed in App.svelte where
+     *  the revisions array lives. Used for context expansion + conflict fileShow. */
+    activeRevisionId: string | undefined
     diffLoading: boolean
     splitView: boolean
     descriptionEditing: boolean
@@ -42,7 +46,7 @@
   }
 
   let {
-    diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions,
+    diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions, activeRevisionId,
     diffLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
     fileSelectionMode, selectedFiles, ontogglefile, splitMode, onresolve,
@@ -194,13 +198,6 @@
     return changedFiles.filter(f => f.conflict && !diffPaths.has(f.path))
   })
 
-  // Active revset: multi-checked join or single selected revision
-  let activeRevset = $derived(
-    checkedRevisions.size > 0
-      ? multiRevset([...checkedRevisions])
-      : selectedRevision ? effectiveId(selectedRevision.commit) : undefined
-  )
-
   let conflictFileDiffs: Map<string, DiffFile> = $state(new Map())
   let conflictFetchGen = 0
 
@@ -211,7 +208,7 @@
       if (conflictFileDiffs.size > 0) conflictFileDiffs = new Map()
       return
     }
-    const revset = activeRevset
+    const revset = activeRevisionId
     if (!revset) return
     for (const f of files) {
       if (conflictFileDiffs.has(f.path)) continue
@@ -461,9 +458,9 @@
 
   // --- Expand context ---
   async function expandFile(filePath: string) {
-    if (!activeRevset) return
+    if (!activeRevisionId) return
     try {
-      const result = await api.diff(activeRevset, filePath, 10000)
+      const result = await api.diff(activeRevisionId, filePath, 10000)
       const parsed = parseDiffContent(result.diff)
       if (parsed.length > 0) {
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])

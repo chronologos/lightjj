@@ -34,6 +34,10 @@ type Server struct {
 	spawnedWorkspaces map[string]string // workspace name → URL of spawned instance
 	children          []*exec.Cmd       // spawned workspace instances
 	childrenMu        sync.Mutex
+
+	// Watcher provides SSE auto-refresh. Nil in SSH mode (no local fs to watch).
+	// Set by main.go after NewServer; routes() tolerates it being nil.
+	Watcher *Watcher
 }
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {
@@ -47,8 +51,12 @@ func NewServer(r runner.CommandRunner, repoDir string) *Server {
 	return s
 }
 
-// Shutdown kills any child lightjj processes spawned for other workspaces.
+// Shutdown kills any child lightjj processes spawned for other workspaces
+// and stops the filesystem watcher.
 func (s *Server) Shutdown() {
+	if s.Watcher != nil {
+		s.Watcher.Close()
+	}
 	s.childrenMu.Lock()
 	defer s.childrenMu.Unlock()
 	for _, cmd := range s.children {
@@ -65,6 +73,8 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/diff", s.handleDiff)
 	s.Mux.HandleFunc("GET /api/files", s.handleFiles)
 	s.Mux.HandleFunc("GET /api/description", s.handleGetDescription)
+	s.Mux.HandleFunc("GET /api/revision", s.handleRevision)
+	s.Mux.HandleFunc("GET /api/files-batch", s.handleFilesBatch)
 	s.Mux.HandleFunc("GET /api/remotes", s.handleRemotes)
 	s.Mux.HandleFunc("GET /api/oplog", s.handleOpLog)
 	s.Mux.HandleFunc("GET /api/evolog", s.handleEvolog)
@@ -101,6 +111,15 @@ func (s *Server) routes() {
 
 	s.Mux.HandleFunc("POST /api/git/push", s.handleGitPush)
 	s.Mux.HandleFunc("POST /api/git/fetch", s.handleGitFetch)
+
+	// SSE auto-refresh — registered lazily since Watcher is set after NewServer.
+	s.Mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
+		if s.Watcher != nil {
+			s.Watcher.handleEvents(w, r)
+		} else {
+			handleEventsDisabled(w, r)
+		}
+	})
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
@@ -123,28 +142,38 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
-// refreshOpId fetches the current op-id from jj and caches it.
+// refreshOpId fetches the current op-id from jj, caches it, and returns it.
 // Uses a detached context so it completes even if the HTTP request is cancelled.
-func (s *Server) refreshOpId() {
+// The return value lets callers (e.g., the SSE watcher's fire() closure) use the
+// fresh value directly instead of a separate getOpId() read — eliminating a
+// TOCTOU window where a concurrent refreshOpId from another goroutine could
+// interleave between this call's write and a subsequent read.
+func (s *Server) refreshOpId() string {
 	output, err := s.Runner.Run(context.Background(), jj.CurrentOpId())
 	if err != nil {
-		return
+		return ""
 	}
 	opId := strings.TrimSpace(string(output))
 	s.cachedMu.Lock()
 	s.cachedOp = opId
 	s.cachedMu.Unlock()
+	return opId
 }
 
-// runMutation executes a jj command, refreshes the op-id in the background,
-// and writes the output as JSON. This is the standard pattern for all mutation handlers.
+// runMutation executes a jj command, synchronously refreshes the op-id, and
+// writes the output as JSON. This is the standard pattern for all mutation handlers.
+//
+// The refresh MUST be synchronous so the X-JJ-Op-Id header reflects the
+// post-mutation state. With SSE auto-refresh, a stale header would mean:
+// client sees old op-id → SSE arrives with new op-id → dedup fails → redundant
+// loadLog() fire. The ~15ms cost of one `jj op log --limit 1` call is acceptable.
 func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []string) {
 	output, err := s.Runner.Run(r.Context(), args)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	go s.refreshOpId()
+	s.refreshOpId()
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
 }
 

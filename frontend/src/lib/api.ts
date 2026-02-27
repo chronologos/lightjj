@@ -34,18 +34,23 @@ export interface Bookmark {
   commit_id: string
 }
 
-// Op-ID tracking: detect when jj state changes outside the UI
+// Op-ID tracking: detect when jj state changes outside the UI.
+// Used ONLY to trigger log/graph refresh via staleCallbacks — NOT for cache
+// invalidation. Per-revision data is keyed by commit_id (content-addressed,
+// self-invalidating) so op-id changes don't touch the cache at all.
 let lastOpId: string | null = null
 const staleCallbacks = new Set<() => void>()
 let refreshQueued = false
 
-// Response cache: keyed by "${cacheId}@${opId}", cleared on op-id change.
-// Immutable commits use a separate cache keyed by bare cacheId (no opId suffix) —
-// they can't change, so there's no need to re-key them on op-id changes.
-const MAX_CACHE_SIZE = 200
-const MAX_IMMUTABLE_CACHE_SIZE = 300
-const responseCache = new Map<string, unknown>()
-const immutableCache = new Map<string, unknown>()
+// Per-revision cache keyed by commit_id. A commit_id is a content hash of
+// tree + parents + message — if it hasn't changed, the cached diff/files/
+// description are provably valid. No op-id suffix, no clear-on-mutation.
+// Operations like `jj new`, `jj abandon` (leaf), `jj undo` leave existing
+// commit_ids unchanged → zero cache invalidation. Only rewrites (describe,
+// rebase, squash) change commit_ids, and then only for the rewritten commit
+// and its descendants — the rest stay cached.
+const MAX_CACHE_SIZE = 500
+const cache = new Map<string, unknown>()
 
 // Default timeout for read-only requests (30s). Mutations get no timeout.
 const READ_TIMEOUT_MS = 30_000
@@ -55,29 +60,25 @@ export function onStale(callback: () => void): () => void {
   return () => { staleCallbacks.delete(callback) }
 }
 
-/** Hard refresh: clear both caches. Use for explicit user-triggered refresh
- *  when --ignore-immutable or op-restore may have staled immutable data. */
+/** Hard refresh: clear the cache. Use for explicit user-triggered refresh. */
 export function clearAllCaches(): void {
-  responseCache.clear()
-  immutableCache.clear()
+  cache.clear()
   _remotes = undefined
   _aliases = undefined
 }
 
-function trackOpId(res: Response) {
-  // Track op-id even on error responses — a failed mutation may still advance the op-id
-  const opId = res.headers.get('X-JJ-Op-Id')
+// notifyOpId is the single op-id ingestion point. Called by both the HTTP
+// header path (trackOpId) and the SSE push path (watchEvents). The lastOpId
+// comparison deduplicates across sources: a UI-initiated mutation fires the
+// header first, then the SSE event arrives ~150ms later with the same op-id
+// and is a no-op. Fires staleCallbacks to trigger loadLog() — the cache is
+// NOT touched (commit_id-keyed entries stay valid across op-id changes).
+function notifyOpId(opId: string) {
   if (!opId) return
   const changed = lastOpId !== null && opId !== lastOpId
   lastOpId = opId
   if (!changed) return
 
-  // Mutable cache is invalidated on any op-id change. Immutable cache is
-  // untouched — immutable commits' diffs/files/descriptions can't change.
-  // Known limitation: `jj describe --ignore-immutable X` or `jj op restore`
-  // CAN change an immutable commit's description, staling the immutableCache
-  // entry. Rare; escapes via clearAllCaches() or natural LRU eviction.
-  responseCache.clear()
   if (staleCallbacks.size > 0 && !refreshQueued) {
     refreshQueued = true
     // Deduplicates within a single tick; resets after callbacks fire
@@ -86,6 +87,40 @@ function trackOpId(res: Response) {
       for (const cb of [...staleCallbacks]) cb()
     })
   }
+}
+
+function trackOpId(res: Response) {
+  // Track op-id even on error responses — a failed mutation may still advance the op-id
+  const opId = res.headers.get('X-JJ-Op-Id')
+  if (opId) notifyOpId(opId)
+}
+
+// watchEvents opens an SSE connection to /api/events and routes incoming
+// op-id pushes through the same dedup path as the HTTP header. Auto-reconnects
+// via the browser's native EventSource retry. If the server returns non-200
+// (204 for SSH mode, 404 if route missing), readyState goes to CLOSED and we
+// stop — no polling fallback; the header path already covers UI mutations.
+export function watchEvents(): () => void {
+  const es = new EventSource('/api/events')
+
+  es.addEventListener('op', (ev) => {
+    try {
+      const { op_id } = JSON.parse(ev.data) as { op_id: string }
+      notifyOpId(op_id)
+    } catch { /* malformed event — ignore */ }
+  })
+
+  // Network drop → readyState CONNECTING (browser retries automatically).
+  // Non-200 response → readyState CLOSED. close() on an already-CLOSED
+  // source is a spec no-op, so no guard needed for the cleanup-fn path.
+  es.addEventListener('error', () => {
+    if (es.readyState === EventSource.CLOSED) {
+      console.warn('lightjj: SSE auto-refresh disabled (server returned non-200 or watch unavailable)')
+      es.close()
+    }
+  })
+
+  return () => es.close()
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -128,68 +163,102 @@ function post<T>(url: string, body: unknown): Promise<T> {
   })
 }
 
-async function cachedRequest<T>(cacheId: string, url: string, immutable = false): Promise<T> {
-  // Check immutableCache unconditionally — data cached as immutable is always
-  // safe to serve even if the caller passes immutable=false (e.g., a commit
-  // that transitioned ◆→○). The diff/files depend on tree+parents, not on
-  // the immutability flag. This keeps isCached() and cachedRequest() aligned.
-  if (immutableCache.has(cacheId)) {
-    // Bump to end (LRU): delete + re-insert moves entry to newest position.
-    const v = immutableCache.get(cacheId) as T
-    immutableCache.delete(cacheId)
-    immutableCache.set(cacheId, v)
+async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
+  if (cache.has(cacheId)) {
+    // LRU bump: delete + re-insert moves entry to newest position.
+    const v = cache.get(cacheId) as T
+    cache.delete(cacheId)
+    cache.set(cacheId, v)
     return v
   }
-  if (lastOpId) {
-    const key = `${cacheId}@${lastOpId}`
-    if (responseCache.has(key)) return responseCache.get(key) as T
-  }
-  const opIdAtStart = lastOpId
   const result = await request<T>(url)
-  if (immutable) {
-    // Map preserves insertion order — evicting the first key is LRU
-    // (hits bump entries to the end above).
-    if (immutableCache.size >= MAX_IMMUTABLE_CACHE_SIZE) {
-      immutableCache.delete(immutableCache.keys().next().value!)
-    }
-    immutableCache.set(cacheId, result)
-    return result
-  }
-  // Only cache if op-id hasn't been advanced by a concurrent request.
-  // If opIdAtStart was null (first request seeding the op-id), caching is safe.
-  if (lastOpId && (opIdAtStart === null || lastOpId === opIdAtStart)) {
-    if (responseCache.size >= MAX_CACHE_SIZE) responseCache.clear()
-    responseCache.set(`${cacheId}@${lastOpId}`, result)
-  }
+  storeInCache(cacheId, result)
   return result
+}
+
+// storeInCache is the single cache-write path. Used by cachedRequest() and by
+// api.revision() to seed individual cache keys from a batch response. No
+// concurrency guard needed — commit_id is immutable by construction, so a
+// value fetched for commit_id X is valid regardless of what op-id advances
+// happened during the fetch.
+function storeInCache(cacheId: string, result: unknown) {
+  // Map preserves insertion order — evicting the first key is LRU.
+  if (cache.size >= MAX_CACHE_SIZE) {
+    cache.delete(cache.keys().next().value!)
+  }
+  cache.set(cacheId, result)
 }
 
 // Check if a revision's diff + files + description are all cached.
 // Used by selectRevision to skip the 50ms debounce on cache hits. All three
 // must be cached — otherwise the "fast path" still triggers a network request
 // on every keypress, defeating the debounce.
-export function isCached(revision: string): boolean {
-  if (immutableCache.has(`diff:${revision}`) &&
-      immutableCache.has(`files:${revision}`) &&
-      immutableCache.has(`desc:${revision}`)) {
-    return true
-  }
-  if (!lastOpId) return false
-  return responseCache.has(`diff:${revision}@${lastOpId}`) &&
-         responseCache.has(`files:${revision}@${lastOpId}`) &&
-         responseCache.has(`desc:${revision}@${lastOpId}`)
+export function isCached(commitId: string): boolean {
+  return cache.has(`diff:${commitId}`) &&
+         cache.has(`files:${commitId}`) &&
+         cache.has(`desc:${commitId}`)
+}
+
+interface RevisionResponse {
+  diff: string
+  files: FileChange[]
+  description: string
+}
+
+// fetchRevision hits the batch endpoint and seeds the three individual cache
+// keys (diff:X, files:X, desc:X) so subsequent api.diff()/files()/description()
+// calls are microtask-fast cache hits. The shapes written to each key exactly
+// match what the individual endpoints return — the cache doesn't care which
+// wire protocol populated it.
+async function fetchRevision(commitId: string): Promise<RevisionResponse> {
+  const result = await request<RevisionResponse>(`/api/revision?revision=${encodeURIComponent(commitId)}`)
+  storeInCache(`diff:${commitId}`, { diff: result.diff })
+  storeInCache(`files:${commitId}`, result.files)
+  storeInCache(`desc:${commitId}`, { description: result.description })
+  return result
 }
 
 /** Warm the cache for a revision's diff/files/description without applying
  *  results to UI state. Fire-and-forget. Used during nav debounce to pre-load
  *  adjacent revisions so sequential j/k is instant. */
-export function prefetchRevision(revision: string, immutable = false): void {
-  if (isCached(revision)) return
-  // These are cachedRequest calls — results land in the cache for later.
-  // Errors swallowed: prefetch failures are invisible, real nav will retry.
-  api.diff(revision, undefined, undefined, immutable).catch(() => {})
-  api.files(revision, immutable).catch(() => {})
-  api.description(revision, immutable).catch(() => {})
+export function prefetchRevision(commitId: string): void {
+  if (isCached(commitId)) return
+  // Batch endpoint: one HTTP round-trip instead of three. Result seeds all
+  // three cache keys. Errors swallowed: prefetch failures are invisible,
+  // the real navigation will retry.
+  fetchRevision(commitId).catch(() => {})
+}
+
+interface FilesBatchEntry {
+  conflict: boolean
+  files: FileChange[]
+}
+
+/** Pre-load file lists (status + path + line counts) for multiple commit_ids
+ *  in one backend call (single jj subprocess for N revisions). Seeds the
+ *  `files:X` cache key for each non-conflicted revision so the file-list
+ *  sidebar shows instantly during j/k navigation.
+ *
+ *  Conflicted commits are skipped — they need conflict_side_count detail that
+ *  the batch template doesn't provide. Those fall back to /api/files on actual
+ *  navigation.
+ *
+ *  Fire-and-forget; errors swallowed. Call after loadLog() with a window of
+ *  ~10 revisions around the selected index. */
+export async function prefetchFilesBatch(commitIds: string[]): Promise<void> {
+  const uncached = commitIds.filter(id => !cache.has(`files:${id}`))
+  if (uncached.length === 0) return
+  try {
+    const result = await request<Record<string, FilesBatchEntry>>(
+      `/api/files-batch?revisions=${encodeURIComponent(uncached.join(','))}`,
+    )
+    for (const [commitId, entry] of Object.entries(result)) {
+      // Conflicted commits need side-count detail the batch call doesn't
+      // provide. Skip seeding so actual navigation triggers /api/files.
+      if (entry.conflict) continue
+      storeInCache(`files:${commitId}`, entry.files)
+    }
+  } catch { /* prefetch failure is invisible — real nav retries via /api/files */ }
 }
 
 // Session-stable data — remotes/aliases don't change mid-session unless the
@@ -321,22 +390,35 @@ export const api = {
     return request<Bookmark[]>(`/api/bookmarks?${params}`)
   },
 
-  diff: (revision: string, file?: string, context?: number, immutable = false) => {
+  /** Batch fetch diff + files + description in one round-trip, seeding
+   *  individual cache keys. After this resolves, api.diff()/files()/description()
+   *  for the same commit_id are cache hits. Prefer this for primary navigation;
+   *  use the individual methods for one-off needs (e.g., DivergencePanel's
+   *  standalone files() call, DiffPanel's context-expanded diff).
+   *
+   *  Pass commit_id, not change_id — commit_id is content-addressed, so the
+   *  cache is self-invalidating across rewrites. */
+  revision: async (commitId: string): Promise<void> => {
+    if (isCached(commitId)) return
+    await fetchRevision(commitId)
+  },
+
+  diff: (revision: string, file?: string, context?: number) => {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
     if (context) params.set('context', String(context))
     const cacheId = 'diff:' + revision + (file ? ':' + file : '') + (context ? ':ctx' + context : '')
-    return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`, immutable)
+    return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`)
   },
 
-  description: (revision: string, immutable = false) => {
+  description: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return cachedRequest<{ description: string }>('desc:' + revision, `/api/description?${params}`, immutable)
+    return cachedRequest<{ description: string }>('desc:' + revision, `/api/description?${params}`)
   },
 
-  files: (revision: string, immutable = false) => {
+  files: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`, immutable)
+    return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`)
   },
 
   fileShow: (revision: string, path: string) => {
@@ -349,7 +431,9 @@ export const api = {
 
   remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
 
-  workspaces: () => cachedRequest<WorkspacesResponse>('workspaces', '/api/workspaces'),
+  // Workspaces is session-stable (changes only if user adds a workspace).
+  // Plain request for now — promise-memoize later if load frequency warrants.
+  workspaces: () => request<WorkspacesResponse>('/api/workspaces'),
 
   workspaceOpen: (name: string) =>
     post<{ url: string }>('/api/workspace/open', { name }),
@@ -360,9 +444,13 @@ export const api = {
     return request<OpEntry[]>(`/api/oplog?${params}`)
   },
 
+  // Evolog content grows with each jj operation on a change — it cannot be
+  // cached by commit_id (the change_id is the subject, and the history expands
+  // over time). Uncached; loadEvolog is debounced in App.svelte so rapid j/k
+  // won't fire N requests.
   evolog: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return cachedRequest<EvologEntry[]>('evolog:' + revision, `/api/evolog?${params}`)
+    return request<EvologEntry[]>(`/api/evolog?${params}`)
   },
 
   diffRange: (from: string, to: string, files?: string[]) => {
@@ -448,10 +536,8 @@ export const api = {
 export const _testInternals = {
   get lastOpId() { return lastOpId },
   set lastOpId(v: string | null) { lastOpId = v },
-  get cache() { return responseCache },
-  get immutableCache() { return immutableCache },
+  get cache() { return cache },
   get MAX_CACHE_SIZE() { return MAX_CACHE_SIZE },
-  get MAX_IMMUTABLE_CACHE_SIZE() { return MAX_IMMUTABLE_CACHE_SIZE },
   get staleCallbacks() { return staleCallbacks },
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },

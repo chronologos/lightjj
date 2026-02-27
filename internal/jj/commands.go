@@ -338,6 +338,13 @@ func CurrentOpId() CommandArgs {
 		"--limit", "1", "-T", `self.id().short()`}
 }
 
+// DebugSnapshot asks jj to snapshot the working copy. Advances op_heads only
+// if the WC actually differs. Used by the filesystem watcher to catch raw file
+// edits that jj hasn't observed yet.
+func DebugSnapshot() CommandArgs {
+	return []string{"debug", "snapshot"}
+}
+
 func OpLog(limit int) CommandArgs {
 	args := []string{"op", "log", "--no-graph", "--color", "never", "--ignore-working-copy"}
 	if limit > 0 {
@@ -423,6 +430,81 @@ func ConflictedFiles(revision string) CommandArgs {
 	tmpl := `conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count()) ++ "\n").join("")`
 	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
 		"--ignore-working-copy", "-T", tmpl}
+}
+
+// FilesBatch returns args for a single jj log template call that emits file
+// stats (status char, path, +/- line counts) for multiple revisions. Used to
+// pre-load the file-list sidebar for a window of revisions in one subprocess.
+//
+// Output format per commit: {commitId}\x1E{conflicted:0|1}\x1E{files}\x1D
+// Files: status_char\x1Fpath\x1Flines_added\x1Flines_removed\n (joined)
+//
+// DiffStatEntry.path() returns the destination path for renames — no brace
+// expansion needed (unlike parsing `jj diff --stat` human output).
+//
+// Conflict detail (side counts) is NOT included — commits with conflict=true
+// should fall back to the full /api/files endpoint. This keeps the batch call
+// fast and avoids a second template iteration for the rare conflicted case.
+func FilesBatch(commitIds []string) CommandArgs {
+	if len(commitIds) == 0 {
+		return nil
+	}
+	// The template uses diff().stat(200) — the width arg affects the textual
+	// bar rendering (which we don't use), not the numeric counts. 200 avoids
+	// any internal truncation edge cases.
+	tmpl := `self.commit_id().short() ++ "\x1E" ++ ` +
+		`if(self.conflict(), "1", "0") ++ "\x1E" ++ ` +
+		`self.diff().stat(200).files().map(|f| ` +
+		`f.status_char() ++ "\x1F" ++ f.path() ++ "\x1F" ++ ` +
+		`stringify(f.lines_added()) ++ "\x1F" ++ stringify(f.lines_removed())` +
+		`).join("\n") ++ "\x1D"`
+	return []string{"log", "-r", strings.Join(commitIds, "|"),
+		"--no-graph", "--color", "never", "--ignore-working-copy", "-T", tmpl}
+}
+
+// FilesBatchEntry is one commit's result from FilesBatch.
+type FilesBatchEntry struct {
+	Conflict bool          `json:"conflict"`
+	Files    []*FileChange `json:"files"`
+}
+
+// ParseFilesBatch parses FilesBatch template output into a map keyed by
+// commit_id. Records are \x1D-separated; each record has three \x1E-separated
+// fields: commit_id, conflict flag, and \n-joined file lines (each with four
+// \x1F-separated fields: status_char, path, additions, deletions).
+func ParseFilesBatch(output string) map[string]FilesBatchEntry {
+	result := make(map[string]FilesBatchEntry)
+	for _, record := range strings.Split(output, "\x1D") {
+		if record == "" {
+			continue
+		}
+		parts := strings.SplitN(record, "\x1E", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		commitId := parts[0]
+		conflicted := parts[1] == "1"
+		files := []*FileChange{}
+		for _, line := range strings.Split(parts[2], "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.SplitN(line, "\x1F", 4)
+			if len(fields) != 4 {
+				continue
+			}
+			add, _ := strconv.Atoi(fields[2])
+			del, _ := strconv.Atoi(fields[3])
+			files = append(files, &FileChange{
+				Type:      fields[0],
+				Path:      fields[1],
+				Additions: add,
+				Deletions: del,
+			})
+		}
+		result[commitId] = FilesBatchEntry{Conflict: conflicted, Files: files}
+	}
+	return result
 }
 
 // Resolve returns args for `jj resolve` to resolve a conflicted file with a tool.

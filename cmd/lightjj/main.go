@@ -32,6 +32,8 @@ func main() {
 	addr := flag.String("addr", "localhost:0", "Listen address (default: random port on localhost)")
 	noBrowser := flag.Bool("no-browser", false, "Don't open browser automatically")
 	showVersion := flag.Bool("version", false, "Print version and exit")
+	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj debug snapshot` interval (0 to disable)")
+	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
 	flag.Parse()
 
 	if *showVersion {
@@ -63,6 +65,11 @@ func main() {
 	}
 
 	srv := api.NewServer(cmdRunner, resolvedRepoDir)
+
+	// Filesystem watch + SSE auto-refresh. Nil in SSH mode or if disabled.
+	if !*noWatch {
+		srv.Watcher = api.NewWatcher(srv, *snapshotInterval)
+	}
 
 	// Serve embedded frontend static files
 	feFS, err := fs.Sub(frontendFS, "frontend-dist")
