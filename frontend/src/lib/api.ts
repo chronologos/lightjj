@@ -54,6 +54,13 @@ export function onStale(callback: () => void): () => void {
   return () => { staleCallbacks.delete(callback) }
 }
 
+/** Hard refresh: clear both caches. Use for explicit user-triggered refresh
+ *  when --ignore-immutable or op-restore may have staled immutable data. */
+export function clearAllCaches(): void {
+  responseCache.clear()
+  immutableCache.clear()
+}
+
 function trackOpId(res: Response) {
   // Track op-id even on error responses — a failed mutation may still advance the op-id
   const opId = res.headers.get('X-JJ-Op-Id')
@@ -64,6 +71,9 @@ function trackOpId(res: Response) {
 
   // Mutable cache is invalidated on any op-id change. Immutable cache is
   // untouched — immutable commits' diffs/files/descriptions can't change.
+  // Known limitation: `jj describe --ignore-immutable X` or `jj op restore`
+  // CAN change an immutable commit's description, staling the immutableCache
+  // entry. Rare; escapes via clearAllCaches() or natural LRU eviction.
   responseCache.clear()
   if (staleCallbacks.size > 0 && !refreshQueued) {
     refreshQueued = true
@@ -116,7 +126,17 @@ function post<T>(url: string, body: unknown): Promise<T> {
 }
 
 async function cachedRequest<T>(cacheId: string, url: string, immutable = false): Promise<T> {
-  if (immutable && immutableCache.has(cacheId)) return immutableCache.get(cacheId) as T
+  // Check immutableCache unconditionally — data cached as immutable is always
+  // safe to serve even if the caller passes immutable=false (e.g., a commit
+  // that transitioned ◆→○). The diff/files depend on tree+parents, not on
+  // the immutability flag. This keeps isCached() and cachedRequest() aligned.
+  if (immutableCache.has(cacheId)) {
+    // Bump to end (LRU): delete + re-insert moves entry to newest position.
+    const v = immutableCache.get(cacheId) as T
+    immutableCache.delete(cacheId)
+    immutableCache.set(cacheId, v)
+    return v
+  }
   if (lastOpId) {
     const key = `${cacheId}@${lastOpId}`
     if (responseCache.has(key)) return responseCache.get(key) as T
@@ -124,9 +144,8 @@ async function cachedRequest<T>(cacheId: string, url: string, immutable = false)
   const opIdAtStart = lastOpId
   const result = await request<T>(url)
   if (immutable) {
-    // Immutable commits' data is stable across operations — safe to cache
-    // regardless of op-id churn. Map preserves insertion order, so evicting
-    // the first key under pressure gives LRU-ish behaviour.
+    // Map preserves insertion order — evicting the first key is LRU
+    // (hits bump entries to the end above).
     if (immutableCache.size >= MAX_IMMUTABLE_CACHE_SIZE) {
       immutableCache.delete(immutableCache.keys().next().value!)
     }

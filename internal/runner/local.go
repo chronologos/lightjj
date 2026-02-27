@@ -58,7 +58,10 @@ func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]b
 			if stdout != "" {
 				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stdout)
 			}
-			return nil, fmt.Errorf("jj exited with code %d", exitErr.ExitCode())
+			// Triple-empty: no stderr, no stdout. Include args so the user
+			// at least knows which operation failed silently.
+			return nil, fmt.Errorf("%s %s: exit code %d (no output)",
+				r.Binary, strings.Join(args, " "), exitErr.ExitCode())
 		}
 		return nil, err
 	}

@@ -4,56 +4,72 @@
 
 lightjj is a browser-based UI for the Jujutsu (jj) version control system. It follows a two-process model: a Go backend that shells out to `jj` CLI, and a Svelte SPA frontend served as embedded static files.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor':'#F2F0E5',
+  'primaryTextColor':'#100F0F',
+  'primaryBorderColor':'#6F6E69',
+  'secondaryColor':'#E6E4D9',
+  'tertiaryColor':'#DAD8CE',
+  'lineColor':'#6F6E69',
+  'textColor':'#100F0F'
+}}}%%
+flowchart TD
+    classDef blue fill:#E1ECEB,stroke:#205EA6,color:#205EA6
+    classDef green fill:#EDEECF,stroke:#66800B,color:#66800B
+    classDef orange fill:#FFE7CE,stroke:#BC5215,color:#BC5215
+    classDef purple fill:#F0EAEC,stroke:#5E409D,color:#5E409D
+    classDef cyan fill:#DDF1E4,stroke:#24837B,color:#24837B
+
+    subgraph browser["Browser"]
+        components["Svelte Components<br/><small>RevisionGraph · DiffPanel · DiffFileView</small>"]:::blue
+        api["api.ts<br/><small>two-tier cache · op-id tracking</small>"]:::orange
+        components --> api
+    end
+
+    subgraph go["Go Binary — single process, //go:embed frontend-dist/"]
+        handlers["HTTP Handlers<br/><small>internal/api</small>"]:::blue
+        builders["Command Builders<br/><small>internal/jj — pure, []string out</small>"]:::green
+        parsers["Output Parsers<br/><small>ParseGraphLog · ParseDiffStat · ParseBookmarks</small>"]:::green
+        runner["CommandRunner interface<br/><small>internal/runner</small>"]:::purple
+        local["LocalRunner<br/><small>exec jj</small>"]:::purple
+        ssh["SSHRunner<br/><small>exec ssh host jj</small>"]:::purple
+        mock["MockRunner<br/><small>testutil — Expect/Verify</small>"]:::purple
+
+        handlers --> builders
+        handlers --> parsers
+        handlers --> runner
+        runner --> local
+        runner --> ssh
+        runner -.-> mock
+    end
+
+    jjlocal[("jj CLI<br/><small>local .jj</small>")]:::cyan
+    jjremote[("jj CLI<br/><small>remote host</small>")]:::cyan
+
+    api <==>|"JSON + X-JJ-Op-Id"| handlers
+    local --> jjlocal
+    ssh --> jjremote
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Browser                                                         │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │  Svelte SPA (frontend/)                                    │  │
-│  │  ┌──────────────────┐ ┌──────────┐ ┌────────────────────┐ │  │
-│  │  │  RevisionGraph   │ │ DiffPanel│ │ DescriptionEditor  │ │  │
-│  │  └────────┬─────────┘ └─────┬────┘ └─────────┬──────────┘ │  │
-│  │           └─────────────────┴────────────────┘            │  │
-│  │                     api.ts                                 │  │
-│  └─────────────────────────┬──────────────────────────────────┘  │
-│                            │ fetch() JSON                        │
-└────────────────────────────┼────────────────────────────────────┘
-                             │ http://localhost:PORT/api/*
-┌────────────────────────────┼────────────────────────────────────┐
-│  Go Backend (cmd/lightjj)   │                                     │
-│  ┌─────────────────────────┴──────────────────────────────────┐ │
-│  │  HTTP Server (net/http)                                     │ │
-│  │  ┌──────────────────────────────────────────────────────┐  │ │
-│  │  │  API Handlers (internal/api/)                         │  │ │
-│  │  │  GET  /api/log, /api/diff, /api/diff-range,           │  │ │
-│  │  │       /api/files, /api/bookmarks, /api/description,   │  │ │
-│  │  │       /api/remotes, /api/oplog, /api/evolog,          │  │ │
-│  │  │       /api/file-show, /api/workspaces, /api/aliases,  │  │ │
-│  │  │       /api/pull-requests                              │  │ │
-│  │  │  POST /api/new, /api/edit, /api/abandon, /api/undo,   │  │ │
-│  │  │       /api/rebase, /api/squash, /api/split,           │  │ │
-│  │  │       /api/describe, /api/commit, /api/resolve,       │  │ │
-│  │  │       /api/bookmark/{set,delete,move,forget,track,    │  │ │
-│  │  │                      untrack}                         │  │ │
-│  │  │       /api/git/{push,fetch}, /api/alias,              │  │ │
-│  │  │       /api/workspace/open                             │  │ │
-│  │  └───────────────────────┬──────────────────────────────┘  │ │
-│  │                          │                                  │ │
-│  │  ┌───────────────────────┴──────────────────────────────┐  │ │
-│  │  │  CommandRunner Interface (internal/runner/)           │  │ │
-│  │  │  ┌─────────────────┐    ┌─────────────────────────┐  │  │ │
-│  │  │  │  LocalRunner    │    │  SSHRunner               │  │  │ │
-│  │  │  │  exec("jj",...) │    │  exec("ssh",host,cmd)    │  │  │ │
-│  │  │  └────────┬────────┘    └────────────┬────────────┘  │  │ │
-│  │  └───────────┼──────────────────────────┼───────────────┘  │ │
-│  └──────────────┼──────────────────────────┼──────────────────┘ │
-│                 │                          │                     │
-└─────────────────┼──────────────────────────┼─────────────────────┘
-                  │                          │
-         ┌────────▼────────┐        ┌────────▼────────┐
-         │   jj CLI        │        │   ssh → jj CLI  │
-         │   (local repo)  │        │   (remote repo) │
-         └─────────────────┘        └─────────────────┘
-```
+
+**API endpoints:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/log` | Graph log with revset + limit |
+| GET | `/api/diff`, `/api/diff-range` | Unified diff (single revision or from/to range) |
+| GET | `/api/files` | File list + stats + conflict status (3 parallel subprocess calls) |
+| GET | `/api/bookmarks`, `/api/remotes`, `/api/description` | Metadata reads |
+| GET | `/api/oplog`, `/api/evolog` | Operation/evolution history |
+| GET | `/api/file-show` | Raw file content at revision (for conflict viewing) |
+| GET | `/api/workspaces`, `/api/aliases`, `/api/pull-requests` | Environment info |
+| POST | `/api/new`, `/api/edit`, `/api/abandon`, `/api/undo`, `/api/commit` | Basic mutations |
+| POST | `/api/rebase`, `/api/squash`, `/api/split`, `/api/resolve` | Structured mutations |
+| POST | `/api/describe` | Set description (uses `RunWithInput` for stdin) |
+| POST | `/api/bookmark/{set,delete,move,forget,track,untrack}` | Bookmark ops |
+| POST | `/api/git/{push,fetch}` | Git remote ops (flag-whitelisted) |
+| POST | `/api/alias` | Run a user-configured jj alias (validated against config) |
+| POST | `/api/workspace/open` | Spawn child lightjj instance for another workspace |
 
 ## Layer Responsibilities
 
@@ -109,29 +125,71 @@ Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to
 
 ## Data Flow
 
-### Read path (e.g., viewing log)
+### Write path + state sync (e.g., rebase)
 
-```
-User opens app
-  → Svelte calls api.log()
-  → fetch GET /api/log?revset=...
-  → Go handler calls jj.LogGraph(revset) → ["log", "--template", ..., "\x1F"-delimited]
-  → runner.Run(ctx, args) → exec jj subprocess
-  → parser.ParseGraphLog(output) → []GraphRow with parsed Commits
-  → JSON response with X-JJ-Op-Id header → Svelte renders revision graph
+The full mutation → op-id detection → cache invalidation → auto-refresh cycle:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor':'#F2F0E5',
+  'primaryTextColor':'#100F0F',
+  'primaryBorderColor':'#205EA6',
+  'lineColor':'#6F6E69',
+  'textColor':'#100F0F',
+  'actorBkg':'#E1ECEB',
+  'actorTextColor':'#205EA6',
+  'actorBorder':'#205EA6',
+  'signalColor':'#100F0F',
+  'noteBkgColor':'#FFE7CE',
+  'noteTextColor':'#BC5215',
+  'noteBorderColor':'#BC5215',
+  'activationBkgColor':'#F2F0E5',
+  'activationBorderColor':'#6F6E69'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant S as Svelte
+    participant A as api.ts
+    participant H as Go Handler
+    participant R as Runner
+    participant J as jj CLI
+
+    U->>S: press Enter (rebase mode)
+    S->>A: api.rebase({revisions, dest, ...})
+    A->>H: POST /api/rebase
+    H->>H: decodeBody + validate
+    H->>H: jj.Rebase(...) → ["rebase","-r","abc","-d","def"]
+    H->>R: runMutation(args)
+    R->>J: exec jj rebase -r abc -d def
+    J-->>R: stdout
+    R-->>H: output
+
+    par async refresh (doesn't block response)
+        H->>R: jj op log --limit 1
+        R->>J: exec
+        J-->>R: new op-id
+        R-->>H: cachedOp = "op2"
+    end
+
+    H-->>A: 200 {output} + X-JJ-Op-Id: op2
+
+    Note over A: trackOpId sees op1 → op2
+    A->>A: responseCache.clear()
+    Note over A: immutableCache untouched
+
+    A->>S: fire staleCallbacks()
+    S->>A: api.log()  (auto-refresh)
+    A->>H: GET /api/log
+    H->>R: jj log --template ...
+    R->>J: exec
+    J-->>R: graph output
+    H-->>A: []GraphRow + X-JJ-Op-Id: op2
+    Note over A: op2 == lastOpId, no invalidation
+    A-->>S: render fresh log
 ```
 
-### Write path (e.g., rebase)
-
-```
-User triggers rebase (inline mode, Enter key)
-  → Svelte calls api.rebase({revisions, destination, source_mode, target_mode})
-  → fetch POST /api/rebase with JSON body
-  → Go handler decodes body, builds SelectedRevisions
-  → calls jj.Rebase(...) → ["rebase", "-r"|"-s"|"-b", "abc", "-d"|"--insert-after"|"--insert-before", "def"]
-  → runMutation(ctx, args) → Run + async refreshOpId
-  → returns {output} with new X-JJ-Op-Id → Svelte detects op change, refreshes log
-```
+**Read path** is the lower half of this sequence (steps 17-23) without the preceding mutation. Key difference: the read path uses `cachedRequest()` which may return cached data immediately with zero subprocess spawns — see the two-tier cache section below.
 
 ### State synchronization
 
@@ -160,32 +218,38 @@ Rebase does not use a modal. Instead, pressing `R` activates an inline rebase mo
 
 ## Testing Strategy
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor':'#F2F0E5',
+  'primaryTextColor':'#100F0F',
+  'primaryBorderColor':'#6F6E69',
+  'lineColor':'#6F6E69',
+  'textColor':'#100F0F'
+}}}%%
+flowchart TD
+    classDef green fill:#EDEECF,stroke:#66800B,color:#66800B
+    classDef blue fill:#E1ECEB,stroke:#205EA6,color:#205EA6
+    classDef orange fill:#FFE7CE,stroke:#BC5215,color:#BC5215
+    classDef purple fill:#F0EAEC,stroke:#5E409D,color:#5E409D
+
+    integ["Integration<br/><small>go test -tags integration<br/>real jj in tmpdir</small>"]:::purple
+    handlers["API Handler Tests<br/><small>MockRunner + httptest<br/>Expect(args) → SetOutput → Verify()</small>"]:::blue
+    gounit["Go Unit Tests<br/><small>command builders · parsers · models<br/>pure input→output, no I/O</small>"]:::green
+    feunit["Frontend Unit (Vitest)<br/><small>api.ts · diff-parser · word-diff · loader<br/>fetch mocking · generation counters</small>"]:::orange
+
+    integ --> handlers
+    handlers --> gounit
+    handlers -.-> feunit
+
+    gounit -.- |"command builders feed<br/>both test layers"| handlers
 ```
-┌─────────────────────────────────────────────────┐
-│  Unit tests (no subprocess, no I/O)             │
-│  ├── Command builders: args in → []string out   │
-│  ├── Data model methods: IsRoot, GetChangeId    │
-│  ├── Output parsers: string → structs           │
-│  └── SSH arg wrapping: shellQuote               │
-├─────────────────────────────────────────────────┤
-│  API handler tests (MockRunner, httptest)        │
-│  └── Request → expected jj args → mock output   │
-│      → assert JSON response                     │
-├─────────────────────────────────────────────────┤
-│  Frontend unit tests (Vitest)                   │
-│  ├── API client: fetch mocking, error handling, │
-│  │   op-id tracking, cache invalidation         │
-│  ├── Diff parser: unified diff parsing          │
-│  ├── Split view: side-by-side alignment         │
-│  ├── Word diff: inline diff computation         │
-│  └── Fuzzy search: command palette matching     │
-├─────────────────────────────────────────────────┤
-│  Integration tests (real jj repo in tmpdir)     │
-│  └── go test -tags integration ./internal/api/  │
-│      CRUD endpoints, journey tests, divergence  │
-│      resolution, diff-range, bookmark lifecycle │
-└─────────────────────────────────────────────────┘
-```
+
+| Layer | Count | Coverage |
+|-------|-------|----------|
+| Go unit | ~100 | Command builders, parsers (DiffStat, BookmarkList, GraphLog, WorkspaceList), models (`Commit.GetChangeId`, `SelectedRevisions`) |
+| Go handlers | ~180 | Every endpoint's happy path + validation (400) + runner error (500) via `runnerErrorTest` helper |
+| Go integration | ~30 | Build-tagged. CRUD journey, divergence resolution, diff-range file filtering, bookmark lifecycle |
+| Frontend unit | ~300 | api.ts cache/op-id, diff-parser, word-diff LCS, split-view alignment, loader races, mode factories |
 
 The `testutil.MockRunner` uses an expect/verify pattern:
 
@@ -219,11 +283,97 @@ defer runner.Verify()  // asserts all expectations called
 
 **Per-file prop scoping** — `DiffPanel` passes per-file slices of global state to each `DiffFileView` rather than the full dataset. This localizes reactive invalidation:
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor':'#F2F0E5',
+  'primaryTextColor':'#100F0F',
+  'primaryBorderColor':'#6F6E69',
+  'lineColor':'#6F6E69',
+  'textColor':'#100F0F'
+}}}%%
+flowchart LR
+    classDef blue fill:#E1ECEB,stroke:#205EA6,color:#205EA6
+    classDef orange fill:#FFE7CE,stroke:#BC5215,color:#BC5215
+    classDef green fill:#EDEECF,stroke:#66800B,color:#66800B
+    classDef gray fill:#E6E4D9,stroke:#6F6E69,color:#6F6E69
+    classDef empty fill:#F2F0E5,stroke:#B7B5AC,color:#B7B5AC,stroke-dasharray: 3 3
+
+    subgraph panel["DiffPanel"]
+        hlMap["highlightsByFile<br/><small>Map&lt;path, Map&lt;key,html&gt;&gt;</small>"]:::orange
+        wdMap["wordDiffsByFile<br/><small>Map&lt;path, Map&lt;hunk,spans&gt;&gt;</small>"]:::orange
+        smMap["matchesByFile<br/><small>groupByWithIndex()</small>"]:::orange
+    end
+
+    subgraph progressive["Progressive Async Workers"]
+        shiki["highlightDiff()<br/><small>setTimeout(0) yield/file</small>"]:::blue
+        word["computeAllWordDiffs()<br/><small>setTimeout(0) yield/file</small>"]:::blue
+    end
+
+    shiki -->|"publishes one file<br/>at a time"| hlMap
+    word -->|"publishes one file<br/>at a time"| wdMap
+
+    subgraph views["DiffFileView instances"]
+        dfv1["file: a.go"]:::green
+        dfv2["file: b.go"]:::gray
+        dfv3["file: c.go<br/><small>not yet highlighted</small>"]:::empty
+    end
+
+    hlMap -->|"new ref"| dfv1
+    hlMap -->|"same ref — skipped"| dfv2
+    hlMap -->|"EMPTY_HL singleton"| dfv3
+    wdMap --> dfv1
+    smMap --> dfv1
+
+    note["Only a.go re-renders.<br/>b.go and c.go get same Map reference<br/>→ Svelte skips them."]
+```
+
 - `highlightsByFile: Map<filePath, Map<key, html>>` — progressive Shiki highlighting publishes per-file inner Maps. Already-highlighted files keep their inner Map reference, so only the newly-highlighted `DiffFileView` re-renders on each publish. Stable `EMPTY_HL` singleton for not-yet-highlighted files.
 - `wordDiffsByFile: Map<filePath, Map<hunkIdx, Map<lineIdx, spans>>>` — same progressive-async pattern as Shiki. LCS computation yields between files; single-file context expansion only recomputes that file's entry. Stable `EMPTY_WD` singleton.
 - `matchesByFile` — search matches pre-grouped by `filePath` via `groupByWithIndex()`, preserving global indices so `currentMatchIdx` comparison still works. Match-free files receive `EMPTY_MATCHES` (stable singleton), so their `lineMatchMap` `$derived` never reads `currentMatchIdx` → no dependency → no recompute on Enter/Shift+Enter.
 
-**Two-tier response cache** — `api.ts` maintains two Maps: `responseCache` (keyed by `${cacheId}@${opId}`, cleared on every op-id change) and `immutableCache` (keyed by bare `cacheId`, survives op-id changes, bounded at 300 entries with insertion-order eviction). Immutable commits' diffs/files/descriptions can't change, so they're cached across operations. The separate cache avoids any re-keying logic on op-id changes — `trackOpId` just calls `responseCache.clear()`.
+**Two-tier response cache** — `api.ts` maintains two Maps: `responseCache` (keyed by `${cacheId}@${opId}`, cleared on every op-id change) and `immutableCache` (keyed by bare `cacheId`, survives op-id changes, bounded at 300 entries with insertion-order LRU eviction). Immutable commits' diffs/files/descriptions can't change, so they're cached across operations. The separate cache avoids any re-keying logic on op-id changes — `trackOpId` just calls `responseCache.clear()`. Cache hits on the immutable tier bump the entry to the end of the Map (delete + re-insert), giving true LRU behaviour.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor':'#F2F0E5',
+  'primaryTextColor':'#100F0F',
+  'primaryBorderColor':'#6F6E69',
+  'lineColor':'#6F6E69',
+  'textColor':'#100F0F'
+}}}%%
+flowchart TD
+    classDef green fill:#EDEECF,stroke:#66800B,color:#66800B
+    classDef orange fill:#FFE7CE,stroke:#BC5215,color:#BC5215
+    classDef blue fill:#E1ECEB,stroke:#205EA6,color:#205EA6
+    classDef red fill:#FFE1D5,stroke:#AF3029,color:#AF3029
+
+    start(["cachedRequest(id, url, immutable)"])
+    start --> checkImm{immutableCache<br/>has id?}
+    checkImm -->|yes| bumpLRU["LRU bump<br/><small>delete + re-insert</small>"]:::green
+    bumpLRU --> hit1["return cached ✓"]:::green
+
+    checkImm -->|no| checkMut{responseCache<br/>has id@opId?}
+    checkMut -->|yes| hit2["return cached ✓"]:::green
+
+    checkMut -->|no| fetch["fetch(url)"]:::blue
+    fetch --> isImm{immutable<br/>param?}
+
+    isImm -->|true| evict{size ≥ 300?}
+    evict -->|yes| drop["evict oldest<br/><small>keys().next()</small>"]:::orange
+    evict -->|no| storeImm
+    drop --> storeImm["immutableCache.set(id, data)"]:::orange
+    storeImm --> ret1[return result]
+
+    isImm -->|false| checkOp{opId unchanged<br/>since fetch?}
+    checkOp -->|yes| storeMut["responseCache.set(id@opId, data)"]:::orange
+    checkOp -->|no| stale["don't cache<br/><small>(concurrent request advanced opId)</small>"]:::red
+    storeMut --> ret2[return result]
+    stale --> ret3[return result]
+
+    opchange["— op-id changes —"]:::red
+    opchange --> clearMut["responseCache.clear()"]:::red
+    opchange --> keepImm["immutableCache untouched"]:::green
+```
 
 **`createLoader()` factory** — `loader.svelte.ts` encapsulates the generation-counter async pattern. Each `load()` supersedes any in-flight call; only the latest-started result is applied. The `loading` flag is deferred via `setTimeout(0)` so microtask-fast cache hits never flip it, preventing reactive-update cascades during cached j/k navigation. App.svelte declares 6 loaders instead of 6 hand-rolled load functions + 6 generation counters + 11 `$state` vars.
 

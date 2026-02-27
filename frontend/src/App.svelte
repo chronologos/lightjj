@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, isCached, onStale, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
+  import { api, effectiveId, isCached, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -212,6 +212,7 @@
 
     // Revisions
     { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog, when: () => !inlineMode },
+    { label: 'Hard refresh (clear all caches)', category: 'Revisions', action: () => { clearAllCaches(); loadLog(true) }, when: () => !inlineMode },
     { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))

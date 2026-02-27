@@ -1,6 +1,7 @@
 package jj
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,11 +30,11 @@ func TestLogGraph(t *testing.T) {
 	// Must NOT contain --no-graph (unlike LogJSON) — graph chars encode topology
 	assert.NotContains(t, args, "--no-graph")
 	// Template must use \x1F field separator (not tabs, which appear in descriptions)
-	assert.Contains(t, args, "-T")
-	tmpl := args[len(args)-1]
-	assert.Contains(t, tmpl, `\x1F`)
-	assert.Contains(t, tmpl, JJUIPrefix)
-	assert.Contains(t, tmpl, "divergent")
+	joined := strings.Join(args, " ")
+	assert.Contains(t, joined, "-T ")
+	assert.Contains(t, joined, `\x1F`)
+	assert.Contains(t, joined, JJUIPrefix)
+	assert.Contains(t, joined, "divergent")
 }
 
 func TestLogGraph_NoRevset(t *testing.T) {
@@ -321,6 +322,24 @@ func TestParseDiffStat(t *testing.T) {
 				"big.go": {Additions: 98, Deletions: 2},
 			},
 		},
+		{
+			// Real jj output for binary files. statLineRe requires [+-]+ bar,
+			// so binaries are intentionally excluded (0/0 stats via MergeStats zero-value).
+			name: "binary file (no bar)",
+			input: `binary.bin | (binary) +100 bytes
+1 file changed, 0 insertions(+), 0 deletions(-)
+`,
+			want: map[string]FileStat{},
+		},
+		{
+			// Real jj output for pure renames (no content change). Also excluded
+			// by statLineRe (| 0 has no bar). FileChange gets 0/0 from MergeStats.
+			name: "pure rename (no bar)",
+			input: `{file.txt => renamed.txt} | 0
+1 file changed, 0 insertions(+), 0 deletions(-)
+`,
+			want: map[string]FileStat{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -566,7 +585,7 @@ func TestResolve_EscapedFile(t *testing.T) {
 }
 
 func TestParseResolveList(t *testing.T) {
-	output := "src/main.go    2-sided conflict\nREADME.md    2-sided conflict\n"
+	output := "src/main.go    2-sided conflict\nREADME.md    3-sided conflict including 1 deletion\n"
 	paths := ParseResolveList(output)
 	assert.Equal(t, []string{"src/main.go", "README.md"}, paths)
 }
@@ -598,12 +617,12 @@ func TestMergeConflicts(t *testing.T) {
 }
 
 func TestMergeConflicts_NoConflicts(t *testing.T) {
-	files := []FileChange{
-		{Type: "M", Path: "a.go"},
+	files := []FileChange{{Type: "M", Path: "a.go"}}
+	for _, conflicts := range [][]string{nil, {}} {
+		result := MergeConflicts(files, conflicts)
+		assert.Len(t, result, 1)
+		assert.False(t, result[0].Conflict)
 	}
-	files = MergeConflicts(files, []string{})
-	assert.Len(t, files, 1)
-	assert.False(t, files[0].Conflict)
 }
 
 func TestMergeConflicts_AppendsConflictOnlyFiles(t *testing.T) {
