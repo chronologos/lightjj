@@ -692,6 +692,10 @@
         {:else}
           <span class="file-selection-title">Squash — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
         {/if}
+        <span class="file-selection-actions">
+          <button class="file-select-action" onclick={() => { for (const f of changedFiles) { if (!selectedFiles.has(f.path)) ontogglefile(f.path) } }}>All</button>
+          <button class="file-select-action" onclick={() => { for (const f of changedFiles) { if (selectedFiles.has(f.path)) ontogglefile(f.path) } }}>None</button>
+        </span>
         <span class="file-selection-count">{selectedFiles.size}/{changedFiles.length} {splitMode ? 'stay' : 'to move'}</span>
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1108,6 +1112,30 @@
     border: 1px solid var(--surface1);
     color: var(--overlay0);
     font-weight: 500;
+  }
+
+  .file-selection-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  .file-select-action {
+    background: none;
+    border: none;
+    color: var(--subtext0);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .file-select-action:hover {
+    color: var(--text);
   }
 
   .file-selection-count {

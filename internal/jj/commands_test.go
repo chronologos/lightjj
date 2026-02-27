@@ -235,10 +235,28 @@ func TestParseDiffSummary(t *testing.T) {
 			want:  []FileChange{},
 		},
 		{
-			name:  "renamed file",
+			// Regression: rename brace syntax was passed through verbatim.
+			// Squash/split file selection then sent the brace syntax back to
+			// jj as a fileset, which silently matched nothing. Now we expand
+			// to the destination path.
+			name:  "renamed file (full rename)",
 			input: "R {old_name.go => new_name.go}\n",
 			want: []FileChange{
-				{Type: "R", Path: "{old_name.go => new_name.go}"},
+				{Type: "R", Path: "new_name.go"},
+			},
+		},
+		{
+			name:  "renamed file (partial: dir changed, name same)",
+			input: "R dir/{a => b}/file.txt\n",
+			want: []FileChange{
+				{Type: "R", Path: "dir/b/file.txt"},
+			},
+		},
+		{
+			name:  "renamed file (directory move with suffix)",
+			input: "R sandbox/{ => notes/obol}/01-obolhuman/main.go\n",
+			want: []FileChange{
+				{Type: "R", Path: "sandbox/notes/obol/01-obolhuman/main.go"},
 			},
 		},
 	}
@@ -247,6 +265,24 @@ func TestParseDiffSummary(t *testing.T) {
 			got := ParseDiffSummary(tt.input)
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+func TestExpandRenamePath(t *testing.T) {
+	cases := []struct {
+		in, out string
+	}{
+		{"plain/path.go", "plain/path.go"},                                       // no rename
+		{"{old => new}", "new"},                                                  // full rename
+		{"dir/{a => b}/file.txt", "dir/b/file.txt"},                              // dir rename
+		{"sandbox/{ => notes/obol}/main.go", "sandbox/notes/obol/main.go"},       // empty old (file added to new dir)
+		{"sandbox/{old => }/main.go", "sandbox//main.go"},                        // empty new (odd but handled)
+		{"path with spaces/{a b => c d}.txt", "path with spaces/c d.txt"},        // spaces in names
+		{"path/with => arrow but no braces", "path/with => arrow but no braces"}, // arrow without braces → unchanged
+		{"{weird{file}.txt => weird{file}2.txt}", "weird{file}2.txt"},            // literal braces in filename — outermost delimiters win
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.out, expandRenamePath(tc.in), "input: %q", tc.in)
 	}
 }
 
@@ -569,9 +605,18 @@ func TestParseWorkspaceList_Empty(t *testing.T) {
 	assert.Empty(t, ws)
 }
 
-func TestResolveList(t *testing.T) {
-	got := ResolveList("abc")
-	assert.Equal(t, []string{"resolve", "--list", "-r", "abc", "--color", "never", "--quiet"}, got)
+func TestConflictedFiles(t *testing.T) {
+	args := ConflictedFiles("abc")
+	assert.Equal(t, "log", args[0])
+	assert.Contains(t, args, "-r")
+	assert.Contains(t, args, "abc")
+	assert.Contains(t, args, "--no-graph")
+	assert.Contains(t, args, "--ignore-working-copy")
+	// Template assertions — position-independent
+	joined := strings.Join(args, " ")
+	assert.Contains(t, joined, "conflicted_files")
+	assert.Contains(t, joined, "conflict_side_count")
+	assert.Contains(t, joined, `\x1F`)
 }
 
 func TestResolve(t *testing.T) {
@@ -584,35 +629,48 @@ func TestResolve_EscapedFile(t *testing.T) {
 	assert.Equal(t, []string{"resolve", "--tool", ":theirs", "-r", "abc", `file:"path with \"quotes\".go"`}, got)
 }
 
-func TestParseResolveList(t *testing.T) {
-	output := "src/main.go    2-sided conflict\nREADME.md    3-sided conflict including 1 deletion\n"
-	entries := ParseResolveList(output)
+func TestParseConflictedFiles(t *testing.T) {
+	output := "src/main.go\x1F2\nREADME.md\x1F3\n"
+	entries := ParseConflictedFiles(output)
 	assert.Equal(t, []ConflictEntry{
 		{Path: "src/main.go", Sides: 2},
 		{Path: "README.md", Sides: 3},
 	}, entries)
 }
 
-func TestParseResolveList_PlainPaths(t *testing.T) {
-	// Handles output without conflict type suffix (future-proofing).
-	// Arity defaults to 0 when not parseable.
-	output := "src/main.go\nREADME.md\n"
-	entries := ParseResolveList(output)
+func TestParseConflictedFiles_Malformed(t *testing.T) {
+	// Defensive branch: line missing \x1F field → Sides defaults to 0.
+	// Should never happen with jj >= 0.36, but the parser is lenient so a
+	// future template change doesn't crash the handler. Frontend falls back
+	// to marker-counting when conflict_sides == 0.
+	output := "src/main.go\nalso/no-field.go\x1Fnot-a-number\n"
+	entries := ParseConflictedFiles(output)
 	assert.Equal(t, []ConflictEntry{
 		{Path: "src/main.go", Sides: 0},
-		{Path: "README.md", Sides: 0},
+		{Path: "also/no-field.go", Sides: 0},
 	}, entries)
 }
 
-func TestParseResolveList_Empty(t *testing.T) {
-	entries := ParseResolveList("")
+func TestParseConflictedFiles_Empty(t *testing.T) {
+	entries := ParseConflictedFiles("")
 	assert.Empty(t, entries)
 	assert.NotNil(t, entries)
 }
 
-func TestConflictPaths(t *testing.T) {
-	entries := []ConflictEntry{{Path: "a.go", Sides: 2}, {Path: "b.go", Sides: 3}}
-	assert.Equal(t, []string{"a.go", "b.go"}, ConflictPaths(entries))
+func TestMergeConflicts_DuplicatePaths(t *testing.T) {
+	// Multi-revision revsets (jj log -r 'X|Y') can produce the same path twice
+	// when both commits conflict on it. The byPath map dedups; append loop must
+	// iterate the map, not the original slice, to avoid duplicate FileChange
+	// entries (which would cause duplicate {#each} keys in the frontend).
+	conflicts := []ConflictEntry{
+		{Path: "file.go", Sides: 2},
+		{Path: "file.go", Sides: 3}, // last-write-wins in byPath map
+	}
+	// Conflict-only case (not in DiffSummary) — this is where the bug was.
+	result := MergeConflicts([]FileChange{}, conflicts)
+	assert.Len(t, result, 1, "duplicate paths must be deduped")
+	assert.Equal(t, "file.go", result[0].Path)
+	assert.Equal(t, 3, result[0].ConflictSides, "last entry wins in byPath map")
 }
 
 func TestMergeConflicts(t *testing.T) {

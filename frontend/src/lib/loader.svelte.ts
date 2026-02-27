@@ -77,6 +77,7 @@ export function createLoader<T, A extends unknown[]>(
 
   function set(v: T) {
     value = v
+    error = '' // set() means "I have a known-good value"
   }
 
   return {

@@ -376,9 +376,16 @@ func FileShow(revision string, path string) CommandArgs {
 	return []string{"file", "show", "-r", revision, EscapeFileName(path)}
 }
 
-// ResolveList returns args for `jj resolve --list` to enumerate conflicted files.
-func ResolveList(revision string) CommandArgs {
-	return []string{"resolve", "--list", "-r", revision, "--color", "never", "--quiet"}
+// ConflictedFiles returns args for a template-based conflict listing.
+// Unlike `jj resolve --list`, this uses structured output (path\x1Fsides\n) and
+// exits 0 with empty output on clean revisions — no error special-casing needed.
+// Multi-revision revsets work (union of conflicts); `resolve --list` rejects them.
+// Requires jj >= 0.36 for Commit.conflicted_files() and TreeEntry.conflict_side_count().
+func ConflictedFiles(revision string) CommandArgs {
+	// RepoPath auto-coerces via ++; only Integer needs stringify.
+	tmpl := `conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count()) ++ "\n").join("")`
+	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
+		"--ignore-working-copy", "-T", tmpl}
 }
 
 // Resolve returns args for `jj resolve` to resolve a conflicted file with a tool.

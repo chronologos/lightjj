@@ -62,7 +62,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] Rename `squashSelectedFiles`/`squashTotalFiles`/`toggleSquashFile` to `selectedFiles`/`totalFileCount`/`toggleFileSelection` in App.svelte — now shared by squash and split modes.
 - [x] Rename CSS classes `rebase-badge`/`rebase-source`/`rebase-target` to `mode-badge`/`badge-source`/`badge-target` — shared across rebase, squash, split.
 - [x] Squash mode StatusBar file count now says "N/M files to move" for parity with split's "N/M files stay".
-- [ ] Add bulk select/deselect toggle for file checkboxes (applies to squash + split modes).
+- [x] Add bulk select/deselect toggle for file checkboxes (applies to squash + split modes).
 - [ ] No list virtualization for large repos (500+ commits).
 - [ ] No HTTP response compression (especially impacts SSH mode).
 - [x] `highlightDiff` re-highlights all files when one is expanded. Fixed: `expandFile()` now only highlights the expanded file.
@@ -206,7 +206,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] Inline rebase mode (keyboard-driven, not a modal)
 - [x] Squash support (file-level selection, keep-emptied, use-dest-message)
 - [x] Split support (inline mode, file checkboxes, parallel toggle)
-- [x] Conflict resolution UI (basic) — detect `×` conflicting revisions, parse jj's conflict markers (`<<<<<<<`, `%%%%%%%`, `+++++++`, `>>>>>>>`), render inline with color-coded cards (peach for diff side, mauve for snapshot side), "Accept Ours" / "Accept Theirs" buttons per file. `jj resolve --list` for conflict detection, `jj file show` for conflict-only files not in diff output.
+- [x] Conflict resolution UI — detect `×` conflicting revisions, parse jj's conflict markers (`<<<<<<<`, `%%%%%%%`, `+++++++`, `>>>>>>>`), render with A/B letter badges for spatial correspondence between buttons and section tabs. "Keep [A]"/"Keep [B]" buttons per-region + file-header. Hover preview (amber glow on kept, redaction stripes on discarded). `conflicted_files` template for structured conflict detection (replaces `resolve --list` regex parsing), `jj file show` for conflict-only files not in diff output.
 - [ ] Three-way merge editor — replace inline conflict markers with a CodeMirror `@codemirror/merge` three-way view (base | ours | theirs). Phase 1: add backend endpoint returning `{base, ours, theirs}` per conflicted file (via `jj file show` on parent revisions). Phase 2: read-only three-pane view with diff highlighting + existing Accept Ours/Theirs buttons. Phase 3: editable center pane with "Save Resolution" that writes merged content back. Current inline card view remains as fallback for N-way conflicts (3+ sides). See [CodeMirror merge demo](https://codemirror.net/3/demo/merge.html) for the UX pattern.
 - [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
@@ -219,7 +219,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] Themes (light/dark) — Catppuccin Mocha (dark) + Latte (light), toggle via Cmd+K, persisted in localStorage
 - [ ] Syntax highlighting deadline / Web Worker — `codeToHtml` is synchronous and can freeze the UI for seconds on pathological files (e.g., 200-line CSS). Short-term: chunk input into ~30-line batches with yields between. Long-term: move Shiki into a Web Worker so `worker.terminate()` acts as a true cancellation primitive.
 - [ ] Lazy rendering for large diffs (IntersectionObserver, like antique)
-- [ ] Draggable split view divider (resize ratio)
+- [x] Draggable split view divider (resize ratio)
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle

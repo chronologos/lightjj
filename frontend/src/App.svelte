@@ -66,6 +66,32 @@
   let evologContent = $derived(evolog.value)
   let evologLoading = $derived(evolog.loading)
 
+  // --- Draggable revision panel divider ---
+  let draggingDivider = $state(false)
+
+  function startDividerDrag(e: MouseEvent) {
+    e.preventDefault()
+    draggingDivider = true
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+
+    function onMouseMove(e: MouseEvent) {
+      // Clamp between 280 and 600
+      config.revisionPanelWidth = Math.max(280, Math.min(600, e.clientX))
+    }
+
+    function onMouseUp() {
+      draggingDivider = false
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+  }
+
   let paletteOpen: boolean = $state(false)
   let bookmarkModalOpen: boolean = $state(false)
   let bookmarkModalFilter: string = $state('')
@@ -1142,34 +1168,39 @@
 
     {#if activeView === 'log'}
       <div class="workspace">
-        <RevisionGraph
-          bind:this={revisionGraphRef}
-          {revisions}
-          {selectedIndex}
-          {checkedRevisions}
-          {loading}
-          {revsetFilter}
-          {viewMode}
-          {lastCheckedIndex}
-          onselect={selectRevision}
-          oncheck={toggleCheck}
-          onrangecheck={rangeCheck}
-          oncontextmenu={openRevisionContextMenu}
-          onnewfromchecked={handleNewFromChecked}
-          onabandonchecked={handleAbandonChecked}
-          onclearchecks={clearChecksAndReload}
-          onrevsetsubmit={handleRevsetSubmit}
-          onrevsetclear={clearRevsetFilter}
-          onrevsetchange={(v) => { revsetFilter = v }}
-          onrevsetescaped={clearRevsetFilter}
-          onviewmodechange={toggleViewMode}
-          onbookmarkclick={openBookmarkModal}
-          {rebase}
-          {squash}
-          {split}
-          isDark={darkMode}
-          {prByBookmark}
-        />
+        <div class="revision-panel-wrapper" style="width: {config.revisionPanelWidth}px">
+          <RevisionGraph
+            bind:this={revisionGraphRef}
+            {revisions}
+            {selectedIndex}
+            {checkedRevisions}
+            {loading}
+            {revsetFilter}
+            {viewMode}
+            {lastCheckedIndex}
+            onselect={selectRevision}
+            oncheck={toggleCheck}
+            onrangecheck={rangeCheck}
+            oncontextmenu={openRevisionContextMenu}
+            onnewfromchecked={handleNewFromChecked}
+            onabandonchecked={handleAbandonChecked}
+            onclearchecks={clearChecksAndReload}
+            onrevsetsubmit={handleRevsetSubmit}
+            onrevsetclear={clearRevsetFilter}
+            onrevsetchange={(v) => { revsetFilter = v }}
+            onrevsetescaped={clearRevsetFilter}
+            onviewmodechange={toggleViewMode}
+            onbookmarkclick={openBookmarkModal}
+            {rebase}
+            {squash}
+            {split}
+            isDark={darkMode}
+            {prByBookmark}
+          />
+        </div>
+
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="panel-divider" class:divider-active={draggingDivider} onmousedown={startDividerDrag}></div>
 
         {#if divergence.active}
           <DivergencePanel
@@ -1310,6 +1341,38 @@
     display: flex;
     flex: 1;
     overflow: hidden;
+  }
+
+  .revision-panel-wrapper {
+    flex-shrink: 0;
+    min-width: 280px;
+    max-width: 600px;
+    display: flex;
+    overflow: hidden;
+  }
+
+  .panel-divider {
+    width: 4px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    position: relative;
+    z-index: 1;
+  }
+
+  .panel-divider::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 1px;
+    width: 1px;
+    background: transparent;
+    transition: background var(--anim-duration) var(--anim-ease);
+  }
+
+  .panel-divider:hover::after,
+  .panel-divider.divider-active::after {
+    background: var(--surface2);
   }
 
   .fullwidth-panel {

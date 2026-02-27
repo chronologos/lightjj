@@ -152,7 +152,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	conflictCh := make(chan asyncResult, 1)
 	go func() {
-		out, err := s.Runner.Run(r.Context(), jj.ResolveList(revision))
+		out, err := s.Runner.Run(r.Context(), jj.ConflictedFiles(revision))
 		conflictCh <- asyncResult{out, err}
 	}()
 
@@ -172,17 +172,15 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		jj.MergeStats(files, stats)
 	}
 
-	// Collect conflict result and merge. `jj resolve --list` exits code 2 with
-	// "No conflicts found" when the revision is clean — that's expected, not an
-	// error. Other errors (SSH failure, revision not found) are logged for
-	// debuggability since we continue anyway (conflicts missing is degraded UX,
-	// not a hard failure).
+	// Template call exits 0 with empty output on clean revisions — any error
+	// here is genuine (SSH failure, bad revset, jj too old for the template).
+	// Logged for debuggability; response continues with degraded conflict info.
 	cr := <-conflictCh
 	if cr.err == nil {
-		conflicts := jj.ParseResolveList(string(cr.output))
+		conflicts := jj.ParseConflictedFiles(string(cr.output))
 		files = jj.MergeConflicts(files, conflicts)
-	} else if !strings.Contains(cr.err.Error(), "No conflicts found") {
-		log.Printf("handleFiles: resolve --list failed for %s: %v", revision, cr.err)
+	} else {
+		log.Printf("handleFiles: conflicted_files template failed for %s: %v", revision, cr.err)
 	}
 
 	s.writeJSON(w, r, http.StatusOK, files)
