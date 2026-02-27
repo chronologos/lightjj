@@ -491,9 +491,32 @@
     margin-right: 4px;
   }
 
+  .action-btn {
+    padding: 2px 10px;
+    background: transparent;
+    border: 1px solid var(--surface1);
+    border-radius: 4px;
+    color: var(--subtext0);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+
+  .action-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: var(--surface2);
+  }
+
+  .action-btn.danger:hover:not(:disabled) {
+    color: var(--red);
+    border-color: rgba(from var(--red) r g b / 0.4);
+  }
+
   .action-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    opacity: 0.35;
+    cursor: default;
   }
 
   /* --- Refresh indicator (stale-while-revalidate) --- */
@@ -684,8 +707,10 @@
     flex-shrink: 0;
     text-align: center;
     color: var(--green);
-    font-size: 11px;
-    padding-left: 4px;
+    font-size: 10px;
+    font-weight: 400;
+    padding-left: 2px;
+    opacity: 0.85;
   }
 
   .node-line-content,

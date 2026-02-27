@@ -20,6 +20,9 @@ import (
 	"github.com/iant/lightjj/internal/runner"
 )
 
+// version is set at build time via -ldflags "-X main.version=$(cat version.txt)"
+var version = "dev"
+
 //go:embed all:frontend-dist
 var frontendFS embed.FS
 
@@ -28,7 +31,13 @@ func main() {
 	remote := flag.String("remote", "", "Remote repo as user@host:/path (SSH proxy mode)")
 	addr := flag.String("addr", "localhost:0", "Listen address (default: random port on localhost)")
 	noBrowser := flag.Bool("no-browser", false, "Don't open browser automatically")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("lightjj v%s\n", strings.TrimSpace(version))
+		return
+	}
 
 	var cmdRunner runner.CommandRunner
 	var resolvedRepoDir string // absolute path for local mode, empty for SSH
@@ -68,7 +77,7 @@ func main() {
 	}
 
 	url := fmt.Sprintf("http://%s", listener.Addr().String())
-	fmt.Printf("lightjj listening on %s\n", url)
+	fmt.Printf("lightjj v%s listening on %s\n", strings.TrimSpace(version), url)
 
 	if !*noBrowser {
 		openBrowser(url)

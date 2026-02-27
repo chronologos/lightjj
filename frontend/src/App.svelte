@@ -16,6 +16,9 @@
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
   import { createLoader } from './lib/loader.svelte'
   import { config } from './lib/config.svelte'
+  import { APP_VERSION, parseSemver, semverMinorGt } from './lib/version'
+  import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
+  import WelcomeModal from './lib/WelcomeModal.svelte'
 
   // --- Global state ---
   let selectedIndex: number = $state(-1)
@@ -34,6 +37,9 @@
   let navDebounceTimer: number | undefined
   let evologOpen: boolean = $state(false)
   let oplogOpen: boolean = $state(false)
+  let welcomeOpen: boolean = $state(false)
+  let welcomeFeatures: TutorialFeature[] = $state([])
+  let welcomeTitle: string = $state('')
 
   // --- Error helpers (defined early — loaders need showError) ---
   function showError(e: unknown) {
@@ -116,7 +122,7 @@
   let contextMenuY: number = $state(0)
   let contextMenuOpen: boolean = $state(false)
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen || divergence.active)
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen || divergence.active || welcomeOpen)
   let inlineMode = $derived(rebase.active || squash.active || split.active)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
@@ -297,6 +303,7 @@
     { label: 'Toggle split/unified diff', category: 'View', action: () => { config.splitView = !config.splitView } },
     { label: 'Toggle operation log', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
+    { label: 'Show welcome / keyboard shortcuts', category: 'View', action: () => { welcomeTitle = `Welcome to lightjj v${APP_VERSION}`; welcomeFeatures = FEATURES; welcomeOpen = true } },
 
     // Actions
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
@@ -1100,6 +1107,38 @@
   loadWorkspaces()
   loadAliases()
   loadPullRequests()
+
+  // --- Tutorial / What's New ---
+  {
+    const currentSemver = parseSemver(APP_VERSION)
+    const storedVersion = config.tutorialVersion
+    const storedSemver = parseSemver(storedVersion)
+
+    if (!storedVersion) {
+      welcomeTitle = `Welcome to lightjj v${APP_VERSION}`
+      welcomeFeatures = FEATURES
+      welcomeOpen = true
+    } else if (currentSemver && storedSemver && semverMinorGt(currentSemver, storedSemver)) {
+      const newFeatures = FEATURES.filter(f => {
+        const fv = parseSemver(f.version)
+        return fv && semverMinorGt(fv, storedSemver)
+      })
+      if (newFeatures.length > 0) {
+        welcomeTitle = `What's New in lightjj v${APP_VERSION}`
+        welcomeFeatures = newFeatures
+        welcomeOpen = true
+      } else {
+        config.tutorialVersion = APP_VERSION
+      }
+    } else if (storedVersion !== APP_VERSION) {
+      config.tutorialVersion = APP_VERSION
+    }
+  }
+
+  function dismissWelcome() {
+    welcomeOpen = false
+    config.tutorialVersion = APP_VERSION
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} onclick={(e: MouseEvent) => {
@@ -1377,6 +1416,10 @@
     onexecute={handleBookmarkOp}
     onclose={() => { bookmarkModalOpen = false }}
   />
+
+  {#if welcomeOpen}
+    <WelcomeModal version={APP_VERSION} features={welcomeFeatures} title={welcomeTitle} onclose={dismissWelcome} />
+  {/if}
 </div>
 
 <style>
