@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iant/lightjj/internal/jj"
-	"github.com/iant/lightjj/internal/parser"
-	"github.com/iant/lightjj/testutil"
+	"github.com/chronologos/lightjj/internal/jj"
+	"github.com/chronologos/lightjj/internal/parser"
+	"github.com/chronologos/lightjj/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -33,10 +33,10 @@ Jujutsu is a powerful VCS with a steep learning curve. lightjj gives you a visua
 
 ```bash
 # Install
-go install github.com/iant/lightjj/cmd/lightjj@latest
+go install github.com/chronologos/lightjj/cmd/lightjj@latest
 
 # Or build from source
-git clone https://github.com/iant/lightjj
+git clone https://github.com/chronologos/lightjj
 cd lightjj
 cd frontend && pnpm install && pnpm run build && cd ..
 go build ./cmd/lightjj
