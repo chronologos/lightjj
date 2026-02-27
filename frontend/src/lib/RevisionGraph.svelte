@@ -31,6 +31,7 @@
     split: SplitMode
     isDark: boolean
     prByBookmark: Map<string, PullRequest>
+    impliedCommitIds: Set<string>
   }
 
   let {
@@ -39,7 +40,7 @@
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
     rebase, squash, split,
-    isDark, prByBookmark,
+    isDark, prByBookmark, impliedCommitIds,
   }: Props = $props()
 
   let anyModeActive = $derived(rebase.active || squash.active || split.active)
@@ -256,6 +257,7 @@
       <div class="revision-list" class:refreshing={isRefreshing} bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list">
         {#each flatLines as line, lineIdx (effectiveId(revisions[line.entryIndex].commit) + ':' + line.lineKey)}
           {@const isChecked = checkedRevisions.has(effectiveId(revisions[line.entryIndex]?.commit))}
+          {@const isImplied = !isChecked && impliedCommitIds.has(revisions[line.entryIndex]?.commit.commit_id)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
             class="graph-row"
@@ -264,6 +266,7 @@
             class:desc-row={line.isDescLine}
             class:selected={selectedIndex === line.entryIndex}
             class:checked={isChecked}
+            class:implied={isImplied}
             class:wc={line.isWorkingCopy}
             class:hidden-rev={line.isHidden}
             class:immutable={line.isImmutable}
@@ -284,7 +287,7 @@
             tabindex={line.isNode ? 0 : -1}
             aria-selected={selectedIndex === line.entryIndex}
           >
-            <span class="check-gutter">{#if line.isNode && isChecked}✓{/if}</span>
+            <span class="check-gutter" class:implied={isImplied} title={isImplied ? 'Included via gap-fill (connected)' : ''}>{#if line.isNode && isChecked}✓{:else if line.isNode && isImplied}◌{/if}</span>
             <GraphSvg
               gutter={line.gutter}
               isNode={line.isNode}
@@ -650,6 +653,22 @@
   .graph-row.checked.selected {
     background: var(--bg-checked-selected);
     box-shadow: inset 2px 0 0 var(--amber);
+  }
+
+  .graph-row.implied {
+    /* Fainter than checked — "included but not explicitly selected" */
+    background: rgba(from var(--green) r g b / 0.04);
+  }
+
+  .graph-row.implied.selected {
+    /* Selected + implied: amber indicator wins, green tint stays faint */
+    background: rgba(from var(--green) r g b / 0.06);
+    box-shadow: inset 2px 0 0 var(--amber);
+  }
+
+  .check-gutter.implied {
+    color: var(--overlay0);
+    cursor: help;
   }
 
   .graph-row.hidden-rev {
