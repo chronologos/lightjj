@@ -63,7 +63,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     BookmarkModal.svelte   — Bookmark management modal
     BookmarkInput.svelte   — Bookmark name input with autocomplete
     GitModal.svelte        — Git push/fetch modal
-    EvologPanel.svelte     — Evolution log panel
+    EvologPanel.svelte     — Evolution log: clickable entry list → per-step diff via diffRange (reuses DiffFileView)
     OplogPanel.svelte      — Operation log panel
     DivergencePanel.svelte — Divergent commit resolution panel (compare versions, keep/abandon)
     diff-parser.ts         — Unified diff parser
@@ -161,7 +161,8 @@ Patterns learned from profiling j/k keyboard navigation:
 - **Opportunistic prefetch — only when current is cached.** `selectRevision` fires `prefetchRevision()` for the next revision in the navigation direction, but only when the current revision is already cached (instant main load → no network contention). Unconditional prefetch during rapid uncached j/k stacks 3N requests, exhausting the browser's 6-connection-per-origin limit and queuing main loads behind speculative fetches for skipped revisions. Fire-and-forget with swallowed errors.
 - **Scope expensive `$derived` to minimal dependencies.** `workingCopyEntry = $derived(revisions.find(...))` only re-runs when `revisions` changes, not when `loading`/`mutating`/`diffLoading` flip. Nested inside `statusText` it was re-scanning 500 revisions 4-6× per mutation cycle.
 - **Session-cache stable data.** `api.remotes()`/`api.aliases()` are promise-memoized — fetched once, reused for the session. Reset via `clearAllCaches()` (hard refresh). Error path clears the memo so retries work.
-- **`createLoader()` factory** (`loader.svelte.ts`) encapsulates the generation-counter race-safe async pattern. Its `loading` flag is deferred via `setTimeout(0)` so cache hits (microtask-fast) never flip it — zero reactive updates on cached j/k navigation. Use `loader.set()` for optimistic updates, `loader.reset()` to cancel + restore initial.
+- **`createLoader()` factory** (`loader.svelte.ts`) encapsulates the generation-counter race-safe async pattern. Its `loading` flag is deferred via `setTimeout(0)` so cache hits (microtask-fast) never flip it — zero reactive updates on cached j/k navigation. Use `loader.set()` for optimistic updates, `loader.reset()` to cancel + restore initial. **Prefer this over manual `diffLoading`/`diffError`/`diffGen` state** — the manual pattern has a subtle spinner-freeze bug when a no-fetch code path (early return) runs while a prior fetch is in flight (its `finally` gen-check fails to clear the flag).
+- **`{#key}` over manual reset effects.** When component state should reset on identity change, wrap the component in `{#key identityExpr}` in the parent — the component remounts with fresh state. Manual `$effect` + previous-value-tracking `let` is 7+ lines, fragile (sentinel collisions), and reinvents what Svelte gives you. See `EvologPanel` usage in `App.svelte`.
 - **Guard `$derived` in hidden components.** `CommandPalette`'s `availableCommands` uses `if (!open) return []` to avoid recomputing when the palette is closed but its `commands` prop changes.
 - **Defer Shiki highlighting.** `highlightDiff` is called via `setTimeout(fn, 0)` so the browser paints the selection highlight before Shiki runs. The diff renders immediately with plain text; syntax colors appear one frame later.
 - **Progressive highlighting.** `highlightDiff` yields between files (`setTimeout(0)`) and updates `highlightsByFile` per-file. Already-highlighted files keep their inner Map reference, so only newly-highlighted `DiffFileView`s re-render.

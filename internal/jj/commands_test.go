@@ -571,6 +571,33 @@ func TestEvolog(t *testing.T) {
 	assert.Contains(t, got, "-r")
 	assert.Contains(t, got, "abc")
 	assert.Contains(t, got, "--no-graph")
+	assert.Contains(t, got, "-T")
+}
+
+func TestParseEvolog(t *testing.T) {
+	output := "d00e01ea653d\x1f2026-02-27 15:03:07\x1fsnapshot working copy\x1f3e06196802f1\n" +
+		"3e06196802f1\x1f2026-02-27 15:03:01\x1fsnapshot working copy\x1fb2b7be97c389,abc123\n" +
+		"b48bc18a97e2\x1f2026-02-27 14:49:04\x1fnew empty commit\x1f\n"
+	entries := ParseEvolog(output)
+	assert.Len(t, entries, 3)
+	assert.Equal(t, "d00e01ea653d", entries[0].CommitId)
+	assert.Equal(t, "2026-02-27 15:03:07", entries[0].Time)
+	assert.Equal(t, "snapshot working copy", entries[0].Operation)
+	assert.Equal(t, []string{"3e06196802f1"}, entries[0].PredecessorIds)
+	assert.Equal(t, []string{"b2b7be97c389", "abc123"}, entries[1].PredecessorIds)
+	assert.Equal(t, "2026-02-27 14:49:04", entries[2].Time)
+	assert.Equal(t, []string{}, entries[2].PredecessorIds)
+}
+
+func TestParseEvolog_Empty(t *testing.T) {
+	entries := ParseEvolog("")
+	assert.Len(t, entries, 0)
+	assert.NotNil(t, entries)
+}
+
+func TestParseEvolog_Malformed(t *testing.T) {
+	entries := ParseEvolog("only\x1ftwo\x1ffields\n")
+	assert.Empty(t, entries)
 }
 
 func TestWorkspaceList(t *testing.T) {

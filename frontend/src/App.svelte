@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -58,7 +58,7 @@
   const files = createLoader((id: string, immutable?: boolean) => api.files(id, immutable), [] as FileChange[], showError)
   const description = createLoader((id: string, immutable?: boolean) => api.description(id, immutable).then(r => r.description), '')
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
-  const evolog = createLoader((id: string) => api.evolog(id).then(r => r.output), '', showError)
+  const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
 
   let revisions = $derived(log.value)
   let loading = $derived(log.loading)
@@ -68,7 +68,7 @@
   let fullDescription = $derived(description.value)
   let oplogEntries = $derived(oplog.value)
   let oplogLoading = $derived(oplog.loading)
-  let evologContent = $derived(evolog.value)
+  let evologEntries = $derived(evolog.value)
   let evologLoading = $derived(evolog.loading)
 
   // --- Draggable revision panel divider ---
@@ -1357,13 +1357,15 @@
       </div>
 
       {#if evologOpen}
-        <EvologPanel
-          content={evologContent}
-          loading={evologLoading}
-          {selectedRevision}
-          onrefresh={() => { if (selectedRevision) loadEvolog(effectiveId(selectedRevision.commit)) }}
-          onclose={() => { evologOpen = false }}
-        />
+        {#key selectedRevision?.commit.change_id}
+          <EvologPanel
+            entries={evologEntries}
+            loading={evologLoading}
+            {selectedRevision}
+            onrefresh={() => { if (selectedRevision) loadEvolog(effectiveId(selectedRevision.commit)) }}
+            onclose={() => { evologOpen = false }}
+          />
+        {/key}
       {/if}
 
       {#if oplogOpen}
