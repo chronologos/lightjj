@@ -8,6 +8,7 @@
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
   import DiffFileView from './DiffFileView.svelte'
+  import ContextMenu, { type ContextMenuItem } from './ContextMenu.svelte'
 
   interface Props {
     diffContent: string
@@ -16,7 +17,6 @@
     fullDescription: string
     checkedRevisions: SvelteSet<string>
     diffLoading: boolean
-    filesLoading: boolean
     splitView: boolean
     descriptionEditing: boolean
     descriptionDraft: string
@@ -35,14 +35,18 @@
     divergentSelected?: boolean
     onresolveDivergence?: () => void
     prByBookmark: Map<string, PullRequest>
+    onfilesaved?: () => Promise<void> | void
+    /** App's withMutation wrapper — serializes jj mutations across the app.
+     *  Returns undefined if blocked (another mutation in flight). */
+    onjjmutation?: <T>(fn: () => Promise<T>) => Promise<T | undefined>
   }
 
   let {
     diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions,
-    diffLoading, filesLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
+    diffLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
     onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
     fileSelectionMode, selectedFiles, ontogglefile, splitMode, onresolve,
-    divergentSelected, onresolveDivergence, prByBookmark,
+    divergentSelected, onresolveDivergence, prByBookmark, onfilesaved, onjjmutation,
   }: Props = $props()
 
   // --- Local state ---
@@ -50,11 +54,111 @@
   let fileSelectionListEl: HTMLElement | undefined = $state(undefined)
   let panelContentEl: HTMLElement | undefined = $state(undefined)
   let activeFilePath: string | null = $state(null)
+  let descExpanded = $state(false)
+  let descText = $derived(fullDescription || selectedRevision?.description || '(no description)')
+  let descIsMultiline = $derived(descText.includes('\n'))
   let collapsedFiles = new SvelteSet<string>()
   // Persist collapse state per revision so switching back restores it
   let collapseStateCache = new Map<string, Set<string>>()
   // Expanded files: store full-context DiffFile per file path
   let expandedDiffs: Map<string, DiffFile> = $state(new Map())
+
+  // --- Inline editing state ---
+  let editingFiles = new SvelteSet<string>()
+  let editFileContents = $state(new Map<string, string>())
+  let editBusy = new SvelteSet<string>()  // concurrency guard + loading indicator
+  let editError = $state('')  // last error message (shown in status bar area)
+
+  // --- Diff line context menu ---
+  let diffCtx: { items: ContextMenuItem[]; x: number; y: number; open: boolean } = $state({
+    items: [], x: 0, y: 0, open: false,
+  })
+
+  function openDiffLineContextMenu(e: MouseEvent, info: { filePath: string, oldLine: number | null, newLine: number | null, content: string, type: string }): void {
+    const line = info.newLine ?? info.oldLine
+    const lineRef = line ? `${info.filePath}:${line}` : info.filePath
+    const cleanContent = info.content.replace(/^[-+ ]/, '')
+
+    diffCtx = {
+      items: [
+        { label: `Copy ${lineRef}`, action: () => navigator.clipboard.writeText(lineRef) },
+        { label: 'Copy file path', action: () => navigator.clipboard.writeText(info.filePath) },
+        { separator: true },
+        { label: 'Copy line content', action: () => navigator.clipboard.writeText(cleanContent) },
+      ],
+      x: e.clientX,
+      y: e.clientY,
+      open: true,
+    }
+  }
+
+  async function startEdit(path: string) {
+    if (!selectedRevision || editBusy.has(path)) return
+    // Editor lives in the right split column — switch if coming from unified.
+    // splitView is $bindable so this persists to config and the parent.
+    if (!splitView) splitView = true
+    const revId = effectiveId(selectedRevision.commit)
+    editBusy.add(path)
+    editError = ''
+    try {
+      if (!selectedRevision.commit.is_working_copy) {
+        // api.edit is a jj mutation — must go through App's mutation lock
+        // to prevent races with keyboard-triggered mutations (e.g. 'u' undo).
+        // Returns undefined if blocked by a concurrent mutation.
+        const result = onjjmutation
+          ? await onjjmutation(() => api.edit(revId))
+          : await api.edit(revId)
+        if (result === undefined && onjjmutation) {
+          editError = 'Operation in progress — try again'
+          return
+        }
+      }
+      // Guard against revision change during await
+      if (!selectedRevision || effectiveId(selectedRevision.commit) !== revId) return
+      const resp = await api.fileShow(revId, path)
+      // Guard again after second await
+      if (!selectedRevision || effectiveId(selectedRevision.commit) !== revId) return
+      editFileContents = new Map(editFileContents).set(path, resp.content)
+      editingFiles.add(path)
+    } catch (e) {
+      editError = `Edit failed: ${e instanceof Error ? e.message : String(e)}`
+    } finally {
+      editBusy.delete(path)
+    }
+  }
+
+  function clearEditState(path: string): void {
+    editingFiles.delete(path)
+    const next = new Map(editFileContents)
+    next.delete(path)
+    editFileContents = next
+  }
+
+  async function saveFile(path: string, content: string) {
+    if (editBusy.has(path) || !selectedRevision) return
+    const revId = effectiveId(selectedRevision.commit)
+    editBusy.add(path)
+    editError = ''
+    try {
+      // Guard: revision may have changed since the editor was opened
+      if (!selectedRevision || effectiveId(selectedRevision.commit) !== revId) return
+      await api.fileWrite(path, content)
+      clearEditState(path)
+      // Reload to show updated diff. Scroll position is preserved by the
+      // stale-while-revalidate pattern in the panel-content {#if} — it keeps
+      // showing the old diff until the new one arrives, and the keyed {#each}
+      // maintains DiffFileView component instances across the swap.
+      await onfilesaved?.()
+    } catch (e) {
+      editError = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+    } finally {
+      editBusy.delete(path)
+    }
+  }
+
+  function cancelEdit(path: string) {
+    clearEditState(path)
+  }
 
   let parsedDiff = $derived(parseDiffContent(diffContent))
 
@@ -316,7 +420,12 @@
     // Restore saved state or start expanded
     collapsedFiles.clear()
     expandedDiffs = new Map()
+    editingFiles.clear()
+    editFileContents = new Map()
+    editBusy.clear()
+    editError = ''
     activeFilePath = null
+    descExpanded = false
     conflictFetchGen++ // invalidate any in-flight fileShow requests
     conflictFileDiffs = new Map()
     // Suppress chevron transition during revision switch (prevents j/k flapping)
@@ -628,11 +737,19 @@
       <div class="detail-header">
         <div class="detail-ids">
           <span class="detail-change-id">{selectedRevision.commit.change_id.slice(0, 8)}</span>
-          <span class="detail-description-inline">{(fullDescription || selectedRevision.description) || '(no description)'}</span>
+          <span
+            class="detail-description-inline"
+            class:desc-collapsed={descIsMultiline && !descExpanded}
+          >{descText}</span>
         </div>
         <div class="panel-actions">
           {#if describeSaved}
             <span class="describe-saved">Saved</span>
+          {/if}
+          {#if descIsMultiline}
+            <button class="header-btn desc-expand-btn" onclick={() => descExpanded = !descExpanded} title={descExpanded ? 'Collapse description' : 'Expand description'}>
+              <svg class="desc-expand-icon" class:desc-expand-open={descExpanded} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,4.5 6,7.5 9,4.5"/></svg>
+            </button>
           {/if}
           <button class="header-btn" onclick={onstartdescribe} title="Edit description (e)">
             Describe
@@ -809,7 +926,11 @@
     </div>
   {/if}
   <div class="panel-content" bind:this={panelContentEl}>
-    {#if diffLoading}
+    {#if diffLoading && parsedDiff.length === 0}
+      <!-- Spinner only on INITIAL load. For refreshes (parsedDiff populated),
+           keep showing stale content until fresh arrives — prevents scroll
+           jump from unmounting all DiffFileViews. The keyed {#each} preserves
+           component instances across the content swap. -->
       <div class="empty-state">
         <div class="spinner"></div>
         <span>Loading diff...</span>
@@ -824,6 +945,12 @@
         <span class="empty-hint">No changes in this revision</span>
       </div>
     {:else}
+      {#if editError}
+        <div class="edit-error-banner" role="alert">
+          {editError}
+          <button class="edit-error-dismiss" onclick={() => editError = ''}>×</button>
+        </div>
+      {/if}
       <div class="diff-content">
         {#each parsedDiff as file (file.filePath)}
           {@const filePath = file.filePath}
@@ -841,6 +968,13 @@
             {onresolve}
             searchMatches={matchesByFile.get(filePath) ?? EMPTY_MATCHES}
             {currentMatchIdx}
+            editing={editingFiles.has(filePath)}
+            editContent={editFileContents.get(filePath)}
+            editBusy={editBusy.has(filePath)}
+            onedit={startEdit}
+            onsavefile={saveFile}
+            oncanceledit={cancelEdit}
+            onlinecontext={openDiffLineContextMenu}
           />
         {/each}
         {#each conflictOnlyFiles as cf (cf.path)}
@@ -859,6 +993,7 @@
               {onresolve}
               searchMatches={matchesByFile.get(cf.path) ?? EMPTY_MATCHES}
               {currentMatchIdx}
+              onlinecontext={openDiffLineContextMenu}
             />
           {:else}
             <div class="diff-file" data-file-path={cf.path}>
@@ -878,6 +1013,8 @@
     {/if}
   </div>
 </div>
+
+<ContextMenu items={diffCtx.items} x={diffCtx.x} y={diffCtx.y} bind:open={diffCtx.open} />
 
 <style>
   .panel {
@@ -1004,6 +1141,25 @@
     min-width: 0;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .detail-description-inline.desc-collapsed {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .desc-expand-btn {
+    padding: 2px 4px;
+  }
+
+  .desc-expand-icon {
+    display: block;
+    transition: transform var(--anim-duration) var(--anim-ease);
+  }
+
+  .desc-expand-icon.desc-expand-open {
+    transform: rotate(180deg);
   }
 
   .detail-bookmarks {
@@ -1543,5 +1699,30 @@
 
   .panel-content::-webkit-scrollbar-thumb:hover {
     background: var(--surface1);
+  }
+
+  .edit-error-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-error);
+    border-bottom: 1px solid var(--red);
+    color: var(--red);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .edit-error-dismiss {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.7;
+  }
+  .edit-error-dismiss:hover {
+    opacity: 1;
   }
 </style>

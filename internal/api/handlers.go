@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -765,9 +767,8 @@ type PullRequest struct {
 	IsDraft  bool   `json:"is_draft"`
 }
 
-// execGhPRList runs `gh pr list` and returns the raw JSON output.
-// Package-level var to allow test replacement.
-var execGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
+// defaultExecGhPRList is the production implementation of ExecGhPRList.
+func defaultExecGhPRList(ctx context.Context, repoDir string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
 		"--author", "@me",
@@ -785,7 +786,7 @@ func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := execGhPRList(r.Context(), s.RepoDir)
+	out, err := s.ExecGhPRList(r.Context(), s.RepoDir)
 	if err != nil {
 		s.writeJSON(w, r, http.StatusOK, empty)
 		return
@@ -812,4 +813,85 @@ func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, r, http.StatusOK, prs)
+}
+
+// --- File write handler ---
+
+type fileWriteRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
+	if s.RepoDir == "" {
+		s.writeError(w, http.StatusNotImplemented, "file writing is not supported in SSH mode")
+		return
+	}
+
+	var req fileWriteRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Path == "" {
+		s.writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	// Security: reject null bytes, path traversal, absolute paths, and internal dirs
+	if strings.ContainsRune(req.Path, 0) {
+		s.writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if filepath.IsAbs(req.Path) {
+		s.writeError(w, http.StatusBadRequest, "absolute paths are not allowed")
+		return
+	}
+	cleaned := filepath.Clean(req.Path)
+	if strings.HasPrefix(cleaned, "..") {
+		s.writeError(w, http.StatusBadRequest, "path traversal is not allowed")
+		return
+	}
+	sep := string(filepath.Separator)
+	if cleaned == ".jj" || strings.HasPrefix(cleaned, ".jj"+sep) ||
+		cleaned == ".git" || strings.HasPrefix(cleaned, ".git"+sep) {
+		s.writeError(w, http.StatusBadRequest, "writing to internal directories is not allowed")
+		return
+	}
+
+	target := filepath.Join(s.RepoDir, cleaned)
+
+	// Resolve symlinks in the parent directory to prevent symlink escape.
+	// A tracked symlink inside the repo (e.g. link -> /etc) would pass
+	// lexical checks but resolve outside the repo tree.
+	parentDir := filepath.Dir(target)
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "parent directory does not exist")
+		return
+	}
+	resolvedRepo, err := filepath.EvalSymlinks(s.RepoDir)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "cannot resolve repository path")
+		return
+	}
+	if !strings.HasPrefix(resolvedParent+string(filepath.Separator), resolvedRepo+string(filepath.Separator)) && resolvedParent != resolvedRepo {
+		s.writeError(w, http.StatusBadRequest, "path escapes repository")
+		return
+	}
+
+	// Check if the target itself is a symlink (leaf-level symlink escape).
+	// Parent directory symlinks are caught by EvalSymlinks above, but a
+	// symlink at the file level (e.g. link.txt -> /etc/shadow) would pass
+	// parent checks and follow the link to an arbitrary location.
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		s.writeError(w, http.StatusBadRequest, "cannot write to symlink")
+		return
+	}
+
+	if err := os.WriteFile(target, []byte(req.Content), 0644); err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to write %s", cleaned))
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -1,8 +1,7 @@
 <script lang="ts">
   /** SVG renderer for a single graph row's gutter string.
    *  Maps jj's ASCII graph characters to SVG elements at grid positions.
-   *  Uses --graph-N CSS vars from theme.css (Tier 3: muted, decorative).
-   *  Opacity encodes hover/state: lines 0.45 → 0.7, nodes 0.8 → 1.0. */
+   *  Uses --graph-N CSS vars from theme.css (Tier 3: muted, decorative). */
 
   interface Props {
     gutter: string
@@ -12,36 +11,32 @@
     isConflicted: boolean
     isDivergent: boolean
     isHidden: boolean
-    maxLanes: number
-    hoveredLane: number | null
+    gutterWidth: number
     isDark: boolean
-    onlanehover?: (lane: number | null) => void
   }
 
   let {
-    gutter, isDivergent, maxLanes, hoveredLane, isDark, onlanehover,
+    gutter, isDivergent, gutterWidth, isDark,
     // Remaining props are passed by the parent but unused here — the gutter
     // character itself encodes node type (@, ◆, ×, ◌, ○). Kept in the
     // interface for API completeness; destructured to suppress Svelte warnings.
-    isNode: _, isWorkingCopy: _wc, isImmutable: _im, isConflicted: _cf, isHidden: _hd,
+    isNode: _isNode, isWorkingCopy: _isWorkingCopy, isImmutable: _isImmutable,
+    isConflicted: _isConflicted, isHidden: _isHidden,
   }: Props = $props()
 
   // --- Constants ---
-  const CELL_W = 12   // width per character cell
+  const CELL_W = 10   // width per character cell
   const ROW_H = 18    // matches fixed row height
   const NODE_R = 4    // node circle radius
   const WC_R = 5      // working copy node radius (larger)
   const LINE_W = 1.5  // lane line stroke width
-  const HOVER_W = 2.5 // hovered lane stroke width
   const GRAPH_COLORS = 8  // number of --graph-N vars in theme.css
 
   // Opacity tiers per design language (Tier 3: muted, decorative)
   const LINE_OPACITY = 0.45
-  const LINE_HOVER_OPACITY = 0.7
   const NODE_OPACITY = 0.8
-  const NODE_HOVER_OPACITY = 1.0
   const ELIDED_OPACITY = 0.3
-  const ELIDED_HOVER_OPACITY = 0.5
+  const BG_OPACITY = 0.2
 
   const NODE_CHARS = new Set(['@', '○', '◆', '×', '◌'])
 
@@ -102,7 +97,7 @@
   }
 
   let cells = $derived(parseGutter(gutter))
-  let svgWidth = $derived(Math.max(maxLanes * CELL_W * 2, (cells.length + 1) * CELL_W))
+  let svgWidth = $derived(gutterWidth * CELL_W)
 
   function cx(col: number): number {
     return col * CELL_W + CELL_W / 2
@@ -112,19 +107,8 @@
 
   // Contrast color for glyphs rendered on top of semantic-colored nodes
   let contrastFill = $derived(isDark ? '#0f0f13' : '#f8f8f6')
-
-  // Stroke props (color, width, opacity) for a given lane, accounting for hover
-  function laneStroke(lane: number): { color: string; sw: number; op: number } {
-    const hovered = hoveredLane === lane
-    return {
-      color: laneColor(lane),
-      sw: hovered ? HOVER_W : LINE_W,
-      op: hovered ? LINE_HOVER_OPACITY : LINE_OPACITY,
-    }
-  }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <svg
   width={svgWidth}
   height={ROW_H}
@@ -132,74 +116,60 @@
 >
   {#each cells as cell}
     {@const x = cx(cell.col)}
-    {@const hovered = hoveredLane === cell.lane}
     {@const color = laneColor(cell.lane)}
-    {@const lineOp = hovered ? LINE_HOVER_OPACITY : LINE_OPACITY}
-    {@const sw = hovered ? HOVER_W : LINE_W}
-
-    <!-- Hit area: transparent rect filling the cell for easy hover targeting -->
-    {#if cell.char !== ' '}
-      <rect
-        x={cell.col * CELL_W} y={0} width={CELL_W} height={ROW_H}
-        fill="transparent"
-        onmouseenter={() => onlanehover?.(cell.lane)}
-      />
-    {/if}
 
     {#if cell.char === '│'}
       <line x1={x} y1={0} x2={x} y2={ROW_H}
-        stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
+        stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY} />
 
     {:else if cell.char === '~'}
       <line x1={x} y1={0} x2={x} y2={ROW_H}
-        stroke={color} stroke-width={sw}
-        stroke-dasharray="2 3" opacity={hovered ? ELIDED_HOVER_OPACITY : ELIDED_OPACITY}
-        pointer-events="none" />
+        stroke={color} stroke-width={LINE_W}
+        stroke-dasharray="2 3" opacity={ELIDED_OPACITY} />
 
     {:else if cell.char === '─'}
       <line x1={x - CELL_W / 2} y1={cy} x2={x + CELL_W / 2} y2={cy}
-        stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
+        stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY} />
 
     {:else if cell.char === '├'}
-      {@const b = laneStroke(cell.lane + 1)}
+      <!-- Trunk line uses cell's lane; branch stub uses lane+1 -->
       <line x1={x} y1={0} x2={x} y2={ROW_H}
-        stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
+        stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY} />
       <line x1={x} y1={cy} x2={x + CELL_W / 2} y2={cy}
-        stroke={b.color} stroke-width={b.sw} opacity={b.op} pointer-events="none" />
+        stroke={laneColor(cell.lane + 1)} stroke-width={LINE_W} opacity={LINE_OPACITY} />
 
     {:else if cell.char === '┤'}
-      {@const b = laneStroke(cell.lane - 1)}
+      <!-- Trunk line uses cell's lane; branch stub uses lane-1 -->
       <line x1={x} y1={0} x2={x} y2={ROW_H}
-        stroke={color} stroke-width={sw} opacity={lineOp} pointer-events="none" />
+        stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY} />
       <line x1={x - CELL_W / 2} y1={cy} x2={x} y2={cy}
-        stroke={b.color} stroke-width={b.sw} opacity={b.op} pointer-events="none" />
+        stroke={laneColor(cell.lane - 1)} stroke-width={LINE_W} opacity={LINE_OPACITY} />
 
     {:else if cell.char === '╮'}
       <path d="M {x - CELL_W / 2} {cy} Q {x} {cy} {x} {ROW_H}"
-        fill="none" stroke={color} stroke-width={sw} opacity={lineOp}
-        stroke-linecap="round" pointer-events="none" />
+        fill="none" stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY}
+        stroke-linecap="round" />
 
     {:else if cell.char === '╯'}
       <path d="M {x} {0} Q {x} {cy} {x - CELL_W / 2} {cy}"
-        fill="none" stroke={color} stroke-width={sw} opacity={lineOp}
-        stroke-linecap="round" pointer-events="none" />
+        fill="none" stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY}
+        stroke-linecap="round" />
 
     {:else if cell.char === '╭'}
       <path d="M {x + CELL_W / 2} {cy} Q {x} {cy} {x} {ROW_H}"
-        fill="none" stroke={color} stroke-width={sw} opacity={lineOp}
-        stroke-linecap="round" pointer-events="none" />
+        fill="none" stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY}
+        stroke-linecap="round" />
 
     {:else if cell.char === '╰'}
       <path d="M {x} {0} Q {x} {cy} {x + CELL_W / 2} {cy}"
-        fill="none" stroke={color} stroke-width={sw} opacity={lineOp}
-        stroke-linecap="round" pointer-events="none" />
+        fill="none" stroke={color} stroke-width={LINE_W} opacity={LINE_OPACITY}
+        stroke-linecap="round" />
 
     {:else if NODE_CHARS.has(cell.char)}
-      {@const nodeOp = hovered ? NODE_HOVER_OPACITY : NODE_OPACITY}
-      <g pointer-events="none">
+      <g>
         <!-- Background lane line for continuity -->
         <line x1={x} y1={0} x2={x} y2={ROW_H}
-          stroke={color} stroke-width={LINE_W} opacity={hovered ? 0.35 : 0.2} />
+          stroke={color} stroke-width={LINE_W} opacity={BG_OPACITY} />
 
         {#if cell.char === '@'}
           <!-- Working copy: amber concentric circle (matches sidebar icon) -->
@@ -210,7 +180,7 @@
         {:else if cell.char === '◆'}
           <!-- Immutable: dimmer than normal nodes -->
           <rect x={x - 3.5} y={cy - 3.5} width={7} height={7}
-            rx={1} fill={color} opacity={hovered ? 0.7 : 0.5}
+            rx={1} fill={color} opacity={0.5}
             transform="rotate(45 {x} {cy})" />
 
         {:else if cell.char === '×'}
@@ -224,11 +194,11 @@
         {:else if cell.char === '◌'}
           <!-- Hidden: subtler than normal nodes -->
           <circle cx={x} cy={cy} r={NODE_R - 0.5}
-            fill="none" stroke={color} stroke-width={1.2} opacity={hovered ? 0.55 : 0.35} />
+            fill="none" stroke={color} stroke-width={1.2} opacity={0.35} />
 
         {:else}
           <!-- Normal node (○): graph palette with node opacity -->
-          <circle cx={x} cy={cy} r={NODE_R} fill={color} opacity={nodeOp} />
+          <circle cx={x} cy={cy} r={NODE_R} fill={color} opacity={NODE_OPACITY} />
         {/if}
         {#if isDivergent}
           <circle cx={x} cy={cy} r={NODE_R + 3} fill="none"

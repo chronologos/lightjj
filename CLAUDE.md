@@ -53,8 +53,9 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     api.ts                 — Typed API client, op-id tracking, two-tier cache (mutable + immutable)
     api.test.ts            — API client tests
     RevisionGraph.svelte   — Revision list with graph gutter rendering
-    DiffPanel.svelte       — Diff viewer: unified/split toggle, syntax highlighting
-    DiffFileView.svelte    — Individual file diff with collapsible sections, context expansion
+    DiffPanel.svelte       — Diff viewer: unified/split toggle, syntax highlighting, edit-state management
+    DiffFileView.svelte    — Individual file diff with collapsible sections, context expansion, conflict A/B badges
+    FileEditor.svelte      — CodeMirror 6 wrapper for inline editing (split-view right column)
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
     ContextMenu.svelte     — Reusable right-click context menu (positioned at cursor)
@@ -66,7 +67,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     OplogPanel.svelte      — Operation log panel
     DivergencePanel.svelte — Divergent commit resolution panel (compare versions, keep/abandon)
     diff-parser.ts         — Unified diff parser
-    conflict-parser.ts     — jj conflict marker parser (<<<, %%%, +++, >>>)
+    conflict-parser.ts     — jj conflict marker parser; diff-side labels use \\\\\\\ "to:" value (what :ours keeps), not %%%%%%% "from:"
     split-view.ts          — Side-by-side diff alignment
     word-diff.ts           — Word-level inline diff computation
     highlighter.ts         — Shiki syntax highlighting integration
@@ -94,6 +95,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Use `--tool :git`** when requesting diff output for the web API. Users may have external diff formatters (difftastic) configured that output ANSI codes.
 - **Use `--color never`** for any jj output the backend will parse. Use `--color always` only if passing through to a terminal.
 - **Use `\x1F` (unit separator)** as the field delimiter in jj templates, not tabs. Tabs can appear in commit descriptions and break parsing.
+- **Prefer templates over human-output parsing.** Check `jj help -k templates` before writing regex/string parsers. `ConflictedFiles` uses `Commit.conflicted_files()` + `TreeEntry.conflict_side_count()` — structured integers, exits 0 on clean revisions, works with multi-revision revsets. No exit-code special-casing.
+- **`expandRenamePath` resolves jj's `{old => new}` brace syntax** to the destination path. Both `ParseDiffSummary` and `ParseDiffStat` call it — otherwise squash/split file selection passes the braces back to jj as a fileset, matching nothing.
 - **Parsers return empty slices, not nil.** This ensures JSON serialization produces `[]` not `null`.
 - **`NewServer(runner, repoDir)`** takes the resolved repo dir as second arg. Pass `""` for SSH mode or tests. The `RepoDir` enables workspace store reading and child process spawning.
 - **Workspace store parser** (`internal/jj/workspace_store.go`) manually parses protobuf wire format — no protobuf dependency. The `.jj/repo/workspace_store/index` file has a simple schema: `repeated Entry { string name = 1; string path = 2; }`.

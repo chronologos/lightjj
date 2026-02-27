@@ -9,6 +9,7 @@
     selectedIndex: number
     checkedRevisions: SvelteSet<string>
     loading: boolean
+    mutating: boolean
     revsetFilter: string
     viewMode: 'log' | 'tracked'
     lastCheckedIndex: number
@@ -33,7 +34,7 @@
   }
 
   let {
-    revisions, selectedIndex, checkedRevisions, loading, revsetFilter, viewMode, lastCheckedIndex,
+    revisions, selectedIndex, checkedRevisions, loading, mutating, revsetFilter, viewMode, lastCheckedIndex,
     onselect, oncheck, onrangecheck, oncontextmenu,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
@@ -43,8 +44,15 @@
 
   let anyModeActive = $derived(rebase.active || squash.active || split.active)
 
+  // Stale-while-revalidate: when we already have revisions, don't blank the
+  // list during reloads — dim it and show a thin progress bar instead.
+  // Covers both post-mutation reloads (mutating=true) and the log fetch
+  // itself (loading=true). Initial load (no data) still shows the spinner.
+  let isRefreshing = $derived((loading || mutating) && revisions.length > 0)
+
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
-  let hoveredLane: number | null = $state(null)
+  let listEl: HTMLDivElement | undefined = $state(undefined)
+
 
   interface FlatLine {
     gutter: string
@@ -92,7 +100,6 @@
     return Math.min(max, MAX_GUTTER)
   })
 
-  let maxLanes = $derived(Math.ceil(maxGutterLen / 2))
 
   function padGutter(gutter: string): string {
     return gutter.length > maxGutterLen
@@ -181,7 +188,6 @@
 
   // Scroll the selected node row into view when selectedIndex changes.
   // Svelte 5 effects run after DOM updates, so no rAF needed.
-  let listEl: HTMLElement | undefined = $state(undefined)
   $effect(() => {
     if (selectedIndex < 0) return
     const el = listEl?.querySelector('.graph-row.node-row.selected')
@@ -196,7 +202,7 @@
       <button class="view-btn" class:view-btn-active={viewMode === 'log'} onclick={() => { if (viewMode !== 'log') onviewmodechange() }}>Log</button>
       <button class="view-btn" class:view-btn-active={viewMode === 'tracked'} onclick={() => { if (viewMode !== 'tracked') onviewmodechange() }}>Tracked</button>
     </div>
-    {#if !loading}
+    {#if revisions.length > 0}
       <span class="panel-badge">{revisions.length}{#if checkedRevisions.size > 0} ({checkedRevisions.size} checked){/if}</span>
     {/if}
   </div>
@@ -228,13 +234,17 @@
   {#if checkedRevisions.size > 0 && !anyModeActive}
     <div class="batch-actions-bar">
       <span class="batch-label">{checkedRevisions.size} checked</span>
-      <button class="action-btn" onclick={onnewfromchecked} title="New from checked (n)">new</button>
-      <button class="action-btn danger" onclick={onabandonchecked} title="Abandon checked">abandon</button>
+      <button class="action-btn" onclick={onnewfromchecked} disabled={mutating} title="New from checked (n)">new</button>
+      <button class="action-btn danger" onclick={onabandonchecked} disabled={mutating} title="Abandon checked">abandon</button>
       <button class="action-btn" onclick={onclearchecks} title="Clear checks (Escape)">clear</button>
     </div>
   {/if}
+  <!-- Always mounted (height reserved) to avoid 2px layout shift on refresh start/end -->
+  <div class="refresh-bar" class:active={isRefreshing} aria-hidden="true"></div>
   <div class="panel-content">
-    {#if loading}
+    {#if loading && revisions.length === 0}
+      <!-- Spinner only on INITIAL load. Refreshes keep showing stale content
+           (dimmed + progress bar) so SSH-latency reloads don't blank the UI. -->
       <div class="empty-state">
         <div class="spinner"></div>
         <span>Loading revisions...</span>
@@ -243,8 +253,7 @@
       <div class="empty-state">No revisions found</div>
     {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="revision-list" bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list"
-        onmouseleave={() => hoveredLane = null}>
+      <div class="revision-list" class:refreshing={isRefreshing} bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list">
         {#each flatLines as line, lineIdx (effectiveId(revisions[line.entryIndex].commit) + ':' + line.lineKey)}
           {@const isChecked = checkedRevisions.has(effectiveId(revisions[line.entryIndex]?.commit))}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -268,7 +277,7 @@
             }}
             oncontextmenu={(e: MouseEvent) => {
               e.preventDefault()
-              if (anyModeActive) return
+              if (anyModeActive || isRefreshing) return
               oncontextmenu(effectiveId(revisions[line.entryIndex].commit), e.clientX, e.clientY)
             }}
             role="option"
@@ -284,10 +293,8 @@
               isConflicted={line.isConflicted ?? false}
               isDivergent={line.isDivergent ?? false}
               isHidden={line.isHidden}
-              {maxLanes}
-              {hoveredLane}
+              gutterWidth={maxGutterLen}
               {isDark}
-              onlanehover={(lane) => hoveredLane = lane}
             />
             {#if line.isNode}
               {@const entry = revisions[line.entryIndex]}
@@ -481,6 +488,44 @@
     margin-right: 4px;
   }
 
+  .action-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* --- Refresh indicator (stale-while-revalidate) --- */
+  /* Always mounted at 2px to avoid layout shift. .active triggers animation. */
+  .refresh-bar {
+    height: 2px;
+    flex-shrink: 0;
+    overflow: hidden;
+    position: relative;
+    background: transparent;
+  }
+
+  .refresh-bar.active {
+    background: var(--surface0);
+  }
+
+  .refresh-bar.active::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--amber);
+    transform-origin: left;
+    animation: refresh-indeterminate 1.2s ease-in-out infinite;
+  }
+
+  @keyframes refresh-indeterminate {
+    0%   { transform: translateX(-60%) scaleX(0.4); }
+    50%  { transform: translateX(  0%) scaleX(0.6); }
+    100% { transform: translateX(100%) scaleX(0.4); }
+  }
+
+  .revision-list.refreshing {
+    opacity: 0.55;
+  }
+
   /* --- Panel structure --- */
   .panel {
     display: flex;
@@ -535,6 +580,8 @@
     flex-direction: column;
     user-select: none;
     -webkit-user-select: none;
+    /* Transition on base class so fade-OUT also animates (when .refreshing removed) */
+    transition: opacity 0.15s ease;
   }
 
   .revision-list ::selection {
@@ -875,4 +922,5 @@
   .panel-content::-webkit-scrollbar-thumb:hover {
     background: var(--surface1);
   }
+
 </style>

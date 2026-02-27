@@ -17,6 +17,8 @@ export interface RebaseMode extends ModeBase {
   readonly sources: string[]
   readonly sourceMode: SourceMode
   readonly targetMode: TargetMode
+  readonly skipEmptied: boolean
+  readonly ignoreImmutable: boolean
   enter(revisions: string[]): void
 }
 
@@ -24,6 +26,7 @@ export interface SquashMode extends ModeBase {
   readonly sources: string[]
   readonly keepEmptied: boolean
   readonly useDestMsg: boolean
+  readonly ignoreImmutable: boolean
   enter(revisions: string[]): void
 }
 
@@ -38,17 +41,23 @@ export function createRebaseMode(): RebaseMode {
   let sources: string[] = $state([])
   let sourceMode: SourceMode = $state('-r')
   let targetMode: TargetMode = $state('-d')
+  let skipEmptied = $state(false)
+  let ignoreImmutable = $state(false)
 
   return {
     get active() { return active },
     get sources() { return sources },
     get sourceMode() { return sourceMode },
     get targetMode() { return targetMode },
+    get skipEmptied() { return skipEmptied },
+    get ignoreImmutable() { return ignoreImmutable },
 
     enter(revisions: string[]) {
       sources = revisions
       sourceMode = '-r'
       targetMode = '-d'
+      skipEmptied = false
+      ignoreImmutable = false
       active = true
     },
 
@@ -65,6 +74,8 @@ export function createRebaseMode(): RebaseMode {
         case 'a': targetMode = '--insert-after'; return true
         case 'i': targetMode = '--insert-before'; return true
         case 'o': case 'd': targetMode = '-d'; return true
+        case 'e': skipEmptied = !skipEmptied; return true
+        case 'x': ignoreImmutable = !ignoreImmutable; return true
         default: return false
       }
     },
@@ -76,17 +87,20 @@ export function createSquashMode(): SquashMode {
   let sources: string[] = $state([])
   let keepEmptied = $state(false)
   let useDestMsg = $state(false)
+  let ignoreImmutable = $state(false)
 
   return {
     get active() { return active },
     get sources() { return sources },
     get keepEmptied() { return keepEmptied },
     get useDestMsg() { return useDestMsg },
+    get ignoreImmutable() { return ignoreImmutable },
 
     enter(revisions: string[]) {
       sources = revisions
       keepEmptied = false
       useDestMsg = false
+      ignoreImmutable = false
       active = true
     },
 
@@ -99,6 +113,7 @@ export function createSquashMode(): SquashMode {
       switch (key) {
         case 'e': keepEmptied = !keepEmptied; return true
         case 'd': useDestMsg = !useDestMsg; return true
+        case 'x': ignoreImmutable = !ignoreImmutable; return true
         default: return false
       }
     },
