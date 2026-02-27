@@ -8,6 +8,7 @@ interface Config {
   splitView: boolean
   reduceMotion: boolean
   revisionPanelWidth: number
+  tutorialVersion: string
 }
 
 const defaults: Config = {
@@ -15,6 +16,7 @@ const defaults: Config = {
   splitView: false,
   reduceMotion: false,
   revisionPanelWidth: 420,
+  tutorialVersion: '',
 }
 
 function load(): Partial<Config> {
@@ -67,6 +69,9 @@ function createConfig() {
 
     get revisionPanelWidth() { return state.revisionPanelWidth },
     set revisionPanelWidth(v: number) { state.revisionPanelWidth = v },
+
+    get tutorialVersion() { return state.tutorialVersion },
+    set tutorialVersion(v: string) { state.tutorialVersion = v },
   }
 }
 

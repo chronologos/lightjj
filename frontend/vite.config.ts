@@ -1,9 +1,15 @@
+import { readFileSync } from 'fs'
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { svelteTesting } from '@testing-library/svelte/vite'
 
+const appVersion = readFileSync('../version.txt', 'utf-8').trim()
+
 export default defineConfig({
   plugins: [svelte(), svelteTesting()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   server: {
     // Proxy API calls to the Go backend during development
     proxy: {
