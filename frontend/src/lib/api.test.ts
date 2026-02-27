@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, onStale, multiRevset, computeConnectedCommitIds, _testInternals, type LogEntry } from './api'
+import { api, isCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, _testInternals, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -23,6 +23,7 @@ beforeEach(() => {
   _testInternals.immutableCache.clear()
   _testInternals.staleCallbacks.clear()
   _testInternals.refreshQueued = false
+  _testInternals.resetSessionCaches()
 })
 
 describe('response cache', () => {
@@ -591,6 +592,53 @@ describe('timeout', () => {
     // Verify no signal was added by the internal timeout logic
     const [, init] = mockFetch.mock.calls[0]
     expect(init?.signal).toBeUndefined()
+  })
+})
+
+describe('prefetchRevision', () => {
+  it('fires diff+files+description fetches for uncached revision', () => {
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValue(mockResponse({}, 'op1'))
+    prefetchRevision('abc')
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('skips fetch when already cached', () => {
+    _testInternals.lastOpId = 'op1'
+    _testInternals.cache.set('diff:abc@op1', { diff: '' })
+    _testInternals.cache.set('files:abc@op1', [])
+    _testInternals.cache.set('desc:abc@op1', { description: '' })
+    prefetchRevision('abc')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('swallows fetch errors silently', async () => {
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockRejectedValue(new Error('network'))
+    // Should not throw
+    prefetchRevision('abc')
+    await new Promise(r => setTimeout(r, 0)) // let rejections settle
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('session-cached endpoints', () => {
+  it('caches remotes() — second call does not fetch', async () => {
+    mockFetch.mockResolvedValue(mockResponse(['origin', 'upstream']))
+    const r1 = await api.remotes()
+    const r2 = await api.remotes()
+    expect(r1).toEqual(['origin', 'upstream'])
+    expect(r2).toBe(r1) // same promise resolution
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries remotes() after failure', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('fail'))
+    await expect(api.remotes()).rejects.toThrow('fail')
+    mockFetch.mockResolvedValueOnce(mockResponse(['origin']))
+    const r = await api.remotes()
+    expect(r).toEqual(['origin'])
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })
 
