@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, _testInternals, type LogEntry } from './api'
+import { api, isCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, _testInternals, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -20,7 +20,6 @@ beforeEach(() => {
   mockFetch.mockReset()
   _testInternals.lastOpId = null
   _testInternals.cache.clear()
-  _testInternals.immutableCache.clear()
   _testInternals.staleCallbacks.clear()
   _testInternals.refreshQueued = false
   _testInternals.resetSessionCaches()
@@ -42,56 +41,54 @@ describe('response cache', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1) // still 1
   })
 
-  it('does not cache when op-id is unknown', async () => {
+  it('caches even when op-id is unknown — commit_id keying is independent of op-id', async () => {
     const diffData = { diff: '+line' }
-    // Response without op-id header
     mockFetch.mockResolvedValue(mockResponse(diffData, null))
 
     await api.diff('abc')
     await api.diff('abc')
-    // Both should fetch since no op-id to key against
-    expect(mockFetch).toHaveBeenCalledTimes(2)
+    // Second call hits cache — op-id is irrelevant to cache validity
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
-  it('clears cache when op-id changes (detected by a non-cached request)', async () => {
-    const diffData1 = { diff: '+v1' }
-    const diffData2 = { diff: '+v2' }
-    mockFetch.mockResolvedValueOnce(mockResponse(diffData1, 'op1'))
+  it('cache SURVIVES op-id change — commit_id is content-addressed', async () => {
+    // This is the core behavioral change: jj new / jj abandon / jj undo
+    // advance the op-id but leave existing commit_ids unchanged. Their
+    // cached data is still valid and should still serve.
+    const diffData = { diff: '+v1' }
+    mockFetch.mockResolvedValueOnce(mockResponse(diffData, 'op1'))
 
     await api.diff('abc')
     expect(mockFetch).toHaveBeenCalledTimes(1)
     expect(_testInternals.cache.size).toBe(1)
 
-    // A non-cached request (e.g. log) comes back with a new op-id,
-    // which triggers trackOpId → cache.clear()
-    const logData: never[] = []
-    mockFetch.mockResolvedValueOnce(mockResponse(logData, 'op2'))
+    // Op-id advances (e.g. jj new). Cache is NOT cleared.
+    mockFetch.mockResolvedValueOnce(mockResponse([], 'op2'))
     await api.log()
-    expect(_testInternals.cache.size).toBe(0) // cache was cleared
+    expect(_testInternals.cache.size).toBe(1) // still cached!
 
-    // Now the cached diff endpoint fetches fresh data
-    mockFetch.mockResolvedValueOnce(mockResponse(diffData2, 'op2'))
+    // Same commit_id → cache hit, no fetch
     const result = await api.diff('abc')
-    expect(result).toEqual(diffData2)
-    expect(mockFetch).toHaveBeenCalledTimes(3)
-    expect(_testInternals.cache.size).toBe(1) // new entry cached
+    expect(result).toEqual(diffData)
+    expect(mockFetch).toHaveBeenCalledTimes(2) // only log fetched
   })
 
-  it('caches files and evolog separately', async () => {
+  it('caches files; evolog is NOT cached (op-dependent)', async () => {
     const filesData = [{ type: 'M', path: 'a.go', additions: 1, deletions: 0 }]
     const evologData = [{ commit_id: 'abc', time: 't', operation: 'snapshot', predecessor_ids: [] }]
     mockFetch
       .mockResolvedValueOnce(mockResponse(filesData, 'op1'))
+      .mockResolvedValueOnce(mockResponse(evologData, 'op1'))
       .mockResolvedValueOnce(mockResponse(evologData, 'op1'))
 
     await api.files('abc')
     await api.evolog('abc')
     expect(mockFetch).toHaveBeenCalledTimes(2)
 
-    // Both should be cached now
+    // files cached, evolog uncached (it grows with each operation)
     await api.files('abc')
     await api.evolog('abc')
-    expect(mockFetch).toHaveBeenCalledTimes(2) // no new fetches
+    expect(mockFetch).toHaveBeenCalledTimes(3) // evolog refetched
   })
 
   it('caches diff with different file arguments separately', async () => {
@@ -168,124 +165,49 @@ describe('response cache', () => {
     expect(body.target_mode).toBeUndefined()
   })
 
-  it('clears cache when exceeding MAX_CACHE_SIZE', async () => {
-    _testInternals.lastOpId = 'op1'
-
-    // Fill cache to the limit
-    for (let i = 0; i < _testInternals.MAX_CACHE_SIZE; i++) {
-      _testInternals.cache.set(`entry${i}@op1`, { data: i })
-    }
-    expect(_testInternals.cache.size).toBe(_testInternals.MAX_CACHE_SIZE)
-
-    // Next cachedRequest should trigger clear + re-add
-    const diffData = { diff: '+overflow' }
-    mockFetch.mockResolvedValueOnce(mockResponse(diffData, 'op1'))
-    await api.diff('overflow-rev')
-
-    // Cache was cleared, then 1 new entry added
-    expect(_testInternals.cache.size).toBe(1)
-  })
-})
-
-describe('immutable cache', () => {
-  it('preserves immutable entries across op-id changes', async () => {
-    // Cache an immutable diff — goes to immutableCache, not responseCache
-    const immutableDiff = { diff: '+immutable content' }
-    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, 'op1'))
-    await api.diff('immutable-rev', undefined, undefined, true)
-    expect(_testInternals.immutableCache.size).toBe(1)
-    expect(_testInternals.cache.size).toBe(0)
-
-    // Cache a mutable diff — goes to responseCache
-    const mutableDiff = { diff: '+mutable content' }
-    mockFetch.mockResolvedValueOnce(mockResponse(mutableDiff, 'op1'))
-    await api.diff('mutable-rev')
-    expect(_testInternals.cache.size).toBe(1)
-
-    // Op-id changes — mutable entry evicted, immutable preserved
-    mockFetch.mockResolvedValueOnce(mockResponse([], 'op2'))
-    await api.log()
-    expect(_testInternals.cache.size).toBe(0)
-    expect(_testInternals.immutableCache.size).toBe(1)
-
-    // Immutable diff still cached — no fetch needed
-    const result = await api.diff('immutable-rev', undefined, undefined, true)
-    expect(result).toEqual(immutableDiff)
-    // 3 fetches total: immutable diff, mutable diff, log. No 4th fetch for immutable.
-    expect(mockFetch).toHaveBeenCalledTimes(3)
-  })
-
-  it('stores immutable entries under bare cacheId (no opId suffix)', async () => {
-    const immutableDiff = { diff: '+immutable' }
-    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, 'op1'))
-    await api.diff('imm-rev', undefined, undefined, true)
-
-    const keys = [..._testInternals.immutableCache.keys()]
-    expect(keys).toEqual(['diff:imm-rev'])
-  })
-
-  it('serves immutable entries even when lastOpId is null', async () => {
-    // Immutable data doesn't depend on opId, so it should serve even before
-    // any opId is established (e.g., first request is for an immutable commit).
-    const immutableDiff = { diff: '+immutable' }
-    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, null))
-    await api.diff('imm-rev', undefined, undefined, true)
-
-    _testInternals.lastOpId = null // simulate fresh session
-    const result = await api.diff('imm-rev', undefined, undefined, true)
-    expect(result).toEqual(immutableDiff)
-    expect(mockFetch).toHaveBeenCalledTimes(1) // second call hit cache
-  })
-
-  it('bounds immutable cache size, evicting the oldest entry only', async () => {
-    const MAX = _testInternals.MAX_IMMUTABLE_CACHE_SIZE
+  it('bounds cache size with LRU eviction — evicts oldest, not all', async () => {
+    const MAX = _testInternals.MAX_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
 
     // Fill to MAX
     for (let i = 0; i < MAX; i++) {
-      await api.diff(`rev${i}`, undefined, undefined, true)
+      await api.diff(`rev${i}`)
     }
-    expect(_testInternals.immutableCache.size).toBe(MAX)
+    expect(_testInternals.cache.size).toBe(MAX)
 
     // One more insert evicts ONLY the oldest — verify survivors to distinguish
     // "evict one" from "clear all + reinsert" (which would also pass .size === MAX)
-    await api.diff('revNew', undefined, undefined, true)
-    expect(_testInternals.immutableCache.size).toBe(MAX)
-    expect(_testInternals.immutableCache.has('diff:rev0')).toBe(false) // evicted
-    expect(_testInternals.immutableCache.has('diff:rev1')).toBe(true)  // survivor
-    expect(_testInternals.immutableCache.has(`diff:rev${MAX - 1}`)).toBe(true) // survivor
-    expect(_testInternals.immutableCache.has('diff:revNew')).toBe(true)
+    await api.diff('revNew')
+    expect(_testInternals.cache.size).toBe(MAX)
+    expect(_testInternals.cache.has('diff:rev0')).toBe(false) // evicted
+    expect(_testInternals.cache.has('diff:rev1')).toBe(true)  // survivor
+    expect(_testInternals.cache.has(`diff:rev${MAX - 1}`)).toBe(true) // survivor
+    expect(_testInternals.cache.has('diff:revNew')).toBe(true)
   })
 
   it('bumps accessed entries to end of eviction order (LRU)', async () => {
-    const MAX = _testInternals.MAX_IMMUTABLE_CACHE_SIZE
+    const MAX = _testInternals.MAX_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
 
     for (let i = 0; i < MAX; i++) {
-      await api.diff(`rev${i}`, undefined, undefined, true)
+      await api.diff(`rev${i}`)
     }
     // Access rev0 (cache hit — no fetch). This should bump it to end.
-    await api.diff('rev0', undefined, undefined, true)
+    await api.diff('rev0')
     expect(mockFetch).toHaveBeenCalledTimes(MAX) // no extra fetch
 
     // Next insert should evict rev1 (now oldest), not rev0
-    await api.diff('revNew', undefined, undefined, true)
-    expect(_testInternals.immutableCache.has('diff:rev0')).toBe(true)  // bumped, survived
-    expect(_testInternals.immutableCache.has('diff:rev1')).toBe(false) // now oldest, evicted
+    await api.diff('revNew')
+    expect(_testInternals.cache.has('diff:rev0')).toBe(true)  // bumped, survived
+    expect(_testInternals.cache.has('diff:rev1')).toBe(false) // now oldest, evicted
   })
 
-  it('serves from immutable cache even when caller passes immutable=false', async () => {
-    // Regression guard for the ◆→○ transition: if a commit's immutability
-    // flag changes but its data is in immutableCache, we should still serve
-    // it rather than refetching. The cached diff is still correct.
-    const immutableDiff = { diff: '+x' }
-    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, 'op1'))
-    await api.diff('rev', undefined, undefined, true)
+  it('stores entries under bare cacheId (no opId suffix)', async () => {
+    const diffData = { diff: '+x' }
+    mockFetch.mockResolvedValueOnce(mockResponse(diffData, 'op1'))
+    await api.diff('abc')
 
-    // Later call with immutable=false should still hit immutable cache
-    const result = await api.diff('rev', undefined, undefined, false)
-    expect(result).toEqual(immutableDiff)
-    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect([..._testInternals.cache.keys()]).toEqual(['diff:abc'])
   })
 })
 
@@ -350,51 +272,37 @@ describe('onStale', () => {
 })
 
 describe('isCached', () => {
-  it('returns false when lastOpId is null', () => {
+  it('returns false when nothing cached', () => {
     expect(isCached('abc')).toBe(false)
   })
 
   it('returns true when diff + files + desc are all cached', () => {
-    _testInternals.lastOpId = 'op1'
-    _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
-    _testInternals.cache.set('files:abc@op1', [])
-    _testInternals.cache.set('desc:abc@op1', { description: 'msg' })
+    _testInternals.cache.set('diff:abc', { diff: '+x' })
+    _testInternals.cache.set('files:abc', [])
+    _testInternals.cache.set('desc:abc', { description: 'msg' })
     expect(isCached('abc')).toBe(true)
   })
 
   it('returns false when description is missing', () => {
-    // Regression guard: isCached() must check desc too — otherwise after an
-    // op-id change the debounce skip path fires a desc fetch on every keypress.
-    _testInternals.lastOpId = 'op1'
-    _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
-    _testInternals.cache.set('files:abc@op1', [])
+    // Regression guard: isCached() must check all three — a partial hit
+    // defeats the debounce by firing the missing fetch on every keypress.
+    _testInternals.cache.set('diff:abc', { diff: '+x' })
+    _testInternals.cache.set('files:abc', [])
     expect(isCached('abc')).toBe(false)
   })
 
   it('returns false when only diff is cached', () => {
-    _testInternals.lastOpId = 'op1'
-    _testInternals.cache.set('diff:abc@op1', { diff: '+x' })
+    _testInternals.cache.set('diff:abc', { diff: '+x' })
     expect(isCached('abc')).toBe(false)
   })
 
-  it('returns true when all three are in immutable cache', () => {
-    // No opId required for immutable cache hits
-    _testInternals.immutableCache.set('diff:abc', { diff: '+x' })
-    _testInternals.immutableCache.set('files:abc', [])
-    _testInternals.immutableCache.set('desc:abc', { description: 'msg' })
+  it('is independent of lastOpId — works before op-id is established', () => {
+    // lastOpId is null at startup, but cache can still serve.
+    expect(_testInternals.lastOpId).toBeNull()
+    _testInternals.cache.set('diff:abc', { diff: '+x' })
+    _testInternals.cache.set('files:abc', [])
+    _testInternals.cache.set('desc:abc', { description: 'msg' })
     expect(isCached('abc')).toBe(true)
-  })
-
-  it('returns false when entries are split across tiers', () => {
-    // isCached checks each tier all-or-nothing. cachedRequest() DOES handle
-    // mixed tiers correctly (checks immutable first, falls through to mutable),
-    // so this is deliberately conservative — a false-negative costs 50ms debounce,
-    // a false-positive costs the perf budget. Documented rather than optimized.
-    _testInternals.lastOpId = 'op1'
-    _testInternals.immutableCache.set('diff:abc', { diff: '+x' })
-    _testInternals.immutableCache.set('files:abc', [])
-    _testInternals.cache.set('desc:abc@op1', { description: 'msg' })
-    expect(isCached('abc')).toBe(false)
   })
 })
 
@@ -512,20 +420,22 @@ describe('resolve request body', () => {
     expect(body.tool).toBe(':theirs')
   })
 
-  it('clears cache and fires stale callbacks on op-id change', async () => {
-    // Seed cache with a diff entry
+  it('fires stale callbacks on op-id change but does NOT clear cache', async () => {
+    // Seed cache with a diff entry keyed by commit_id
     _testInternals.lastOpId = 'op1'
-    _testInternals.cache.set('diff:abc@op1', { diff: '+cached' })
+    _testInternals.cache.set('diff:abc', { diff: '+cached' })
 
     const staleCb = vi.fn()
     onStale(staleCb)
 
-    // Resolve returns a new op-id → should clear cache and fire stale
+    // Resolve returns a new op-id → fires stale callback (triggers loadLog)
+    // but does NOT clear the cache — commit_id-keyed entries are still valid.
     mockFetch.mockResolvedValueOnce(mockResponse({ output: 'resolved' }, 'op2'))
     await api.resolve('abc', 'file.go', ':ours')
     await Promise.resolve() // drain microtask queue for stale callback
 
-    expect(_testInternals.cache.size).toBe(0)
+    expect(_testInternals.cache.size).toBe(1) // NOT cleared
+    expect(_testInternals.cache.get('diff:abc')).toEqual({ diff: '+cached' })
     expect(staleCb).toHaveBeenCalledTimes(1)
   })
 })
@@ -596,29 +506,159 @@ describe('timeout', () => {
 })
 
 describe('prefetchRevision', () => {
-  it('fires diff+files+description fetches for uncached revision', () => {
-    _testInternals.lastOpId = 'op1'
-    mockFetch.mockResolvedValue(mockResponse({}, 'op1'))
+  it('fires single batch fetch for uncached revision', () => {
+    mockFetch.mockResolvedValue(mockResponse({ diff: '', files: [], description: '' }, 'op1'))
     prefetchRevision('abc')
-    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(mockFetch.mock.calls[0][0]).toContain('/api/revision?revision=abc')
   })
 
   it('skips fetch when already cached', () => {
-    _testInternals.lastOpId = 'op1'
-    _testInternals.cache.set('diff:abc@op1', { diff: '' })
-    _testInternals.cache.set('files:abc@op1', [])
-    _testInternals.cache.set('desc:abc@op1', { description: '' })
+    _testInternals.cache.set('diff:abc', { diff: '' })
+    _testInternals.cache.set('files:abc', [])
+    _testInternals.cache.set('desc:abc', { description: '' })
     prefetchRevision('abc')
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('swallows fetch errors silently', async () => {
-    _testInternals.lastOpId = 'op1'
     mockFetch.mockRejectedValue(new Error('network'))
     // Should not throw
     prefetchRevision('abc')
     await new Promise(r => setTimeout(r, 0)) // let rejections settle
-    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('api.revision (batch endpoint)', () => {
+  it('seeds all three cache keys from one fetch', async () => {
+    mockFetch.mockResolvedValue(mockResponse({
+      diff: 'diff output',
+      files: [{ type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 }],
+      description: 'msg',
+    }, 'op1'))
+
+    await api.revision('xyz')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    // Individual cache keys are now populated with shapes matching the
+    // individual endpoints' responses. No op-id suffix.
+    expect(_testInternals.cache.get('diff:xyz')).toEqual({ diff: 'diff output' })
+    expect(_testInternals.cache.get('files:xyz')).toEqual([
+      { type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 },
+    ])
+    expect(_testInternals.cache.get('desc:xyz')).toEqual({ description: 'msg' })
+  })
+
+  it('skips fetch when all three keys are already cached', async () => {
+    _testInternals.cache.set('diff:xyz', { diff: 'cached' })
+    _testInternals.cache.set('files:xyz', [])
+    _testInternals.cache.set('desc:xyz', { description: 'cached' })
+
+    await api.revision('xyz')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('seeded keys are hit by subsequent individual api calls', async () => {
+    mockFetch.mockResolvedValue(mockResponse({
+      diff: 'batch diff', files: [], description: 'batch desc',
+    }, 'op1'))
+
+    await api.revision('seed')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    // These should be cache hits — no additional fetches.
+    const d = await api.diff('seed')
+    const f = await api.files('seed')
+    const desc = await api.description('seed')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(d).toEqual({ diff: 'batch diff' })
+    expect(f).toEqual([])
+    expect(desc).toEqual({ description: 'batch desc' })
+  })
+
+  it('seeds cache even when op-id advances during fetch — commit_id is immutable', async () => {
+    _testInternals.lastOpId = 'op1'
+    // Response carries a newer op-id → trackOpId bumps lastOpId mid-flight.
+    // Under the old model this would skip caching. Now: commit_id content-
+    // addresses the data, so the fetch result is valid regardless of what
+    // op-ids advanced while it was in flight.
+    mockFetch.mockResolvedValue(mockResponse({
+      diff: 'still valid', files: [], description: 'still valid',
+    }, 'op2'))
+
+    await api.revision('concurrent')
+
+    expect(_testInternals.cache.get('diff:concurrent')).toEqual({ diff: 'still valid' })
+  })
+})
+
+describe('prefetchFilesBatch', () => {
+  it('seeds files: cache keys for non-conflicted revisions', async () => {
+    mockFetch.mockResolvedValue(mockResponse({
+      'abc': { conflict: false, files: [{ type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 }] },
+      'def': { conflict: false, files: [] },
+    }, 'op1'))
+
+    await prefetchFilesBatch(['abc', 'def'])
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(mockFetch.mock.calls[0][0]).toContain('/api/files-batch?revisions=abc%2Cdef')
+    expect(_testInternals.cache.has('files:abc')).toBe(true)
+    expect(_testInternals.cache.has('files:def')).toBe(true)
+  })
+
+  it('skips seeding conflicted revisions — they need full /api/files', async () => {
+    mockFetch.mockResolvedValue(mockResponse({
+      'clean': { conflict: false, files: [] },
+      'conflicted': { conflict: true, files: [{ type: 'M', path: 'x', additions: 0, deletions: 0, conflict: false, conflict_sides: 0 }] },
+    }, 'op1'))
+
+    await prefetchFilesBatch(['clean', 'conflicted'])
+
+    expect(_testInternals.cache.has('files:clean')).toBe(true)
+    expect(_testInternals.cache.has('files:conflicted')).toBe(false)
+  })
+
+  it('filters to uncached — empty fetch if all cached', async () => {
+    _testInternals.cache.set('files:abc', [])
+    _testInternals.cache.set('files:def', [])
+
+    await prefetchFilesBatch(['abc', 'def'])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('only sends uncached ids', async () => {
+    _testInternals.cache.set('files:abc', [])
+    mockFetch.mockResolvedValue(mockResponse({ 'def': { conflict: false, files: [] } }, 'op1'))
+
+    await prefetchFilesBatch(['abc', 'def'])
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    // Only 'def' in the request
+    expect(mockFetch.mock.calls[0][0]).toContain('revisions=def')
+    expect(mockFetch.mock.calls[0][0]).not.toContain('abc')
+  })
+
+  it('swallows fetch errors silently', async () => {
+    mockFetch.mockRejectedValue(new Error('network'))
+    await prefetchFilesBatch(['abc']) // should not throw
+    expect(_testInternals.cache.has('files:abc')).toBe(false)
+  })
+
+  it('seeded files: key is hit by subsequent api.files()', async () => {
+    const filesData = [{ type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 }]
+    mockFetch.mockResolvedValue(mockResponse({
+      'seeded': { conflict: false, files: filesData },
+    }, 'op1'))
+
+    await prefetchFilesBatch(['seeded'])
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    const result = await api.files('seeded')
+    expect(mockFetch).toHaveBeenCalledTimes(1) // cache hit
+    expect(result).toEqual(filesData)
   })
 })
 

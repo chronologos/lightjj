@@ -51,10 +51,51 @@ lightjj
 ```bash
 lightjj                            # serve current jj repo, open browser
 lightjj -R /path/to/repo           # explicit repo path
-lightjj --remote user@host:/path   # SSH proxy mode
+lightjj --remote user@host:/path   # SSH proxy mode (each jj call over SSH)
 lightjj --no-browser               # don't auto-open browser
 lightjj --addr localhost:8080      # specify listen address
+lightjj --no-watch                 # disable filesystem watch + SSE auto-refresh
+lightjj --snapshot-interval 10s    # adjust working-copy snapshot frequency (0 to disable)
 ```
+
+### Working with remote repos
+
+`--remote user@host:/path` proxies each jj command through SSH. This works but is slow — every command incurs a full SSH connection setup (~400ms+ with ProxyCommand configs, worse over WAN).
+
+**Recommended: run lightjj on the remote and port-forward.** This gives you local-quality performance, full auto-refresh, and filesystem watching — the SSH tunnel only carries HTTP:
+
+```bash
+# One-off: run lightjj remotely, port-forward to local
+ssh -L 3001:localhost:3001 user@host \
+  "lightjj -R /path/to/repo --addr localhost:3001 --no-browser"
+# then open http://localhost:3001 locally
+```
+
+For persistent use, start it backgrounded and keep the tunnel alive with `autossh` or `ServerAliveInterval`:
+
+```bash
+# ~/.ssh/config
+Host myremote
+  HostName host.example.com
+  User me
+  ServerAliveInterval 30
+  LocalForward 3001 localhost:3001
+
+# Then: `ssh myremote "lightjj -R /path --addr localhost:3001 --no-browser"` in a tmux pane,
+# or launch on login via the remote's shell profile.
+```
+
+**If you must use `--remote` proxy mode**, enable SSH ControlMaster to avoid per-call handshake overhead:
+
+```bash
+# ~/.ssh/config
+Host host.example.com
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%r@%h:%p
+  ControlPersist 10m
+```
+
+This brings per-command latency from ~400ms down to ~20ms after the first connection. Auto-refresh is disabled in proxy mode (no remote filesystem watch); refresh manually or rely on in-UI mutations which trigger refresh via op-id tracking.
 
 ## Development
 

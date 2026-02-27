@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, prefetchFilesBatch, onStale, watchEvents, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -54,9 +54,9 @@
   // counter. See loader.svelte.ts for semantics. Aliases below preserve existing
   // names for backward-compatible reads throughout the component + templates.
   const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
-  const diff = createLoader((id: string, immutable?: boolean) => api.diff(id, undefined, undefined, immutable).then(r => r.diff), '', showError)
-  const files = createLoader((id: string, immutable?: boolean) => api.files(id, immutable), [] as FileChange[], showError)
-  const description = createLoader((id: string, immutable?: boolean) => api.description(id, immutable).then(r => r.description), '')
+  const diff = createLoader((id: string) => api.diff(id).then(r => r.diff), '', showError)
+  const files = createLoader((id: string) => api.files(id), [] as FileChange[], showError)
+  const description = createLoader((id: string) => api.description(id).then(r => r.description), '')
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
 
@@ -174,19 +174,23 @@
     return selectedRevision ? [effectiveId(selectedRevision.commit)] : []
   })
 
+  // checkedRevisions holds effectiveId (change_id for most); resolve once to
+  // commit_ids for both multi-check diff loading AND implied-commit graph walk.
+  let checkedCommitIds = $derived(
+    checkedRevisions.size === 0 ? [] :
+    revisions.filter(r => checkedRevisions.has(effectiveId(r.commit)))
+             .map(r => r.commit.commit_id)
+  )
+
   // Commits implicitly included in the diff via connected() gap-filling.
   // Rendered with a hollow indicator so user sees what's in scope.
   let impliedCommitIds = $derived.by(() => {
-    if (checkedRevisions.size <= 1) return new Set<string>()
-    // checkedRevisions holds effective IDs; resolve to commit_ids for graph walk
-    const checkedCids = new Set<string>()
-    for (const r of revisions) {
-      if (checkedRevisions.has(effectiveId(r.commit))) checkedCids.add(r.commit.commit_id)
-    }
-    const connected = computeConnectedCommitIds(checkedCids, revisions)
+    if (checkedCommitIds.length <= 1) return new Set<string>()
+    const checkedSet = new Set(checkedCommitIds)
+    const connected = computeConnectedCommitIds(checkedSet, revisions)
     // Implied = in connected but NOT explicitly checked
     const implied = new Set<string>()
-    for (const cid of connected) if (!checkedCids.has(cid)) implied.add(cid)
+    for (const cid of connected) if (!checkedSet.has(cid)) implied.add(cid)
     return implied
   })
 
@@ -236,7 +240,7 @@
 
   function clearChecksAndReload() {
     clearChecks()
-    if (selectedRevision) loadDiffAndFiles(effectiveId(selectedRevision.commit), selectedRevision.commit.immutable)
+    if (selectedRevision) loadDiffAndFiles(selectedRevision.commit.commit_id)
     else { diff.reset(); files.reset() }
   }
 
@@ -376,7 +380,7 @@
     lastCheckedIndex = -1
     if (selectedIndex >= 0 && checkedRevisions.size === 0) {
       const sel = revisions[selectedIndex]
-      loadDiffAndFiles(effectiveId(sel.commit), sel.commit.immutable)
+      loadDiffAndFiles(sel.commit.commit_id)
     }
     // Refresh open panels — oplog always reflects new operations,
     // evolog may change if the selected revision was modified
@@ -384,6 +388,20 @@
     if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
       evolog.load(effectiveId(revisions[selectedIndex].commit))
     }
+
+    // Pre-load file lists for a window of ~10 revisions around the selection.
+    // One jj subprocess for N revs; seeds files:X cache so the file sidebar
+    // shows instantly during j/k. Fire-and-forget; main diff load isn't gated.
+    prefetchFilesWindow()
+  }
+
+  const FILES_PRELOAD_RADIUS = 5 // revisions on each side of selectedIndex
+  function prefetchFilesWindow() {
+    if (selectedIndex < 0) return
+    const start = Math.max(0, selectedIndex - FILES_PRELOAD_RADIUS)
+    const end = Math.min(revisions.length, selectedIndex + FILES_PRELOAD_RADIUS + 1)
+    const ids = revisions.slice(start, end).map(r => r.commit.commit_id)
+    prefetchFilesBatch(ids)
   }
 
   // Thin aliases — preserve existing call-site names across the component.
@@ -392,10 +410,31 @@
   const loadOplog = oplog.load
   const loadEvolog = evolog.load
 
-  function loadDiffAndFiles(changeId: string, immutable = false) {
-    diff.load(changeId, immutable)
-    files.load(changeId, immutable)
-    description.load(changeId, immutable)
+  // Batch-fetch orchestration: api.revision() seeds all three cache keys in
+  // one round-trip, then the individual loaders fire and hit cache.
+  //
+  // Two guards after the await:
+  //   - revGen: rapid j/k supersedes → bail (newer call handles it)
+  //   - checkedRevisions.size > 0: user checked a revision during the fetch →
+  //     bail (the $effect watching checkedRevisions already fired loadDiffForRevset
+  //     with a multi-rev revset; firing single-rev loaders here would overwrite it)
+  //
+  // On batch failure, only diff.load fires — it'll also fail (same underlying
+  // revision problem) but produces ONE error toast via showError, not three.
+  // On batch success, all three loaders fire and hit seeded cache.
+  //
+  // Pass commit_id, not change_id — the cache is keyed by commit_id
+  // (content-addressed, self-invalidating across rewrites).
+  let revGen = 0
+  async function loadDiffAndFiles(commitId: string) {
+    const gen = ++revGen
+    let batchFailed = false
+    await api.revision(commitId).catch(() => { batchFailed = true })
+    if (gen !== revGen || checkedRevisions.size > 0) return
+    diff.load(commitId)
+    if (batchFailed) return
+    files.load(commitId)
+    description.load(commitId)
   }
 
   // Move cursor without loading diff/files — used in squash mode where
@@ -419,29 +458,35 @@
     // Debounce diff/files loading: highlight moves instantly, but fetches
     // wait for navigation to settle. Cache hits skip the debounce.
     clearTimeout(navDebounceTimer)
-    const eid = effectiveId(entry.commit)
-    const cached = isCached(eid)
-    const doLoad = (id: string, immutable: boolean) => {
-      if (checkedRevisions.size === 0) loadDiffAndFiles(id, immutable)
-      if (evologOpen) loadEvolog(id)
+    const cid = entry.commit.commit_id
+    const cached = isCached(cid)
+    const doLoad = (c: LogEntry['commit']) => {
+      if (checkedRevisions.size === 0) loadDiffAndFiles(c.commit_id)
+      // evolog is keyed by change_id (it's the change's history), not commit_id
+      if (evologOpen) loadEvolog(effectiveId(c))
     }
     if (cached) {
-      doLoad(eid, entry.commit.immutable)
+      doLoad(entry.commit)
     } else {
       navDebounceTimer = setTimeout(() => {
         const current = revisions[selectedIndex]
-        if (current) doLoad(effectiveId(current.commit), current.commit.immutable)
+        if (current) doLoad(current.commit)
       }, 50)
     }
 
     // Opportunistic prefetch: warm the cache for the next revision in the
-    // navigation direction. Only when CURRENT is cached — otherwise the
-    // imminent main-load (3 requests) plus prefetch (3 more) would exhaust
-    // the browser's 6-connection-per-origin limit, queuing the main load
-    // behind speculative fetches for skipped-past revisions during rapid j/k.
+    // navigation direction. Only when CURRENT is cached — during rapid uncached
+    // j/k, prefetches for skipped-past revisions waste bandwidth and contend
+    // with the main load. With the batch endpoint (1 req/rev) the 6-connection
+    // limit is no longer reachable, but the contention argument still holds.
     if (moved && cached) {
       const next = revisions[index + direction]
-      if (next) prefetchRevision(effectiveId(next.commit), next.commit.immutable)
+      if (next) prefetchRevision(next.commit.commit_id)
+      // Also re-center the files preload window. prefetchFilesBatch filters
+      // to uncached internally, so repeated calls are cheap — most will be
+      // all-cached no-ops; at window edges it fires one HTTP call for the
+      // newly-visible revisions.
+      prefetchFilesWindow()
     }
   }
 
@@ -483,13 +528,25 @@
     contextMenuOpen = true
   }
 
-  // Reload diff/files when checked revisions change
-  // Skip during squash/split mode — diff is intentionally frozen on source revision
+  // The active revision identifier for diff/files/fileShow calls — commit_id
+  // (single selection) or commit_id-based connected() revset (multi-check).
+  // Built from commit_ids (not change_ids) so the cache key is content-
+  // addressed: if a checked commit is rewritten, its commit_id changes, the
+  // revset string changes, and we get a fresh fetch instead of a stale hit.
+  // Passed to DiffPanel for context expansion + conflict fileShow.
+  // (checkedCommitIds is defined above, shared with impliedCommitIds.)
+  let activeRevisionId = $derived(
+    checkedCommitIds.length > 0
+      ? multiRevset(checkedCommitIds)
+      : selectedRevision?.commit.commit_id
+  )
+  // Reload diff/files when checked revisions change.
+  // Skip during squash/split mode — diff is intentionally frozen on source revision.
   $effect(() => {
-    const checked = [...checkedRevisions]
-    if (checked.length === 0) return
+    if (checkedCommitIds.length === 0) return
     if (squash.active || split.active) return
-    const revset = multiRevset(checked)
+    // activeRevisionId is the multiRevset() string when checks exist
+    const revset = activeRevisionId!
     loadDiffForRevset(revset)
     loadFilesForRevset(revset)
   })
@@ -564,7 +621,7 @@
       descriptionDraft = fullDescription
     } else {
       try {
-        const result = await api.description(effectiveId(selectedRevision.commit))
+        const result = await api.description(selectedRevision.commit.commit_id)
         descriptionDraft = result.description
       } catch {
         descriptionDraft = selectedRevision.description
@@ -861,7 +918,7 @@
       descriptionDraft = fullDescription
     } else {
       try {
-        const result = await api.description(effectiveId(selectedRevision.commit))
+        const result = await api.description(selectedRevision.commit.commit_id)
         descriptionDraft = result.description
       } catch {
         descriptionDraft = selectedRevision.description
@@ -1044,7 +1101,7 @@
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
-          loadDiffAndFiles(effectiveId(selectedRevision.commit), selectedRevision.commit.immutable)
+          loadDiffAndFiles(selectedRevision.commit.commit_id)
         }
         break
       case 'r':
@@ -1114,6 +1171,10 @@
       else if (inlineMode) staleWhileInMode = true
     })
   })
+  // SSE auto-refresh: server pushes op-id changes from fsnotify. Flows through
+  // the same notifyOpId → onStale path as the HTTP header, so the guards above
+  // apply identically. Effect cleanup closes the EventSource on unmount.
+  $effect(() => watchEvents())
   $effect(() => {
     if (!inlineMode && staleWhileInMode) {
       staleWhileInMode = false
@@ -1331,6 +1392,7 @@
             {selectedRevision}
             {fullDescription}
             {checkedRevisions}
+            {activeRevisionId}
             {diffLoading}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
             {descriptionEditing}

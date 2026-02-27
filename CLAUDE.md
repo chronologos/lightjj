@@ -50,7 +50,7 @@ testutil/                  — Test infrastructure
 frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
   src/App.svelte           — Main app shell: layout, keyboard handling, state management
   src/lib/
-    api.ts                 — Typed API client, op-id tracking, two-tier cache (mutable + immutable)
+    api.ts                 — Typed API client, op-id tracking, commit_id-keyed LRU cache, SSE auto-refresh
     api.test.ts            — API client tests
     RevisionGraph.svelte   — Revision list with graph gutter rendering
     DiffPanel.svelte       — Diff viewer: unified/split toggle, syntax highlighting, edit-state management
@@ -106,6 +106,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 
 - **Svelte 5 runes** — use `$state()`, `$derived()`, `$effect()`. No Svelte 4 stores.
 - **api.ts is the single API boundary** — all backend calls go through the `api` object in `src/lib/api.ts`. Don't use raw `fetch()` in components.
+- **Cache by `commit_id`, not `change_id`.** Per-revision data (diff, files, description) is keyed by `commit_id` — a content hash of tree + parents + message. If the commit_id hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants. Pass `commit.commit_id` to `api.diff()`/`files()`/`description()`/`revision()`; use `effectiveId()` (change_id) only for mutations and UI-state that should survive rewrites.
 - **pnpm, not npm** — the project uses pnpm for package management.
 - **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes. **Graph rows use a fixed `height: 18px`** to guarantee identical sizing across all modes (normal, rebase, squash, split). This prevents inline badges, buttons, or text from influencing row height. All inline elements (badges, `@` indicator, action buttons) must fit within 18px. Content is clipped by `overflow: hidden`. Never change this to `min-height` or remove the fixed height — it's the only way to prevent sub-pixel height differences between modes that break graph pipe continuity.
 - **Change IDs show full short form with highlighted prefix.** `commit.change_prefix` determines how many characters to highlight. Same for `commit_prefix`.

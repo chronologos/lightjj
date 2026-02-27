@@ -294,6 +294,143 @@ func TestHandleFiles_Empty(t *testing.T) {
 	assert.Empty(t, files)
 }
 
+func TestHandleFilesBatch(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FilesBatch([]string{"abc", "def"})).SetOutput([]byte(
+		"abc\x1E0\x1EM\x1Fmain.go\x1F3\x1F1\x1D" +
+			"def\x1E1\x1E\x1D"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files-batch?revisions=abc,def", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]jj.FilesBatchEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp, 2)
+	assert.False(t, resp["abc"].Conflict)
+	assert.Len(t, resp["abc"].Files, 1)
+	assert.Equal(t, "main.go", resp["abc"].Files[0].Path)
+	assert.Equal(t, 3, resp["abc"].Files[0].Additions)
+	assert.True(t, resp["def"].Conflict)
+	assert.Empty(t, resp["def"].Files)
+}
+
+func TestHandleFilesBatch_MissingRevisions(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/files-batch", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleFilesBatch_TrailingComma(t *testing.T) {
+	// Trailing/double commas should be filtered, not passed to jj as "|" revset.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FilesBatch([]string{"abc", "def"})).SetOutput([]byte(
+		"abc\x1E0\x1E\x1Ddef\x1E0\x1E\x1D"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files-batch?revisions=abc,,def,", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleFilesBatch_OnlyCommas(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/files-batch?revisions=,,,", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleFilesBatch_TooMany(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	ids := make([]string, 51)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("id%d", i)
+	}
+	req := httptest.NewRequest("GET", "/api/files-batch?revisions="+strings.Join(ids, ","), nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleRevision(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
+	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("diff --git a/src/main.go b/src/main.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 3 ++-\n 1 file changed, 2 insertions(+), 1 deletion(-)\n"))
+	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("Fix the thing\n"))
+	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/revision?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp revisionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "diff --git a/src/main.go b/src/main.go\n", resp.Diff)
+	assert.Equal(t, "Fix the thing\n", resp.Description)
+	require.Len(t, resp.Files, 1)
+	assert.Equal(t, "M", resp.Files[0].Type)
+	assert.Equal(t, "src/main.go", resp.Files[0].Path)
+	assert.Equal(t, 2, resp.Files[0].Additions)
+	assert.Equal(t, 1, resp.Files[0].Deletions)
+}
+
+func TestHandleRevision_MissingRevision(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	req := httptest.NewRequest("GET", "/api/revision", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleRevision_SummaryError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("bad")).SetError(fmt.Errorf("no such revision"))
+	// Parallel goroutines still fire; Allow() so Verify() doesn't fail on them.
+	runner.Allow(jj.Diff("bad", "", "never", "--tool", ":git")).SetOutput([]byte(""))
+	runner.Allow(jj.DiffStat("bad")).SetOutput([]byte(""))
+	runner.Allow(jj.GetDescription("bad")).SetOutput([]byte(""))
+	runner.Allow(jj.ConflictedFiles("bad")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/revision?revision=bad", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestHandleRevision_DescriptionErrorIsSoft(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte(""))
+	runner.Allow(jj.DiffStat("abc")).SetOutput([]byte(""))
+	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.GetDescription("abc")).SetError(fmt.Errorf("template error"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/revision?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp revisionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "", resp.Description) // soft-failed, not a 500
+}
+
 func TestHandleBookmarkMove(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.BookmarkMove("abc", "feature", "--allow-backwards")).SetOutput([]byte(""))
@@ -953,7 +1090,9 @@ func TestHandleDescribe_StdinContent(t *testing.T) {
 func TestHandleFiles_SummaryError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetError(errors.New("summary failed"))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
+	// Parallel commands (runAsync goroutines) may or may not complete before
+	// the handler returns on summary error — Allow, not Expect.
+	runner.Allow(jj.DiffStat("abc")).SetOutput([]byte(""))
 	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
