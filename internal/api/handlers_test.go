@@ -1168,7 +1168,9 @@ func TestHandleFiles_WithConflicts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
 	assert.Len(t, files, 2)
 	assert.False(t, files[0].Conflict)
+	assert.Equal(t, 0, files[0].ConflictSides)
 	assert.True(t, files[1].Conflict)
+	assert.Equal(t, 2, files[1].ConflictSides)
 }
 
 func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
@@ -1193,6 +1195,8 @@ func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
 }
 
 func TestHandleFiles_ConflictError(t *testing.T) {
+	// Genuine resolve --list failure (SSH error, bad revision) — logged but
+	// response still succeeds with conflict flags unset (degraded, not fatal).
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
 	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
@@ -1209,6 +1213,28 @@ func TestHandleFiles_ConflictError(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
 	assert.Len(t, files, 1)
 	assert.False(t, files[0].Conflict) // graceful: no conflict data on error
+}
+
+func TestHandleFiles_NoConflictsFoundIsNotError(t *testing.T) {
+	// `jj resolve --list` exits code 2 with "No conflicts found" on a clean
+	// revision. This is expected behaviour, not an error — the handler must
+	// not log it as a failure (would spam logs for every non-conflicted commit).
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
+	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.ResolveList("abc")).SetError(errors.New("exit code 2: Error: No conflicts found at this revision"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	assert.Len(t, files, 1)
+	assert.False(t, files[0].Conflict)
 }
 
 func TestHandleFileShow(t *testing.T) {

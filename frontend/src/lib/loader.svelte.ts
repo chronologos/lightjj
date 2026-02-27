@@ -8,6 +8,8 @@ export interface Loader<T, A extends unknown[]> {
   readonly value: T
   /** True while a load is in flight and is still the latest generation. */
   readonly loading: boolean
+  /** Message from the last failed load, or '' if the last load succeeded. */
+  readonly error: string
   /**
    * Fetch and assign. Returns true if this call's result was applied,
    * false if superseded by a newer load() or if fetch threw.
@@ -26,6 +28,7 @@ export function createLoader<T, A extends unknown[]>(
 ): Loader<T, A> {
   let value = $state<T>(initial)
   let loading = $state(false)
+  let error = $state('')
   let generation = 0
   let loadingTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -48,11 +51,13 @@ export function createLoader<T, A extends unknown[]>(
       // Reference-equality guard: skip assignment on cache hits returning
       // the same value, so downstream $derived chains don't re-run.
       if (value !== result) value = result
+      if (error) error = '' // clear prior error on successful load
       return true
     } catch (e) {
       if (gen !== generation) return false
       clearTimeout(loadingTimer)
       value = initial
+      error = e instanceof Error ? e.message : String(e)
       onError?.(e)
       return false
     } finally {
@@ -67,6 +72,7 @@ export function createLoader<T, A extends unknown[]>(
     clearTimeout(loadingTimer)
     value = initial
     loading = false
+    error = ''
   }
 
   function set(v: T) {
@@ -76,6 +82,7 @@ export function createLoader<T, A extends unknown[]>(
   return {
     get value() { return value },
     get loading() { return loading },
+    get error() { return error },
     load,
     reset,
     set,

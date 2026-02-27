@@ -22,6 +22,7 @@ function makeStats(path: string, overrides: Partial<FileChange> = {}): FileChang
     additions: 5,
     deletions: 2,
     conflict: false,
+    conflict_sides: 0,
     ...overrides,
   }
 }
@@ -352,7 +353,7 @@ describe('DiffFileView', () => {
     }
 
     function conflictStats() {
-      return makeStats('fuzzy.ts', { conflict: true })
+      return makeStats('fuzzy.ts', { conflict: true, conflict_sides: 2 })
     }
 
     it('hides conflict marker lines (<<<, %%%, +++, >>>)', () => {
@@ -441,7 +442,10 @@ describe('DiffFileView', () => {
       expect(buttons[1].textContent).not.toContain('Theirs')
     })
 
-    it('hides resolve buttons for single-side conflicts', () => {
+    it('shows resolve buttons for single-%%%%% conflicts (2-way conflict, 1 marker section)', () => {
+      // jj can represent a 2-way conflict with just one %%%%%%% diff section
+      // (showing from→to). sideCount === 1 but :ours/:theirs still work.
+      // Regression: was gating on sideCount === 2, hiding buttons for this format.
       const file = makeFile('one-side.ts', [
         { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
         { type: 'add', content: '+%%%%%%% "only changes"' },
@@ -449,10 +453,43 @@ describe('DiffFileView', () => {
         { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
       ])
       const { container } = render(DiffFileView, {
-        props: defaultProps({ file, fileStats: makeStats('one-side.ts', { conflict: true }), onresolve: vi.fn() }),
+        props: defaultProps({ file, fileStats: makeStats('one-side.ts', { conflict: true, conflict_sides: 2 }), onresolve: vi.fn() }),
+      })
+      expect(container.querySelectorAll('.resolve-btn')).toHaveLength(2)
+      expect(container.querySelectorAll('.resolve-btn-inline')).toHaveLength(2)
+    })
+
+    it('hides resolve buttons for 3-sided conflicts', () => {
+      // When `jj resolve --list` reports 3-sided, :ours/:theirs is ambiguous —
+      // hide buttons regardless of how many marker sections the diff shows.
+      const file = makeFile('three-way.ts', [
+        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
+        { type: 'add', content: '+%%%%%%% "side A"' },
+        { type: 'add', content: '++line a' },
+        { type: 'add', content: '+++++++ "side B"' },
+        { type: 'add', content: '+line b' },
+        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, fileStats: makeStats('three-way.ts', { conflict: true, conflict_sides: 3 }), onresolve: vi.fn() }),
       })
       expect(container.querySelectorAll('.resolve-btn')).toHaveLength(0)
       expect(container.querySelectorAll('.resolve-btn-inline')).toHaveLength(0)
+    })
+
+    it('falls back to marker counting when conflict_sides is 0 (arity unknown)', () => {
+      // When backend couldn't parse arity, fall back to counting marker sections.
+      // 1 or 2 sections → show buttons (conservative: assume 2-way).
+      const file = makeFile('unknown.ts', [
+        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
+        { type: 'add', content: '+%%%%%%% "changes"' },
+        { type: 'add', content: '++x' },
+        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
+      ])
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, fileStats: makeStats('unknown.ts', { conflict: true, conflict_sides: 0 }), onresolve: vi.fn() }),
+      })
+      expect(container.querySelectorAll('.resolve-btn')).toHaveLength(2)
     })
 
     it('forces unified view for conflicted files even when splitView=true', () => {

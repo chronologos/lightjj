@@ -183,6 +183,7 @@ export interface FileChange {
   additions: number
   deletions: number
   conflict: boolean
+  conflict_sides: number // 2 for 2-sided, 3+ for N-way. 0 if unknown.
 }
 
 export interface OpEntry {
