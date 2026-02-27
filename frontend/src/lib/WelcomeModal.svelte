@@ -25,8 +25,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-<div class="welcome-backdrop" onclick={onclose}></div>
+<div class="welcome-backdrop" role="presentation" onclick={onclose}></div>
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="welcome-modal" bind:this={modalEl} onkeydown={handleKeydown} tabindex="-1">
   <div class="welcome-header">{title}</div>

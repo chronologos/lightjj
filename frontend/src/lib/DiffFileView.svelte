@@ -302,6 +302,7 @@
   })
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 {#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number, conflictMeta?: ConflictLineMeta)}
   {@const searchKey = hunkIdx !== undefined && lineIdx !== undefined ? `${hunkIdx}:${lineIdx}` : ''}
   {@const lm = searchKey ? lineMatchMap.get(searchKey) : undefined}
