@@ -145,6 +145,15 @@ describe('createLoader', () => {
     expect(loader.error).toBe('')
   })
 
+  it('set clears error state (set means "I have a known-good value")', async () => {
+    const loader = createLoader(async (): Promise<number> => { throw new Error('boom') }, 0)
+    await loader.load()
+    expect(loader.error).toBe('boom')
+    loader.set(42)
+    expect(loader.error).toBe('')
+    expect(loader.value).toBe(42)
+  })
+
   it('ignores superseded errors (no onError call, no reset)', async () => {
     const onError = vi.fn()
     let reject!: (e: unknown) => void

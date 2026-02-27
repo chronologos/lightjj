@@ -489,8 +489,7 @@
   }
 
   .revisions-panel {
-    width: 420px;
-    min-width: 320px;
+    width: 100%;
     border-right: 1px solid var(--surface1);
     flex-shrink: 0;
   }

@@ -269,6 +269,39 @@ func TestIntegrationFiles(t *testing.T) {
 		"modified file should have non-zero stat counts")
 }
 
+func TestIntegrationFiles_Rename(t *testing.T) {
+	// Regression: `jj diff --summary` outputs rename paths with brace syntax
+	// ("dir/{old => new}/file"). ParseDiffSummary must expand to the destination
+	// path. Otherwise squash/split file selection passes the brace syntax back
+	// to jj as a fileset, which matches nothing (silent failure).
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(r.RepoDir, "dir/a"), 0o755))
+	writeFile(t, r.RepoDir, "dir/a/file.txt", "content")
+	jjExec("describe", "-m", "add file")
+	jjExec("new", "-m", "rename dir")
+	require.NoError(t, os.MkdirAll(filepath.Join(r.RepoDir, "dir/b"), 0o755))
+	require.NoError(t, os.Rename(
+		filepath.Join(r.RepoDir, "dir/a/file.txt"),
+		filepath.Join(r.RepoDir, "dir/b/file.txt"),
+	))
+	// DiffSummary uses --ignore-working-copy; trigger snapshot explicitly.
+	jjExec("debug", "snapshot")
+
+	srv := NewServer(r, "")
+	w := apiGet(t, srv, "/api/files?revision=@")
+	var files []jj.FileChange
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
+	require.Len(t, files, 1)
+
+	// Path must be the expanded destination, not "dir/{a => b}/file.txt"
+	assert.Equal(t, "dir/b/file.txt", files[0].Path)
+	assert.Equal(t, "R", files[0].Type)
+	assert.NotContains(t, files[0].Path, "{", "rename brace syntax must be expanded")
+	assert.NotContains(t, files[0].Path, "=>", "rename arrow must be stripped")
+}
+
 func TestIntegrationBookmarks(t *testing.T) {
 	r, jjExec := jjTestRepo(t)
 	t.Parallel()
@@ -1084,6 +1117,10 @@ func TestIntegrationFilesWithConflicts(t *testing.T) {
 	require.Contains(t, byPath, "conflict.txt")
 	assert.True(t, byPath["conflict.txt"].Conflict,
 		"conflict.txt should have conflict=true")
+	// Verify the conflicted_files template's conflict_side_count() round-trips.
+	// createConflict builds a deterministic 2-way conflict (left vs right).
+	assert.Equal(t, 2, byPath["conflict.txt"].ConflictSides,
+		"conflict.txt should have ConflictSides=2 from template output")
 
 	// clean.txt should NOT be marked as conflicted (it may or may not appear
 	// in the files list depending on whether it was modified in this commit).
@@ -1391,9 +1428,11 @@ func TestJourneyConflictResolveChildNotParent(t *testing.T) {
 
 // TestIntegrationFilesFromSubdirectory verifies that running lightjj from a
 // subdirectory of the repo produces correct repo-root-relative paths.
-// Bug: `jj resolve --list` outputs paths relative to CWD, so when CWD is a
-// subdirectory the paths have "../" prefixes and don't match `jj diff --summary`.
-// The fix is resolving the workspace root at startup (main.go).
+// NewLocalRunner resolves the workspace root at startup so all jj commands
+// produce consistent repo-relative paths regardless of the starting CWD.
+// (Historical note: this mattered more when we used `jj resolve --list`,
+// which was CWD-sensitive. The conflicted_files template uses RepoPath which
+// is always repo-relative — but DiffSummary/DiffStat still need the fix.)
 func TestIntegrationFilesFromSubdirectory(t *testing.T) {
 	r, _ := createConflict(t)
 	t.Parallel()
@@ -1408,9 +1447,9 @@ func TestIntegrationFilesFromSubdirectory(t *testing.T) {
 	var files []jj.FileChange
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
 
-	// Without the workspace-root fix, conflict.txt would appear as
-	// "../../../conflict.txt" from resolve --list and "conflict.txt" from
-	// diff --summary, causing a duplicate entry and failed conflict match.
+	// Without the workspace-root fix, paths would be CWD-relative
+	// ("../../../conflict.txt") from some commands and repo-relative from
+	// others, causing duplicate entries and failed conflict/stats merges.
 	var conflictCount int
 	for _, f := range files {
 		if strings.HasSuffix(f.Path, "conflict.txt") {

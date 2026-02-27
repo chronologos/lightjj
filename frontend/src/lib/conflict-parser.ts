@@ -11,7 +11,10 @@ import type { DiffLine } from './diff-parser'
 
 export interface ConflictSide {
   type: 'diff' | 'snapshot'
-  label: string   // extracted from marker line, e.g. commit description
+  // For 'snapshot' sides, label is the commit that produced this content.
+  // For 'diff' sides, label is the "to" commit (from the \\\\\\\ sub-marker) —
+  // that's what `:ours`/`:theirs` actually KEEPS when you pick this side.
+  label: string
   startIdx: number
   endIdx: number  // inclusive
 }
@@ -67,6 +70,11 @@ export function findConflicts(lines: DiffLine[]): ConflictRegion[] {
       currentSide = null
     } else if (current && (m = content.match(CONFLICT_DIFF))) {
       if (currentSide) currentSide.endIdx = i - 1
+      // The %%%%%%% line has "diff from: X" — but choosing this side keeps
+      // the TO state, not the FROM state. The \\\\\\\ "to:" sub-marker below
+      // will overwrite this label with what the user actually keeps.
+      // Falls back to the %%%%%%% text if no \\\\\\\ marker (e.g., the
+      // "Changes from base to side #1" format, which already names the result).
       currentSide = { type: 'diff', label: extractSideLabel(m[1]), startIdx: i, endIdx: i }
       current.sides.push(currentSide)
     } else if (current && (m = content.match(CONFLICT_SNAP))) {
@@ -79,9 +87,11 @@ export function findConflicts(lines: DiffLine[]): ConflictRegion[] {
       regions.push(current)
       current = null
       currentSide = null
-    } else if (current && currentSide && currentSide.type === 'diff' && content.match(CONFLICT_DIFF_TO)) {
-      // The \\\\\\\ sub-marker within a %%%%%%% section is metadata, not code.
-      // Keep it part of the current side but mark it separately for styling.
+    } else if (current && currentSide && currentSide.type === 'diff' && (m = content.match(CONFLICT_DIFF_TO))) {
+      // The \\\\\\\ "to:" sub-marker names what this diff transforms INTO.
+      // That's what `:ours`/`:theirs` keeps if you pick this side, so it
+      // becomes the side's primary label (overwrites the "from" label).
+      currentSide.label = extractSideLabel(m[1])
       currentSide.endIdx = i
     } else if (currentSide) {
       currentSide.endIdx = i

@@ -7,12 +7,14 @@ interface Config {
   theme: 'dark' | 'light'
   splitView: boolean
   reduceMotion: boolean
+  revisionPanelWidth: number
 }
 
 const defaults: Config = {
   theme: 'dark',
   splitView: false,
   reduceMotion: false,
+  revisionPanelWidth: 420,
 }
 
 function load(): Partial<Config> {
@@ -62,6 +64,9 @@ function createConfig() {
 
     get reduceMotion() { return state.reduceMotion },
     set reduceMotion(v: boolean) { state.reduceMotion = v },
+
+    get revisionPanelWidth() { return state.revisionPanelWidth },
+    set revisionPanelWidth(v: number) { state.revisionPanelWidth = v },
   }
 }
 

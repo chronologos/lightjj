@@ -59,7 +59,7 @@ describe('DiffFileView', () => {
       })
       const indicator = container.querySelector('.conflict-indicator')
       expect(indicator).toBeInTheDocument()
-      expect(indicator?.textContent).toBe('1 conflict')
+      expect(indicator?.textContent).toContain('1 conflict')
     })
 
     it('pluralizes conflict count', () => {
@@ -77,7 +77,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({ file, fileStats: stats }),
       })
-      expect(container.querySelector('.conflict-indicator')?.textContent).toBe('2 conflicts')
+      expect(container.querySelector('.conflict-indicator')?.textContent).toContain('2 conflicts')
     })
 
     it('does not show conflict indicator for non-conflicted file', () => {
@@ -124,14 +124,22 @@ describe('DiffFileView', () => {
       return defaultProps({ file, fileStats: stats, onresolve })
     }
 
-    it('shows Accept Ours and Accept Theirs buttons when onresolve is provided', () => {
+    it('shows file-header resolve buttons with letter badges', () => {
+      // Buttons say "Keep [A]" / "Keep [B]" — the letter badge spatially
+      // corresponds to the badge on the section tabs below.
       const { container } = render(DiffFileView, {
         props: conflictProps(vi.fn()),
       })
       const buttons = container.querySelectorAll('.resolve-btn')
       expect(buttons).toHaveLength(2)
-      expect(buttons[0].textContent).toBe('Keep side A changes')
-      expect(buttons[1].textContent).toBe('Keep side B content')
+      expect(buttons[0].textContent?.trim()).toBe('Keep A')
+      expect(buttons[1].textContent?.trim()).toBe('Keep B')
+      expect(buttons[0].querySelector('.side-badge')?.textContent).toBe('A')
+      // Generic tooltip — section order can differ across conflicts, so
+      // using region 1's labels here would be misleading. Per-region buttons
+      // carry the accurate local labels.
+      expect(buttons[0].getAttribute('title')).toContain(':ours')
+      expect(buttons[1].getAttribute('title')).toContain(':theirs')
     })
 
     it('does not show resolve buttons when onresolve is not provided', () => {
@@ -417,15 +425,40 @@ describe('DiffFileView', () => {
       expect(allText).not.toContain('\\\\\\\\\\\\\\')
     })
 
-    it('shows side labels from conflict markers', () => {
+    it('section tabs have letter badges matching their side index', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats() }),
       })
-      const labels = container.querySelectorAll('.conflict-side-label')
-      const labelTexts = [...labels].map(l => l.textContent)
-      expect(labelTexts).toContain('Conflict resolution')
-      expect(labelTexts.some(t => t?.includes('side X'))).toBe(true)
-      expect(labelTexts.some(t => t?.includes('side Y'))).toBe(true)
+      // One tab per side, NOT one per marker (\\\ sub-markers don't make tabs).
+      const tabs = container.querySelectorAll('.conflict-side-tab')
+      expect(tabs).toHaveLength(2)
+      // Each tab has a letter badge: A for side 0, B for side 1.
+      // This creates spatial correspondence with the "Keep A"/"Keep B" buttons.
+      const badges = [...tabs].map(t => t.querySelector('.side-badge')?.textContent)
+      expect(badges).toEqual(['A', 'B'])
+      // Tab description is the "to" label (what you keep), not "from".
+      // twoSideConflict: diff side = to "side X", snapshot side = "side Y"
+      expect(tabs[0].textContent).toContain('side X')
+      expect(tabs[0].textContent).not.toContain('Conflict resolution') // that's the FROM
+      expect(tabs[1].textContent).toContain('side Y')
+    })
+
+    it('region buttons use letter badges, tooltips carry full labels', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats(), onresolve: vi.fn() }),
+      })
+      const picks = container.querySelectorAll('.conflict-pick')
+      expect(picks).toHaveLength(2)
+      // Buttons just say "Keep [A]" / "Keep [B]" — commit descriptions are
+      // opaque to users; the letter badge creates spatial correspondence.
+      expect(picks[0].textContent?.trim()).toBe('Keep A')
+      expect(picks[1].textContent?.trim()).toBe('Keep B')
+      // Full labels in tooltip for those who want them.
+      // Side A (diff, :ours) = the TO label = "side X"
+      expect(picks[0].getAttribute('title')).toContain('side X')
+      expect(picks[0].getAttribute('title')).not.toContain('Conflict resolution')
+      // Side B (snapshot, :theirs) = "side Y"
+      expect(picks[1].getAttribute('title')).toContain('side Y')
     })
 
     it('shows resolve buttons with side labels for 2-way conflicts', () => {
@@ -456,11 +489,12 @@ describe('DiffFileView', () => {
         props: defaultProps({ file, fileStats: makeStats('one-side.ts', { conflict: true, conflict_sides: 2 }), onresolve: vi.fn() }),
       })
       expect(container.querySelectorAll('.resolve-btn')).toHaveLength(2)
-      expect(container.querySelectorAll('.resolve-btn-inline')).toHaveLength(2)
+      // Per-region buttons now live at region START (.conflict-pick), not end
+      expect(container.querySelectorAll('.conflict-pick')).toHaveLength(2)
     })
 
     it('hides resolve buttons for 3-sided conflicts', () => {
-      // When `jj resolve --list` reports 3-sided, :ours/:theirs is ambiguous —
+      // When conflict_sides=3 (3-way merge), :ours/:theirs is ambiguous —
       // hide buttons regardless of how many marker sections the diff shows.
       const file = makeFile('three-way.ts', [
         { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
@@ -474,7 +508,7 @@ describe('DiffFileView', () => {
         props: defaultProps({ file, fileStats: makeStats('three-way.ts', { conflict: true, conflict_sides: 3 }), onresolve: vi.fn() }),
       })
       expect(container.querySelectorAll('.resolve-btn')).toHaveLength(0)
-      expect(container.querySelectorAll('.resolve-btn-inline')).toHaveLength(0)
+      expect(container.querySelectorAll('.conflict-pick')).toHaveLength(0)
     })
 
     it('falls back to marker counting when conflict_sides is 0 (arity unknown)', () => {

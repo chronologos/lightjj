@@ -28,8 +28,7 @@ internal/
     commit_test.go         — Commit model tests
     bookmark.go            — Bookmark model + output parsers
     bookmark_test.go       — Bookmark parser tests
-    file_change.go         — FileChange model, DiffStat/DiffSummary parsers, MergeStats
-    file_change_test.go    — Parser edge case tests (binary, rename, suffix fallback, conflicts)
+    file_change.go         — FileChange model, DiffStat/DiffSummary/ConflictedFiles parsers, MergeStats, expandRenamePath
     selected_revisions.go  — Multi-revision selection helper
     workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (name→path map)
     workspace_store_test.go — Parser tests with real binary data

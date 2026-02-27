@@ -3,6 +3,7 @@ package jj
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +36,32 @@ func DiffStat(revision string) CommandArgs {
 // We use the total count and the +/- ratio in the bar to compute actual additions/deletions.
 var statLineRe = regexp.MustCompile(`^\s*(.+?)\s+\|\s+(\d+)\s+([+-]+)\s*$`)
 
+// expandRenamePath resolves jj's rename brace syntax to the destination path.
+// "dir/{old => new}/file.go" → "dir/new/file.go"
+// "{old => new}"             → "new"
+// Passes through paths without rename syntax unchanged.
+//
+// This is critical for squash/split file selection — passing the brace syntax
+// back to jj as a fileset argument fails silently (no files matched).
+func expandRenamePath(path string) string {
+	idx := strings.Index(path, " => ")
+	if idx < 0 {
+		return path
+	}
+	// jj's rename delimiters are always the outermost braces. Use Index for
+	// the first { and LastIndex for the last } so filenames containing literal
+	// braces (e.g. "weird{file}.txt") are handled correctly.
+	braceStart := strings.Index(path[:idx], "{")
+	braceEnd := strings.LastIndex(path[idx:], "}")
+	if braceStart < 0 || braceEnd < 0 {
+		return path
+	}
+	prefix := path[:braceStart]
+	newName := path[idx+4 : idx+braceEnd]
+	suffix := path[idx+braceEnd+1:]
+	return prefix + newName + suffix
+}
+
 // ParseDiffStat parses the output of `jj diff -r <rev> --stat --color never`.
 // Returns a map from file path to FileStat. The summary line at the end
 // ("N files changed, ...") is ignored.
@@ -45,18 +72,7 @@ func ParseDiffStat(output string) map[string]FileStat {
 		if m == nil {
 			continue
 		}
-		path := strings.TrimSpace(m[1])
-		// Handle rename syntax: "{old => new}" or "dir/{old => new}"
-		if idx := strings.Index(path, " => "); idx >= 0 {
-			braceStart := strings.LastIndex(path[:idx], "{")
-			braceEnd := strings.Index(path[idx:], "}")
-			if braceStart >= 0 && braceEnd >= 0 {
-				prefix := path[:braceStart]
-				newName := path[idx+4 : idx+braceEnd]
-				suffix := path[idx+braceEnd+1:]
-				path = prefix + newName + suffix
-			}
-		}
+		path := expandRenamePath(strings.TrimSpace(m[1]))
 		total := 0
 		fmt.Sscanf(m[2], "%d", &total)
 		bar := m[3]
@@ -94,47 +110,29 @@ func MergeStats(files []FileChange, stats map[string]FileStat) {
 	}
 }
 
-// ConflictEntry represents a conflicted file from `jj resolve --list`.
+// ConflictEntry represents a conflicted file and its arity (number of conflict sides).
+// Sides is 0 if template output was malformed (should not happen with jj >= 0.36).
 type ConflictEntry struct {
 	Path  string
-	Sides int // 2 for 2-way, 3+ for N-way. 0 if arity couldn't be parsed.
+	Sides int // 2 for 2-way, 3+ for N-way merges.
 }
 
-// resolveArityRe matches "N-sided" in resolve --list output.
-var resolveArityRe = regexp.MustCompile(`(\d+)-sided`)
-
-// ParseResolveList parses the output of `jj resolve --list` to extract conflicted
-// file paths and their conflict arity. Each line has the form:
-//   "path/to/file    2-sided conflict"
-//   "other/file      3-sided conflict including 1 deletion"
-// jj separates path from type with multiple spaces (right-aligns the path column).
-func ParseResolveList(output string) []ConflictEntry {
+// ParseConflictedFiles parses the output of the ConflictedFiles template.
+// Each line is "path\x1Fsides". Empty output = no conflicts (not an error).
+func ParseConflictedFiles(output string) []ConflictEntry {
 	entries := []ConflictEntry{}
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		e := ConflictEntry{Path: line}
-		if idx := strings.Index(line, "    "); idx >= 0 {
-			e.Path = line[:idx]
-			if m := resolveArityRe.FindStringSubmatch(line[idx:]); m != nil {
-				fmt.Sscanf(m[1], "%d", &e.Sides)
-			}
+		parts := strings.SplitN(line, "\x1F", 2)
+		e := ConflictEntry{Path: parts[0]}
+		if len(parts) == 2 {
+			e.Sides, _ = strconv.Atoi(parts[1])
 		}
 		entries = append(entries, e)
 	}
 	return entries
-}
-
-// ConflictPaths extracts just the paths from a ConflictEntry slice (for callers
-// that don't need arity).
-func ConflictPaths(entries []ConflictEntry) []string {
-	paths := make([]string, len(entries))
-	for i, e := range entries {
-		paths[i] = e.Path
-	}
-	return paths
 }
 
 // MergeConflicts sets Conflict/ConflictSides on FileChange entries whose paths appear
@@ -153,9 +151,12 @@ func MergeConflicts(files []FileChange, conflicts []ConflictEntry) []FileChange 
 			matched[c.Path] = true
 		}
 	}
-	for _, c := range conflicts {
-		if !matched[c.Path] {
-			files = append(files, FileChange{Type: "M", Path: c.Path, Conflict: true, ConflictSides: c.Sides})
+	// Iterate byPath (deduped) rather than conflicts. With multi-revision revsets
+	// the same path can appear multiple times; iterating the original slice would
+	// append duplicates for conflict-only paths → duplicate {#each} keys.
+	for path, c := range byPath {
+		if !matched[path] {
+			files = append(files, FileChange{Type: "M", Path: path, Conflict: true, ConflictSides: c.Sides})
 		}
 	}
 	return files
@@ -171,7 +172,7 @@ func ParseDiffSummary(output string) []FileChange {
 			continue
 		}
 		changeType := string(line[0])
-		path := strings.TrimSpace(line[1:])
+		path := expandRenamePath(strings.TrimSpace(line[1:]))
 		if path == "" {
 			continue
 		}

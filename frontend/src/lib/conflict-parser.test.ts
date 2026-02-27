@@ -138,7 +138,8 @@ describe('findConflicts', () => {
     expect(regions[0].sides[0].type).toBe('diff')
   })
 
-  it('extracts commit description as side label', () => {
+  it('extracts commit description as side label (no \\ sub-marker)', () => {
+    // Without a \\\\\\\ "to:" sub-marker, the %%%%%%% "from" label stays.
     const lines: DiffLine[] = [
       addLine('+<<<<<<< Conflict 1 of 1'),
       addLine('+%%%%%%% diff from: lpymxuwk 75ef1147 "Conflict resolution"'),
@@ -150,6 +151,28 @@ describe('findConflicts', () => {
     const regions = findConflicts(lines)
     expect(regions[0].sides[0].label).toBe('Conflict resolution')
     expect(regions[0].sides[1].label).toBe('side Y: modify existing file differently')
+  })
+
+  it('diff side label is the "to" commit, not "from" (\\ sub-marker overwrites)', () => {
+    // CRITICAL SEMANTICS: :ours/:theirs keeps the side's RESULT state.
+    // For %%%%%%% diff sides, that's the "to" commit (\\\\\\\ marker),
+    // NOT the "from" commit (%%%%%%% marker). The button must say
+    // "Keep <to>" so users know what they're choosing.
+    const lines: DiffLine[] = [
+      addLine('+<<<<<<< Conflict 1 of 1'),
+      addLine('+%%%%%%% diff from: aaaa1111 "the base state"'),
+      addLine('+\\\\\\\\\\\\\\        to: bbbb2222 "the result state"'),
+      addLine('+-removed'),
+      addLine('++added'),
+      addLine('++++++++ cccc3333 "other side"'),
+      addLine('+snapshot content'),
+      addLine('+>>>>>>> Conflict 1 of 1 ends'),
+    ]
+    const regions = findConflicts(lines)
+    expect(regions[0].sides[0].type).toBe('diff')
+    expect(regions[0].sides[0].label).toBe('the result state')  // what :ours KEEPS — NOT "the base state"
+    expect(regions[0].sides[1].type).toBe('snapshot')
+    expect(regions[0].sides[1].label).toBe('other side')         // what :theirs KEEPS
   })
 
   it('falls back to raw marker text when no quoted description', () => {
