@@ -8,11 +8,12 @@ import (
 
 // FileChange represents a file affected by a revision, as reported by `jj diff --summary`.
 type FileChange struct {
-	Type      string `json:"type"`      // A (added), M (modified), D (deleted), R (renamed)
-	Path      string `json:"path"`
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	Conflict  bool   `json:"conflict"`
+	Type          string `json:"type"`           // A (added), M (modified), D (deleted), R (renamed)
+	Path          string `json:"path"`
+	Additions     int    `json:"additions"`
+	Deletions     int    `json:"deletions"`
+	Conflict      bool   `json:"conflict"`
+	ConflictSides int    `json:"conflict_sides"` // 2 for 2-sided, 3+ for N-way merges. 0 when not conflicted.
 }
 
 // FileStat holds per-file addition/deletion counts parsed from `jj diff --stat`.
@@ -93,44 +94,68 @@ func MergeStats(files []FileChange, stats map[string]FileStat) {
 	}
 }
 
-// ParseResolveList parses the output of `jj resolve --list` to extract conflicted file paths.
-// Each line has the form: "path/to/file    2-sided conflict" — we extract just the path
-// by splitting on multiple consecutive spaces (the separator jj uses between path and type).
-func ParseResolveList(output string) []string {
-	paths := []string{}
+// ConflictEntry represents a conflicted file from `jj resolve --list`.
+type ConflictEntry struct {
+	Path  string
+	Sides int // 2 for 2-way, 3+ for N-way. 0 if arity couldn't be parsed.
+}
+
+// resolveArityRe matches "N-sided" in resolve --list output.
+var resolveArityRe = regexp.MustCompile(`(\d+)-sided`)
+
+// ParseResolveList parses the output of `jj resolve --list` to extract conflicted
+// file paths and their conflict arity. Each line has the form:
+//   "path/to/file    2-sided conflict"
+//   "other/file      3-sided conflict including 1 deletion"
+// jj separates path from type with multiple spaces (right-aligns the path column).
+func ParseResolveList(output string) []ConflictEntry {
+	entries := []ConflictEntry{}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// jj separates the file path from the conflict type with multiple spaces.
-		// Split on "    " (4 spaces) to extract just the path.
+		e := ConflictEntry{Path: line}
 		if idx := strings.Index(line, "    "); idx >= 0 {
-			line = line[:idx]
+			e.Path = line[:idx]
+			if m := resolveArityRe.FindStringSubmatch(line[idx:]); m != nil {
+				fmt.Sscanf(m[1], "%d", &e.Sides)
+			}
 		}
-		paths = append(paths, line)
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// ConflictPaths extracts just the paths from a ConflictEntry slice (for callers
+// that don't need arity).
+func ConflictPaths(entries []ConflictEntry) []string {
+	paths := make([]string, len(entries))
+	for i, e := range entries {
+		paths[i] = e.Path
 	}
 	return paths
 }
 
-// MergeConflicts sets Conflict=true on FileChange entries whose paths appear in conflictPaths.
-// Files in conflictPaths that aren't already in the list are appended (conflict-only files
-// may not appear in DiffSummary output for merge commits).
-func MergeConflicts(files []FileChange, conflictPaths []string) []FileChange {
-	pathSet := make(map[string]bool, len(conflictPaths))
-	for _, p := range conflictPaths {
-		pathSet[p] = true
+// MergeConflicts sets Conflict/ConflictSides on FileChange entries whose paths appear
+// in the conflict entry list. Files in conflicts that aren't already in the list are
+// appended (conflict-only files may not appear in DiffSummary output for merge commits).
+func MergeConflicts(files []FileChange, conflicts []ConflictEntry) []FileChange {
+	byPath := make(map[string]ConflictEntry, len(conflicts))
+	for _, c := range conflicts {
+		byPath[c.Path] = c
 	}
-	matched := make(map[string]bool, len(conflictPaths))
+	matched := make(map[string]bool, len(conflicts))
 	for i := range files {
-		if pathSet[files[i].Path] {
+		if c, ok := byPath[files[i].Path]; ok {
 			files[i].Conflict = true
-			matched[files[i].Path] = true
+			files[i].ConflictSides = c.Sides
+			matched[c.Path] = true
 		}
 	}
-	for _, p := range conflictPaths {
-		if !matched[p] {
-			files = append(files, FileChange{Type: "M", Path: p, Conflict: true})
+	for _, c := range conflicts {
+		if !matched[c.Path] {
+			files = append(files, FileChange{Type: "M", Path: c.Path, Conflict: true, ConflictSides: c.Sides})
 		}
 	}
 	return files

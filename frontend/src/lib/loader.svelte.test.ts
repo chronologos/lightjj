@@ -117,7 +117,32 @@ describe('createLoader', () => {
     expect(ok).toBe(false)
     expect(loader.value).toBe(99)
     expect(loader.loading).toBe(false)
+    expect(loader.error).toBe('boom')
     expect(onError).toHaveBeenCalledExactlyOnceWith(err)
+  })
+
+  it('clears error on subsequent successful load', async () => {
+    let shouldThrow = true
+    const loader = createLoader(async () => {
+      if (shouldThrow) throw new Error('boom')
+      return 42
+    }, 0)
+
+    await loader.load()
+    expect(loader.error).toBe('boom')
+
+    shouldThrow = false
+    await loader.load()
+    expect(loader.error).toBe('')
+    expect(loader.value).toBe(42)
+  })
+
+  it('reset clears error state', async () => {
+    const loader = createLoader(async () => { throw new Error('boom') }, 0)
+    await loader.load()
+    expect(loader.error).toBe('boom')
+    loader.reset()
+    expect(loader.error).toBe('')
   })
 
   it('ignores superseded errors (no onError call, no reset)', async () => {

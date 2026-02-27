@@ -25,6 +25,10 @@
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
+  // Conflict arity from `jj resolve --list` — authoritative. 2 = resolvable with
+  // :ours/:theirs. 0 = unknown (fall back to marker counting). 3+ = N-way merge,
+  // resolve tools are ambiguous so buttons are hidden.
+  let conflictSides = $derived(fileStats?.conflict_sides ?? 0)
   let hoveredResolve: { regionIdx: number; side: number } | null = $state(null)
 
   function computeLineNumbers(hunk: DiffHunk): { old: number | null; new: number | null }[] {
@@ -202,8 +206,14 @@
       }
       lineMeta.set(hunkIdx, metaMap)
     }
-    // allRegionEnds collected during the loop above for file-level resolve button visibility
-    const allTwoWay = allRegionEnds.length > 0 && allRegionEnds.every(m => m.sideCount === 2)
+    // Determine if :ours/:theirs resolution is applicable. Prefer the authoritative
+    // arity from `jj resolve --list` (conflictSides). Fall back to marker counting
+    // when arity is unknown (conflictSides === 0). jj can represent a 2-way conflict
+    // with a single %%%%%%% diff section (sideCount === 1), so marker counting alone
+    // would incorrectly hide the buttons for those conflicts.
+    const allTwoWay = conflictSides > 0
+      ? conflictSides === 2
+      : allRegionEnds.length > 0 && allRegionEnds.every(m => (m.sideCount ?? 0) <= 2)
     return { lineMeta, totalConflicts, allRegionEnds, allTwoWay }
   })
 </script>
@@ -391,7 +401,7 @@
                 {#if cm.sideLabel}
                   <span class="conflict-side-label">{cm.sideLabel}</span>
                 {/if}
-                {#if cm.isRegionEnd && onresolve && cm.sideCount === 2}
+                {#if cm.isRegionEnd && onresolve && conflictData?.allTwoWay}
                   <div class="conflict-resolve-inline" role="group" onmouseleave={() => hoveredResolve = null}>
                     <button class="resolve-btn-inline resolve-inline-ours"
                       onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}

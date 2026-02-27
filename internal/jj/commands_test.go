@@ -586,21 +586,33 @@ func TestResolve_EscapedFile(t *testing.T) {
 
 func TestParseResolveList(t *testing.T) {
 	output := "src/main.go    2-sided conflict\nREADME.md    3-sided conflict including 1 deletion\n"
-	paths := ParseResolveList(output)
-	assert.Equal(t, []string{"src/main.go", "README.md"}, paths)
+	entries := ParseResolveList(output)
+	assert.Equal(t, []ConflictEntry{
+		{Path: "src/main.go", Sides: 2},
+		{Path: "README.md", Sides: 3},
+	}, entries)
 }
 
 func TestParseResolveList_PlainPaths(t *testing.T) {
 	// Handles output without conflict type suffix (future-proofing).
+	// Arity defaults to 0 when not parseable.
 	output := "src/main.go\nREADME.md\n"
-	paths := ParseResolveList(output)
-	assert.Equal(t, []string{"src/main.go", "README.md"}, paths)
+	entries := ParseResolveList(output)
+	assert.Equal(t, []ConflictEntry{
+		{Path: "src/main.go", Sides: 0},
+		{Path: "README.md", Sides: 0},
+	}, entries)
 }
 
 func TestParseResolveList_Empty(t *testing.T) {
-	paths := ParseResolveList("")
-	assert.Empty(t, paths)
-	assert.NotNil(t, paths)
+	entries := ParseResolveList("")
+	assert.Empty(t, entries)
+	assert.NotNil(t, entries)
+}
+
+func TestConflictPaths(t *testing.T) {
+	entries := []ConflictEntry{{Path: "a.go", Sides: 2}, {Path: "b.go", Sides: 3}}
+	assert.Equal(t, []string{"a.go", "b.go"}, ConflictPaths(entries))
 }
 
 func TestMergeConflicts(t *testing.T) {
@@ -609,16 +621,18 @@ func TestMergeConflicts(t *testing.T) {
 		{Type: "M", Path: "b.go"},
 		{Type: "A", Path: "c.go"},
 	}
-	files = MergeConflicts(files, []string{"b.go"})
+	files = MergeConflicts(files, []ConflictEntry{{Path: "b.go", Sides: 2}})
 	assert.Len(t, files, 3)
 	assert.False(t, files[0].Conflict)
 	assert.True(t, files[1].Conflict)
+	assert.Equal(t, 2, files[1].ConflictSides)
 	assert.False(t, files[2].Conflict)
+	assert.Equal(t, 0, files[2].ConflictSides)
 }
 
 func TestMergeConflicts_NoConflicts(t *testing.T) {
 	files := []FileChange{{Type: "M", Path: "a.go"}}
-	for _, conflicts := range [][]string{nil, {}} {
+	for _, conflicts := range [][]ConflictEntry{nil, {}} {
 		result := MergeConflicts(files, conflicts)
 		assert.Len(t, result, 1)
 		assert.False(t, result[0].Conflict)
@@ -629,10 +643,15 @@ func TestMergeConflicts_AppendsConflictOnlyFiles(t *testing.T) {
 	files := []FileChange{
 		{Type: "M", Path: "a.go"},
 	}
-	files = MergeConflicts(files, []string{"a.go", "conflict-only.txt"})
+	files = MergeConflicts(files, []ConflictEntry{
+		{Path: "a.go", Sides: 2},
+		{Path: "conflict-only.txt", Sides: 3},
+	})
 	assert.Len(t, files, 2)
 	assert.True(t, files[0].Conflict)
+	assert.Equal(t, 2, files[0].ConflictSides)
 	assert.Equal(t, "conflict-only.txt", files[1].Path)
 	assert.Equal(t, "M", files[1].Type)
 	assert.True(t, files[1].Conflict)
+	assert.Equal(t, 3, files[1].ConflictSides)
 }
