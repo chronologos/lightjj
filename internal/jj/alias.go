@@ -8,7 +8,7 @@ import (
 // Alias represents a user-defined jj alias from the [aliases] config section.
 type Alias struct {
 	Name    string   `json:"name"`
-	Command []string `json:"command"` // e.g. ["git", "fetch", "-b", "glob:iant/*"]
+	Command []string `json:"command"` // e.g. ["git", "fetch", "-b", "glob:alice/*"]
 }
 
 // ParseAliases parses the output of `jj config list aliases` into a slice of Alias.
