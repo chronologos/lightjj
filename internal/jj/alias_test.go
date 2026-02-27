@@ -7,14 +7,14 @@ import (
 )
 
 func TestParseAliases_SingleLine(t *testing.T) {
-	output := `aliases.sync = ['git', 'fetch', '-b', 'glob:iant/*', '-b']
+	output := `aliases.sync = ['git', 'fetch', '-b', 'glob:alice/*', '-b']
 aliases.evolve = ['rebase', '--skip-emptied', '-o']
 aliases.push = ['git', 'push', '-r', '@-']
 `
 	aliases := ParseAliases(output)
 	assert.Len(t, aliases, 3)
 	assert.Equal(t, "sync", aliases[0].Name)
-	assert.Equal(t, []string{"git", "fetch", "-b", "glob:iant/*", "-b"}, aliases[0].Command)
+	assert.Equal(t, []string{"git", "fetch", "-b", "glob:alice/*", "-b"}, aliases[0].Command)
 	assert.Equal(t, "evolve", aliases[1].Name)
 	assert.Equal(t, []string{"rebase", "--skip-emptied", "-o"}, aliases[1].Command)
 	assert.Equal(t, "push", aliases[2].Name)

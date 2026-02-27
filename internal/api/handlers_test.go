@@ -1390,7 +1390,7 @@ func TestHandleEdit_RunnerError(t *testing.T) {
 
 func TestHandleAliases(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	aliasOutput := "aliases.sync = ['git', 'fetch', '-b', 'glob:iant/*']\naliases.evolve = ['rebase', '--skip-emptied']\n"
+	aliasOutput := "aliases.sync = ['git', 'fetch', '-b', 'glob:alice/*']\naliases.evolve = ['rebase', '--skip-emptied']\n"
 	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
 	defer runner.Verify()
 
@@ -1404,7 +1404,7 @@ func TestHandleAliases(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &aliases))
 	assert.Len(t, aliases, 2)
 	assert.Equal(t, "sync", aliases[0].Name)
-	assert.Equal(t, []string{"git", "fetch", "-b", "glob:iant/*"}, aliases[0].Command)
+	assert.Equal(t, []string{"git", "fetch", "-b", "glob:alice/*"}, aliases[0].Command)
 }
 
 func TestHandleAliases_NoAliases(t *testing.T) {
@@ -1484,7 +1484,7 @@ func TestValidateFlags_EqualsFormat(t *testing.T) {
 }
 
 func TestHandlePullRequests(t *testing.T) {
-	ghJSON := `[{"headRefName":"iant/feature-x","url":"https://github.com/org/repo/pull/123","number":123,"isDraft":false},{"headRefName":"iant/wip","url":"https://github.com/org/repo/pull/42","number":42,"isDraft":true}]`
+	ghJSON := `[{"headRefName":"alice/feature-x","url":"https://github.com/org/repo/pull/123","number":123,"isDraft":false},{"headRefName":"alice/wip","url":"https://github.com/org/repo/pull/42","number":42,"isDraft":true}]`
 
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
@@ -1502,10 +1502,10 @@ func TestHandlePullRequests(t *testing.T) {
 	var prs []PullRequest
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
 	assert.Len(t, prs, 2)
-	assert.Equal(t, "iant/feature-x", prs[0].Bookmark)
+	assert.Equal(t, "alice/feature-x", prs[0].Bookmark)
 	assert.Equal(t, 123, prs[0].Number)
 	assert.False(t, prs[0].IsDraft)
-	assert.Equal(t, "iant/wip", prs[1].Bookmark)
+	assert.Equal(t, "alice/wip", prs[1].Bookmark)
 	assert.Equal(t, 42, prs[1].Number)
 	assert.True(t, prs[1].IsDraft)
 }

@@ -170,7 +170,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - **Preview panel**: diff preview without leaving the revision list
 - **Command palette**: fuzzy-search all available actions
 
-### Antique (internal code review)
+### Diff-viewer prior art
 - **Split/unified toggle** with draggable divider for resize
 - **Collapsible file diffs** with lazy rendering (IntersectionObserver)
 - **Separate old/new highlighting** for accurate syntax highlighting
@@ -227,13 +227,13 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [ ] SSH remote repo browser
 - [ ] Live file watching (auto-refresh on working copy changes)
 - [ ] Git push/fetch with progress indication
-- [x] Diff syntax highlighting (language-aware, Shiki like antique)
+- [x] Diff syntax highlighting (language-aware, Shiki)
 - [x] Context expansion at hunk boundaries — "Show N hidden lines" buttons between hunks, click to expand full file context
 - [ ] Parse user aliases from jj config and expose them dynamically in the UI (command palette, context menu)
 - [ ] Search across revisions
 - [x] Themes (light/dark) — Catppuccin Mocha (dark) + Latte (light), toggle via Cmd+K, persisted in localStorage
 - [ ] Syntax highlighting deadline / Web Worker — `codeToHtml` is synchronous and can freeze the UI for seconds on pathological files (e.g., 200-line CSS). Short-term: chunk input into ~30-line batches with yields between. Long-term: move Shiki into a Web Worker so `worker.terminate()` acts as a true cancellation primitive.
-- [ ] Lazy rendering for large diffs (IntersectionObserver, like antique)
+- [ ] Lazy rendering for large diffs (IntersectionObserver)
 - [x] Draggable split view divider (resize ratio)
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
