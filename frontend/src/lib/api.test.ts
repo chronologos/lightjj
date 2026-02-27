@@ -236,7 +236,7 @@ describe('immutable cache', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1) // second call hit cache
   })
 
-  it('bounds immutable cache size via LRU eviction on insert', async () => {
+  it('bounds immutable cache size, evicting the oldest entry only', async () => {
     const MAX = _testInternals.MAX_IMMUTABLE_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
 
@@ -246,11 +246,45 @@ describe('immutable cache', () => {
     }
     expect(_testInternals.immutableCache.size).toBe(MAX)
 
-    // One more insert evicts the oldest
+    // One more insert evicts ONLY the oldest — verify survivors to distinguish
+    // "evict one" from "clear all + reinsert" (which would also pass .size === MAX)
     await api.diff('revNew', undefined, undefined, true)
     expect(_testInternals.immutableCache.size).toBe(MAX)
-    expect(_testInternals.immutableCache.has('diff:rev0')).toBe(false)
+    expect(_testInternals.immutableCache.has('diff:rev0')).toBe(false) // evicted
+    expect(_testInternals.immutableCache.has('diff:rev1')).toBe(true)  // survivor
+    expect(_testInternals.immutableCache.has(`diff:rev${MAX - 1}`)).toBe(true) // survivor
     expect(_testInternals.immutableCache.has('diff:revNew')).toBe(true)
+  })
+
+  it('bumps accessed entries to end of eviction order (LRU)', async () => {
+    const MAX = _testInternals.MAX_IMMUTABLE_CACHE_SIZE
+    mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
+
+    for (let i = 0; i < MAX; i++) {
+      await api.diff(`rev${i}`, undefined, undefined, true)
+    }
+    // Access rev0 (cache hit — no fetch). This should bump it to end.
+    await api.diff('rev0', undefined, undefined, true)
+    expect(mockFetch).toHaveBeenCalledTimes(MAX) // no extra fetch
+
+    // Next insert should evict rev1 (now oldest), not rev0
+    await api.diff('revNew', undefined, undefined, true)
+    expect(_testInternals.immutableCache.has('diff:rev0')).toBe(true)  // bumped, survived
+    expect(_testInternals.immutableCache.has('diff:rev1')).toBe(false) // now oldest, evicted
+  })
+
+  it('serves from immutable cache even when caller passes immutable=false', async () => {
+    // Regression guard for the ◆→○ transition: if a commit's immutability
+    // flag changes but its data is in immutableCache, we should still serve
+    // it rather than refetching. The cached diff is still correct.
+    const immutableDiff = { diff: '+x' }
+    mockFetch.mockResolvedValueOnce(mockResponse(immutableDiff, 'op1'))
+    await api.diff('rev', undefined, undefined, true)
+
+    // Later call with immutable=false should still hit immutable cache
+    const result = await api.diff('rev', undefined, undefined, false)
+    expect(result).toEqual(immutableDiff)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -348,6 +382,18 @@ describe('isCached', () => {
     _testInternals.immutableCache.set('files:abc', [])
     _testInternals.immutableCache.set('desc:abc', { description: 'msg' })
     expect(isCached('abc')).toBe(true)
+  })
+
+  it('returns false when entries are split across tiers', () => {
+    // isCached checks each tier all-or-nothing. cachedRequest() DOES handle
+    // mixed tiers correctly (checks immutable first, falls through to mutable),
+    // so this is deliberately conservative — a false-negative costs 50ms debounce,
+    // a false-positive costs the perf budget. Documented rather than optimized.
+    _testInternals.lastOpId = 'op1'
+    _testInternals.immutableCache.set('diff:abc', { diff: '+x' })
+    _testInternals.immutableCache.set('files:abc', [])
+    _testInternals.cache.set('desc:abc@op1', { description: 'msg' })
+    expect(isCached('abc')).toBe(false)
   })
 })
 

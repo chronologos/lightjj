@@ -129,9 +129,13 @@
   // Auto-collapse files larger than this to prevent DOM flooding
   const AUTO_COLLAPSE_LINE_LIMIT = 500
 
-  function shouldSkipWordDiff(filePath: string, lineCount: number): boolean {
-    if (lineCount > WORD_DIFF_LINE_LIMIT) return true
-    const lower = filePath.toLowerCase()
+  function fileLineCount(file: DiffFile): number {
+    return file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
+  }
+
+  function shouldSkipWordDiff(file: DiffFile): boolean {
+    if (fileLineCount(file) > WORD_DIFF_LINE_LIMIT) return true
+    const lower = file.filePath.toLowerCase()
     return SKIP_WORD_DIFF_SUFFIXES.some(suffix => lower.endsWith(suffix))
   }
 
@@ -155,13 +159,12 @@
     const done = new Map<string, Map<string, Map<number, WordSpan[]>>>()
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
-      const lineCount = file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
-      if (shouldSkipWordDiff(file.filePath, lineCount)) continue
+      if (shouldSkipWordDiff(file)) continue
       // Yield between files to avoid blocking paint
       if (i > 0) await new Promise<void>(r => setTimeout(r, 0))
       if (gen !== wordDiffGeneration) return
       done.set(file.filePath, computeWordDiffsForFile(file))
-      if (gen === wordDiffGeneration) wordDiffsByFile = new Map(done)
+      wordDiffsByFile = new Map(done)
     }
   }
 
@@ -273,18 +276,23 @@
       wordDiffsByFile = new Map()
       return
     }
-    // Check if only a single file changed (context expansion) — recompute just that file
+    // Single-file-changed fast path (context expansion): recompute just that file.
+    // Must bump generation — an in-flight computeAllWordDiffs holds the OLD file
+    // snapshot; letting it finish would overwrite our updated entry with stale data.
     if (files.length === lastWordDiffFiles.length && files.length > 0) {
       const changedIdx = files.findIndex((f, i) => f !== lastWordDiffFiles[i])
       if (changedIdx >= 0 && files.every((f, i) => i === changedIdx || f === lastWordDiffFiles[i])) {
+        wordDiffGeneration++ // abort any in-flight computeAllWordDiffs
         const file = files[changedIdx]
         lastWordDiffFiles = files
-        const lineCount = file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
-        if (!shouldSkipWordDiff(file.filePath, lineCount)) {
-          const updated = new Map(wordDiffsByFile)
+        const updated = new Map(wordDiffsByFile)
+        if (shouldSkipWordDiff(file)) {
+          // Expansion pushed past the limit — delete stale pre-expansion entry
+          updated.delete(file.filePath)
+        } else {
           updated.set(file.filePath, computeWordDiffsForFile(file))
-          wordDiffsByFile = updated
         }
+        wordDiffsByFile = updated
         return
       }
     }
@@ -330,8 +338,7 @@
     if (!diffContent || diffContent === lastAutoCollapseDiff) return
     lastAutoCollapseDiff = diffContent
     for (const file of parsedDiff) {
-      const lineCount = file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
-      if (lineCount > AUTO_COLLAPSE_LINE_LIMIT) collapsedFiles.add(file.filePath)
+      if (fileLineCount(file) > AUTO_COLLAPSE_LINE_LIMIT) collapsedFiles.add(file.filePath)
     }
   })
 
@@ -343,17 +350,14 @@
       const parsed = parseDiffContent(result.diff)
       if (parsed.length > 0) {
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
-        // Only re-highlight the expanded file, not all files
-        const gen = ++highlightGeneration
-        const expandedFile = parsed[0]
-        setTimeout(async () => {
-          if (gen !== highlightGeneration) return
-          const fileHighlights = await highlightFile(expandedFile)
-          if (gen !== highlightGeneration) return
-          const updated = new Map(highlightsByFile)
-          updated.set(filePath, fileHighlights)
-          highlightsByFile = updated
-        }, 50)
+        // Re-run full highlightDiff over the updated effectiveFiles. Bumping
+        // highlightGeneration here aborts any in-flight phase-2 pass — but that
+        // pass holds an OLD snapshot (pre-expansion filePath content), so letting
+        // it finish would overwrite the expanded file's highlight with stale data.
+        // The 50ms delay + per-file yields keep the full pass responsive.
+        clearTimeout(highlightTimer)
+        const filesToHighlight = effectiveFiles
+        highlightTimer = setTimeout(() => highlightDiff(filesToHighlight, false), 50)
       }
     } catch {
       // Silently fail — the unexpanded diff remains visible

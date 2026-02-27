@@ -1726,5 +1726,6 @@ func TestMethodNotAllowed(t *testing.T) {
 		w := httptest.NewRecorder()
 		srv.Mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "%s %s", tc.method, tc.path)
+		assert.NotEmpty(t, w.Header().Get("Allow"), "%s %s should set Allow header", tc.method, tc.path)
 	}
 }
