@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -190,6 +190,9 @@
     return implied
   })
 
+  // Scoped so it only re-scans when revisions changes, not on every loading/mutating flip.
+  let workingCopyEntry = $derived(revisions.find(r => r.commit.is_working_copy))
+
   let statusText = $derived.by(() => {
     if (inlineMode) return ''
     if (mutating) return 'Working...'
@@ -197,7 +200,7 @@
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
     const count = revisions.length
-    const wc = revisions.find(r => r.commit.is_working_copy)
+    const wc = workingCopyEntry
     const checked = checkedRevisions.size > 0 ? `${checkedRevisions.size} checked | ` : ''
     const conflicts = conflictCount > 0 ? ` | ${conflictCount} conflict${conflictCount !== 1 ? 's' : ''}` : ''
     return `${checked}${count} revisions${wc ? ` | @ ${wc.commit.change_id.slice(0, 8)}` : ''}${conflicts}`
@@ -401,7 +404,12 @@
     selectedIndex = index
   }
 
+  let prevSelectedIndex = -1
+
   function selectRevision(index: number) {
+    const moved = index !== prevSelectedIndex
+    const direction = index > prevSelectedIndex ? 1 : -1
+    prevSelectedIndex = index
     selectedIndex = index
     descriptionEditing = false
 
@@ -424,6 +432,16 @@
         const current = revisions[selectedIndex]
         if (current) doLoad(effectiveId(current.commit), current.commit.immutable)
       }, 50)
+    }
+
+    // Opportunistic prefetch: warm the cache for the next revision in the
+    // navigation direction. Only when CURRENT is cached — otherwise the
+    // imminent main-load (3 requests) plus prefetch (3 more) would exhaust
+    // the browser's 6-connection-per-origin limit, queuing the main load
+    // behind speculative fetches for skipped-past revisions during rapid j/k.
+    if (moved && cached) {
+      const next = revisions[index + direction]
+      if (next) prefetchRevision(effectiveId(next.commit), next.commit.immutable)
     }
   }
 

@@ -60,6 +60,8 @@ export function onStale(callback: () => void): () => void {
 export function clearAllCaches(): void {
   responseCache.clear()
   immutableCache.clear()
+  _remotes = undefined
+  _aliases = undefined
 }
 
 function trackOpId(res: Response) {
@@ -177,6 +179,23 @@ export function isCached(revision: string): boolean {
          responseCache.has(`files:${revision}@${lastOpId}`) &&
          responseCache.has(`desc:${revision}@${lastOpId}`)
 }
+
+/** Warm the cache for a revision's diff/files/description without applying
+ *  results to UI state. Fire-and-forget. Used during nav debounce to pre-load
+ *  adjacent revisions so sequential j/k is instant. */
+export function prefetchRevision(revision: string, immutable = false): void {
+  if (isCached(revision)) return
+  // These are cachedRequest calls — results land in the cache for later.
+  // Errors swallowed: prefetch failures are invisible, real nav will retry.
+  api.diff(revision, undefined, undefined, immutable).catch(() => {})
+  api.files(revision, immutable).catch(() => {})
+  api.description(revision, immutable).catch(() => {})
+}
+
+// Session-stable data — remotes/aliases don't change mid-session unless the
+// user edits jj config externally. clearAllCaches() (hard refresh) resets.
+let _remotes: Promise<string[]> | undefined
+let _aliases: Promise<Alias[]> | undefined
 
 export interface FileChange {
   type: string
@@ -321,7 +340,7 @@ export const api = {
   fileWrite: (path: string, content: string) =>
     post<{ ok: boolean }>('/api/file-write', { path, content }),
 
-  remotes: () => request<string[]>('/api/remotes'),
+  remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
 
   workspaces: () => cachedRequest<WorkspacesResponse>('workspaces', '/api/workspaces'),
 
@@ -412,7 +431,7 @@ export const api = {
 
   pullRequests: () => request<PullRequest[]>('/api/pull-requests'),
 
-  aliases: () => request<Alias[]>('/api/aliases'),
+  aliases: () => _aliases ??= request<Alias[]>('/api/aliases').catch(e => { _aliases = undefined; throw e }),
 
   runAlias: (name: string) =>
     post<{ output: string }>('/api/alias', { name }),
@@ -429,4 +448,5 @@ export const _testInternals = {
   get staleCallbacks() { return staleCallbacks },
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },
+  resetSessionCaches() { _remotes = undefined; _aliases = undefined },
 }
