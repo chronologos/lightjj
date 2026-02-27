@@ -5,6 +5,10 @@
 Features to support human-in-the-loop review of agent work across jj worktrees.
 
 - [x] **Copy reference from diff lines** (Small) — Right-click selected diff lines → "Copy reference" with `path:line-range @ changeId` + line content. Detects native text selection via `window.getSelection()` + `Range.intersectsNode()` to find all `.diff-line` elements in the selection. Falls back to single clicked line. `DiffFileView` exports `DiffLineInfo` interface (reusable for future annotations). `DiffPanel` formats the reference with the revision's change ID.
+- [x] **Per-step evolog diffs** (Small) — `jj evolog` now emits structured template output (`CommitEvolutionEntry` type: commit_id, timestamp, operation description, predecessor IDs). EvologPanel shows a clickable entry list; clicking an entry fetches `api.diffRange(predecessor, current)` and renders via existing `DiffFileView`. Zero new state tracking — hidden evolution commits are fully addressable by `jj diff --from X --to Y`. `{#key selectedRevision?.commit.change_id}` in App.svelte resets panel state on revision change. Multi-predecessor entries show `(+N)` badge; origin entries dimmed.
+- [ ] **Evolog: rebase-safe inter-diff** (Small) — `diffRange(pred, cur)` shows parent churn when the revision was rebased between snapshots. `CommitEvolutionEntry.inter_diff()` template method is rebase-safe (same as `jj evolog -p`). For now the "agent editing WC" case has stable parents so this is a non-issue; worth a follow-up if agents start rebasing.
+- [ ] **Evolog: keyboard navigation** (Small) — ArrowUp/Down to step through entries. The sequential step-through-history workflow would benefit from j/k-style navigation.
+- [ ] **Evolog: resizable panel height** (Small) — 360px viewport shows ~14 diff lines. Drag handle on border-top or CSS `resize: vertical`.
 - [ ] **Auto-refresh via filesystem watch** (Medium) — `fsnotify` on `.jj/repo/op_heads/` + SSE push to frontend. Periodic `jj debug snapshot` (~5s) catches raw file edits. Frontend `EventSource` → existing `onStale()` callbacks. New `internal/api/watcher.go`. Adds `fsnotify` Go dependency. ~1 day.
 - [ ] **Inline diff annotations** (Medium-Large) — Click diff line to add a comment, stored in localStorage keyed by `changeId + filePath + lineNumber`. Fuzzy re-matching via `lineContent` snapshot. Export as structured JSON for agent prompts. New `annotations.svelte.ts`. ~2-3 days.
 - [ ] **File-level accept/reject mode** (Small) — Relabeled split mode for reviewing agent work. Check files to "accept", unchecked files "rejected" into a new revision. Reuses existing split infrastructure. ~2-4 hours.
@@ -47,6 +51,7 @@ Four-agent deep analysis (Go backend, Svelte frontend, performance paths, API de
 - [x] **Backend fields unexposed in frontend** — wired `skipEmptied` and `ignoreImmutable` to rebase mode (`e`/`x` keys), `ignoreImmutable` to squash mode (`x` key). Added to `modes.svelte.ts` interfaces + factories, `api.ts` parameters, `App.svelte` execute functions, and `StatusBar.svelte` key indicators.
 
 ### Remaining — Reliability
+- [ ] **Settings don't persist across sessions** — default `--addr localhost:0` picks a random ephemeral port on each launch → different origin → empty localStorage → tutorial reappears, theme reverts to `dark`. Didn't surface in dev (Vite serves on fixed 5173). Fix options: (a) fixed default port — simplest but collides when running multiple repos; (b) derive port deterministically from `resolvedRepoDir` hash — same repo → same origin, different repos get isolated prefs; (c) server-side config at `~/.config/lightjj/` via `/api/config` — port-agnostic, survives cache clears. Recommend (b).
 - [x] **`handleBookmarkTrack/Untrack` don't validate `Remote`** — empty remote passes validation, jj errors instead of 400. Fixed: both now return 400 if `Remote` is empty.
 - [x] **JSON encoding errors silently dropped** — `json.Encode()` return value discarded in `writeJSON`/`writeError`. Fixed: now logged via `log.Printf`.
 - [x] **`LocalRunner` discards exit code** — `errors.New(stderr)` loses `ExitError` type. Fixed: error message now includes exit code, falls back to stdout when stderr empty.
@@ -214,7 +219,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] Command palette (Cmd+K / Ctrl+K)
 - [x] Inline diff (word-level highlighting)
 - [x] Operation log viewer
-- [x] Evolog viewer
+- [x] Evolog viewer — structured entry list with per-step diffs (reuses `diffRange` + `DiffFileView`)
 
 ### P3 — Advanced
 - [x] Retain collapse/expand state per revision (cached per change-id, restored on revisit)

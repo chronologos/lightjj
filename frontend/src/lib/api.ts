@@ -213,6 +213,13 @@ export interface OpEntry {
   is_current: boolean
 }
 
+export interface EvologEntry {
+  commit_id: string
+  time: string
+  operation: string
+  predecessor_ids: string[]
+}
+
 export interface Workspace {
   name: string
   change_id: string
@@ -355,7 +362,7 @@ export const api = {
 
   evolog: (revision: string) => {
     const params = new URLSearchParams({ revision })
-    return cachedRequest<{ output: string }>('evolog:' + revision, `/api/evolog?${params}`)
+    return cachedRequest<EvologEntry[]>('evolog:' + revision, `/api/evolog?${params}`)
   },
 
   diffRange: (from: string, to: string, files?: string[]) => {

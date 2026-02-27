@@ -542,7 +542,8 @@ func (s *Server) handleEvolog(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	entries := jj.ParseEvolog(string(output))
+	s.writeJSON(w, r, http.StatusOK, entries)
 }
 
 type bookmarkRevisionRequest struct {
