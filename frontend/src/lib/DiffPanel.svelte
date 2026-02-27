@@ -7,7 +7,7 @@
   import { computeWordDiffs, type WordSpan } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
-  import DiffFileView from './DiffFileView.svelte'
+  import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
   import ContextMenu, { type ContextMenuItem } from './ContextMenu.svelte'
 
   interface Props {
@@ -74,17 +74,25 @@
     items: [], x: 0, y: 0, open: false,
   })
 
-  function openDiffLineContextMenu(e: MouseEvent, info: { filePath: string, oldLine: number | null, newLine: number | null, content: string, type: string }): void {
-    const line = info.newLine ?? info.oldLine
-    const lineRef = line ? `${info.filePath}:${line}` : info.filePath
-    const cleanContent = info.content.replace(/^[-+ ]/, '')
+  function openDiffLineContextMenu(e: MouseEvent, info: DiffLineInfo): void {
+    const nums = info.lines.map(l => l.lineNum).filter((n): n is number => n !== null)
+    const start = nums.length > 0 ? Math.min(...nums) : null
+    const end = nums.length > 0 ? Math.max(...nums) : null
+    const changeId = selectedRevision?.commit.change_id ?? ''
+
+    // Build reference: path:line(-end) @ changeId
+    let ref = info.filePath
+    if (start !== null) {
+      ref += end !== null && end !== start ? `:${start}-${end}` : `:${start}`
+    }
+    if (changeId) ref += ` @ ${changeId}`
+
+    const content = info.lines.map(l => l.content).join('\n')
+    const fullRef = `${ref}\n${content}`
 
     diffCtx = {
       items: [
-        { label: `Copy ${lineRef}`, action: () => navigator.clipboard.writeText(lineRef) },
-        { label: 'Copy file path', action: () => navigator.clipboard.writeText(info.filePath) },
-        { separator: true },
-        { label: 'Copy line content', action: () => navigator.clipboard.writeText(cleanContent) },
+        { label: `Copy reference`, action: () => navigator.clipboard.writeText(fullRef) },
       ],
       x: e.clientX,
       y: e.clientY,

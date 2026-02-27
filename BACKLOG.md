@@ -4,7 +4,7 @@
 
 Features to support human-in-the-loop review of agent work across jj worktrees.
 
-- [ ] **Copy reference from diff lines** (Small) — Right-click a diff line → context menu with "Copy path:line", "Copy path:range", "Copy hunk as markdown". Uses existing `ContextMenu.svelte` + `navigator.clipboard.writeText()`. All line number data already computed in `DiffFileView.svelte`. ~50-80 lines, no backend changes.
+- [x] **Copy reference from diff lines** (Small) — Right-click selected diff lines → "Copy reference" with `path:line-range @ changeId` + line content. Detects native text selection via `window.getSelection()` + `Range.intersectsNode()` to find all `.diff-line` elements in the selection. Falls back to single clicked line. `DiffFileView` exports `DiffLineInfo` interface (reusable for future annotations). `DiffPanel` formats the reference with the revision's change ID.
 - [ ] **Auto-refresh via filesystem watch** (Medium) — `fsnotify` on `.jj/repo/op_heads/` + SSE push to frontend. Periodic `jj debug snapshot` (~5s) catches raw file edits. Frontend `EventSource` → existing `onStale()` callbacks. New `internal/api/watcher.go`. Adds `fsnotify` Go dependency. ~1 day.
 - [ ] **Inline diff annotations** (Medium-Large) — Click diff line to add a comment, stored in localStorage keyed by `changeId + filePath + lineNumber`. Fuzzy re-matching via `lineContent` snapshot. Export as structured JSON for agent prompts. New `annotations.svelte.ts`. ~2-3 days.
 - [ ] **File-level accept/reject mode** (Small) — Relabeled split mode for reviewing agent work. Check files to "accept", unchecked files "rejected" into a new revision. Reuses existing split infrastructure. ~2-4 hours.

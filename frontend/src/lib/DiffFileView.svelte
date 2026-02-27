@@ -29,12 +29,9 @@
     onlinecontext?: (e: MouseEvent, info: DiffLineInfo) => void
   }
 
-  interface DiffLineInfo {
+  export interface DiffLineInfo {
     filePath: string
-    oldLine: number | null
-    newLine: number | null
-    content: string
-    type: string
+    lines: { lineNum: number | null, content: string }[]
   }
 
   let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onsavefile, oncanceledit, onlinecontext }: Props = $props()
@@ -181,16 +178,47 @@
     return { range: `${m[1]} ${m[2]}`, context: m[3].trim() }
   }
 
+  // Extract line number + text content from a .diff-line DOM element.
+  // Prefers the last non-empty .line-num (new-side in unified, only number in split).
+  function extractLineFromDom(el: Element): { lineNum: number | null, content: string } {
+    let lineNum: number | null = null
+    for (const span of el.querySelectorAll('.line-num')) {
+      const t = span.textContent?.trim()
+      if (t) lineNum = parseInt(t, 10)
+    }
+    let content = ''
+    for (const child of el.childNodes) {
+      if (child instanceof Element && (child.classList.contains('line-num') || child.classList.contains('diff-prefix'))) continue
+      content += child.textContent ?? ''
+    }
+    return { lineNum, content }
+  }
+
   function handleLineContextMenu(e: MouseEvent, line: DiffLine, lineNumbers: (number | null)[]): void {
     if (!onlinecontext) return
     e.preventDefault()
-    onlinecontext(e, {
-      filePath,
-      oldLine: lineNumbers[0] ?? null,
-      newLine: lineNumbers[1] ?? null,
-      content: line.content,
-      type: line.type,
-    })
+
+    // Detect native text selection spanning multiple diff lines
+    const selection = window.getSelection()
+    const fileEl = (e.currentTarget as HTMLElement).closest('.diff-file')
+    let lines: { lineNum: number | null, content: string }[] = []
+
+    if (selection && !selection.isCollapsed && fileEl) {
+      const range = selection.getRangeAt(0)
+      for (const el of fileEl.querySelectorAll('.diff-line:not(.conflict-marker-line)')) {
+        if (range.intersectsNode(el)) {
+          lines.push(extractLineFromDom(el))
+        }
+      }
+    }
+
+    // Fallback: single right-clicked line
+    if (lines.length === 0) {
+      const lineNum = lineNumbers[1] ?? lineNumbers[0] ?? null
+      lines = [{ lineNum, content: line.content.replace(/^[-+ ]/, '') }]
+    }
+
+    onlinecontext(e, { filePath, lines })
   }
 
   function escapeHtml(text: string): string {
