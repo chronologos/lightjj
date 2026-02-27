@@ -388,9 +388,13 @@ func TestIntegrationEvolog(t *testing.T) {
 
 	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/evolog?revision=@")
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["output"], "evolog should return output")
+	var entries []jj.EvologEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	assert.GreaterOrEqual(t, len(entries), 2, "evolog should have multiple entries after re-describe")
+	assert.NotEmpty(t, entries[0].CommitId)
+	// First entry (current) should have a predecessor; last entry should not.
+	assert.NotEmpty(t, entries[0].PredecessorIds)
+	assert.Empty(t, entries[len(entries)-1].PredecessorIds)
 }
 
 func TestIntegrationWorkspaces(t *testing.T) {

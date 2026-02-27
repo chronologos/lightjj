@@ -534,7 +534,9 @@ func TestHandleOpLog(t *testing.T) {
 
 func TestHandleEvolog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.Evolog("abc")).SetOutput([]byte("evolution log output"))
+	runner.Expect(jj.Evolog("abc")).SetOutput([]byte(
+		"d00e01ea\x1f2026-02-27 15:03\x1fsnapshot working copy\x1f3e061968\n" +
+			"3e061968\x1f2026-02-27 15:01\x1fnew empty commit\x1f\n"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -543,9 +545,13 @@ func TestHandleEvolog(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]string
+	var resp []jj.EvologEntry
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "evolution log output", resp["output"])
+	assert.Len(t, resp, 2)
+	assert.Equal(t, "d00e01ea", resp[0].CommitId)
+	assert.Equal(t, "snapshot working copy", resp[0].Operation)
+	assert.Equal(t, []string{"3e061968"}, resp[0].PredecessorIds)
+	assert.Empty(t, resp[1].PredecessorIds)
 }
 
 func TestHandleEvolog_MissingRevision(t *testing.T) {

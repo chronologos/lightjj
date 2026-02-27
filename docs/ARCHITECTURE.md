@@ -60,7 +60,7 @@ flowchart TD
 | GET | `/api/diff`, `/api/diff-range` | Unified diff (single revision or from/to range) |
 | GET | `/api/files` | File list + stats + conflict status (3 parallel subprocess calls — DiffSummary, DiffStat, ConflictedFiles template) |
 | GET | `/api/bookmarks`, `/api/remotes`, `/api/description` | Metadata reads |
-| GET | `/api/oplog`, `/api/evolog` | Operation/evolution history |
+| GET | `/api/oplog`, `/api/evolog` | Operation/evolution history — structured `\x1F`-delimited template output. Evolog entries include predecessor commit IDs; the frontend shows per-step diffs via `/api/diff-range` (hidden evolution commits are addressable by `jj diff --from X --to Y`). |
 | GET | `/api/file-show` | Raw file content at revision (for conflict viewing + inline editor) |
 | GET | `/api/workspaces`, `/api/aliases`, `/api/pull-requests` | Environment info |
 | POST | `/api/new`, `/api/edit`, `/api/abandon`, `/api/undo`, `/api/commit` | Basic mutations |
@@ -214,7 +214,13 @@ User selects divergent commit → "Divergence ⚠" button appears in DiffPanel h
   → "Keep" button abandons all other versions, resolves bookmark conflicts
 ```
 
-The `diff-range` endpoint (`GET /api/diff-range?from=X&to=Y&files=a&files=b`) compares two arbitrary commits. File filtering uses repeated query params (not comma-separated) to handle paths with commas. Version cards are color-coded to match the diff: red for the "from" (deletions) side, green for the "to" (additions) side.
+The `diff-range` endpoint (`GET /api/diff-range?from=X&to=Y&files=a&files=b`) compares two arbitrary commits — including hidden commits from the evolog. File filtering uses repeated query params (not comma-separated) to handle paths with commas. Version cards are color-coded to match the diff: red for the "from" (deletions) side, green for the "to" (additions) side.
+
+### Evolution log diffs
+
+`jj evolog` tracks every working-copy snapshot as a hidden commit addressable by `jj diff`. The `Evolog()` builder uses `CommitEvolutionEntry` template methods (`.commit()`, `.operation()`, `.predecessors()`) to emit structured entries. `EvologPanel` renders these as a clickable list; clicking an entry calls `api.diffRange(predecessor_id, commit_id)` and renders the result through the existing `DiffFileView`. Zero new state tracking on either end — jj's object store is the state. `{#key selectedRevision?.commit.change_id}` in App.svelte remounts the panel on revision change to reset selection state.
+
+**Limitation:** `diff --from pred --to cur` is only correct when parents didn't change between snapshots (the "agent editing WC" case). For rebase-heavy workflows, `CommitEvolutionEntry.inter_diff()` is rebase-safe (same as `jj evolog -p`) — not yet exposed.
 
 ### Inline rebase UX
 

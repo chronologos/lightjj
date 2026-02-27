@@ -292,7 +292,44 @@ func DiffSummary(revision string) CommandArgs {
 }
 
 func Evolog(revision string) CommandArgs {
-	return []string{"evolog", "-r", revision, "--no-graph", "--color", "never", "--quiet", "--ignore-working-copy"}
+	tmpl := `commit.commit_id().short(12) ++ "\x1F" ++ ` +
+		`commit.committer().timestamp() ++ "\x1F" ++ ` +
+		`operation.description() ++ "\x1F" ++ ` +
+		`predecessors.map(|p| p.commit_id().short(12)).join(",") ++ "\n"`
+	return []string{"evolog", "-r", revision, "--no-graph", "--color", "never", "--ignore-working-copy", "-T", tmpl}
+}
+
+type EvologEntry struct {
+	CommitId       string   `json:"commit_id"`
+	Time           string   `json:"time"`
+	Operation      string   `json:"operation"`
+	PredecessorIds []string `json:"predecessor_ids"`
+}
+
+func ParseEvolog(output string) []EvologEntry {
+	entries := []EvologEntry{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x1F", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		var preds []string
+		if parts[3] != "" {
+			preds = strings.Split(parts[3], ",")
+		} else {
+			preds = []string{}
+		}
+		entries = append(entries, EvologEntry{
+			CommitId:       parts[0],
+			Time:           parts[1],
+			Operation:      parts[2],
+			PredecessorIds: preds,
+		})
+	}
+	return entries
 }
 
 // CurrentOpId returns the short ID of the most recent operation.

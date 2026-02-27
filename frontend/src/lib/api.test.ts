@@ -79,7 +79,7 @@ describe('response cache', () => {
 
   it('caches files and evolog separately', async () => {
     const filesData = [{ type: 'M', path: 'a.go', additions: 1, deletions: 0 }]
-    const evologData = { output: 'evolog content' }
+    const evologData = [{ commit_id: 'abc', time: 't', operation: 'snapshot', predecessor_ids: [] }]
     mockFetch
       .mockResolvedValueOnce(mockResponse(filesData, 'op1'))
       .mockResolvedValueOnce(mockResponse(evologData, 'op1'))
