@@ -79,7 +79,7 @@ body {
   --bg-checked-selected: rgba(102,187,106,0.12);
   --bg-error: rgba(239,83,80,0.1);
   --bg-error-hover: rgba(239,83,80,0.15);
-  --bg-diff-header-hover: rgba(255,255,255,0.03);
+  --bg-diff-header-hover: #151519;
   --bg-hunk-header: rgba(255,255,255,0.03);
   --border-hunk-header: rgba(255,255,255,0.05);
   --bg-diff-empty: rgba(255,255,255,0.02);
@@ -166,7 +166,7 @@ body {
   --bg-checked-selected: rgba(46,125,50,0.12);
   --bg-error: rgba(198,40,40,0.08);
   --bg-error-hover: rgba(198,40,40,0.12);
-  --bg-diff-header-hover: rgba(0,0,0,0.02);
+  --bg-diff-header-hover: #f4f4f2;
   --bg-hunk-header: rgba(0,0,0,0.03);
   --border-hunk-header: rgba(0,0,0,0.05);
   --bg-diff-empty: rgba(0,0,0,0.02);

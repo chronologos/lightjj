@@ -27,13 +27,22 @@ type Server struct {
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
+	// ExecGhPRList runs `gh pr list` and returns the raw JSON output.
+	// Injected at construction; tests can override with a stub.
+	ExecGhPRList func(ctx context.Context, repoDir string) ([]byte, error)
+
 	spawnedWorkspaces map[string]string // workspace name → URL of spawned instance
 	children          []*exec.Cmd       // spawned workspace instances
 	childrenMu        sync.Mutex
 }
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {
-	s := &Server{Runner: r, Mux: http.NewServeMux(), RepoDir: repoDir}
+	s := &Server{
+		Runner:       r,
+		Mux:          http.NewServeMux(),
+		RepoDir:      repoDir,
+		ExecGhPRList: defaultExecGhPRList,
+	}
 	s.routes()
 	return s
 }
@@ -86,6 +95,9 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/alias", s.handleRunAlias)
 
 	s.Mux.HandleFunc("GET /api/pull-requests", s.handlePullRequests)
+
+  // handle file edits
+	s.Mux.HandleFunc("POST /api/file-write", s.handleFileWrite)
 
 	s.Mux.HandleFunc("POST /api/git/push", s.handleGitPush)
 	s.Mux.HandleFunc("POST /api/git/fetch", s.handleGitFetch)

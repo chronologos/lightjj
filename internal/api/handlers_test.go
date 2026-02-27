@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -701,6 +703,23 @@ func TestHandleRebase_Modes(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Code)
 		})
 	}
+}
+
+func TestHandleRebase_Flags(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", true, true)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{
+		Revisions: []string{"abc"}, Destination: "def",
+		SkipEmptied: true, IgnoreImmutable: true,
+	})
+	req := jsonPost("/api/rebase", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestHandleRebase_InvalidModes(t *testing.T) {
@@ -1464,24 +1483,16 @@ func TestValidateFlags_EqualsFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "flag not allowed: --force=true")
 }
 
-// stubGhPRList replaces execGhPRList for the duration of a test.
-func stubGhPRList(t *testing.T, fn func(ctx context.Context, repoDir string) ([]byte, error)) {
-	t.Helper()
-	original := execGhPRList
-	t.Cleanup(func() { execGhPRList = original })
-	execGhPRList = fn
-}
-
 func TestHandlePullRequests(t *testing.T) {
 	ghJSON := `[{"headRefName":"iant/feature-x","url":"https://github.com/org/repo/pull/123","number":123,"isDraft":false},{"headRefName":"iant/wip","url":"https://github.com/org/repo/pull/42","number":42,"isDraft":true}]`
-	stubGhPRList(t, func(ctx context.Context, repoDir string) ([]byte, error) {
-		return []byte(ghJSON), nil
-	})
 
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
 	srv.RepoDir = "/tmp/test-repo"
+	srv.ExecGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
+		return []byte(ghJSON), nil
+	}
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -1515,14 +1526,13 @@ func TestHandlePullRequests_SSHMode(t *testing.T) {
 }
 
 func TestHandlePullRequests_GhError(t *testing.T) {
-	stubGhPRList(t, func(ctx context.Context, repoDir string) ([]byte, error) {
-		return nil, fmt.Errorf("gh: not authenticated")
-	})
-
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
 	srv.RepoDir = "/tmp/test-repo"
+	srv.ExecGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
+		return nil, fmt.Errorf("gh: not authenticated")
+	}
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -1535,14 +1545,13 @@ func TestHandlePullRequests_GhError(t *testing.T) {
 }
 
 func TestHandlePullRequests_InvalidJSON(t *testing.T) {
-	stubGhPRList(t, func(ctx context.Context, repoDir string) ([]byte, error) {
-		return []byte("not json"), nil
-	})
-
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
 	srv.RepoDir = "/tmp/test-repo"
+	srv.ExecGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
+		return []byte("not json"), nil
+	}
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -1733,4 +1742,163 @@ func TestMethodNotAllowed(t *testing.T) {
 		assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "%s %s", tc.method, tc.path)
 		assert.NotEmpty(t, w.Header().Get("Allow"), "%s %s should set Allow header", tc.method, tc.path)
 	}
+}
+
+func TestHandleFileWrite(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "hello.txt", Content: "hello world"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		data, err := os.ReadFile(filepath.Join(dir, "hello.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "hello world", string(data))
+	})
+
+	t.Run("subdirectory", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0755))
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "src/main.go", Content: "package main"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		data, err := os.ReadFile(filepath.Join(dir, "src", "main.go"))
+		require.NoError(t, err)
+		assert.Equal(t, "package main", string(data))
+	})
+
+	t.Run("missing path", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, "/tmp")
+
+		body, _ := json.Marshal(fileWriteRequest{Content: "data"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("path traversal", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		for _, p := range []string{"../etc/passwd", "foo/../../etc/passwd", "/etc/passwd"} {
+			body, _ := json.Marshal(fileWriteRequest{Path: p, Content: "pwned"})
+			req := jsonPost("/api/file-write", body)
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "path %q should be rejected", p)
+		}
+	})
+
+	t.Run("internal paths", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		for _, p := range []string{".jj/repo/store", ".git/config", ".git/hooks/pre-commit"} {
+			body, _ := json.Marshal(fileWriteRequest{Path: p, Content: "bad"})
+			req := jsonPost("/api/file-write", body)
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "path %q should be rejected", p)
+		}
+	})
+
+	t.Run("allows jj-prefixed non-internal files", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: ".jjignore", Content: "*.tmp"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("symlink escape", func(t *testing.T) {
+		dir := t.TempDir()
+		target := t.TempDir() // separate dir to simulate outside-repo target
+		require.NoError(t, os.Symlink(target, filepath.Join(dir, "escape")))
+
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "escape/evil.txt", Content: "pwned"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		// Verify no file was written
+		_, err := os.Stat(filepath.Join(target, "evil.txt"))
+		assert.True(t, os.IsNotExist(err), "file should not have been written outside repo")
+	})
+
+	t.Run("leaf symlink escape", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(t.TempDir(), "stolen.txt")
+		// Create a symlink at the file level: repo/link.txt -> /tmp/.../stolen.txt
+		require.NoError(t, os.Symlink(target, filepath.Join(dir, "link.txt")))
+
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "link.txt", Content: "pwned"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "symlink")
+		// Verify no file was written at the symlink target
+		_, err := os.Stat(target)
+		assert.True(t, os.IsNotExist(err), "file should not have been written via symlink")
+	})
+
+	t.Run("null byte in path", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "foo\x00bar", Content: "bad"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("ssh mode", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, "") // empty RepoDir = SSH mode
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "file.txt", Content: "data"})
+		req := jsonPost("/api/file-write", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotImplemented, w.Code)
+	})
 }

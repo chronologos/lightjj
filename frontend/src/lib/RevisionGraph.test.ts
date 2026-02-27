@@ -59,6 +59,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     selectedIndex: -1,
     checkedRevisions: new SvelteSet<string>(),
     loading: false,
+    mutating: false,
     revsetFilter: '',
     viewMode: 'log' as const,
     lastCheckedIndex: -1,
@@ -327,6 +328,85 @@ describe('RevisionGraph', () => {
       // Click the non-active "Tracked" button
       await fireEvent.click(buttons[1])
       expect(onviewmodechange).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('stale-while-revalidate', () => {
+    it('shows spinner on initial load (loading=true, no revisions)', () => {
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ loading: true, revisions: [] }),
+      })
+      expect(container.querySelector('.spinner')).toBeInTheDocument()
+      expect(container.querySelector('.revision-list')).not.toBeInTheDocument()
+      // Refresh bar always mounted (reserves 2px) but not active
+      expect(container.querySelector('.refresh-bar')).not.toHaveClass('active')
+    })
+
+    it('keeps showing stale revisions during reload (loading=true, has revisions)', () => {
+      const entry = makeEntry()
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ loading: true, revisions: [entry] }),
+      })
+      // List stays mounted — no spinner
+      expect(container.querySelector('.spinner')).not.toBeInTheDocument()
+      expect(container.querySelector('.revision-list')).toBeInTheDocument()
+      // But dimmed + progress bar active
+      expect(container.querySelector('.revision-list')).toHaveClass('refreshing')
+      expect(container.querySelector('.refresh-bar')).toHaveClass('active')
+    })
+
+    it('shows refresh state during mutation (mutating=true, loading=false)', () => {
+      // Covers the first phase of SSH mutations: await api.abandon() is in
+      // flight but loadLog hasn't started yet
+      const entry = makeEntry()
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ mutating: true, loading: false, revisions: [entry] }),
+      })
+      expect(container.querySelector('.revision-list')).toHaveClass('refreshing')
+      expect(container.querySelector('.refresh-bar')).toHaveClass('active')
+    })
+
+    it('no refresh indicator when idle', () => {
+      const entry = makeEntry()
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ loading: false, mutating: false, revisions: [entry] }),
+      })
+      expect(container.querySelector('.revision-list')).not.toHaveClass('refreshing')
+      // Bar is present (no layout shift) but inactive
+      expect(container.querySelector('.refresh-bar')).not.toHaveClass('active')
+    })
+
+    it('disables batch action buttons while mutating', () => {
+      const checked = new SvelteSet<string>(['abcdef12'])
+      const entry = makeEntry({ change_id: 'abcdef12' })
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: [entry], checkedRevisions: checked, mutating: true }),
+      })
+      const buttons = container.querySelectorAll('.batch-actions-bar .action-btn')
+      // new + abandon disabled; clear stays enabled (non-mutating)
+      expect(buttons[0]).toBeDisabled() // new
+      expect(buttons[1]).toBeDisabled() // abandon
+      expect(buttons[2]).not.toBeDisabled() // clear
+    })
+
+    it('blocks context menu during refresh', () => {
+      const oncontextmenu = vi.fn()
+      const entry = makeEntry()
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: [entry], mutating: true, oncontextmenu }),
+      })
+      const row = container.querySelector('.graph-row')!
+      fireEvent.contextMenu(row)
+      expect(oncontextmenu).not.toHaveBeenCalled()
+    })
+
+    it('shows stale count badge during refresh', () => {
+      const entries = [makeEntry({ change_id: 'aaa' }), makeEntry({ change_id: 'bbb' })]
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ loading: true, revisions: entries }),
+      })
+      // Badge shows stale count (consistent with showing stale list)
+      expect(container.querySelector('.panel-badge')?.textContent).toContain('2')
     })
   })
 

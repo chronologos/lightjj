@@ -59,9 +59,25 @@ describe('createRebaseMode', () => {
       expect(mode.targetMode).toBe('-d')
     })
 
+    it('toggles skipEmptied with e', () => {
+      const mode = createRebaseMode()
+      expect(mode.handleKey('e')).toBe(true)
+      expect(mode.skipEmptied).toBe(true)
+      expect(mode.handleKey('e')).toBe(true)
+      expect(mode.skipEmptied).toBe(false)
+    })
+
+    it('toggles ignoreImmutable with x', () => {
+      const mode = createRebaseMode()
+      expect(mode.handleKey('x')).toBe(true)
+      expect(mode.ignoreImmutable).toBe(true)
+      expect(mode.handleKey('x')).toBe(true)
+      expect(mode.ignoreImmutable).toBe(false)
+    })
+
     it('returns false for unrecognized keys', () => {
       const mode = createRebaseMode()
-      expect(mode.handleKey('x')).toBe(false)
+      expect(mode.handleKey('z')).toBe(false)
       expect(mode.handleKey('Enter')).toBe(false)
       expect(mode.handleKey('Escape')).toBe(false)
     })
@@ -112,9 +128,17 @@ describe('createSquashMode', () => {
       expect(mode.useDestMsg).toBe(false)
     })
 
+    it('toggles ignoreImmutable with x', () => {
+      const mode = createSquashMode()
+      expect(mode.handleKey('x')).toBe(true)
+      expect(mode.ignoreImmutable).toBe(true)
+      expect(mode.handleKey('x')).toBe(true)
+      expect(mode.ignoreImmutable).toBe(false)
+    })
+
     it('returns false for unrecognized keys', () => {
       const mode = createSquashMode()
-      expect(mode.handleKey('x')).toBe(false)
+      expect(mode.handleKey('z')).toBe(false)
     })
   })
 })

@@ -58,10 +58,10 @@ flowchart TD
 |--------|------|---------|
 | GET | `/api/log` | Graph log with revset + limit |
 | GET | `/api/diff`, `/api/diff-range` | Unified diff (single revision or from/to range) |
-| GET | `/api/files` | File list + stats + conflict status (3 parallel subprocess calls) |
+| GET | `/api/files` | File list + stats + conflict status (3 parallel subprocess calls — DiffSummary, DiffStat, ConflictedFiles template) |
 | GET | `/api/bookmarks`, `/api/remotes`, `/api/description` | Metadata reads |
 | GET | `/api/oplog`, `/api/evolog` | Operation/evolution history |
-| GET | `/api/file-show` | Raw file content at revision (for conflict viewing) |
+| GET | `/api/file-show` | Raw file content at revision (for conflict viewing + inline editor) |
 | GET | `/api/workspaces`, `/api/aliases`, `/api/pull-requests` | Environment info |
 | POST | `/api/new`, `/api/edit`, `/api/abandon`, `/api/undo`, `/api/commit` | Basic mutations |
 | POST | `/api/rebase`, `/api/squash`, `/api/split`, `/api/resolve` | Structured mutations |
@@ -70,6 +70,7 @@ flowchart TD
 | POST | `/api/git/{push,fetch}` | Git remote ops (flag-whitelisted) |
 | POST | `/api/alias` | Run a user-configured jj alias (validated against config) |
 | POST | `/api/workspace/open` | Spawn child lightjj instance for another workspace |
+| POST | `/api/file-write` | Write file directly to working copy (inline editor save). Local mode only — path validation rejects `..`, absolute paths, `.jj/`, `.git/`, null bytes, symlink escapes. |
 
 ## Layer Responsibilities
 
@@ -85,9 +86,12 @@ func Rebase(from SelectedRevisions, to string, ...) CommandArgs
 Also contains data models and parsers:
 - `Commit` — includes `ChangePrefix`/`CommitPrefix` for highlighted IDs, `Immutable` bool (from `◆` glyph), `Divergent` bool (from template `divergent` expression), `WorkingCopies []string` (for multi-workspace display)
 - `Bookmark` — bookmark model + output parsers
-- `FileChange` — file change model, `DiffStat`/`DiffSummary` parsers
+- `FileChange` — file change model with `ConflictSides int`; `DiffStat`/`DiffSummary`/`ConflictedFiles` parsers; `expandRenamePath` (shared rename-brace resolver)
+- `ConflictEntry` — conflict path + arity from template output
 - `SelectedRevisions` — multi-revision selection helper
 - `Workspace` — workspace model + parser
+
+**Template-based structured output** — When jj exposes a template method for the data you need, use it instead of parsing human-readable output. `ConflictedFiles` uses `Commit.conflicted_files()` + `TreeEntry.conflict_side_count()` (jj ≥ 0.36) with `\x1F`-delimited fields — eliminates regex parsing, exit-code special-casing, and works correctly with multi-revision revsets (union). See `jj help -k templates` before adding text-based parsers.
 
 ### Command Runner (`internal/runner/`)
 
@@ -215,6 +219,18 @@ The `diff-range` endpoint (`GET /api/diff-range?from=X&to=Y&files=a&files=b`) co
 ### Inline rebase UX
 
 Rebase does not use a modal. Instead, pressing `R` activates an inline rebase mode directly in the revision graph. The source commit is marked with a badge; `j`/`k` move a destination cursor through the graph (also badged); Enter fires the API call. Source mode (`-r`/`-s`/`-b`) and target mode (`-d`/`--insert-after`/`--insert-before`) are toggled with keyboard shortcuts while in rebase mode. Escape cancels without any API call.
+
+### Conflict resolution UX
+
+Conflicts are detected via the `conflicted_files` template (`Commit.conflicted_files()` + `TreeEntry.conflict_side_count()`) — structured output, no regex parsing, exits 0 on clean revisions. `FileChange.ConflictSides` carries the authoritative arity (2 = resolvable with `:ours`/`:theirs`, 3+ = N-way, buttons hidden).
+
+**Letter-badge spatial correspondence** — commit descriptions are opaque to users ("Conflict resolution" doesn't describe the code). Instead of matching labels, the UI uses `[A]`/`[B]` badges on **both** buttons and section tabs: "Keep [A]" button visually corresponds to the "[A] commit-description" tab. Hover preview applies amber glow to the kept side and diagonal redaction stripes to the discarded side. No mental mapping required.
+
+**Label semantics** — for `%%%%%%%` diff-style sides, the `\\\\\\\` "to:" sub-marker overwrites the `%%%%%%%` "from:" label. `:ours`/`:theirs` keeps the *result* (to-state), not the base (from-state), so the button label must name what you actually get. `conflict-parser.ts` handles this rewrite.
+
+### Inline file editing
+
+`FileEditor.svelte` wraps CodeMirror 6 in the split-view right column. Clicking Edit in unified view auto-switches to split (via `splitView = $bindable` write-back). Indent detection scans the first 200 indented lines to configure `indentUnit` (tabs vs N-spaces); `tabSize=4` matches `.diff-line { tab-size: 4 }` so columns align. Hunk folding collapses unchanged regions with 3 lines of context. `POST /api/file-write` writes directly to the filesystem — no jj command, since jj auto-snapshots on the next API call that doesn't use `--ignore-working-copy`.
 
 ## Testing Strategy
 
@@ -380,7 +396,9 @@ flowchart TD
     opchange --> keepImm["immutableCache untouched"]:::green
 ```
 
-**`createLoader()` factory** — `loader.svelte.ts` encapsulates the generation-counter async pattern. Each `load()` supersedes any in-flight call; only the latest-started result is applied. The `loading` flag is deferred via `setTimeout(0)` so microtask-fast cache hits never flip it, preventing reactive-update cascades during cached j/k navigation. App.svelte declares 6 loaders instead of 6 hand-rolled load functions + 6 generation counters + 11 `$state` vars.
+**`createLoader()` factory** — `loader.svelte.ts` encapsulates the generation-counter async pattern. Each `load()` supersedes any in-flight call; only the latest-started result is applied. The `loading` flag is deferred via `setTimeout(0)` so microtask-fast cache hits never flip it, preventing reactive-update cascades during cached j/k navigation. Exposes `.error` (cleared on successful load/set/reset) for inline error display. App.svelte declares 6 loaders instead of 6 hand-rolled load functions + 6 generation counters + 11 `$state` vars.
+
+**Stale-while-revalidate** — `DiffPanel` shows the loading spinner only on **initial** load (`diffLoading && parsedDiff.length === 0`). For refreshes, the old content stays visible until the new diff arrives — the keyed `{#each parsedDiff as file (file.filePath)}` preserves `DiffFileView` instances across the swap, so scroll position survives. Previously the spinner branch unmounted everything → scroll jumped to top on every save.
 
 **Mode objects over individual props** — `RevisionGraph` and `StatusBar` receive `{rebase, squash, split}` mode objects (from `modes.svelte.ts` factories with reactive getters) instead of 11+ individual props. Reactivity is preserved (Svelte tracks `.active`, `.sources`, etc. access); prop count drops 31→23 / 12→8.
 
@@ -389,6 +407,23 @@ flowchart TD
 **Bounded log fetch** — `GET /api/log` defaults to `--limit 500`, caps at 1000. Prevents unbounded payload/DOM on large repos.
 
 **Serial mutations** — Concurrent jj mutations can produce divergent operation history (jj auto-reconciles, but avoidable). Multi-step flows (e.g., abandon N divergent versions → set N bookmarks) run serially. The perf cost is negligible for rare manual actions.
+
+## Syntax Highlighting: Dual Engine
+
+The frontend ships two independent syntax highlighting engines — Shiki for read-only diffs and CodeMirror 6 for the inline editor. This is intentional technical debt worth consolidating later.
+
+| | Shiki (read-only diffs) | CodeMirror 6 (inline editor) |
+|---|---|---|
+| **Purpose** | Highlight diff lines in `DiffFileView` | Interactive editing in `FileEditor` |
+| **Rendering** | TextMate grammars → HTML strings via `{@html}` | Lezer incremental parser → CM6 decorations |
+| **Languages** | 12 (TS, JS, Go, Python, Rust, CSS, HTML, Svelte, JSON, YAML, Bash, TOML) | 4 (TS/JS, Python, Go, Rust) |
+| **Theme** | Catppuccin Mocha/Latte (TextMate theme JSON) | CSS variables matching catppuccin tokens |
+| **Bundle cost** | ~1,074 KB source (~180 KB gzip): langs 713 + themes 102 + core 78 + vscode-textmate 98 + oniguruma-to-es 59 + oniguruma-parser 25 | ~1,254 KB source (shared with editor): view 469 + state 142 + language 99 + commands 82 + autocomplete 87* + 4 lang grammars |
+| **Tree-shaking** | Yes — `shiki/core` + individual `shiki/langs/*.mjs` imports, JS regex engine (no WASM) | Yes — individual `@codemirror/*` imports. *`codemirror` meta-package pulls in unused `@codemirror/autocomplete` (~87 KB) — remove it. |
+
+**Future consolidation:** CM6's `highlightCode()` API can produce static tokens without an editor instance, which could replace Shiki for diff highlighting. This would eliminate ~1,074 KB of source (~180 KB gzip) from the bundle at the cost of adding ~8 Lezer grammar packages (CSS, HTML, Svelte, JSON, YAML, Bash, TOML — all small) and rewriting `highlighter.ts` to produce CM6 token spans instead of Shiki HTML strings.
+
+**Known bundle issue:** The `codemirror` meta-package in `package.json` is never directly imported — all imports use `@codemirror/*` individually. However, it pulls `@codemirror/autocomplete` (~87 KB) into the bundle as a side effect. Removing it from `dependencies` is a free ~25-30 KB gzip reduction.
 
 ## Graph View
 

@@ -139,6 +139,12 @@ func TestRebase(t *testing.T) {
 	assert.Equal(t, []string{"rebase", "-r", "abc", "-d", "def"}, got)
 }
 
+func TestRebase_Flags(t *testing.T) {
+	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
+	got := Rebase(from, "def", "-r", "-d", true, true)
+	assert.Equal(t, []string{"rebase", "-r", "abc", "-d", "def", "--ignore-immutable", "--skip-emptied"}, got)
+}
+
 func TestEscapeFileName(t *testing.T) {
 	tests := []struct {
 		name     string

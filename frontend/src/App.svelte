@@ -59,7 +59,6 @@
   let diffContent = $derived(diff.value)
   let diffLoading = $derived(diff.loading)
   let changedFiles = $derived(files.value)
-  let filesLoading = $derived(files.loading)
   let fullDescription = $derived(description.value)
   let oplogEntries = $derived(oplog.value)
   let oplogLoading = $derived(oplog.loading)
@@ -121,6 +120,19 @@
   let inlineMode = $derived(rebase.active || squash.active || split.active)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
+  // Mutation lock — prevents queuing ops against stale/changing state.
+  // Covers the full span from mutation start through post-mutation loadLog().
+  // Over SSH each call is ~440ms, so without this a double-click on Abandon
+  // could fire two abandon requests against the same (now-stale) revision.
+  let mutating = $state(false)
+
+  async function withMutation<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    if (mutating) return
+    mutating = true
+    try { return await fn() }
+    finally { mutating = false }
+  }
+
   // --- Theme ---
   let darkMode = $derived(config.theme === 'dark')
   const cmdKey = typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'
@@ -158,7 +170,8 @@
 
   let statusText = $derived.by(() => {
     if (inlineMode) return ''
-    if (loading) return 'Loading revisions...'
+    if (mutating) return 'Working...'
+    if (loading) return revisions.length > 0 ? 'Refreshing...' : 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
     const count = revisions.length
@@ -445,14 +458,16 @@
     successMsg: string,
     opts?: { before?: () => void, after?: () => void },
   ) {
-    try {
-      opts?.before?.()
-      const result = await fn()
-      lastAction = successMsg
-      commandOutput = result.output
-      opts?.after?.()
-      await loadLog()
-    } catch (e) { showError(e) }
+    return withMutation(async () => {
+      try {
+        opts?.before?.()
+        const result = await fn()
+        lastAction = successMsg
+        commandOutput = result.output
+        opts?.after?.()
+        await loadLog()
+      } catch (e) { showError(e) }
+    })
   }
 
   const handleAbandon = (id: string) =>
@@ -484,18 +499,20 @@
   async function handleDescribe() {
     if (!selectedRevision) return
     const eid = effectiveId(selectedRevision.commit)
-    try {
-      const result = await api.describe(eid, descriptionDraft)
-      lastAction = `Updated description for ${eid.slice(0, 8)}`
-      commandOutput = result.output
-      description.set(descriptionDraft)
-      descriptionEditing = false
-      describeSaved = true
-      setTimeout(() => { describeSaved = false }, 1500)
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    return withMutation(async () => {
+      try {
+        const result = await api.describe(eid, descriptionDraft)
+        lastAction = `Updated description for ${eid.slice(0, 8)}`
+        commandOutput = result.output
+        description.set(descriptionDraft)
+        descriptionEditing = false
+        describeSaved = true
+        setTimeout(() => { describeSaved = false }, 1500)
+        await loadLog()
+      } catch (e) {
+        showError(e)
+      }
+    })
   }
 
   async function handleCommit() {
@@ -520,17 +537,19 @@
   }
 
   async function executeCommit() {
-    try {
-      const result = await api.commit(descriptionDraft)
-      lastAction = 'Committed working copy'
-      commandOutput = result.output
-      descriptionEditing = false
-      commitMode = false
-      description.reset()
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    return withMutation(async () => {
+      try {
+        const result = await api.commit(descriptionDraft)
+        lastAction = 'Committed working copy'
+        commandOutput = result.output
+        descriptionEditing = false
+        commitMode = false
+        description.reset()
+        await loadLog()
+      } catch (e) {
+        showError(e)
+      }
+    })
   }
 
   const handleGitOp = (type: 'push' | 'fetch', flags: string[]) =>
@@ -576,31 +595,33 @@
   }
 
   async function handleKeepDivergent(keptCommitId: string, abandonIds: string[]) {
-    try {
-      // Snapshot conflicted bookmarks BEFORE abandon — --retain-bookmarks
-      // may auto-resolve them by moving to the parent, losing the conflict flag
-      const bookmarksBefore = await api.bookmarks()
-      const conflictedNames = bookmarksBefore
-        .filter(b => b.conflict && abandonIds.includes(b.commit_id))
-        .map(b => b.name)
+    return withMutation(async () => {
+      try {
+        // Snapshot conflicted bookmarks BEFORE abandon — --retain-bookmarks
+        // may auto-resolve them by moving to the parent, losing the conflict flag
+        const bookmarksBefore = await api.bookmarks()
+        const conflictedNames = bookmarksBefore
+          .filter(b => b.conflict && abandonIds.includes(b.commit_id))
+          .map(b => b.name)
 
-      await api.abandon(abandonIds)
+        await api.abandon(abandonIds)
 
-      // Move all previously-conflicted bookmarks to the kept commit.
-      // Serial (not Promise.all): concurrent jj mutations can produce divergent
-      // op history. N is tiny (1-3) and this is a rare manual action.
-      for (const name of conflictedNames) {
-        await api.bookmarkSet(keptCommitId, name)
+        // Move all previously-conflicted bookmarks to the kept commit.
+        // Serial (not Promise.all): concurrent jj mutations can produce divergent
+        // op history. N is tiny (1-3) and this is a rare manual action.
+        for (const name of conflictedNames) {
+          await api.bookmarkSet(keptCommitId, name)
+        }
+
+        divergence.cancel()
+        lastAction = `Resolved divergence — kept ${keptCommitId.slice(0, 8)}`
+        await loadLog()
+      } catch (e: any) {
+        // Don't close panel on error — let user see state and retry
+        showError(e.message || 'Failed to resolve divergence')
+        await loadLog() // always refresh to show current reality
       }
-
-      divergence.cancel()
-      lastAction = `Resolved divergence — kept ${keptCommitId.slice(0, 8)}`
-      await loadLog()
-    } catch (e: any) {
-      // Don't close panel on error — let user see state and retry
-      showError(e.message || 'Failed to resolve divergence')
-      await loadLog() // always refresh to show current reality
-    }
+    })
   }
 
   function enterRebaseMode() {
@@ -618,20 +639,25 @@
       return
     }
     // Capture mode state before cancelling
-    const { sources, sourceMode, targetMode } = rebase
+    const { sources, sourceMode, targetMode, skipEmptied, ignoreImmutable } = rebase
     const modeLabel = targetModeLabel[targetMode]
     rebase.cancel()
-    try {
-      const result = await api.rebase(sources, destination, sourceMode, targetMode)
-      lastAction = sources.length > 1
-        ? `Rebased ${sources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
-        : `Rebased ${sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
-      commandOutput = result.output
-      clearChecks()
-      await loadLog()
-    } catch (e) {
-      showError(e)
-    }
+    return withMutation(async () => {
+      try {
+        const result = await api.rebase(sources, destination, sourceMode, targetMode, {
+          skipEmptied: skipEmptied || undefined,
+          ignoreImmutable: ignoreImmutable || undefined,
+        })
+        lastAction = sources.length > 1
+          ? `Rebased ${sources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
+          : `Rebased ${sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
+        commandOutput = result.output
+        clearChecks()
+        await loadLog()
+      } catch (e) {
+        showError(e)
+      }
+    })
   }
 
   function enterSquashMode() {
@@ -664,29 +690,32 @@
       lastAction = 'Select at least one file to squash'
       return
     }
-    try {
-      // W3: compare against snapshotted total, not live changedFiles
-      const files = selectedFiles.size < totalFileCount
-        ? [...selectedFiles]
-        : undefined
-      const { sources, keepEmptied, useDestMsg } = squash
-      const result = await api.squash(sources, destination, {
-        files,
-        keepEmptied: keepEmptied || undefined,
-        useDestinationMessage: useDestMsg || undefined,
-      })
-      // W1: only exit mode after successful API call
-      cancelInlineModes()
-      lastAction = sources.length > 1
-        ? `Squashed ${sources.length} revisions into ${destination.slice(0, 8)}`
-        : `Squashed ${sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
-      commandOutput = result.output
-      clearChecks()
-      await loadLog()
-    } catch (e) {
-      // W1: keep squash mode active so user can retry or Escape
-      showError(e)
-    }
+    return withMutation(async () => {
+      try {
+        // W3: compare against snapshotted total, not live changedFiles
+        const files = selectedFiles.size < totalFileCount
+          ? [...selectedFiles]
+          : undefined
+        const { sources, keepEmptied, useDestMsg, ignoreImmutable } = squash
+        const result = await api.squash(sources, destination, {
+          files,
+          keepEmptied: keepEmptied || undefined,
+          useDestinationMessage: useDestMsg || undefined,
+          ignoreImmutable: ignoreImmutable || undefined,
+        })
+        // W1: only exit mode after successful API call
+        cancelInlineModes()
+        lastAction = sources.length > 1
+          ? `Squashed ${sources.length} revisions into ${destination.slice(0, 8)}`
+          : `Squashed ${sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
+        commandOutput = result.output
+        clearChecks()
+        await loadLog()
+      } catch (e) {
+        // W1: keep squash mode active so user can retry or Escape
+        showError(e)
+      }
+    })
   }
 
   function toggleFileSelection(path: string) {
@@ -716,19 +745,21 @@
       error = 'Select at least one file to keep'
       return
     }
-    try {
-      const files = [...selectedFiles]
-      const revision = split.revision
-      const result = await api.split(revision, files, split.parallel || undefined)
-      cancelInlineModes()
-      lastAction = `Split ${revision.slice(0, 8)} (${files.length} files stay)`
-      commandOutput = result.output
-      clearChecks()
-      await loadLog()
-    } catch (e) {
-      // Keep split mode active so user can retry or Escape
-      showError(e)
-    }
+    return withMutation(async () => {
+      try {
+        const files = [...selectedFiles]
+        const revision = split.revision
+        const result = await api.split(revision, files, split.parallel || undefined)
+        cancelInlineModes()
+        lastAction = `Split ${revision.slice(0, 8)} (${files.length} files stay)`
+        commandOutput = result.output
+        clearChecks()
+        await loadLog()
+      } catch (e) {
+        // Keep split mode active so user can retry or Escape
+        showError(e)
+      }
+    })
   }
 
   let squashFileCount = $derived.by(() => {
@@ -841,9 +872,11 @@
       return
     }
 
-    // Inline mode Enter/Escape must fire even when a checkbox has focus
-    // (clicking file checkboxes in split/squash steals focus to the <input>)
+    // Inline mode Enter/Escape must fire even when focusable elements in the
+    // diff panel have focus (e.g. file selection items during split/squash).
+    // But let CodeMirror and text inputs handle their own Enter/Escape.
     if (inlineMode && (e.key === 'Enter' || e.key === 'Escape')) {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('.cm-editor')) return
       e.preventDefault()
       if (e.key === 'Enter') {
         if (split.active) executeSplit()
@@ -855,7 +888,11 @@
       return
     }
 
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('.cm-editor')) return
+
+    // Let unhandled Cmd/Ctrl combos (Cmd+C, Cmd+V, Cmd+A, Cmd+Z, etc.)
+    // pass through to the browser. Only Cmd+K and Cmd+F are intercepted above.
+    if (e.metaKey || e.ctrlKey) return
 
     // Skip all shortcuts when any modal is open (modals handle their own keys)
     if (anyModalOpen) return
@@ -1024,12 +1061,15 @@
   }
 
   // Auto-refresh when jj state changes outside the UI (detected via op-id header).
-  // Skip if a loadLog is already in progress (mutation handlers call loadLog explicitly).
+  // Skip if a mutation is in flight — mutation handlers call loadLog explicitly,
+  // and the stale callback fires as a microtask BEFORE res.json() resolves (i.e.
+  // while we're still inside await fn() with mutating=true, loading=false).
+  // Without !mutating, every mutation over SSH fires a redundant ~440ms loadLog.
   // If stale events occur during inline mode, refresh when mode exits.
   let staleWhileInMode = false
   $effect(() => {
     return onStale(() => {
-      if (!loading && !anyModalOpen && !inlineMode) loadLog()
+      if (!loading && !mutating && !anyModalOpen && !inlineMode) loadLog()
       else if (inlineMode) staleWhileInMode = true
     })
   })
@@ -1129,20 +1169,20 @@
         </button>
       </div>
       <div class="toolbar-right">
-        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleUndo() }} disabled={inlineMode} title="Undo (u)">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleUndo() }} disabled={inlineMode || mutating} title="Undo (u)">
           Undo
         </button>
-        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleCommit() }} disabled={inlineMode} title="Commit (c)">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleCommit() }} disabled={inlineMode || mutating} title="Commit (c)">
           Commit
         </button>
         <span class="toolbar-divider"></span>
-        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('fetch', []) }} disabled={inlineMode} title="Fetch (f)">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('fetch', []) }} disabled={inlineMode || mutating} title="Fetch (f)">
           Fetch
         </button>
-        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('push', []) }} disabled={inlineMode} title="Push (p)">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('push', []) }} disabled={inlineMode || mutating} title="Push (p)">
           Push
         </button>
-        <button class="toolbar-btn" onclick={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }} disabled={inlineMode} title="Git operations (g)">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }} disabled={inlineMode || mutating} title="Git operations (g)">
           Git…
         </button>
         <span class="toolbar-divider"></span>
@@ -1175,6 +1215,7 @@
             {selectedIndex}
             {checkedRevisions}
             {loading}
+            {mutating}
             {revsetFilter}
             {viewMode}
             {lastCheckedIndex}
@@ -1217,7 +1258,6 @@
             {fullDescription}
             {checkedRevisions}
             {diffLoading}
-            {filesLoading}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
             {descriptionEditing}
             {descriptionDraft}
@@ -1236,6 +1276,8 @@
             divergentSelected={selectedRevision?.commit.divergent ?? false}
             onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
             {prByBookmark}
+            onfilesaved={() => withMutation(loadLog)}
+            onjjmutation={withMutation}
           />
         {/if}
       </div>

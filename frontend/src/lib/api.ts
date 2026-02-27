@@ -261,6 +261,9 @@ export const api = {
     return request<{ content: string }>(`/api/file-show?${params}`)
   },
 
+  fileWrite: (path: string, content: string) =>
+    post<{ ok: boolean }>('/api/file-write', { path, content }),
+
   remotes: () => request<string[]>('/api/remotes'),
 
   workspaces: () => cachedRequest<WorkspacesResponse>('workspaces', '/api/workspaces'),
@@ -298,19 +301,25 @@ export const api = {
   describe: (revision: string, description: string) =>
     post<{ output: string }>('/api/describe', { revision, description }),
 
-  rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string) =>
-    post<{ output: string }>('/api/rebase', { revisions, destination, source_mode: sourceMode, target_mode: targetMode }),
+  rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string, opts?: {
+    skipEmptied?: boolean, ignoreImmutable?: boolean
+  }) =>
+    post<{ output: string }>('/api/rebase', {
+      revisions, destination, source_mode: sourceMode, target_mode: targetMode,
+      skip_emptied: opts?.skipEmptied, ignore_immutable: opts?.ignoreImmutable,
+    }),
 
   split: (revision: string, files: string[], parallel?: boolean) =>
     post<{ output: string }>('/api/split', { revision, files, parallel }),
 
   squash: (revisions: string[], destination: string, opts?: {
-    files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean
+    files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean, ignoreImmutable?: boolean
   }) =>
     post<{ output: string }>('/api/squash', {
       revisions, destination,
       files: opts?.files, keep_emptied: opts?.keepEmptied,
       use_destination_message: opts?.useDestinationMessage,
+      ignore_immutable: opts?.ignoreImmutable,
     }),
 
   undo: () => post<{ output: string }>('/api/undo', {}),

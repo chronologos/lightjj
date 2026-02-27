@@ -5,6 +5,7 @@
   import type { FileChange } from './api'
   import { findConflicts } from './conflict-parser'
   import type { SearchMatch } from './DiffPanel.svelte'
+  import FileEditor from './FileEditor.svelte'
 
   interface Props {
     file: DiffFile
@@ -19,9 +20,31 @@
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
     searchMatches?: { item: SearchMatch; index: number }[]
     currentMatchIdx?: number
+    editing?: boolean
+    editContent?: string
+    editBusy?: boolean
+    onedit?: (path: string) => void
+    onsavefile?: (path: string, content: string) => void
+    oncanceledit?: (path: string) => void
+    onlinecontext?: (e: MouseEvent, info: DiffLineInfo) => void
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0 }: Props = $props()
+  interface DiffLineInfo {
+    filePath: string
+    oldLine: number | null
+    newLine: number | null
+    content: string
+    type: string
+  }
+
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onsavefile, oncanceledit, onlinecontext }: Props = $props()
+
+  let editorRef: FileEditor | undefined = $state(undefined)
+
+  // Compute hunk line ranges (1-based) for the "new" side, used by FileEditor for folding
+  let changedRanges = $derived(
+    file.hunks.filter(h => h.newCount > 0).map(h => ({ fromLine: h.newStart, toLine: h.newStart + h.newCount - 1 }))
+  )
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
@@ -158,6 +181,18 @@
     return { range: `${m[1]} ${m[2]}`, context: m[3].trim() }
   }
 
+  function handleLineContextMenu(e: MouseEvent, line: DiffLine, lineNumbers: (number | null)[]): void {
+    if (!onlinecontext) return
+    e.preventDefault()
+    onlinecontext(e, {
+      filePath,
+      oldLine: lineNumbers[0] ?? null,
+      newLine: lineNumbers[1] ?? null,
+      content: line.content,
+      type: line.type,
+    })
+  }
+
   function escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
@@ -259,6 +294,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       data-search-match-current={hasCurrent ? 'true' : undefined}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
     >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm)}</div>
   {:else if highlightedLines.has(hlKey)}
     <div
@@ -268,6 +304,7 @@
       class:diff-context={!inConflict && line.type === 'context'}
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
     >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
@@ -276,6 +313,7 @@
       class:diff-remove={!inConflict && line.type === 'remove'}
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
     >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{#each spans as span}{#if span.changed}<span
           class="word-change"
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
@@ -287,6 +325,7 @@
       class:diff-context={!inConflict && line.type === 'context'}
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
     >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{displayContent}</div>
   {/if}
 {/snippet}
@@ -317,6 +356,13 @@
         {#if fileStats.additions > 0}<span class="stat-add">+{fileStats.additions}</span>{/if}
         {#if fileStats.deletions > 0}<span class="stat-del">-{fileStats.deletions}</span>{/if}
       </span>
+    {/if}
+    {#if onedit && !editing && fileStats?.type !== 'D'}
+      <button class="edit-file-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(filePath) }} title="Edit this file (switches to split view)">{editBusy ? 'Loading…' : 'Edit'}</button>
+    {/if}
+    {#if editing && onsavefile && oncanceledit}
+      <button class="edit-file-btn edit-save-btn" disabled={editBusy || !editorRef} onclick={(e: MouseEvent) => { e.stopPropagation(); if (editorRef) onsavefile(filePath, editorRef.getContent()) }} title="Save changes (Ctrl+S)">{editBusy ? 'Saving…' : 'Save'}</button>
+      <button class="edit-file-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); oncanceledit(filePath) }} title="Cancel editing (Esc)">Cancel</button>
     {/if}
     {#if isConflict && conflictData && conflictData.totalConflicts > 0}
       <span class="conflict-indicator">
@@ -355,7 +401,7 @@
           <span class="expand-label">full context</span>
         </button>
       {/if}
-      <div class="split-view">
+      <div class="split-view" class:split-editing={editing}>
         <div class="split-col split-left">
           {#each splitLines as sl, si}
             {#if sl.left?.line.type === 'header'}
@@ -370,6 +416,18 @@
             {/if}
           {/each}
         </div>
+        {#if editing && editContent !== undefined}
+          <div class="split-col split-right split-editor">
+            <FileEditor
+              bind:this={editorRef}
+              content={editContent}
+              {filePath}
+              {changedRanges}
+              onsave={(c) => onsavefile?.(filePath, c)}
+              oncancel={() => oncanceledit?.(filePath)}
+            />
+          </div>
+        {:else}
         <div class="split-col split-right">
           {#each splitLines as sl, si}
             {#if sl.right?.line.type === 'header'}
@@ -384,6 +442,7 @@
             {/if}
           {/each}
         </div>
+        {/if}
       </div>
     {:else}
       <!-- Unified view -->
@@ -663,6 +722,8 @@
     white-space: pre-wrap;
     word-break: break-all;
     border-left: 3px solid transparent;
+    /* Match CodeMirror's default tabSize so side-by-side split view aligns */
+    tab-size: 4;
   }
 
   .line-num {
@@ -1008,5 +1069,47 @@
   .conflict-side-discarded .conflict-side-tab {
     opacity: 0.3;
     transform: translateX(-2px);
+  }
+
+  /* --- Edit mode --- */
+  .edit-file-btn {
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: all 0.12s var(--anim-ease);
+  }
+  .edit-file-btn:hover {
+    background: var(--surface1);
+    color: var(--text);
+  }
+  .edit-save-btn {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--base);
+  }
+  .edit-save-btn:hover {
+    opacity: 0.85;
+  }
+  .edit-file-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  .split-editing {
+    min-height: 300px;
+  }
+  .split-editor {
+    display: flex;
+    flex-direction: column;
   }
 </style>

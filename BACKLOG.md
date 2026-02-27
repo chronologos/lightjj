@@ -1,5 +1,15 @@
 # lightjj Backlog
 
+## Agent Workflow (2026-02-27)
+
+Features to support human-in-the-loop review of agent work across jj worktrees.
+
+- [ ] **Copy reference from diff lines** (Small) — Right-click a diff line → context menu with "Copy path:line", "Copy path:range", "Copy hunk as markdown". Uses existing `ContextMenu.svelte` + `navigator.clipboard.writeText()`. All line number data already computed in `DiffFileView.svelte`. ~50-80 lines, no backend changes.
+- [ ] **Auto-refresh via filesystem watch** (Medium) — `fsnotify` on `.jj/repo/op_heads/` + SSE push to frontend. Periodic `jj debug snapshot` (~5s) catches raw file edits. Frontend `EventSource` → existing `onStale()` callbacks. New `internal/api/watcher.go`. Adds `fsnotify` Go dependency. ~1 day.
+- [ ] **Inline diff annotations** (Medium-Large) — Click diff line to add a comment, stored in localStorage keyed by `changeId + filePath + lineNumber`. Fuzzy re-matching via `lineContent` snapshot. Export as structured JSON for agent prompts. New `annotations.svelte.ts`. ~2-3 days.
+- [ ] **File-level accept/reject mode** (Small) — Relabeled split mode for reviewing agent work. Check files to "accept", unchecked files "rejected" into a new revision. Reuses existing split infrastructure. ~2-4 hours.
+- [ ] **Hunk-level accept/reject** (Large) — Per-hunk checkboxes in DiffFileView. Requires programmatic patch application (no jj CLI hunk selection). Mini patch-apply engine. ~3-5 days. Depends on file-level accept/reject.
+
 ## Architecture Review Round 2 (2026-02-26)
 
 Four-agent deep analysis (Go backend, Svelte frontend, performance paths, API design). Items marked ✅ are fixed.
@@ -20,13 +30,15 @@ Four-agent deep analysis (Go backend, Svelte frontend, performance paths, API de
 
 ### Remaining — Performance
 - [x] **`wordDiffMap` is sync `$derived`** — `computeWordDiffs` (LCS) runs synchronously for every hunk on diff load. Fixed: progressive async computation per-file with `setTimeout(0)` yields between files. Single-file expand only recomputes that file.
-- [ ] **`hoveredLane` fans out to every GraphSvg** — ~1200 equality checks per mousemove. Cross-row highlighting (hover lane N anywhere → lane N highlighted everywhere) requires shared state so CSS `:hover` doesn't work. Needs profiling to verify actual impact before optimizing.
+- [x] **`hoveredLane` fans out to every GraphSvg** — fixed: removed lane-level hover entirely. Lane 0 spans the entire graph, so highlighting it was visually jarring. Graph elements no longer have hover state — row-level `:hover` on `.graph-row` (background highlight) is sufficient.
 - [ ] **No virtualization for mega-files** — manual expand of 5000-line file renders all lines. Auto-collapse at 500 is the mitigation; `@tanstack/virtual` would be the full fix.
+- [ ] **Remove `codemirror` meta-package** — never imported directly; all imports use `@codemirror/*`. Pulls unused `@codemirror/autocomplete` (~87 KB source, ~25-30 KB gzip) into bundle. Quick fix: `pnpm remove codemirror`.
+- [ ] **Consolidate Shiki → CM6 for diff highlighting** — two syntax engines ship in the bundle (Shiki ~1,074 KB + CM6 ~1,254 KB source). CM6's `highlightCode()` API can produce static tokens without an editor, replacing Shiki for read-only diffs. Would eliminate ~180 KB gzip. Requires adding ~8 Lezer grammar packages and rewriting `highlighter.ts`. See ARCHITECTURE.md "Syntax Highlighting: Dual Engine".
 
 ### Remaining — Maintainability
 - [x] **Extract `diffLoader.svelte.ts`** — Done as `createLoader()` factory in `loader.svelte.ts`. 6 copy-pasted load functions collapsed to 6 one-line declarations; 11 `$state` vars replaced with `$derived` aliases. 17 tests covering races, cancellation, cache-hit fast path (macrotask-deferred loading flag).
-- [ ] **`gh pr list` bypasses runner interface** — `handlers.go:774` uses `exec.Command` directly instead of `CommandRunner`. A generic `ExternalRunner` would restore the pattern. Low priority — `gh` is a different binary and test replacement via `var execGhPRList` works.
-- [ ] **Backend fields unexposed in frontend** — `rebaseRequest.SkipEmptied`, `rebaseRequest.IgnoreImmutable`, `squashRequest.IgnoreImmutable` accepted by Go but `api.rebase()`/`api.squash()` don't send them. Wire up when UI needs them. YAGNI for now.
+- [x] **`gh pr list` bypasses runner interface** — moved `execGhPRList` from package-level var to `Server.ExecGhPRList` field. Production default set in `NewServer()`, tests inject stubs directly on the server instance. Eliminates global mutable state.
+- [x] **Backend fields unexposed in frontend** — wired `skipEmptied` and `ignoreImmutable` to rebase mode (`e`/`x` keys), `ignoreImmutable` to squash mode (`x` key). Added to `modes.svelte.ts` interfaces + factories, `api.ts` parameters, `App.svelte` execute functions, and `StatusBar.svelte` key indicators.
 
 ### Remaining — Reliability
 - [x] **`handleBookmarkTrack/Untrack` don't validate `Remote`** — empty remote passes validation, jj errors instead of 400. Fixed: both now return 400 if `Remote` is empty.
@@ -207,6 +219,9 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] Squash support (file-level selection, keep-emptied, use-dest-message)
 - [x] Split support (inline mode, file checkboxes, parallel toggle)
 - [x] Conflict resolution UI — detect `×` conflicting revisions, parse jj's conflict markers (`<<<<<<<`, `%%%%%%%`, `+++++++`, `>>>>>>>`), render with A/B letter badges for spatial correspondence between buttons and section tabs. "Keep [A]"/"Keep [B]" buttons per-region + file-header. Hover preview (amber glow on kept, redaction stripes on discarded). `conflicted_files` template for structured conflict detection (replaces `resolve --list` regex parsing), `jj file show` for conflict-only files not in diff output.
+- [x] Inline file editing — CodeMirror 6 editor in split-view right column. Edit button in file headers (both views — auto-switches to split, hidden for deleted files). Auto `jj edit` for non-WC revisions. Hunk folding, CSS-var theme, indent detection (tabs vs N-spaces from file content), `tabSize=4` matching `.diff-line`. Cmd+S save, Escape cancel. Stale-while-revalidate on save preserves scroll. Backend `POST /api/file-write` with symlink escape protection, .jj/.git blocking, path traversal + null-byte prevention.
+- [ ] **Stacked-revision combined diff** — check multiple contiguous revisions → show the combined diff against the stack's base (i.e., `jj diff --from <oldest checked>- --to <newest checked>`). Currently multi-check unions per-revision diffs; stacked mode would show the net effect of the whole stack as if it were one commit. UI: new toggle in the diff toolbar when all checked revisions form a linear chain ("Stack view"). Backend: reuse `diff-range` endpoint (already compares arbitrary `from`/`to`). Edge case: detect when checked revisions are NOT a linear chain (branches/merges) → disable toggle or fall back to union.
+- [ ] **Subtle reload over SSH** — mutations over SSH cause full-screen "Loading…" state because each jj call takes ~440ms and the `loading` flag flips. Fix: extend the stale-while-revalidate pattern from DiffPanel to RevisionGraph — keep showing stale log/diff content during reload, just dim it or show a thin progress bar. **Block further mutations** during reload (optimistic UI lock) so users don't queue up conflicting ops against stale state. `loader.loading` becomes a "refreshing" indicator, not a content gate. Separate visual state for initial-load (spinner) vs refresh (dimmed + top progress bar, like GitHub/Linear).
 - [ ] Three-way merge editor — replace inline conflict markers with a CodeMirror `@codemirror/merge` three-way view (base | ours | theirs). Phase 1: add backend endpoint returning `{base, ours, theirs}` per conflicted file (via `jj file show` on parent revisions). Phase 2: read-only three-pane view with diff highlighting + existing Accept Ours/Theirs buttons. Phase 3: editable center pane with "Save Resolution" that writes merged content back. Current inline card view remains as fallback for N-way conflicts (3+ sides). See [CodeMirror merge demo](https://codemirror.net/3/demo/merge.html) for the UX pattern.
 - [ ] SSH remote mode performance — each jj command spawns a new SSH connection (~440ms via Coder ProxyCommand). Options: (a) batch endpoint combining diff+files+evolog into one SSH call, (b) persistent SSH session with stdin/stdout multiplexing, (c) run backend on remote with SSH port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path"`). Option (c) sidesteps the problem entirely.
 - [ ] SSH remote repo browser
