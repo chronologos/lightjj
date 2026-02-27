@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, isCached, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, onStale, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -166,6 +166,22 @@
       return [...checkedRevisions]
     }
     return selectedRevision ? [effectiveId(selectedRevision.commit)] : []
+  })
+
+  // Commits implicitly included in the diff via connected() gap-filling.
+  // Rendered with a hollow indicator so user sees what's in scope.
+  let impliedCommitIds = $derived.by(() => {
+    if (checkedRevisions.size <= 1) return new Set<string>()
+    // checkedRevisions holds effective IDs; resolve to commit_ids for graph walk
+    const checkedCids = new Set<string>()
+    for (const r of revisions) {
+      if (checkedRevisions.has(effectiveId(r.commit))) checkedCids.add(r.commit.commit_id)
+    }
+    const connected = computeConnectedCommitIds(checkedCids, revisions)
+    // Implied = in connected but NOT explicitly checked
+    const implied = new Set<string>()
+    for (const cid of connected) if (!checkedCids.has(cid)) implied.add(cid)
+    return implied
   })
 
   let statusText = $derived.by(() => {
@@ -448,7 +464,7 @@
     const checked = [...checkedRevisions]
     if (checked.length === 0) return
     if (squash.active || split.active) return
-    const revset = checked.join('|')
+    const revset = multiRevset(checked)
     loadDiffForRevset(revset)
     loadFilesForRevset(revset)
   })
@@ -1237,6 +1253,7 @@
             {split}
             isDark={darkMode}
             {prByBookmark}
+            {impliedCommitIds}
           />
         </div>
 

@@ -18,6 +18,7 @@ export interface LogEntry {
     conflicted: boolean
     divergent: boolean
     working_copies?: string[]
+    parent_ids?: string[]
   }
   description: string
   bookmarks?: string[]
@@ -222,6 +223,62 @@ export interface PullRequest {
  *  Mirrors the Go Commit.GetChangeId() logic. */
 export function effectiveId(commit: LogEntry['commit']): string {
   return (commit.divergent || commit.hidden) ? commit.commit_id : commit.change_id
+}
+
+/** Builds a diff-safe revset from multiple revision IDs.
+ *  connected() fills gaps so jj's "Cannot diff revsets with gaps" error
+ *  can't fire. No-op for contiguous/branched selections. */
+export function multiRevset(ids: string[]): string {
+  if (ids.length === 0) return ''
+  if (ids.length === 1) return ids[0]
+  return `connected(${ids.join('|')})`
+}
+
+/** Computes the connected closure of a set of checked commit IDs over the
+ *  visible log. Returns the set of commit_ids that connected() would include
+ *  — i.e., ancestors(checked) ∩ descendants(checked) within the log.
+ *  Used to visually mark gap-fill revisions. Keys on commit_id (unique)
+ *  since parent_ids refer to commit IDs. */
+export function computeConnectedCommitIds(
+  checkedCommitIds: Set<string>,
+  revisions: LogEntry[],
+): Set<string> {
+  if (checkedCommitIds.size <= 1) return new Set(checkedCommitIds)
+
+  const byCommitId = new Map<string, LogEntry>()
+  const children = new Map<string, string[]>()
+  for (const r of revisions) {
+    const cid = r.commit.commit_id
+    byCommitId.set(cid, r)
+    for (const pid of r.commit.parent_ids ?? []) {
+      if (!children.has(pid)) children.set(pid, [])
+      children.get(pid)!.push(cid)
+    }
+  }
+
+  // BFS helper — index-based queue to avoid O(n²) from Array.shift()
+  const bfs = (next: (id: string) => string[]): Set<string> => {
+    const seen = new Set<string>()
+    const queue = [...checkedCommitIds]
+    for (let i = 0; i < queue.length; i++) {
+      const id = queue[i]
+      if (seen.has(id)) continue
+      seen.add(id)
+      for (const n of next(id)) queue.push(n)
+    }
+    return seen
+  }
+
+  const anc = bfs(id => {
+    const e = byCommitId.get(id)
+    return e ? (e.commit.parent_ids ?? []).filter(p => byCommitId.has(p)) : []
+  })
+  const desc = bfs(id => children.get(id) ?? [])
+
+  // connected(X) = ancestors(X) ∩ descendants(X)
+  const result = new Set<string>()
+  for (const id of anc) if (desc.has(id)) result.add(id)
+  return result
 }
 
 export const api = {

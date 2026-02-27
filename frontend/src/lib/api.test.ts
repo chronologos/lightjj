@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, onStale, _testInternals } from './api'
+import { api, isCached, onStale, multiRevset, computeConnectedCommitIds, _testInternals, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -591,5 +591,67 @@ describe('timeout', () => {
     // Verify no signal was added by the internal timeout logic
     const [, init] = mockFetch.mock.calls[0]
     expect(init?.signal).toBeUndefined()
+  })
+})
+
+describe('multiRevset', () => {
+  it('returns bare ID for single revision', () => {
+    expect(multiRevset(['abc'])).toBe('abc')
+  })
+  it('wraps multiple in connected()', () => {
+    expect(multiRevset(['abc', 'def', 'ghi'])).toBe('connected(abc|def|ghi)')
+  })
+  it('returns empty for empty input', () => {
+    expect(multiRevset([])).toBe('')
+  })
+})
+
+describe('computeConnectedCommitIds', () => {
+  const entry = (cid: string, parents: string[]): LogEntry => ({
+    commit: {
+      commit_id: cid, parent_ids: parents, change_id: cid,
+      change_prefix: 1, commit_prefix: 1,
+      is_working_copy: false, hidden: false, immutable: false,
+      conflicted: false, divergent: false,
+    },
+    description: '', graph_lines: [],
+  })
+
+  it('returns a fresh set for <=1 checked', () => {
+    const checked = new Set(['a1'])
+    const result = computeConnectedCommitIds(checked, [entry('a1', [])])
+    expect(result).toEqual(checked)
+    expect(result).not.toBe(checked) // no aliasing
+  })
+
+  it('returns empty set for 0 checked', () => {
+    expect(computeConnectedCommitIds(new Set(), [])).toEqual(new Set())
+  })
+
+  it('fills linear gap', () => {
+    const revs = [entry('a', ['b']), entry('b', ['c']), entry('c', [])]
+    const result = computeConnectedCommitIds(new Set(['a', 'c']), revs)
+    expect(result).toEqual(new Set(['a', 'b', 'c']))
+  })
+
+  it('does not pull in common ancestor of sibling heads', () => {
+    // a → c, b → c (two heads sharing ancestor c)
+    // c is NOT in descendants({a,b}) since a,b are heads — matches jj's connected()
+    const revs = [entry('a', ['c']), entry('b', ['c']), entry('c', [])]
+    const result = computeConnectedCommitIds(new Set(['a', 'b']), revs)
+    expect(result).toEqual(new Set(['a', 'b']))
+  })
+
+  it('fills gap on one branch when checking across a merge', () => {
+    // m has parents a,b; a→c, b→c. Check m and c: gap is a+b.
+    const revs = [entry('m', ['a', 'b']), entry('a', ['c']), entry('b', ['c']), entry('c', [])]
+    const result = computeConnectedCommitIds(new Set(['m', 'c']), revs)
+    expect(result).toEqual(new Set(['m', 'a', 'b', 'c']))
+  })
+
+  it('ignores parents outside the visible log', () => {
+    const revs = [entry('a', ['b']), entry('b', ['invisible'])]
+    const result = computeConnectedCommitIds(new Set(['a', 'b']), revs)
+    expect(result).toEqual(new Set(['a', 'b'])) // 'invisible' not added
   })
 })

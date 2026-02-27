@@ -30,6 +30,7 @@ function makeEntry(overrides: Partial<{
   conflicted: boolean
   divergent: boolean
   working_copies: string[]
+  parent_ids: string[]
   bookmarks: string[]
   description: string
   gutter: string
@@ -46,6 +47,7 @@ function makeEntry(overrides: Partial<{
       conflicted: overrides.conflicted ?? false,
       divergent: overrides.divergent ?? false,
       working_copies: overrides.working_copies,
+      parent_ids: overrides.parent_ids ?? [],
     },
     description: overrides.description ?? 'test commit',
     bookmarks: overrides.bookmarks,
@@ -81,6 +83,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     split: createSplitMode(),
     isDark: true,
     prByBookmark: new Map(),
+    impliedCommitIds: new Set<string>(),
     ...overrides,
   }
 }
@@ -429,6 +432,27 @@ describe('RevisionGraph', () => {
       // Non-conflicted node row also has SVG graph
       const nodeRow = container.querySelector('.graph-row.node-row')
       expect(nodeRow?.querySelector('.graph-svg')).toBeInTheDocument()
+    })
+
+    it('shows hollow indicator for implied (gap-fill) revisions', () => {
+      const entries = [
+        makeEntry({ change_id: 'aaa', commit_id: 'a1', parent_ids: ['b2'] }),
+        makeEntry({ change_id: 'bbb', commit_id: 'b2', parent_ids: ['c3'] }), // gap
+        makeEntry({ change_id: 'ccc', commit_id: 'c3', parent_ids: [] }),
+      ]
+      const checked = new SvelteSet(['aaa', 'ccc']) // skip middle
+      const implied = new Set(['b2']) // App would compute this
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: entries, checkedRevisions: checked, impliedCommitIds: implied }),
+      })
+      const rows = container.querySelectorAll('.graph-row.node-row')
+      expect(rows[0]).toHaveClass('checked')
+      expect(rows[0].querySelector('.check-gutter')?.textContent).toBe('✓')
+      expect(rows[1]).toHaveClass('implied')
+      expect(rows[1]).not.toHaveClass('checked')
+      expect(rows[1].querySelector('.check-gutter')?.textContent).toBe('◌')
+      expect(rows[2]).toHaveClass('checked')
+      expect(rows[2].querySelector('.check-gutter')?.textContent).toBe('✓')
     })
 
     it('conflicted and non-conflicted node rows both render with SVG', () => {

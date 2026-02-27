@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, type LogEntry, type FileChange, type PullRequest } from './api'
+  import { api, effectiveId, multiRevset, type LogEntry, type FileChange, type PullRequest } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { groupByWithIndex } from './group-by'
   import { computeWordDiffs, type WordSpan } from './word-diff'
@@ -197,7 +197,7 @@
   // Active revset: multi-checked join or single selected revision
   let activeRevset = $derived(
     checkedRevisions.size > 0
-      ? [...checkedRevisions].join('|')
+      ? multiRevset([...checkedRevisions])
       : selectedRevision ? effectiveId(selectedRevision.commit) : undefined
   )
 
