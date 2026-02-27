@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iant/lightjj/internal/jj"
-	"github.com/iant/lightjj/internal/runner"
+	"github.com/chronologos/lightjj/internal/jj"
+	"github.com/chronologos/lightjj/internal/runner"
 )
 
 // Server holds the HTTP handler and its dependencies.

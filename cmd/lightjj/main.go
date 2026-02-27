@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/iant/lightjj/internal/api"
-	"github.com/iant/lightjj/internal/runner"
+	"github.com/chronologos/lightjj/internal/api"
+	"github.com/chronologos/lightjj/internal/runner"
 )
 
 // version is set at build time via -ldflags "-X main.version=$(cat version.txt)"

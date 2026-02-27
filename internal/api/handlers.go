@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/iant/lightjj/internal/jj"
-	"github.com/iant/lightjj/internal/parser"
+	"github.com/chronologos/lightjj/internal/jj"
+	"github.com/chronologos/lightjj/internal/parser"
 )
 
 // Whitelisted flags for git push/fetch to prevent injection of arbitrary jj flags.

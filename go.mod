@@ -1,4 +1,4 @@
-module github.com/iant/lightjj
+module github.com/chronologos/lightjj
 
 go 1.25.6
 
