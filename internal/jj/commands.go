@@ -58,12 +58,12 @@ func LogGraph(revset string, limit int) CommandArgs {
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
-	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F bookmarks
+	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F parent_ids \x1F bookmarks
 	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
-	// working_copies is inserted before bookmarks since bookmarks use \x1F as internal separator.
-	// Bookmarks are joined with \x1F to avoid breakage if bookmark names contain spaces.
+	// Parent IDs are comma-joined (commit IDs are hex, commas can't appear).
+	// Bookmarks are joined with \x1F and MUST be the last field — the parser's SplitN leaves the tail unsplit.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ bookmarks.join("\x1F") ++ "\n"`,
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ bookmarks.join("\x1F") ++ "\n"`,
 		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args

@@ -13,6 +13,7 @@ type Commit struct {
 	Conflicted     bool     `json:"conflicted"`
 	Divergent      bool     `json:"divergent"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
+	ParentIds      []string `json:"parent_ids,omitempty"`
 }
 
 func (c Commit) IsRoot() bool {

@@ -99,9 +99,9 @@ func parseNodeLine(line string) GraphRow {
 	// The rest contains the markers and content
 	rest := line[prefixIdx:]
 
-	// Fields: [0]=prefixBlock [1]=changeId [2]=commitId [3]=description [4]=working_copies [5]=bookmarks
-	// Bookmarks MUST be last — SplitN(6) leaves the tail unsplit so \x1F-joined bookmark names survive.
-	parts := strings.SplitN(rest, "\x1f", 6)
+	// Fields: [0]=prefixBlock [1]=changeId [2]=commitId [3]=description [4]=working_copies [5]=parent_ids [6]=bookmarks
+	// Bookmarks MUST be last — SplitN(7) leaves the tail unsplit so \x1F-joined bookmark names survive.
+	parts := strings.SplitN(rest, "\x1f", 7)
 	prefixBlock := parts[0]
 
 	// Parse the prefix block: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent
@@ -134,10 +134,15 @@ func parseNodeLine(line string) GraphRow {
 		}
 	}
 
-	// Bookmarks are joined with \x1F in the template. After SplitN(6), remaining
-	// separators within the bookmarks field delimit individual bookmark names.
+	// Parent commit IDs (comma-separated; empty for root)
 	if len(parts) > 5 && parts[5] != "" {
-		for _, bm := range strings.Split(parts[5], "\x1f") {
+		row.Commit.ParentIds = strings.Split(parts[5], ",")
+	}
+
+	// Bookmarks are joined with \x1F in the template. After SplitN(7), remaining
+	// separators within the bookmarks field delimit individual bookmark names.
+	if len(parts) > 6 && parts[6] != "" {
+		for _, bm := range strings.Split(parts[6], "\x1f") {
 			bm = strings.TrimSpace(bm)
 			if bm != "" {
 				row.Bookmarks = append(row.Bookmarks, bm)

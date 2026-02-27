@@ -49,7 +49,7 @@ func TestOpIdHeader(t *testing.T) {
 
 func TestHandleLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1f\x1fmain\n"
+	graphOutput := "@  _PREFIX:abc_PREFIX:xyz_PREFIX:false\x1fabcdefgh\x1fxyz12345\x1fmy commit\x1f\x1f\x1fmain\n"
 	runner.Expect(jj.LogGraph("@", 500)).SetOutput([]byte(graphOutput))
 	defer runner.Verify()
 
