@@ -35,6 +35,7 @@ func TestLogGraph(t *testing.T) {
 	assert.Contains(t, joined, `\x1F`)
 	assert.Contains(t, joined, JJUIPrefix)
 	assert.Contains(t, joined, "divergent")
+	assert.Contains(t, joined, "parents")
 }
 
 func TestLogGraph_NoRevset(t *testing.T) {
