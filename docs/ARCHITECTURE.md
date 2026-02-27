@@ -232,16 +232,18 @@ flowchart TD
     classDef orange fill:#FFE7CE,stroke:#BC5215,color:#BC5215
     classDef purple fill:#F0EAEC,stroke:#5E409D,color:#5E409D
 
-    integ["Integration<br/><small>go test -tags integration<br/>real jj in tmpdir</small>"]:::purple
+    integ["Go Integration<br/><small>go test -tags integration<br/>real jj in tmpdir</small>"]:::purple
     handlers["API Handler Tests<br/><small>MockRunner + httptest<br/>Expect(args) → SetOutput → Verify()</small>"]:::blue
     gounit["Go Unit Tests<br/><small>command builders · parsers · models<br/>pure input→output, no I/O</small>"]:::green
-    feunit["Frontend Unit (Vitest)<br/><small>api.ts · diff-parser · word-diff · loader<br/>fetch mocking · generation counters</small>"]:::orange
+    fedom["Component Tests (Vitest + testing-library)<br/><small>render · fireEvent · query DOM<br/>RevisionGraph · DiffFileView · modals</small>"]:::orange
+    felogic["Frontend Logic Tests (Vitest)<br/><small>api.ts · diff-parser · word-diff · loader<br/>fetch mocking · generation counters</small>"]:::orange
 
     integ --> handlers
     handlers --> gounit
-    handlers -.-> feunit
+    fedom --> felogic
+    fedom -.-> handlers
 
-    gounit -.- |"command builders feed<br/>both test layers"| handlers
+    gounit -.- |"command builders feed<br/>handler expectations"| handlers
 ```
 
 | Layer | Count | Coverage |
@@ -249,7 +251,10 @@ flowchart TD
 | Go unit | ~100 | Command builders, parsers (DiffStat, BookmarkList, GraphLog, WorkspaceList), models (`Commit.GetChangeId`, `SelectedRevisions`) |
 | Go handlers | ~180 | Every endpoint's happy path + validation (400) + runner error (500) via `runnerErrorTest` helper |
 | Go integration | ~30 | Build-tagged. CRUD journey, divergence resolution, diff-range file filtering, bookmark lifecycle |
-| Frontend unit | ~300 | api.ts cache/op-id, diff-parser, word-diff LCS, split-view alignment, loader races, mode factories |
+| Frontend logic | ~150 | api.ts cache/op-id, diff-parser, word-diff LCS, split-view alignment, loader races, mode factories |
+| Frontend component | ~150 | testing-library/svelte: render + fireEvent + DOM queries. Badge visibility, keyboard handlers, mode state, ARIA attrs |
+
+**No E2E tests** — there's no Playwright/Cypress against a real backend. The closest is Go integration tests exercising the HTTP API directly, and component tests mounting individual Svelte components in jsdom.
 
 The `testutil.MockRunner` uses an expect/verify pattern:
 

@@ -4,11 +4,12 @@
   interface Props {
     entries: OpEntry[]
     loading: boolean
+    error?: string
     onrefresh: () => void
     onclose: () => void
   }
 
-  let { entries, loading, onrefresh, onclose }: Props = $props()
+  let { entries, loading, error = '', onrefresh, onclose }: Props = $props()
 </script>
 
 <div class="oplog-panel">
@@ -24,6 +25,11 @@
       <div class="empty-state">
         <div class="spinner"></div>
         <span>Loading operations...</span>
+      </div>
+    {:else if error}
+      <div class="empty-state error-state">
+        <span>⚠ {error}</span>
+        <button class="header-btn" onclick={onrefresh}>Retry</button>
       </div>
     {:else}
       {#each entries as op (op.id)}
@@ -152,6 +158,10 @@
     padding: 48px 24px;
     color: var(--surface2);
     font-size: 13px;
+  }
+
+  .error-state {
+    color: var(--red);
   }
 
   .spinner {

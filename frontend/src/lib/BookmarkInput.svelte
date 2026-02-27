@@ -13,6 +13,7 @@
   let value: string = $state('')
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let suggestions: string[] = $state([])
+  let suggestionsError: string = $state('')
   let selectedSuggestion: number = $state(-1)
   let previousFocus: HTMLElement | null = null
 
@@ -26,9 +27,12 @@
       previousFocus = document.activeElement as HTMLElement | null
       value = ''
       selectedSuggestion = -1
+      suggestionsError = ''
       api.bookmarks().then((bms: Bookmark[]) => {
         suggestions = bms.map(b => b.name)
-      }).catch(() => {})
+      }).catch((e) => {
+        suggestionsError = e instanceof Error ? e.message : 'Failed to load bookmarks'
+      })
       inputEl?.focus()
     }
   })
@@ -87,7 +91,9 @@
       onkeydown={handleKeydown}
       oninput={() => { selectedSuggestion = -1 }}
     />
-    {#if filtered.length > 0}
+    {#if suggestionsError}
+      <div class="bm-set-error">⚠ {suggestionsError}</div>
+    {:else if filtered.length > 0}
       <div class="bm-set-suggestions">
         {#each filtered as suggestion, i}
           <button
@@ -178,6 +184,13 @@
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
+  }
+
+  .bm-set-error {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--red);
+    border-bottom: 1px solid var(--surface0);
   }
 
   .bm-set-hint {

@@ -109,6 +109,35 @@ describe('BookmarkInput', () => {
         expect(text).toContain('here')
       })
     })
+
+    it('shows inline error when bookmarks fetch fails', async () => {
+      // Regression: was silently swallowing fetch errors → empty suggestions
+      // with no explanation. Now surfaces the error so user knows what happened.
+      mockBookmarks.mockRejectedValue(new Error('connection refused'))
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+
+      await waitFor(() => {
+        const errorEl = container.querySelector('.bm-set-error')
+        expect(errorEl).toBeInTheDocument()
+        expect(errorEl?.textContent).toContain('connection refused')
+      })
+      // Suggestions list should not render when there's an error
+      expect(container.querySelector('.bm-set-suggestions')).toBeNull()
+    })
+
+    it('allows typing and submitting even when bookmarks fetch fails', async () => {
+      // Error affects autocomplete only — user can still create a new bookmark
+      mockBookmarks.mockRejectedValue(new Error('timeout'))
+      const onsave = vi.fn()
+      const { container } = render(BookmarkInput, { props: defaultProps({ onsave }) })
+
+      await waitFor(() => expect(container.querySelector('.bm-set-error')).toBeInTheDocument())
+
+      const input = container.querySelector('.bm-set-input') as HTMLInputElement
+      await fireEvent.input(input, { target: { value: 'new-bookmark' } })
+      await fireEvent.keyDown(input, { key: 'Enter' })
+      expect(onsave).toHaveBeenCalledWith('new-bookmark')
+    })
   })
 
   describe('keyboard', () => {

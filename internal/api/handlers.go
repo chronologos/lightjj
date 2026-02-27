@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
 	"slices"
@@ -171,11 +172,17 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		jj.MergeStats(files, stats)
 	}
 
-	// Collect conflict result and merge if successful
+	// Collect conflict result and merge. `jj resolve --list` exits code 2 with
+	// "No conflicts found" when the revision is clean — that's expected, not an
+	// error. Other errors (SSH failure, revision not found) are logged for
+	// debuggability since we continue anyway (conflicts missing is degraded UX,
+	// not a hard failure).
 	cr := <-conflictCh
 	if cr.err == nil {
-		conflictPaths := jj.ParseResolveList(string(cr.output))
-		files = jj.MergeConflicts(files, conflictPaths)
+		conflicts := jj.ParseResolveList(string(cr.output))
+		files = jj.MergeConflicts(files, conflicts)
+	} else if !strings.Contains(cr.err.Error(), "No conflicts found") {
+		log.Printf("handleFiles: resolve --list failed for %s: %v", revision, cr.err)
 	}
 
 	s.writeJSON(w, r, http.StatusOK, files)

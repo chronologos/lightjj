@@ -97,7 +97,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] `wordDiffMap` per-file computation — moved to progressive async in DiffPanel with per-file `wordDiffsByFile` Map
 - [x] `highlightDiff` partial re-highlight — `expandFile()` now only re-tokenizes the expanded file, merges into existing `highlightsByFile`
 - [ ] `"origin"` hardcoded as preferred remote — make configurable via startup flag or jj config query
-- [ ] `OplogPanel` inline error display — pass error prop, match GitModal/BookmarkModal pattern
+- [x] `OplogPanel` inline error display — `Loader` factory now exposes `.error`; OplogPanel shows inline error + Retry button instead of routing to global `showError`
 
 **Larger refactors (half day+):**
 - [x] `App.svelte` rebase state extraction — moved rebase/squash/split mode state to `modes.svelte.ts`, theme CSS to `theme.css`, added `runMutation` helper (App.svelte 1590→1269 lines)

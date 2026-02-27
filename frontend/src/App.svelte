@@ -29,7 +29,6 @@
   let viewMode: 'log' | 'tracked' = $state('log')
   const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
   let describeSaved: boolean = $state(false)
-  let splitView: boolean = $state(false)
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
   let navDebounceTimer: number | undefined
@@ -52,7 +51,7 @@
   const diff = createLoader((id: string, immutable?: boolean) => api.diff(id, undefined, undefined, immutable).then(r => r.diff), '', showError)
   const files = createLoader((id: string, immutable?: boolean) => api.files(id, immutable), [] as FileChange[], showError)
   const description = createLoader((id: string, immutable?: boolean) => api.description(id, immutable).then(r => r.description), '')
-  const oplog = createLoader(() => api.oplog(50), [] as OpEntry[], showError)
+  const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   const evolog = createLoader((id: string) => api.evolog(id).then(r => r.output), '', showError)
 
   let revisions = $derived(log.value)
@@ -240,7 +239,7 @@
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
     { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
     { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', category: 'View', action: toggleViewMode },
-    { label: 'Toggle split/unified diff', category: 'View', action: () => { splitView = !splitView } },
+    { label: 'Toggle split/unified diff', category: 'View', action: () => { config.splitView = !config.splitView } },
     { label: 'Toggle operation log', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
 
@@ -1188,7 +1187,7 @@
             {checkedRevisions}
             {diffLoading}
             {filesLoading}
-            bind:splitView
+            bind:splitView={() => config.splitView, (v) => config.splitView = v}
             {descriptionEditing}
             {descriptionDraft}
             {describeSaved}
@@ -1224,6 +1223,7 @@
         <OplogPanel
           entries={oplogEntries}
           loading={oplogLoading}
+          error={oplog.error}
           onrefresh={loadOplog}
           onclose={() => { oplogOpen = false }}
         />
@@ -1239,6 +1239,7 @@
         <OplogPanel
           entries={oplogEntries}
           loading={oplogLoading}
+          error={oplog.error}
           onrefresh={loadOplog}
           onclose={() => { activeView = 'log' }}
         />
