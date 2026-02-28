@@ -142,13 +142,34 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
-// refreshOpId fetches the current op-id from jj, caches it, and returns it.
-// Uses a detached context so it completes even if the HTTP request is cancelled.
+// refreshOpId fetches the current op-id, caches it, and returns it.
 // The return value lets callers (e.g., the SSE watcher's fire() closure) use the
 // fresh value directly instead of a separate getOpId() read — eliminating a
 // TOCTOU window where a concurrent refreshOpId from another goroutine could
 // interleave between this call's write and a subsequent read.
+//
+// Local-mode fast path: the op-id IS the filename in .jj/repo/op_heads/heads/
+// (first 12 hex chars). jj atomically swaps a single 0-byte file on every
+// operation commit — the same mechanism fsnotify watches. Reading it directly
+// is <1ms vs ~15-20ms for the `jj op log` subprocess. Falls through to the
+// subprocess for SSH mode (no local fs) or divergent ops (>1 head, rare,
+// self-healing on next jj command).
 func (s *Server) refreshOpId() string {
+	if s.RepoDir != "" {
+		heads := filepath.Join(s.RepoDir, ".jj", "repo", "op_heads", "heads")
+		if entries, err := os.ReadDir(heads); err == nil && len(entries) == 1 {
+			name := entries[0].Name()
+			if len(name) >= 12 {
+				opId := name[:12]
+				s.cachedMu.Lock()
+				s.cachedOp = opId
+				s.cachedMu.Unlock()
+				return opId
+			}
+		}
+	}
+	// Fallback: SSH mode, divergent ops, or unexpected dir state. Detached
+	// context so it completes even if the HTTP request is cancelled.
 	output, err := s.Runner.Run(context.Background(), jj.CurrentOpId())
 	if err != nil {
 		return ""

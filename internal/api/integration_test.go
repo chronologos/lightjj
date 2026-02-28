@@ -404,13 +404,13 @@ func TestIntegrationWorkspaces(t *testing.T) {
 
 	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/workspaces")
-	var workspaces []jj.Workspace
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &workspaces))
-	require.NotEmpty(t, workspaces)
+	var resp workspacesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Workspaces)
 
 	// Default workspace should exist.
 	var hasDefault bool
-	for _, ws := range workspaces {
+	for _, ws := range resp.Workspaces {
 		if ws.Name == "default" {
 			hasDefault = true
 			assert.NotEmpty(t, ws.ChangeId)

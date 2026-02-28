@@ -1,10 +1,42 @@
+<script module lang="ts">
+  import type { WordSpan } from './word-diff'
+
+  // Module-scoped caches — survive component unmount. DiffPanel is replaced by
+  // DivergencePanel via {#if divergence.active} in App.svelte; without module
+  // scope, opening that panel destroys 30 entries of Shiki work (~15s of CPU
+  // on a busy session) and the user's collapse preferences for 50 revisions.
+  type DerivedCacheEntry = {
+    highlights: Map<string, Map<string, string>>
+    wordDiffs: Map<string, Map<string, Map<number, WordSpan[]>>>
+  }
+  const derivedCache = new Map<string, DerivedCacheEntry>()
+  const collapseStateCache = new Map<string, Set<string>>()
+  const DERIVED_CACHE_SIZE = 30
+
+  function lruSet<K, V>(cache: Map<K, V>, key: K, value: V, max: number) {
+    // LRU bump: delete first so set() moves to end
+    cache.delete(key)
+    cache.set(key, value)
+    if (cache.size > max) cache.delete(cache.keys().next().value!)
+  }
+
+  /** Invalidate theme-specific cached highlights. Word diffs are theme-agnostic.
+   *  Called by App.toggleTheme() — must be module-level because the cache now
+   *  outlives the component instance. The instance's rehighlight() (via
+   *  diffPanelRef?.rehighlight()) handles re-rendering if mounted, but that ref
+   *  is undefined when DivergencePanel is showing. */
+  export function clearHighlightCache(): void {
+    for (const entry of derivedCache.values()) entry.highlights = new Map()
+  }
+</script>
+
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { api, effectiveId, type LogEntry, type FileChange, type PullRequest } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { groupByWithIndex } from './group-by'
-  import { computeWordDiffs, type WordSpan } from './word-diff'
+  import { computeWordDiffs } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import DescriptionEditor from './DescriptionEditor.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
@@ -62,29 +94,7 @@
   let descText = $derived(fullDescription || selectedRevision?.description || '(no description)')
   let descIsMultiline = $derived(descText.includes('\n'))
   let collapsedFiles = new SvelteSet<string>()
-  // Persist collapse state per revision so switching back restores it
-  let collapseStateCache = new Map<string, Set<string>>()
 
-  // Highlights + word-diffs LRU cache, keyed by activeRevisionId (commit_id or
-  // multi-revset string). The diff text is cached in api.ts, but Shiki + LCS
-  // computation take ~500ms for large diffs and were being re-run on every
-  // revisit because lastHighlightedDiff only tracks the MOST RECENT diff.
-  // Keying by commit_id is correct: rewrites change commit_id → automatic
-  // invalidation. Change_id (what collapseStateCache uses) would serve stale
-  // highlights after a describe/rebase.
-  const DERIVED_CACHE_SIZE = 30
-  type DerivedCacheEntry = {
-    highlights: Map<string, Map<string, string>>
-    wordDiffs: Map<string, Map<string, Map<number, WordSpan[]>>>
-  }
-  let derivedCache = new Map<string, DerivedCacheEntry>()
-
-  function lruSet<K, V>(cache: Map<K, V>, key: K, value: V, max: number) {
-    // LRU bump: delete first so set() moves to end
-    cache.delete(key)
-    cache.set(key, value)
-    if (cache.size > max) cache.delete(cache.keys().next().value!)
-  }
   // Expanded files: store full-context DiffFile per file path
   let expandedDiffs: Map<string, DiffFile> = $state(new Map())
 
@@ -801,9 +811,7 @@
   export function rehighlight() {
     lastHighlightedDiff = ''
     highlightsByFile = new Map()
-    // Cached highlights are theme-specific — invalidate them so revisits don't
-    // restore wrong-theme colors. Word diffs are theme-agnostic; keep them.
-    for (const entry of derivedCache.values()) entry.highlights = new Map()
+    clearHighlightCache() // module-level — see <script module>
     clearTimeout(highlightTimer)
     if (parsedDiff.length > 0) {
       // effectiveFiles (not parsedDiff) — preserves expanded-context highlights

@@ -486,9 +486,13 @@ func Resolve(revision string, file string, tool string) CommandArgs {
 	return []string{"resolve", "--tool", tool, "-r", revision, EscapeFileName(file)}
 }
 
-// WorkspaceList returns args for `jj workspace list` to enumerate all workspaces.
+// WorkspaceList returns args for `jj workspace list` with a template.
+// WorkspaceRef.name() + .target() (Commit) — structured output, no parsing
+// of "default: skpssuxl a14ce848 desc" human format (which broke on
+// workspace names containing ": ").
 func WorkspaceList() CommandArgs {
-	return []string{"workspace", "list", "--color", "never", "--ignore-working-copy"}
+	tmpl := `name ++ "\x1F" ++ target.change_id().short() ++ "\x1F" ++ target.commit_id().short() ++ "\n"`
+	return []string{"workspace", "list", "--color", "never", "--ignore-working-copy", "-T", tmpl}
 }
 
 // Workspace represents a jj workspace entry.
@@ -498,26 +502,17 @@ type Workspace struct {
 	CommitId string `json:"commit_id"`
 }
 
-// ParseWorkspaceList parses `jj workspace list` output.
-// Each line looks like: "default: skpssuxl a14ce848 description text"
+// ParseWorkspaceList parses WorkspaceList template output.
+// Each line: name\x1Fchange_id\x1Fcommit_id
 func ParseWorkspaceList(output string) []Workspace {
 	workspaces := []Workspace{}
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		if line == "" {
-			continue
-		}
-		colonIdx := strings.Index(line, ": ")
-		if colonIdx == -1 {
-			continue
-		}
-		fields := strings.Fields(line[colonIdx+2:])
-		if len(fields) < 2 {
+		parts := strings.SplitN(line, "\x1F", 3)
+		if len(parts) != 3 {
 			continue
 		}
 		workspaces = append(workspaces, Workspace{
-			Name:     line[:colonIdx],
-			ChangeId: fields[0],
-			CommitId: fields[1],
+			Name: parts[0], ChangeId: parts[1], CommitId: parts[2],
 		})
 	}
 	return workspaces

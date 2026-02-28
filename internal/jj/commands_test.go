@@ -541,11 +541,19 @@ func TestParseEvolog_Malformed(t *testing.T) {
 
 func TestWorkspaceList(t *testing.T) {
 	got := WorkspaceList()
-	assert.Equal(t, []string{"workspace", "list", "--color", "never", "--ignore-working-copy"}, got)
+	assert.Equal(t, "workspace", got[0])
+	assert.Equal(t, "list", got[1])
+	assert.Contains(t, got, "--ignore-working-copy")
+	assert.Contains(t, got, "-T")
+	joined := strings.Join(got, " ")
+	assert.Contains(t, joined, "name")
+	assert.Contains(t, joined, "target.change_id()")
+	assert.Contains(t, joined, "target.commit_id()")
+	assert.Contains(t, joined, `\x1F`)
 }
 
 func TestParseWorkspaceList(t *testing.T) {
-	output := "base2: skpssuxl a14ce848 Architecture review burndown\ndefault: qqqqpqpq bbbbbbbb Other description\n"
+	output := "base2\x1Fskpssuxl\x1Fa14ce848\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\n"
 	ws := ParseWorkspaceList(output)
 	assert.Len(t, ws, 2)
 	assert.Equal(t, "base2", ws[0].Name)
@@ -556,21 +564,13 @@ func TestParseWorkspaceList(t *testing.T) {
 	assert.Equal(t, "bbbbbbbb", ws[1].CommitId)
 }
 
-func TestParseWorkspaceList_Malformed(t *testing.T) {
-	// Lines without ": " separator or with too few fields are skipped
-	output := "no-colon-here\ndefault: onlyOneField\nvalid: abc def description\n"
+func TestParseWorkspaceList_NameWithColon(t *testing.T) {
+	// Workspace names containing ": " broke the old human-output parser.
+	// Template output is \x1F-delimited so colons are safe.
+	output := "weird: name\x1Fabc\x1Fdef\n"
 	ws := ParseWorkspaceList(output)
 	assert.Len(t, ws, 1)
-	assert.Equal(t, "valid", ws[0].Name)
-	assert.Equal(t, "abc", ws[0].ChangeId)
-	assert.Equal(t, "def", ws[0].CommitId)
-}
-
-func TestParseWorkspaceList_Single(t *testing.T) {
-	output := "default: xyzwvuts abcdef12 my commit\n"
-	ws := ParseWorkspaceList(output)
-	assert.Len(t, ws, 1)
-	assert.Equal(t, "default", ws[0].Name)
+	assert.Equal(t, "weird: name", ws[0].Name)
 }
 
 func TestParseWorkspaceList_Empty(t *testing.T) {

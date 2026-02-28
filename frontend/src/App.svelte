@@ -5,7 +5,7 @@
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
   import RevisionGraph from './lib/RevisionGraph.svelte'
-  import DiffPanel from './lib/DiffPanel.svelte'
+  import DiffPanel, { clearHighlightCache } from './lib/DiffPanel.svelte'
   import EvologPanel from './lib/EvologPanel.svelte'
   import OplogPanel from './lib/OplogPanel.svelte'
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
@@ -145,6 +145,9 @@
 
   function toggleTheme() {
     config.theme = darkMode ? 'light' : 'dark'
+    // Module-scoped cache outlives the component — clear it even if DiffPanel
+    // is unmounted (DivergencePanel showing). rehighlight() re-renders if mounted.
+    clearHighlightCache()
     diffPanelRef?.rehighlight()
   }
 

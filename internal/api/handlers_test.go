@@ -638,6 +638,42 @@ func TestOpIdHeader_Failure(t *testing.T) {
 	assert.Empty(t, w.Header().Get("X-JJ-Op-Id"))
 }
 
+func TestRefreshOpId_ReaddirFastPath(t *testing.T) {
+	// Fast path: op-id is the filename in op_heads/heads/ (first 12 hex chars).
+	// No subprocess needed — readdir is <1ms vs ~15-20ms for `jj op log`.
+	repoDir := t.TempDir()
+	headsDir := filepath.Join(repoDir, ".jj", "repo", "op_heads", "heads")
+	require.NoError(t, os.MkdirAll(headsDir, 0o755))
+	// Real op-ids are 128 hex chars (64-byte blake2). short() truncates to 12.
+	fullId := "d4851555d6a7" + strings.Repeat("f", 116)
+	require.NoError(t, os.WriteFile(filepath.Join(headsDir, fullId), nil, 0o644))
+
+	// MockRunner with NO CurrentOpId expectation — proves subprocess is NOT called.
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+
+	srv := NewServer(runner, repoDir)
+	assert.Equal(t, "d4851555d6a7", srv.refreshOpId())
+	assert.Equal(t, "d4851555d6a7", srv.getOpId()) // cached
+}
+
+func TestRefreshOpId_DivergentHeadsFallback(t *testing.T) {
+	// Divergent ops produce >1 file in op_heads/heads/. Rare, self-healing
+	// on next jj command. Fast path declines; subprocess resolves.
+	repoDir := t.TempDir()
+	headsDir := filepath.Join(repoDir, ".jj", "repo", "op_heads", "heads")
+	require.NoError(t, os.MkdirAll(headsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(headsDir, "aaa111"+strings.Repeat("0", 58)), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(headsDir, "bbb222"+strings.Repeat("0", 58)), nil, 0o644))
+
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.CurrentOpId()).SetOutput([]byte("merged123456"))
+	defer runner.Verify()
+
+	srv := NewServer(runner, repoDir)
+	assert.Equal(t, "merged123456", srv.refreshOpId())
+}
+
 func TestHandleOpLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	opLogOutput := "abc123\x1Fdescription one\x1F2026-01-01 00:00\x1Ftrue\ndef456\x1Fdescription two\x1F2026-01-01 00:01\x1Ffalse\n"
@@ -1125,7 +1161,7 @@ func TestHandleOpLog_LimitClamped(t *testing.T) {
 
 func TestHandleWorkspaces(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList()).SetOutput([]byte("base2: skpssuxl a14ce848 Architecture review\ndefault: qqqqpqpq bbbbbbbb Other\n"))
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte("base2\x1Fskpssuxl\x1Fa14ce848\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\n"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
