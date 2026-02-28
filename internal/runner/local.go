@@ -45,13 +45,20 @@ func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]b
 	if stdin != "" {
 		cmd.Stdin = bytes.NewReader([]byte(stdin))
 	}
+	// Capture stderr separately so we can surface jj's advisory warnings on
+	// exit-0 commands. `jj git push` with no tracked bookmarks prints
+	// "Warning: Refusing to create new remote bookmark... Nothing changed."
+	// to stderr and exits 0 — without this, the UI shows "Push complete"
+	// with empty output and the user never sees why nothing happened.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if stderr != "" {
-				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stderr)
+			stderrStr := strings.TrimSpace(stderr.String())
+			if stderrStr != "" {
+				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stderrStr)
 			}
 			// Empty stderr — include stdout (some jj errors print there)
 			stdout := strings.TrimSpace(string(output))
@@ -65,7 +72,13 @@ func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]b
 		}
 		return nil, err
 	}
-	return bytes.TrimRight(output, "\n"), nil
+	// Success path: if stdout is empty but stderr has content (advisory
+	// warnings), return stderr as the output so the user sees it.
+	output = bytes.TrimRight(output, "\n")
+	if len(output) == 0 && stderr.Len() > 0 {
+		return bytes.TrimRight(stderr.Bytes(), "\n"), nil
+	}
+	return output, nil
 }
 
 func (r *LocalRunner) Stream(ctx context.Context, args []string) (io.ReadCloser, error) {
