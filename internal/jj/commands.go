@@ -32,20 +32,6 @@ func escapeFiles(files []string) []string {
 	return escaped
 }
 
-// LogJSON builds args for `jj log` with flat (no graph) output.
-func LogJSON(revset string, limit int) CommandArgs {
-	args := []string{"log", "--no-graph", "--color", "never", "--quiet"}
-	if revset != "" {
-		args = append(args, "-r", revset)
-	}
-	if limit > 0 {
-		args = append(args, "--limit", strconv.Itoa(limit))
-	}
-	tmpl := `change_id.shortest() ++ "\t" ++ commit_id.shortest() ++ "\t" ++ if(working_copies, "true", "false") ++ "\t" ++ if(hidden, "true", "false") ++ "\t" ++ description.first_line() ++ "\t" ++ bookmarks ++ "\n"`
-	args = append(args, "-T", tmpl)
-	return args
-}
-
 // LogGraph builds args for `jj log` WITH graph topology.
 // Output includes graph characters (│, ○, @, ├─╮, etc.) and _PREFIX: markers
 // for extracting commit data. The graph characters encode the DAG topology
@@ -285,12 +271,6 @@ func Absorb(changeId string, files ...string) CommandArgs {
 	return args
 }
 
-// DiffSummary builds args for `jj diff --summary` which outputs one line per
-// changed file with a status prefix (A/M/D/R).
-func DiffSummary(revision string) CommandArgs {
-	return []string{"diff", "--summary", "--color", "never", "-r", revision, "--ignore-working-copy"}
-}
-
 func Evolog(revision string) CommandArgs {
 	tmpl := `commit.commit_id().short(12) ++ "\x1F" ++ ` +
 		`commit.committer().timestamp() ++ "\x1F" ++ ` +
@@ -418,18 +398,6 @@ func ConfigListAliases() CommandArgs {
 // Uses EscapeFileName for consistency and to prevent dash-prefix flag injection.
 func FileShow(revision string, path string) CommandArgs {
 	return []string{"file", "show", "-r", revision, EscapeFileName(path)}
-}
-
-// ConflictedFiles returns args for a template-based conflict listing.
-// Unlike `jj resolve --list`, this uses structured output (path\x1Fsides\n) and
-// exits 0 with empty output on clean revisions — no error special-casing needed.
-// Multi-revision revsets work (union of conflicts); `resolve --list` rejects them.
-// Requires jj >= 0.36 for Commit.conflicted_files() and TreeEntry.conflict_side_count().
-func ConflictedFiles(revision string) CommandArgs {
-	// RepoPath auto-coerces via ++; only Integer needs stringify.
-	tmpl := `conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count()) ++ "\n").join("")`
-	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
-		"--ignore-working-copy", "-T", tmpl}
 }
 
 // FilesBatch returns args for a single jj log template call that emits file

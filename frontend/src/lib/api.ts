@@ -182,11 +182,14 @@ async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
 // value fetched for commit_id X is valid regardless of what op-id advances
 // happened during the fetch.
 function storeInCache(cacheId: string, result: unknown) {
-  // Map preserves insertion order — evicting the first key is LRU.
-  if (cache.size >= MAX_CACHE_SIZE) {
+  // Delete-first: Map.set on an existing key does NOT reorder. Without the
+  // delete, a re-write at capacity would evict the oldest entry even though
+  // this key was already present — wasting a slot and killing a fresher entry.
+  cache.delete(cacheId)
+  cache.set(cacheId, result)
+  if (cache.size > MAX_CACHE_SIZE) {
     cache.delete(cache.keys().next().value!)
   }
-  cache.set(cacheId, result)
 }
 
 // Check if a revision's diff + files + description are all cached.

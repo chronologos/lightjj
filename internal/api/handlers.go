@@ -160,31 +160,12 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	statCh := s.runAsync(ctx, jj.DiffStat(revision))
-	conflictCh := s.runAsync(ctx, jj.ConflictedFiles(revision))
-
-	summaryOutput, err := s.Runner.Run(ctx, jj.DiffSummary(revision))
+	output, err := s.Runner.Run(r.Context(), jj.FilesTemplate(revision))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	files := jj.ParseDiffSummary(string(summaryOutput))
-
-	if sr := <-statCh; sr.err == nil {
-		jj.MergeStats(files, jj.ParseDiffStat(string(sr.output)))
-	}
-
-	// Template call exits 0 with empty output on clean revisions — any error
-	// here is genuine (SSH failure, bad revset, jj too old for the template).
-	// Logged for debuggability; response continues with degraded conflict info.
-	if cr := <-conflictCh; cr.err == nil {
-		files = jj.MergeConflicts(files, jj.ParseConflictedFiles(string(cr.output)))
-	} else {
-		log.Printf("handleFiles: conflicted_files template failed for %s: %v", revision, cr.err)
-	}
-
-	s.writeJSON(w, r, http.StatusOK, files)
+	s.writeJSON(w, r, http.StatusOK, jj.ParseFilesTemplate(string(output)))
 }
 
 // revisionResponse is the batch payload for diff + files + description.
@@ -197,15 +178,14 @@ type revisionResponse struct {
 }
 
 // handleRevision batches diff + files + description into a single response.
-// All five underlying jj commands run in parallel. Over SSH this turns five
-// ~440ms round-trips into one (goroutines share the TCP/SSH setup cost only
-// on LocalRunner; for SSHRunner each is still a separate ssh exec, but the
-// HTTP round-trip is one instead of three).
+// Three underlying jj commands run in parallel. Over SSH this turns three
+// ~440ms round-trips into one HTTP round-trip (goroutines share the TCP/SSH
+// setup cost only on LocalRunner; for SSHRunner each is still a separate
+// ssh exec).
 //
-// Error policy mirrors handleFiles: diff/summary failures are hard errors
-// (the revision likely doesn't exist); stat/conflict failures degrade
-// gracefully (older jj, unusual repo state). Description failure is soft
-// too — it's not load-bearing for the diff panel.
+// Error policy: diff/files failures are hard errors (the revision likely
+// doesn't exist). Description failure is soft — not load-bearing for the
+// diff panel.
 func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {
@@ -215,33 +195,21 @@ func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	diffCh := s.runAsync(ctx, jj.Diff(revision, "", "never", "--tool", ":git"))
-	statCh := s.runAsync(ctx, jj.DiffStat(revision))
-	conflictCh := s.runAsync(ctx, jj.ConflictedFiles(revision))
 	descCh := s.runAsync(ctx, jj.GetDescription(revision))
 
-	// Summary runs on the request goroutine — gives us an early hard-error
+	// Files template runs on the request goroutine — gives an early hard-error
 	// signal if the revision doesn't exist, before we bother parsing the rest.
-	summaryOutput, err := s.Runner.Run(ctx, jj.DiffSummary(revision))
+	filesOutput, err := s.Runner.Run(ctx, jj.FilesTemplate(revision))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	files := jj.ParseDiffSummary(string(summaryOutput))
+	files := jj.ParseFilesTemplate(string(filesOutput))
 
 	dr := <-diffCh
 	if dr.err != nil {
 		s.writeError(w, http.StatusInternalServerError, dr.err.Error())
 		return
-	}
-
-	if sr := <-statCh; sr.err == nil {
-		jj.MergeStats(files, jj.ParseDiffStat(string(sr.output)))
-	}
-
-	if cr := <-conflictCh; cr.err == nil {
-		files = jj.MergeConflicts(files, jj.ParseConflictedFiles(string(cr.output)))
-	} else {
-		log.Printf("handleRevision: conflicted_files template failed for %s: %v", revision, cr.err)
 	}
 
 	var desc string

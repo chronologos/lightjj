@@ -55,8 +55,42 @@ export function detectLanguage(filePath: string): string {
   return EXTENSION_LANGUAGES[ext] ?? 'text'
 }
 
-// Highlight an array of code lines, returning HTML strings
-export async function highlightLines(lines: string[], lang: string): Promise<string[]> {
+// Chunk size for yielding during highlighting. codeToHtml is synchronous and
+// blocks the main thread — a 200-line file takes ~100-200ms. Yielding every
+// 30 lines caps max block time at ~15-30ms, keeping j/k navigation responsive
+// even when a previous revision's highlight is still running.
+const HIGHLIGHT_CHUNK_LINES = 30
+
+// Skip highlighting entirely for pathologically large inputs. A single 50KB
+// line (minified bundle without .min suffix) routes to the non-chunked path
+// and blocks for ~200-500ms with no isStale escape. At ~1MB/s Shiki throughput,
+// 20KB ≈ 20ms max block — acceptable ceiling.
+const HIGHLIGHT_MAX_CHARS = 20_000
+
+// Parse Shiki's codeToHtml output into per-line HTML strings.
+// Shiki wraps each line in <span class="line">...tokens...</span>.
+function extractLineHtml(html: string, expectedCount: number): string[] | null {
+  const marker = '<span class="line">'
+  const parts = html.split(marker).slice(1) // skip the <pre><code> prefix
+  if (parts.length !== expectedCount) return null
+  return parts.map(part => {
+    // Each part ends with </span> (closing the line span), followed by
+    // either a newline + next line, or </code></pre>. Strip the trailing
+    // </span> that closes the outer line wrapper.
+    const lastClose = part.lastIndexOf('</span>')
+    return lastClose >= 0 ? part.slice(0, lastClose) : part
+  })
+}
+
+// Highlight an array of code lines, returning HTML strings.
+// For large inputs, yields every HIGHLIGHT_CHUNK_LINES so the main thread
+// stays responsive. The optional `isStale` callback lets callers abort early
+// (e.g., when the user navigates mid-highlight).
+export async function highlightLines(
+  lines: string[],
+  lang: string,
+  isStale?: () => boolean,
+): Promise<string[]> {
   if (lang === 'text' || lines.length === 0) {
     return lines.map(l => escapeHtml(l))
   }
@@ -69,26 +103,50 @@ export async function highlightLines(lines: string[], lang: string): Promise<str
   }
 
   const theme = getShikiTheme()
-  const code = lines.join('\n')
-  try {
-    const html = hl.codeToHtml(code, { lang, theme })
-    // Shiki wraps each line in <span class="line">...tokens...</span>.
-    // Split on the line boundary marker to extract per-line HTML.
-    const marker = '<span class="line">'
-    const parts = html.split(marker).slice(1) // skip the <pre><code> prefix
-    if (parts.length === lines.length) {
-      return parts.map(part => {
-        // Each part ends with </span> (closing the line span), followed by
-        // either a newline + next line, or </code></pre>. Strip the trailing
-        // </span> that closes the outer line wrapper.
-        const lastClose = part.lastIndexOf('</span>')
-        return lastClose >= 0 ? part.slice(0, lastClose) : part
-      })
-    }
-  } catch {
-    // Language not supported or parse error, return escaped text
+
+  // Skip Shiki for pathological inputs (minified bundles, generated files).
+  // Chunking by line count doesn't help if one line is 50KB.
+  let totalChars = 0
+  for (const l of lines) totalChars += l.length
+  if (totalChars > HIGHLIGHT_MAX_CHARS) {
+    return lines.map(l => escapeHtml(l))
   }
-  return lines.map(l => escapeHtml(l))
+
+  // Small input: single call, no chunking overhead.
+  if (lines.length <= HIGHLIGHT_CHUNK_LINES) {
+    try {
+      const html = hl.codeToHtml(lines.join('\n'), { lang, theme })
+      return extractLineHtml(html, lines.length) ?? lines.map(l => escapeHtml(l))
+    } catch {
+      return lines.map(l => escapeHtml(l))
+    }
+  }
+
+  // Large input: chunk with yields. Each chunk is tokenized independently —
+  // this sacrifices cross-chunk grammar state (e.g., a multi-line comment
+  // spanning a chunk boundary may color wrong for one line). Acceptable
+  // trade-off for interactive responsiveness; the visual glitch is rare and
+  // subtle, the frozen UI is frequent and jarring.
+  const result: string[] = []
+  for (let i = 0; i < lines.length; i += HIGHLIGHT_CHUNK_LINES) {
+    if (i > 0) {
+      await new Promise<void>(r => setTimeout(r, 0))
+      if (isStale?.()) return lines.map(l => escapeHtml(l))
+    }
+    const chunk = lines.slice(i, i + HIGHLIGHT_CHUNK_LINES)
+    try {
+      const html = hl.codeToHtml(chunk.join('\n'), { lang, theme })
+      const parsed = extractLineHtml(html, chunk.length)
+      if (parsed) {
+        result.push(...parsed)
+      } else {
+        result.push(...chunk.map(l => escapeHtml(l)))
+      }
+    } catch {
+      result.push(...chunk.map(l => escapeHtml(l)))
+    }
+  }
+  return result
 }
 
 function escapeHtml(s: string): string {

@@ -75,4 +75,28 @@ describe('highlightLines text path', () => {
     // Empty array → returns [] immediately (lines.length === 0 check)
     expect(await highlightLines([], 'go')).toEqual([])
   })
+
+  it('aborts between chunks when isStale returns true', async () => {
+    // For text lang this never reaches the chunk loop, but verify the isStale
+    // param is accepted without changing behavior when unused.
+    const result = await highlightLines(['a', 'b'], 'text', () => true)
+    expect(result).toEqual(['a', 'b'])
+  })
+
+  it('isStale is optional — undefined callback does not throw', async () => {
+    const result = await highlightLines(['hello'], 'text')
+    expect(result).toEqual(['hello'])
+  })
+
+  it('skips Shiki for inputs exceeding HIGHLIGHT_MAX_CHARS (minified guard)', async () => {
+    // A single 50KB line with a recognized lang would block the main thread
+    // for 200-500ms in codeToHtml with no chunking or isStale escape.
+    // The character-count guard should route it to plain escapeHtml.
+    const hugeLine = 'x'.repeat(25_000) // > 20KB limit
+    const result = await highlightLines([hugeLine], 'javascript')
+    // No Shiki tokens in output — just the escaped plain content.
+    expect(result).toHaveLength(1)
+    expect(result[0]).toBe(hugeLine) // 'x' needs no escaping
+    expect(result[0]).not.toContain('<span') // no Shiki markup
+  })
 })

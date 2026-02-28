@@ -7,17 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLogJSON(t *testing.T) {
-	args := LogJSON("@", 5)
-	assert.Contains(t, args, "--no-graph")
-	assert.Contains(t, args, "--color")
-	assert.Contains(t, args, "never")
-	assert.Contains(t, args, "-r")
-	assert.Contains(t, args, "@")
-	assert.Contains(t, args, "--limit")
-	assert.Contains(t, args, "5")
-}
-
 func TestLogGraph(t *testing.T) {
 	args := LogGraph("main..@", 500)
 	assert.Equal(t, "log", args[0])
@@ -27,7 +16,7 @@ func TestLogGraph(t *testing.T) {
 	assert.Contains(t, args, "main..@")
 	assert.Contains(t, args, "--limit")
 	assert.Contains(t, args, "500")
-	// Must NOT contain --no-graph (unlike LogJSON) — graph chars encode topology
+	// Must NOT contain --no-graph — graph chars encode topology
 	assert.NotContains(t, args, "--no-graph")
 	// Template must use \x1F field separator (not tabs, which appear in descriptions)
 	joined := strings.Join(args, " ")
@@ -282,224 +271,100 @@ func TestParseFilesBatch_EmptyInput(t *testing.T) {
 	assert.Empty(t, got)
 }
 
-func TestDiffSummary(t *testing.T) {
-	got := DiffSummary("abc")
-	assert.Equal(t, []string{"diff", "--summary", "--color", "never", "-r", "abc", "--ignore-working-copy"}, got)
+func TestFilesTemplate(t *testing.T) {
+	args := FilesTemplate("abc")
+	assert.Equal(t, "log", args[0])
+	assert.Contains(t, args, "-r")
+	assert.Contains(t, args, "abc")
+	assert.Contains(t, args, "--no-graph")
+	assert.Contains(t, args, "--ignore-working-copy")
+	joined := strings.Join(args, " ")
+	// Single template combines file stats + conflict info
+	assert.Contains(t, joined, "diff().stat(")
+	assert.Contains(t, joined, "status_char()")
+	assert.Contains(t, joined, "lines_added()")
+	assert.Contains(t, joined, "lines_removed()")
+	assert.Contains(t, joined, "conflicted_files")
+	assert.Contains(t, joined, "conflict_side_count()")
+	assert.Contains(t, joined, `\x1F`)
+	assert.Contains(t, joined, `\x1E`)
 }
 
-func TestParseDiffSummary(t *testing.T) {
+func TestParseFilesTemplate(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
 		want  []FileChange
 	}{
 		{
-			name:  "mixed changes",
-			input: "M src/main.go\nA new_file.go\nD old_file.go\n",
+			name:  "files only, no conflicts",
+			input: "M\x1Fsrc/main.go\x1F7\x1F3\nA\x1Fnew.go\x1F5\x1F0\x1E",
 			want: []FileChange{
-				{Type: "M", Path: "src/main.go"},
-				{Type: "A", Path: "new_file.go"},
-				{Type: "D", Path: "old_file.go"},
+				{Type: "M", Path: "src/main.go", Additions: 7, Deletions: 3},
+				{Type: "A", Path: "new.go", Additions: 5, Deletions: 0},
 			},
 		},
 		{
-			name:  "empty output",
-			input: "",
+			name:  "file with conflict flag set",
+			input: "M\x1Fa.go\x1F2\x1F1\nM\x1Fb.go\x1F0\x1F0\x1Eb.go\x1F2",
+			want: []FileChange{
+				{Type: "M", Path: "a.go", Additions: 2, Deletions: 1},
+				{Type: "M", Path: "b.go", Conflict: true, ConflictSides: 2},
+			},
+		},
+		{
+			// Merge commits can have conflicted files with no diff hunks.
+			// They must be appended (not dropped) so the UI can show them.
+			name:  "conflict-only file appended",
+			input: "M\x1Fa.go\x1F1\x1F0\x1Ephantom.go\x1F3",
+			want: []FileChange{
+				{Type: "M", Path: "a.go", Additions: 1},
+				{Type: "M", Path: "phantom.go", Conflict: true, ConflictSides: 3},
+			},
+		},
+		{
+			// Multi-revision revsets can emit the same conflict path twice.
+			// byPath-keyed merge dedups so {#each} keys stay unique.
+			// Last-write-wins (same as old MergeConflicts map behavior).
+			name:  "duplicate conflict paths deduped",
+			input: "\x1Efile.go\x1F2\nfile.go\x1F3",
+			want: []FileChange{
+				{Type: "M", Path: "file.go", Conflict: true, ConflictSides: 3},
+			},
+		},
+		{
+			// Multi-revision revsets emit the template PER-COMMIT. A file
+			// touched in both commits appears twice in the files section.
+			// Stats are summed; Type from the first (newest) occurrence.
+			// Without this, duplicate FileChange entries break {#each} keys.
+			name:  "duplicate file paths (multi-rev) — stats summed",
+			input: "M\x1Fa.go\x1F3\x1F1\nA\x1Fa.go\x1F5\x1F0\x1E",
+			want: []FileChange{
+				{Type: "M", Path: "a.go", Additions: 8, Deletions: 1},
+			},
+		},
+		{
+			// Clean revision — both template sections empty but \x1E always present.
+			name:  "empty sections (clean revision)",
+			input: "\x1E",
 			want:  []FileChange{},
 		},
 		{
-			name:  "whitespace only",
-			input: "  \n  \n",
-			want:  []FileChange{},
-		},
-		{
-			// Regression: rename brace syntax was passed through verbatim.
-			// Squash/split file selection then sent the brace syntax back to
-			// jj as a fileset, which silently matched nothing. Now we expand
-			// to the destination path.
-			name:  "renamed file (full rename)",
-			input: "R {old_name.go => new_name.go}\n",
+			// DiffStatEntry.path() returns the DESTINATION for renames — no
+			// brace expansion needed. Template output is already the dest path.
+			name:  "rename has destination path (no braces)",
+			input: "R\x1Fnew_name.go\x1F10\x1F0\x1E",
 			want: []FileChange{
-				{Type: "R", Path: "new_name.go"},
-			},
-		},
-		{
-			name:  "renamed file (partial: dir changed, name same)",
-			input: "R dir/{a => b}/file.txt\n",
-			want: []FileChange{
-				{Type: "R", Path: "dir/b/file.txt"},
-			},
-		},
-		{
-			name:  "renamed file (directory move with suffix)",
-			input: "R sandbox/{ => notes/obol}/01-obolhuman/main.go\n",
-			want: []FileChange{
-				{Type: "R", Path: "sandbox/notes/obol/01-obolhuman/main.go"},
+				{Type: "R", Path: "new_name.go", Additions: 10},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParseDiffSummary(tt.input)
+			got := ParseFilesTemplate(tt.input)
 			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-func TestExpandRenamePath(t *testing.T) {
-	cases := []struct {
-		in, out string
-	}{
-		{"plain/path.go", "plain/path.go"},                                       // no rename
-		{"{old => new}", "new"},                                                  // full rename
-		{"dir/{a => b}/file.txt", "dir/b/file.txt"},                              // dir rename
-		{"sandbox/{ => notes/obol}/main.go", "sandbox/notes/obol/main.go"},       // empty old (file added to new dir)
-		{"sandbox/{old => }/main.go", "sandbox//main.go"},                        // empty new (odd but handled)
-		{"path with spaces/{a b => c d}.txt", "path with spaces/c d.txt"},        // spaces in names
-		{"path/with => arrow but no braces", "path/with => arrow but no braces"}, // arrow without braces → unchanged
-		{"{weird{file}.txt => weird{file}2.txt}", "weird{file}2.txt"},            // literal braces in filename — outermost delimiters win
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.out, expandRenamePath(tc.in), "input: %q", tc.in)
-	}
-}
-
-func TestDiffStat(t *testing.T) {
-	got := DiffStat("abc")
-	assert.Equal(t, []string{"diff", "--stat", "--color", "never", "-r", "abc", "--ignore-working-copy", "--config", "ui.term-width=500"}, got)
-}
-
-func TestParseDiffStat(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  map[string]FileStat
-	}{
-		{
-			name: "multiple files",
-			input: ` src/main.go | 15 +++++++++------
- new_file.go |  3 +++
- 2 files changed, 12 insertions(+), 6 deletions(-)
-`,
-			want: map[string]FileStat{
-				"src/main.go": {Additions: 9, Deletions: 6},
-				"new_file.go": {Additions: 3, Deletions: 0},
-			},
-		},
-		{
-			name:  "empty output",
-			input: "",
-			want:  map[string]FileStat{},
-		},
-		{
-			name: "deletions only",
-			input: ` old.go | 5 -----
- 1 file changed, 5 deletions(-)
-`,
-			want: map[string]FileStat{
-				"old.go": {Additions: 0, Deletions: 5},
-			},
-		},
-		{
-			name: "path with spaces",
-			input: ` path with spaces/file.go | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
-`,
-			want: map[string]FileStat{
-				"path with spaces/file.go": {Additions: 1, Deletions: 1},
-			},
-		},
-		{
-			name: "rename with braces",
-			input: ` src/{old.go => new.go} | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
-`,
-			want: map[string]FileStat{
-				"src/new.go": {Additions: 2, Deletions: 2},
-			},
-		},
-		{
-			name: "rename entire path",
-			input: ` {old_dir/file.go => new_dir/file.go} | 6 +++---
- 1 file changed, 3 insertions(+), 3 deletions(-)
-`,
-			want: map[string]FileStat{
-				"new_dir/file.go": {Additions: 3, Deletions: 3},
-			},
-		},
-		{
-			name: "proportional scaling large file",
-			input: ` big.go | 100 +++++++++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 99 insertions(+), 1 deletion(-)
-`,
-			want: map[string]FileStat{
-				"big.go": {Additions: 98, Deletions: 2},
-			},
-		},
-		{
-			// Real jj output for binary files. statLineRe requires [+-]+ bar,
-			// so binaries are intentionally excluded (0/0 stats via MergeStats zero-value).
-			name: "binary file (no bar)",
-			input: `binary.bin | (binary) +100 bytes
-1 file changed, 0 insertions(+), 0 deletions(-)
-`,
-			want: map[string]FileStat{},
-		},
-		{
-			// Real jj output for pure renames (no content change). Also excluded
-			// by statLineRe (| 0 has no bar). FileChange gets 0/0 from MergeStats.
-			name: "pure rename (no bar)",
-			input: `{file.txt => renamed.txt} | 0
-1 file changed, 0 insertions(+), 0 deletions(-)
-`,
-			want: map[string]FileStat{},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ParseDiffStat(tt.input)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestMergeStats(t *testing.T) {
-	files := []FileChange{
-		{Type: "M", Path: "a.go"},
-		{Type: "A", Path: "b.go"},
-		{Type: "D", Path: "c.go"},
-	}
-	stats := map[string]FileStat{
-		"a.go": {Additions: 10, Deletions: 3},
-		"b.go": {Additions: 5, Deletions: 0},
-	}
-	MergeStats(files, stats)
-	assert.Equal(t, 10, files[0].Additions)
-	assert.Equal(t, 3, files[0].Deletions)
-	assert.Equal(t, 5, files[1].Additions)
-	assert.Equal(t, 0, files[1].Deletions)
-	// c.go not in stats, should remain zero
-	assert.Equal(t, 0, files[2].Additions)
-	assert.Equal(t, 0, files[2].Deletions)
-}
-
-func TestMergeStats_TruncatedPaths(t *testing.T) {
-	files := []FileChange{
-		{Type: "M", Path: "internal/service/machineidentityservice/v1alpha/service_azure.go"},
-		{Type: "M", Path: "obol/cmd/obol-agent/internal/azure/vtpm.go"},
-	}
-	// Simulate truncated paths from narrow terminal stat output
-	stats := map[string]FileStat{
-		"...rvice/machineidentityservice/v1alpha/service_azure.go": {Additions: 5, Deletions: 2},
-		"obol/cmd/obol-agent/internal/azure/vtpm.go":               {Additions: 107, Deletions: 36},
-	}
-	MergeStats(files, stats)
-	// Truncated path should match via suffix
-	assert.Equal(t, 5, files[0].Additions)
-	assert.Equal(t, 2, files[0].Deletions)
-	// Exact match still works
-	assert.Equal(t, 107, files[1].Additions)
-	assert.Equal(t, 36, files[1].Deletions)
 }
 
 func TestBookmarkMove(t *testing.T) {
@@ -710,20 +575,6 @@ func TestParseWorkspaceList_Empty(t *testing.T) {
 	assert.Empty(t, ws)
 }
 
-func TestConflictedFiles(t *testing.T) {
-	args := ConflictedFiles("abc")
-	assert.Equal(t, "log", args[0])
-	assert.Contains(t, args, "-r")
-	assert.Contains(t, args, "abc")
-	assert.Contains(t, args, "--no-graph")
-	assert.Contains(t, args, "--ignore-working-copy")
-	// Template assertions — position-independent
-	joined := strings.Join(args, " ")
-	assert.Contains(t, joined, "conflicted_files")
-	assert.Contains(t, joined, "conflict_side_count")
-	assert.Contains(t, joined, `\x1F`)
-}
-
 func TestResolve(t *testing.T) {
 	got := Resolve("abc", "src/main.go", ":ours")
 	assert.Equal(t, []string{"resolve", "--tool", ":ours", "-r", "abc", `file:"src/main.go"`}, got)
@@ -734,87 +585,3 @@ func TestResolve_EscapedFile(t *testing.T) {
 	assert.Equal(t, []string{"resolve", "--tool", ":theirs", "-r", "abc", `file:"path with \"quotes\".go"`}, got)
 }
 
-func TestParseConflictedFiles(t *testing.T) {
-	output := "src/main.go\x1F2\nREADME.md\x1F3\n"
-	entries := ParseConflictedFiles(output)
-	assert.Equal(t, []ConflictEntry{
-		{Path: "src/main.go", Sides: 2},
-		{Path: "README.md", Sides: 3},
-	}, entries)
-}
-
-func TestParseConflictedFiles_Malformed(t *testing.T) {
-	// Defensive branch: line missing \x1F field → Sides defaults to 0.
-	// Should never happen with jj >= 0.36, but the parser is lenient so a
-	// future template change doesn't crash the handler. Frontend falls back
-	// to marker-counting when conflict_sides == 0.
-	output := "src/main.go\nalso/no-field.go\x1Fnot-a-number\n"
-	entries := ParseConflictedFiles(output)
-	assert.Equal(t, []ConflictEntry{
-		{Path: "src/main.go", Sides: 0},
-		{Path: "also/no-field.go", Sides: 0},
-	}, entries)
-}
-
-func TestParseConflictedFiles_Empty(t *testing.T) {
-	entries := ParseConflictedFiles("")
-	assert.Empty(t, entries)
-	assert.NotNil(t, entries)
-}
-
-func TestMergeConflicts_DuplicatePaths(t *testing.T) {
-	// Multi-revision revsets (jj log -r 'X|Y') can produce the same path twice
-	// when both commits conflict on it. The byPath map dedups; append loop must
-	// iterate the map, not the original slice, to avoid duplicate FileChange
-	// entries (which would cause duplicate {#each} keys in the frontend).
-	conflicts := []ConflictEntry{
-		{Path: "file.go", Sides: 2},
-		{Path: "file.go", Sides: 3}, // last-write-wins in byPath map
-	}
-	// Conflict-only case (not in DiffSummary) — this is where the bug was.
-	result := MergeConflicts([]FileChange{}, conflicts)
-	assert.Len(t, result, 1, "duplicate paths must be deduped")
-	assert.Equal(t, "file.go", result[0].Path)
-	assert.Equal(t, 3, result[0].ConflictSides, "last entry wins in byPath map")
-}
-
-func TestMergeConflicts(t *testing.T) {
-	files := []FileChange{
-		{Type: "M", Path: "a.go"},
-		{Type: "M", Path: "b.go"},
-		{Type: "A", Path: "c.go"},
-	}
-	files = MergeConflicts(files, []ConflictEntry{{Path: "b.go", Sides: 2}})
-	assert.Len(t, files, 3)
-	assert.False(t, files[0].Conflict)
-	assert.True(t, files[1].Conflict)
-	assert.Equal(t, 2, files[1].ConflictSides)
-	assert.False(t, files[2].Conflict)
-	assert.Equal(t, 0, files[2].ConflictSides)
-}
-
-func TestMergeConflicts_NoConflicts(t *testing.T) {
-	files := []FileChange{{Type: "M", Path: "a.go"}}
-	for _, conflicts := range [][]ConflictEntry{nil, {}} {
-		result := MergeConflicts(files, conflicts)
-		assert.Len(t, result, 1)
-		assert.False(t, result[0].Conflict)
-	}
-}
-
-func TestMergeConflicts_AppendsConflictOnlyFiles(t *testing.T) {
-	files := []FileChange{
-		{Type: "M", Path: "a.go"},
-	}
-	files = MergeConflicts(files, []ConflictEntry{
-		{Path: "a.go", Sides: 2},
-		{Path: "conflict-only.txt", Sides: 3},
-	})
-	assert.Len(t, files, 2)
-	assert.True(t, files[0].Conflict)
-	assert.Equal(t, 2, files[0].ConflictSides)
-	assert.Equal(t, "conflict-only.txt", files[1].Path)
-	assert.Equal(t, "M", files[1].Type)
-	assert.True(t, files[1].Conflict)
-	assert.Equal(t, 3, files[1].ConflictSides)
-}
