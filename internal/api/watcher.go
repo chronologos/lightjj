@@ -149,8 +149,11 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 			cancel()
 			if err != nil {
 				consecutiveErrors++
-				if consecutiveErrors == 3 {
-					log.Printf("watcher: snapshot failed 3x (%v); repo may be locked, auto-refresh degraded", err)
+				// Log on 3rd failure, then every 12 after (~1 min at 5s interval).
+				// `== 3` only would log once for a 10-minute lock; this surfaces
+				// persistent failure without spamming transient blips.
+				if consecutiveErrors == 3 || (consecutiveErrors > 3 && consecutiveErrors%12 == 0) {
+					log.Printf("watcher: snapshot failed %dx (%v); repo may be locked, auto-refresh degraded", consecutiveErrors, err)
 				}
 			} else {
 				consecutiveErrors = 0

@@ -24,6 +24,26 @@ func TestLocalRunner_Run_Success(t *testing.T) {
 	assert.Equal(t, "hello", string(out))
 }
 
+func TestLocalRunner_Run_SuccessWithStderrOnly(t *testing.T) {
+	// jj mutations (new, abandon, rebase, etc) write confirmation to stderr
+	// with empty stdout. `jj git push` with no tracked bookmarks writes the
+	// "Nothing changed" warning to stderr and exits 0. Without returning
+	// stderr on the empty-stdout path, all mutation output was silently lost.
+	r := shRunner()
+	out, err := r.Run(context.Background(), []string{"-c", "echo 'Working copy now at: xyz' >&2"})
+	require.NoError(t, err)
+	assert.Equal(t, "Working copy now at: xyz", string(out))
+}
+
+func TestLocalRunner_Run_SuccessStdoutWinsOverStderr(t *testing.T) {
+	// Read commands (diff, log) may emit progress to stderr while producing
+	// their real output on stdout. Stdout must always win when non-empty.
+	r := shRunner()
+	out, err := r.Run(context.Background(), []string{"-c", "echo 'progress...' >&2; echo 'diff output'"})
+	require.NoError(t, err)
+	assert.Equal(t, "diff output", string(out))
+}
+
 func TestLocalRunner_Run_ExitWithStderr(t *testing.T) {
 	r := shRunner()
 	_, err := r.Run(context.Background(), []string{"-c", "echo boom >&2; exit 3"})
