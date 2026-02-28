@@ -185,6 +185,44 @@ describe('response cache', () => {
     expect(_testInternals.cache.has('diff:revNew')).toBe(true)
   })
 
+  it('re-storing an existing key at capacity bumps it (no spurious eviction)', async () => {
+    // Regression: Map.set() on an existing key does NOT move it in insertion
+    // order. Without delete-first in storeInCache, the old pre-check
+    // `if (size >= MAX)` would evict rev0 even when the key being stored
+    // (diff:target) is already present — no net growth, wrong entry killed.
+    //
+    // Happens in practice when api.revision() seeds diff:X while diff:X is
+    // already cached but files:X / desc:X aren't (partial cache state).
+    const MAX = _testInternals.MAX_CACHE_SIZE
+    mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
+
+    // Fill to MAX - 2 (leave room for files: + desc: seeds)
+    for (let i = 0; i < MAX - 2; i++) {
+      await api.diff(`rev${i}`)
+    }
+    // diff:target is already in cache; files:target and desc:target are not.
+    // isCached('target') → false → api.revision() will fetch and seed all three.
+    const target = `rev${MAX - 3}`
+    expect(_testInternals.cache.has(`diff:${target}`)).toBe(true)
+    expect(_testInternals.cache.size).toBe(MAX - 2)
+
+    mockFetch.mockResolvedValueOnce(mockResponse({
+      diff: '+x', files: [], description: '',
+    }, 'op1'))
+    await api.revision(target)
+
+    // Now at MAX (added files:target + desc:target). diff:target was re-stored.
+    // With delete-first: diff:target was bumped to newest, no eviction.
+    // rev0 (oldest) must still be present — net growth was only +2, within cap.
+    expect(_testInternals.cache.size).toBe(MAX)
+    expect(_testInternals.cache.has('diff:rev0')).toBe(true)
+    // diff:target should now be at the END (bumped), verified by adding one
+    // more entry and checking it's NOT evicted:
+    await api.diff('overflow')
+    expect(_testInternals.cache.has(`diff:${target}`)).toBe(true) // bumped, survives
+    expect(_testInternals.cache.has('diff:rev0')).toBe(false)     // oldest, evicted
+  })
+
   it('bumps accessed entries to end of eviction order (LRU)', async () => {
     const MAX = _testInternals.MAX_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))

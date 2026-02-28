@@ -64,6 +64,27 @@
   let collapsedFiles = new SvelteSet<string>()
   // Persist collapse state per revision so switching back restores it
   let collapseStateCache = new Map<string, Set<string>>()
+
+  // Highlights + word-diffs LRU cache, keyed by activeRevisionId (commit_id or
+  // multi-revset string). The diff text is cached in api.ts, but Shiki + LCS
+  // computation take ~500ms for large diffs and were being re-run on every
+  // revisit because lastHighlightedDiff only tracks the MOST RECENT diff.
+  // Keying by commit_id is correct: rewrites change commit_id → automatic
+  // invalidation. Change_id (what collapseStateCache uses) would serve stale
+  // highlights after a describe/rebase.
+  const DERIVED_CACHE_SIZE = 30
+  type DerivedCacheEntry = {
+    highlights: Map<string, Map<string, string>>
+    wordDiffs: Map<string, Map<string, Map<number, WordSpan[]>>>
+  }
+  let derivedCache = new Map<string, DerivedCacheEntry>()
+
+  function lruSet<K, V>(cache: Map<K, V>, key: K, value: V, max: number) {
+    // LRU bump: delete first so set() moves to end
+    cache.delete(key)
+    cache.set(key, value)
+    if (cache.size > max) cache.delete(cache.keys().next().value!)
+  }
   // Expanded files: store full-context DiffFile per file path
   let expandedDiffs: Map<string, DiffFile> = $state(new Map())
 
@@ -263,7 +284,7 @@
     return fileMap
   }
 
-  async function computeAllWordDiffs(files: DiffFile[]) {
+  async function computeAllWordDiffs(files: DiffFile[], cacheKey?: string) {
     const gen = ++wordDiffGeneration
     const done = new Map<string, Map<string, Map<number, WordSpan[]>>>()
     for (let i = 0; i < files.length; i++) {
@@ -274,6 +295,12 @@
       if (gen !== wordDiffGeneration) return
       done.set(file.filePath, computeWordDiffsForFile(file))
       wordDiffsByFile = new Map(done)
+    }
+    // Persist to derivedCache so revisits skip LCS recomputation.
+    if (gen === wordDiffGeneration && cacheKey) {
+      const entry = derivedCache.get(cacheKey) ?? { highlights: new Map(), wordDiffs: new Map() }
+      entry.wordDiffs = wordDiffsByFile
+      lruSet(derivedCache, cacheKey, entry, DERIVED_CACHE_SIZE)
     }
   }
 
@@ -286,11 +313,15 @@
   let lastHighlightedDiff = ''
   let highlightTimer: number | undefined
 
-  // Highlight a single file's hunks and return a Map of line keys → HTML
-  async function highlightFile(file: DiffFile): Promise<Map<string, string>> {
+  // Highlight a single file's hunks and return a Map of line keys → HTML.
+  // isStale lets highlightLines abort between chunks when the user navigates
+  // mid-highlight — the previous revision's in-flight Shiki work shouldn't
+  // block the next j/k keypress's paint.
+  async function highlightFile(file: DiffFile, isStale: () => boolean): Promise<Map<string, string>> {
     const lang = detectLanguage(file.filePath)
     const fileMap = new Map<string, string>()
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
+      if (isStale()) return fileMap
       const hunk = file.hunks[hunkIdx]
       const groups = new Map<DiffLine['type'], { idx: number; content: string }[]>()
       hunk.lines.forEach((line, i) => {
@@ -299,7 +330,8 @@
         groups.set(line.type, list)
       })
       for (const [type, group] of groups) {
-        const highlighted = await highlightLines(group.map(g => g.content), lang)
+        const highlighted = await highlightLines(group.map(g => g.content), lang, isStale)
+        if (isStale()) return fileMap
         const prefix = type === 'add' ? '+' : type === 'remove' ? '-' : ' '
         group.forEach((g, j) => {
           fileMap.set(
@@ -319,8 +351,12 @@
     return total
   }
 
-  async function highlightDiff(files: DiffFile[], immediate: boolean) {
+  async function highlightDiff(files: DiffFile[], immediate: boolean, cacheKey?: string) {
     const gen = ++highlightGeneration
+    // isStale is passed all the way down to highlightLines' chunk loop so
+    // a single large file can be aborted mid-tokenization. Without this, a
+    // 200-line file's synchronous codeToHtml blocks the next j/k's paint.
+    const isStale = () => gen !== highlightGeneration
     const done = new Map<string, Map<string, string>>()
 
     // Phase 1: highlight first files immediately (up to ~100 lines) — no yield
@@ -333,8 +369,8 @@
         const file = files[i]
         let fileLines = 0
         for (const h of file.hunks) fileLines += h.lines.length
-        done.set(file.filePath, await highlightFile(file))
-        if (gen !== highlightGeneration) return
+        done.set(file.filePath, await highlightFile(file, isStale))
+        if (isStale()) return
         linesProcessed += fileLines
         immediateEnd = i + 1
       }
@@ -344,9 +380,17 @@
     // Phase 2: highlight remaining files, yielding between each
     for (let i = immediateEnd; i < files.length; i++) {
       await new Promise<void>(resolve => setTimeout(resolve, 0))
-      if (gen !== highlightGeneration) return
-      done.set(files[i].filePath, await highlightFile(files[i]))
-      if (gen === highlightGeneration) highlightsByFile = new Map(done)
+      if (isStale()) return
+      done.set(files[i].filePath, await highlightFile(files[i], isStale))
+      if (!isStale()) highlightsByFile = new Map(done)
+    }
+
+    // All files highlighted for this generation — persist to derivedCache so
+    // revisiting this revision is instant (no Shiki re-run).
+    if (!isStale() && cacheKey) {
+      const entry = derivedCache.get(cacheKey) ?? { highlights: new Map(), wordDiffs: new Map() }
+      entry.highlights = highlightsByFile
+      lruSet(derivedCache, cacheKey, entry, DERIVED_CACHE_SIZE)
     }
   }
 
@@ -359,6 +403,21 @@
     clearTimeout(highlightTimer)
     if (parsedDiff.length > 0 && diffContent !== lastHighlightedDiff) {
       lastHighlightedDiff = diffContent
+
+      // Check derivedCache first — revisiting a recently-viewed revision
+      // should restore highlights instantly instead of re-running Shiki.
+      // Keyed by activeRevisionId (commit_id or revset string) so rewrites
+      // naturally invalidate (new commit_id → cache miss).
+      const cacheKey = activeRevisionId
+      const cached = cacheKey ? derivedCache.get(cacheKey) : undefined
+      if (cached && cached.highlights.size > 0) {
+        highlightGeneration++ // abort any in-flight highlightDiff
+        highlightsByFile = cached.highlights
+        // LRU bump — touching this entry moves it to newest.
+        lruSet(derivedCache, cacheKey!, cached, DERIVED_CACHE_SIZE)
+        return () => clearTimeout(highlightTimer)
+      }
+
       // Clear stale highlights immediately to prevent wrong-color flicker
       // when old and new diffs share the same file/hunk/line keys
       highlightsByFile = new Map()
@@ -367,7 +426,7 @@
       // 100 lines) so j/k navigation stays snappy. The 0ms delay is too
       // short to produce a visible plain-text flash.
       const filesToHighlight = effectiveFiles
-      highlightTimer = setTimeout(() => highlightDiff(filesToHighlight, true), 0)
+      highlightTimer = setTimeout(() => highlightDiff(filesToHighlight, true, cacheKey), 0)
     } else if (parsedDiff.length === 0) {
       lastHighlightedDiff = ''
       highlightsByFile = new Map()
@@ -406,23 +465,46 @@
       }
     }
     lastWordDiffFiles = files
-    computeAllWordDiffs(files)
+
+    // Check derivedCache — revisiting a recently-viewed revision restores
+    // word diffs instantly (no LCS recompute). Keyed by activeRevisionId
+    // (commit_id) so rewrites naturally invalidate.
+    const cacheKey = activeRevisionId
+    const cached = cacheKey ? derivedCache.get(cacheKey) : undefined
+    if (cached && cached.wordDiffs.size > 0) {
+      wordDiffGeneration++ // abort any in-flight computeAllWordDiffs
+      wordDiffsByFile = cached.wordDiffs
+      return
+    }
+
+    computeAllWordDiffs(files, cacheKey)
   })
 
-  // Save/restore collapse state when revision changes
-  let lastRevisionId: string | null = null
+  // Per-diff-identity reset — fires when the diff CONTENT being shown changes,
+  // keyed by activeRevisionId (commit_id for single-rev, revset string for
+  // multi-check). Cursor movement (j/k) in multi-check mode changes
+  // selectedRevision but NOT activeRevisionId → this effect does not fire,
+  // so expandedDiffs/editing state/search query correctly persist.
+  //
+  // collapseStateCache is keyed by change_id (survives rewrites) when in
+  // single-rev mode; multi-check collapse state is ephemeral (not saved).
+  let lastActiveRevId: string | undefined = undefined
+  let lastCollapseCacheKey: string | null = null
   $effect(() => {
-    const currentId = selectedRevision ? effectiveId(selectedRevision.commit) : null
-    if (currentId === lastRevisionId) return
-    // Save current state before switching
-    if (lastRevisionId && collapsedFiles.size > 0) {
-      collapseStateCache.set(lastRevisionId, new Set(collapsedFiles))
-      if (collapseStateCache.size > 50) {
-        // Evict oldest entry (Map preserves insertion order)
-        collapseStateCache.delete(collapseStateCache.keys().next().value!)
-      }
+    if (activeRevisionId === lastActiveRevId) return
+
+    // Save collapse state for the OUTGOING diff (single-rev only — multi-check
+    // state is ephemeral). Must happen before collapsedFiles.clear().
+    if (lastCollapseCacheKey && collapsedFiles.size > 0) {
+      lruSet(collapseStateCache, lastCollapseCacheKey, new Set(collapsedFiles), 50)
     }
-    // Restore saved state or start expanded
+
+    lastActiveRevId = activeRevisionId
+    // Compute cache key for the INCOMING diff. Null for multi-check.
+    lastCollapseCacheKey = (selectedRevision && checkedRevisions.size === 0)
+      ? effectiveId(selectedRevision.commit)
+      : null
+
     collapsedFiles.clear()
     expandedDiffs = new Map()
     editingFiles.clear()
@@ -431,19 +513,21 @@
     editError = ''
     activeFilePath = null
     descExpanded = false
-    conflictFetchGen++ // invalidate any in-flight fileShow requests
+    conflictFetchGen++ // invalidate in-flight fileShow requests
     conflictFileDiffs = new Map()
-    // Suppress chevron transition during revision switch (prevents j/k flapping)
+    if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
+
+    // Suppress chevron transition during diff switch (prevents j/k flapping)
     panelContentEl?.classList.add('skip-transitions')
     requestAnimationFrame(() => panelContentEl?.classList.remove('skip-transitions'))
-    const saved = currentId ? collapseStateCache.get(currentId) : null
+
+    // Restore collapse state for the INCOMING diff
+    const saved = lastCollapseCacheKey ? collapseStateCache.get(lastCollapseCacheKey) : null
     if (saved) {
       for (const path of saved) collapsedFiles.add(path)
-      // Suppress auto-collapse for cached revisions — user's manual expand/collapse
-      // choices are already preserved in the cache
+      // Suppress auto-collapse — user's manual choices are in the cache
       lastAutoCollapseDiff = diffContent
     }
-    lastRevisionId = currentId
   })
 
   // Auto-collapse large files to prevent DOM flooding
@@ -509,7 +593,7 @@
   // Reset collapsed files when diff changes significantly (e.g., multi-select)
   export function resetCollapsed() {
     collapsedFiles.clear()
-    if (lastRevisionId) collapseStateCache.delete(lastRevisionId)
+    if (lastCollapseCacheKey) collapseStateCache.delete(lastCollapseCacheKey)
   }
 
   // --- Diff search ---
@@ -573,18 +657,6 @@
       currentMatchIdx = 0
     } else if (currentMatchIdx >= searchMatches.length) {
       currentMatchIdx = searchMatches.length - 1
-    }
-  })
-
-  // Reset search when revision changes
-  let lastSearchRevId: string | null = null
-  $effect(() => {
-    const id = selectedRevision ? effectiveId(selectedRevision.commit) : null
-    if (id === lastSearchRevId) return
-    lastSearchRevId = id
-    if (searchOpen) {
-      searchQuery = ''
-      currentMatchIdx = 0
     }
   })
 
@@ -729,9 +801,13 @@
   export function rehighlight() {
     lastHighlightedDiff = ''
     highlightsByFile = new Map()
+    // Cached highlights are theme-specific — invalidate them so revisits don't
+    // restore wrong-theme colors. Word diffs are theme-agnostic; keep them.
+    for (const entry of derivedCache.values()) entry.highlights = new Map()
     clearTimeout(highlightTimer)
     if (parsedDiff.length > 0) {
-      highlightTimer = setTimeout(() => highlightDiff(parsedDiff, false), 50)
+      // effectiveFiles (not parsedDiff) — preserves expanded-context highlights
+      highlightTimer = setTimeout(() => highlightDiff(effectiveFiles, false, activeRevisionId), 50)
     }
   }
 </script>

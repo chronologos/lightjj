@@ -243,9 +243,8 @@ func TestHandleGitPush(t *testing.T) {
 
 func TestHandleFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\nA new.go\n"))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 10 +++++++---\n new.go      |  5 +++++\n 2 files changed, 12 insertions(+), 3 deletions(-)\n"))
-	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput(
+		[]byte("M\x1Fsrc/main.go\x1F7\x1F3\nA\x1Fnew.go\x1F5\x1F0\x1E"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -278,9 +277,7 @@ func TestHandleFiles_MissingRevision(t *testing.T) {
 
 func TestHandleFiles_Empty(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte(""))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
-	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -362,11 +359,9 @@ func TestHandleFilesBatch_TooMany(t *testing.T) {
 
 func TestHandleRevision(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("M\x1Fsrc/main.go\x1F2\x1F1\x1E"))
 	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("diff --git a/src/main.go b/src/main.go\n"))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 3 ++-\n 1 file changed, 2 insertions(+), 1 deletion(-)\n"))
 	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("Fix the thing\n"))
-	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -394,14 +389,12 @@ func TestHandleRevision_MissingRevision(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestHandleRevision_SummaryError(t *testing.T) {
+func TestHandleRevision_FilesError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("bad")).SetError(fmt.Errorf("no such revision"))
+	runner.Expect(jj.FilesTemplate("bad")).SetError(fmt.Errorf("no such revision"))
 	// Parallel goroutines still fire; Allow() so Verify() doesn't fail on them.
 	runner.Allow(jj.Diff("bad", "", "never", "--tool", ":git")).SetOutput([]byte(""))
-	runner.Allow(jj.DiffStat("bad")).SetOutput([]byte(""))
 	runner.Allow(jj.GetDescription("bad")).SetOutput([]byte(""))
-	runner.Allow(jj.ConflictedFiles("bad")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -413,10 +406,8 @@ func TestHandleRevision_SummaryError(t *testing.T) {
 
 func TestHandleRevision_DescriptionErrorIsSoft(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E"))
 	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte(""))
-	runner.Allow(jj.DiffStat("abc")).SetOutput([]byte(""))
-	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
 	runner.Expect(jj.GetDescription("abc")).SetError(fmt.Errorf("template error"))
 	defer runner.Verify()
 
@@ -1087,13 +1078,9 @@ func TestHandleDescribe_StdinContent(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestHandleFiles_SummaryError(t *testing.T) {
+func TestHandleFiles_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetError(errors.New("summary failed"))
-	// Parallel commands (runAsync goroutines) may or may not complete before
-	// the handler returns on summary error — Allow, not Expect.
-	runner.Allow(jj.DiffStat("abc")).SetOutput([]byte(""))
-	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
+	runner.Expect(jj.FilesTemplate("abc")).SetError(errors.New("template failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1101,26 +1088,6 @@ func TestHandleFiles_SummaryError(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-func TestHandleFiles_StatError(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
-	runner.Expect(jj.DiffStat("abc")).SetError(errors.New("stat failed"))
-	runner.Allow(jj.ConflictedFiles("abc")).SetOutput([]byte(""))
-	defer runner.Verify()
-
-	srv := newTestServer(runner)
-	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var files []jj.FileChange
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
-	assert.Len(t, files, 1)
-	assert.Equal(t, 0, files[0].Additions) // stats not merged due to error
-	assert.Equal(t, 0, files[0].Deletions)
 }
 
 func TestHandleOpLog_CustomLimit(t *testing.T) {
@@ -1317,9 +1284,8 @@ func TestHandleResolve_RunnerError(t *testing.T) {
 
 func TestHandleFiles_WithConflicts(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\nM conflict.go\n"))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 10 +++++++---\n conflict.go |  5 +++++\n 2 files changed, 12 insertions(+), 3 deletions(-)\n"))
-	runner.Expect(jj.ConflictedFiles("abc")).SetOutput([]byte("conflict.go\x1F2\n"))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput(
+		[]byte("M\x1Fsrc/main.go\x1F7\x1F3\nM\x1Fconflict.go\x1F5\x1F0\x1Econflict.go\x1F2"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1339,9 +1305,8 @@ func TestHandleFiles_WithConflicts(t *testing.T) {
 
 func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(" src/main.go | 5 +++++\n 1 file changed\n"))
-	runner.Expect(jj.ConflictedFiles("abc")).SetOutput([]byte("phantom.go\x1F2\n"))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput(
+		[]byte("M\x1Fsrc/main.go\x1F5\x1F0\x1Ephantom.go\x1F2"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1356,28 +1321,6 @@ func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
 	assert.False(t, files[0].Conflict)
 	assert.Equal(t, "phantom.go", files[1].Path)
 	assert.True(t, files[1].Conflict)
-}
-
-func TestHandleFiles_ConflictError(t *testing.T) {
-	// Template call exits 0 on clean revisions — any error is genuine
-	// (SSH failure, bad revset, jj too old). Logged but response still
-	// succeeds with conflict flags unset (degraded UX, not fatal).
-	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.DiffSummary("abc")).SetOutput([]byte("M src/main.go\n"))
-	runner.Expect(jj.DiffStat("abc")).SetOutput([]byte(""))
-	runner.Expect(jj.ConflictedFiles("abc")).SetError(errors.New("template failed"))
-	defer runner.Verify()
-
-	srv := newTestServer(runner)
-	req := httptest.NewRequest("GET", "/api/files?revision=abc", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var files []jj.FileChange
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &files))
-	assert.Len(t, files, 1)
-	assert.False(t, files[0].Conflict) // graceful: no conflict data on error
 }
 
 func TestHandleFileShow(t *testing.T) {

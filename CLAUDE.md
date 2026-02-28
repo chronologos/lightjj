@@ -28,7 +28,7 @@ internal/
     commit_test.go         — Commit model tests
     bookmark.go            — Bookmark model + output parsers
     bookmark_test.go       — Bookmark parser tests
-    file_change.go         — FileChange model, DiffStat/DiffSummary/ConflictedFiles parsers, MergeStats, expandRenamePath
+    file_change.go         — FileChange model, FilesTemplate (single-call file stats + conflict info), ParseFilesTemplate
     selected_revisions.go  — Multi-revision selection helper
     workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (name→path map)
     workspace_store_test.go — Parser tests with real binary data
@@ -95,8 +95,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Use `--tool :git`** when requesting diff output for the web API. Users may have external diff formatters (difftastic) configured that output ANSI codes.
 - **Use `--color never`** for any jj output the backend will parse. Use `--color always` only if passing through to a terminal.
 - **Use `\x1F` (unit separator)** as the field delimiter in jj templates, not tabs. Tabs can appear in commit descriptions and break parsing.
-- **Prefer templates over human-output parsing.** Check `jj help -k templates` before writing regex/string parsers. `ConflictedFiles` uses `Commit.conflicted_files()` + `TreeEntry.conflict_side_count()` — structured integers, exits 0 on clean revisions, works with multi-revision revsets. No exit-code special-casing.
-- **`expandRenamePath` resolves jj's `{old => new}` brace syntax** to the destination path. Both `ParseDiffSummary` and `ParseDiffStat` call it — otherwise squash/split file selection passes the braces back to jj as a fileset, matching nothing.
+- **Prefer templates over human-output parsing.** Check `jj help -k templates` before writing regex/string parsers. `FilesTemplate` uses `self.diff().stat().files()` + `conflicted_files.map()` — one subprocess returns status char, path, exact +/- counts, and conflict side-counts. `DiffStatEntry.path()` returns the DESTINATION path for renames (no brace expansion needed). Exits 0 on clean revisions, works with multi-revision revsets, no regex.
 - **Parsers return empty slices, not nil.** This ensures JSON serialization produces `[]` not `null`.
 - **`NewServer(runner, repoDir)`** takes the resolved repo dir as second arg. Pass `""` for SSH mode or tests. The `RepoDir` enables workspace store reading and child process spawning.
 - **Workspace store parser** (`internal/jj/workspace_store.go`) manually parses protobuf wire format — no protobuf dependency. The `.jj/repo/workspace_store/index` file has a simple schema: `repeated Entry { string name = 1; string path = 2; }`.
@@ -167,6 +166,8 @@ Patterns learned from profiling j/k keyboard navigation:
 - **Guard `$derived` in hidden components.** `CommandPalette`'s `availableCommands` uses `if (!open) return []` to avoid recomputing when the palette is closed but its `commands` prop changes.
 - **Defer Shiki highlighting.** `highlightDiff` is called via `setTimeout(fn, 0)` so the browser paints the selection highlight before Shiki runs. The diff renders immediately with plain text; syntax colors appear one frame later.
 - **Progressive highlighting.** `highlightDiff` yields between files (`setTimeout(0)`) and updates `highlightsByFile` per-file. Already-highlighted files keep their inner Map reference, so only newly-highlighted `DiffFileView`s re-render.
+- **Cache derived computations by commit_id, not just the source data.** The diff text is cached in api.ts, but Shiki + word-diff LCS were being re-run on every revisit (~500ms) because `lastHighlightedDiff` tracked only the *most recent* diff. `derivedCache` (30-entry LRU keyed by `activeRevisionId`) persists `highlightsByFile`/`wordDiffsByFile` so revisits restore instantly. Commit_id keying means rewrites auto-invalidate. `rehighlight()` (theme toggle) clears only `.highlights` (word diffs are theme-agnostic).
+- **Chunk Shiki to keep j/k responsive.** `codeToHtml()` is synchronous and blocks the main thread — a 200-line file takes ~100-200ms. `highlightLines()` chunks at 30 lines with `setTimeout(0)` yields + an `isStale()` callback so the previous revision's in-flight highlight can abort mid-file when the user navigates. Sacrifices cross-chunk grammar state (e.g., multi-line comment spanning a boundary may mis-color one line) — rare and subtle vs. frequent frozen UI.
 - **`user-select: none`** on interactive lists prevents text selection artifacts during click/keyboard navigation.
 - **Svelte 5 effects run after DOM updates** — no need for `requestAnimationFrame` to query updated DOM in `$effect`.
 - **Fire-and-forget async in effects is fine** when the async function has its own error handling and generation counter for cancellation.

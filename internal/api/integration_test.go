@@ -270,10 +270,11 @@ func TestIntegrationFiles(t *testing.T) {
 }
 
 func TestIntegrationFiles_Rename(t *testing.T) {
-	// Regression: `jj diff --summary` outputs rename paths with brace syntax
-	// ("dir/{old => new}/file"). ParseDiffSummary must expand to the destination
-	// path. Otherwise squash/split file selection passes the brace syntax back
-	// to jj as a fileset, which matches nothing (silent failure).
+	// Rename paths must be the DESTINATION path, not brace syntax
+	// ("dir/{old => new}/file"). Otherwise squash/split file selection passes
+	// the brace syntax back to jj as a fileset, which matches nothing (silent
+	// failure). FilesTemplate uses DiffStatEntry.path() which returns the
+	// destination directly — no brace expansion needed.
 	r, jjExec := jjTestRepo(t)
 	t.Parallel()
 
@@ -286,7 +287,7 @@ func TestIntegrationFiles_Rename(t *testing.T) {
 		filepath.Join(r.RepoDir, "dir/a/file.txt"),
 		filepath.Join(r.RepoDir, "dir/b/file.txt"),
 	))
-	// DiffSummary uses --ignore-working-copy; trigger snapshot explicitly.
+	// FilesTemplate uses --ignore-working-copy; trigger snapshot explicitly.
 	jjExec("debug", "snapshot")
 
 	srv := NewServer(r, "")
@@ -1435,8 +1436,8 @@ func TestJourneyConflictResolveChildNotParent(t *testing.T) {
 // NewLocalRunner resolves the workspace root at startup so all jj commands
 // produce consistent repo-relative paths regardless of the starting CWD.
 // (Historical note: this mattered more when we used `jj resolve --list`,
-// which was CWD-sensitive. The conflicted_files template uses RepoPath which
-// is always repo-relative — but DiffSummary/DiffStat still need the fix.)
+// which was CWD-sensitive. The FilesTemplate uses RepoPath which is always
+// repo-relative, so this test now primarily guards against regression.)
 func TestIntegrationFilesFromSubdirectory(t *testing.T) {
 	r, _ := createConflict(t)
 	t.Parallel()

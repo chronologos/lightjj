@@ -1,13 +1,12 @@
 package jj
 
 import (
-	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 )
 
-// FileChange represents a file affected by a revision, as reported by `jj diff --summary`.
+// FileChange represents a file affected by a revision, with per-file stats and
+// conflict info. Populated by ParseFilesTemplate from structured template output.
 type FileChange struct {
 	Type          string `json:"type"`           // A (added), M (modified), D (deleted), R (renamed)
 	Path          string `json:"path"`
@@ -17,166 +16,91 @@ type FileChange struct {
 	ConflictSides int    `json:"conflict_sides"` // 2 for 2-sided, 3+ for N-way merges. 0 when not conflicted.
 }
 
-// FileStat holds per-file addition/deletion counts parsed from `jj diff --stat`.
-type FileStat struct {
-	Additions int
-	Deletions int
-}
-
-// DiffStat builds args for `jj diff --stat` which outputs per-file change counts.
-// Uses a wide term-width to prevent jj from truncating long file paths with "..."
-// when the server inherits a narrow COLUMNS from the launching terminal.
-func DiffStat(revision string) CommandArgs {
-	return []string{"diff", "--stat", "--color", "never", "-r", revision, "--ignore-working-copy", "--config", "ui.term-width=500"}
-}
-
-// statLineRe matches lines like: " file1.go | 15 +++++++++------"
-// Captures: filename, total count, bar graph chars.
-// The bar is proportional — for large files jj truncates it.
-// We use the total count and the +/- ratio in the bar to compute actual additions/deletions.
-var statLineRe = regexp.MustCompile(`^\s*(.+?)\s+\|\s+(\d+)\s+([+-]+)\s*$`)
-
-// expandRenamePath resolves jj's rename brace syntax to the destination path.
-// "dir/{old => new}/file.go" → "dir/new/file.go"
-// "{old => new}"             → "new"
-// Passes through paths without rename syntax unchanged.
+// FilesTemplate returns a single jj log template call that emits file stats
+// (status char, path, +/- line counts) AND conflict side-counts for one
+// revision. Replaces the prior DiffSummary + DiffStat + ConflictedFiles
+// three-subprocess pipeline with one call and structured output (no regex,
+// no brace-syntax expansion, exact line counts — DiffStatEntry gives integers,
+// not proportional ASCII bars).
 //
-// This is critical for squash/split file selection — passing the brace syntax
-// back to jj as a fileset argument fails silently (no files matched).
-func expandRenamePath(path string) string {
-	idx := strings.Index(path, " => ")
-	if idx < 0 {
-		return path
-	}
-	// jj's rename delimiters are always the outermost braces. Use Index for
-	// the first { and LastIndex for the last } so filenames containing literal
-	// braces (e.g. "weird{file}.txt") are handled correctly.
-	braceStart := strings.Index(path[:idx], "{")
-	braceEnd := strings.LastIndex(path[idx:], "}")
-	if braceStart < 0 || braceEnd < 0 {
-		return path
-	}
-	prefix := path[:braceStart]
-	newName := path[idx+4 : idx+braceEnd]
-	suffix := path[idx+braceEnd+1:]
-	return prefix + newName + suffix
+// Output: {files section}\x1E{conflicts section}
+//   files:     status_char\x1Fpath\x1Fadded\x1Fdeleted\n (joined)
+//   conflicts: path\x1Fside_count\n (joined)
+//
+// DiffStatEntry.path() returns the DESTINATION path for renames — no brace
+// expansion needed.
+//
+// Multi-revision caveat: `jj log -r 'X|Y'` runs the template PER-COMMIT (not
+// a net combined diff like `jj diff -r 'X|Y'`). ParseFilesTemplate sums stats
+// on duplicate paths so the file sidebar has no duplicate {#each} keys;
+// the Type and counts are approximate for files touched in multiple commits.
+func FilesTemplate(revision string) CommandArgs {
+	tmpl := `self.diff().stat(200).files().map(|f| ` +
+		`f.status_char() ++ "\x1F" ++ f.path() ++ "\x1F" ++ ` +
+		`stringify(f.lines_added()) ++ "\x1F" ++ stringify(f.lines_removed())` +
+		`).join("\n") ++ "\x1E" ++ ` +
+		`conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count())).join("\n")`
+	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
+		"--ignore-working-copy", "-T", tmpl}
 }
 
-// ParseDiffStat parses the output of `jj diff -r <rev> --stat --color never`.
-// Returns a map from file path to FileStat. The summary line at the end
-// ("N files changed, ...") is ignored.
-func ParseDiffStat(output string) map[string]FileStat {
-	stats := make(map[string]FileStat)
-	for _, line := range strings.Split(output, "\n") {
-		m := statLineRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		path := expandRenamePath(strings.TrimSpace(m[1]))
-		total := 0
-		fmt.Sscanf(m[2], "%d", &total)
-		bar := m[3]
-		plusCount := strings.Count(bar, "+")
-		minusCount := strings.Count(bar, "-")
-		barTotal := plusCount + minusCount
-		if barTotal > 0 && total > 0 {
-			// Scale proportionally: the bar may be truncated for large files
-			additions := (total * plusCount) / barTotal
-			deletions := total - additions
-			stats[path] = FileStat{Additions: additions, Deletions: deletions}
-		}
-	}
-	return stats
-}
+// ParseFilesTemplate parses FilesTemplate output into a []FileChange.
+// Conflict-only files (in conflicted_files but not in the diff — merge commits
+// can have conflicts with no diff hunks) are appended with Type="M".
+// Multi-revision revsets may emit the same conflict path multiple times;
+// the byPath-keyed merge deduplicates so {#each} keys stay unique.
+func ParseFilesTemplate(output string) []FileChange {
+	filesSection, conflictSection, _ := strings.Cut(output, "\x1E")
 
-// MergeStats enriches a slice of FileChange with stats from ParseDiffStat output.
-// Falls back to suffix matching when stat paths are truncated (e.g., "...dir/file.go").
-func MergeStats(files []FileChange, stats map[string]FileStat) {
-	for i := range files {
-		if s, ok := stats[files[i].Path]; ok {
-			files[i].Additions = s.Additions
-			files[i].Deletions = s.Deletions
-			continue
-		}
-		// Fallback: match truncated stat paths by suffix.
-		// jj truncates paths like "...dir/file.go" when terminal is narrow.
-		for statPath, s := range stats {
-			if strings.HasPrefix(statPath, "...") && strings.HasSuffix(files[i].Path, statPath[3:]) {
-				files[i].Additions = s.Additions
-				files[i].Deletions = s.Deletions
-				break
-			}
-		}
-	}
-}
+	changes := []FileChange{}
+	byPath := make(map[string]int) // path → index in changes (for conflict merge)
 
-// ConflictEntry represents a conflicted file and its arity (number of conflict sides).
-// Sides is 0 if template output was malformed (should not happen with jj >= 0.36).
-type ConflictEntry struct {
-	Path  string
-	Sides int // 2 for 2-way, 3+ for N-way merges.
-}
-
-// ParseConflictedFiles parses the output of the ConflictedFiles template.
-// Each line is "path\x1Fsides". Empty output = no conflicts (not an error).
-func ParseConflictedFiles(output string) []ConflictEntry {
-	entries := []ConflictEntry{}
-	for _, line := range strings.Split(output, "\n") {
+	for _, line := range strings.Split(filesSection, "\n") {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x1F", 2)
-		e := ConflictEntry{Path: parts[0]}
-		if len(parts) == 2 {
-			e.Sides, _ = strconv.Atoi(parts[1])
-		}
-		entries = append(entries, e)
-	}
-	return entries
-}
-
-// MergeConflicts sets Conflict/ConflictSides on FileChange entries whose paths appear
-// in the conflict entry list. Files in conflicts that aren't already in the list are
-// appended (conflict-only files may not appear in DiffSummary output for merge commits).
-func MergeConflicts(files []FileChange, conflicts []ConflictEntry) []FileChange {
-	byPath := make(map[string]ConflictEntry, len(conflicts))
-	for _, c := range conflicts {
-		byPath[c.Path] = c
-	}
-	matched := make(map[string]bool, len(conflicts))
-	for i := range files {
-		if c, ok := byPath[files[i].Path]; ok {
-			files[i].Conflict = true
-			files[i].ConflictSides = c.Sides
-			matched[c.Path] = true
-		}
-	}
-	// Iterate byPath (deduped) rather than conflicts. With multi-revision revsets
-	// the same path can appear multiple times; iterating the original slice would
-	// append duplicates for conflict-only paths → duplicate {#each} keys.
-	for path, c := range byPath {
-		if !matched[path] {
-			files = append(files, FileChange{Type: "M", Path: path, Conflict: true, ConflictSides: c.Sides})
-		}
-	}
-	return files
-}
-
-// ParseDiffSummary parses the output of `jj diff --summary --color never`.
-// Each line has the form: "M src/main.go" or "A new_file.go".
-func ParseDiffSummary(output string) []FileChange {
-	changes := []FileChange{}
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) < 2 {
+		fields := strings.SplitN(line, "\x1F", 4)
+		if len(fields) != 4 {
 			continue
 		}
-		changeType := string(line[0])
-		path := expandRenamePath(strings.TrimSpace(line[1:]))
-		if path == "" {
+		add, _ := strconv.Atoi(fields[2])
+		del, _ := strconv.Atoi(fields[3])
+		// Multi-revision revsets emit the template per-commit — sum stats
+		// on duplicate paths to avoid duplicate {#each} keys. Type from the
+		// FIRST occurrence (newest commit in jj log's default newest-first order).
+		if idx, ok := byPath[fields[1]]; ok {
+			changes[idx].Additions += add
+			changes[idx].Deletions += del
 			continue
 		}
-		changes = append(changes, FileChange{Type: changeType, Path: path})
+		byPath[fields[1]] = len(changes)
+		changes = append(changes, FileChange{
+			Type: fields[0], Path: fields[1], Additions: add, Deletions: del,
+		})
 	}
+
+	for _, line := range strings.Split(conflictSection, "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\x1F", 2)
+		path := fields[0]
+		sides := 0
+		if len(fields) == 2 {
+			sides, _ = strconv.Atoi(fields[1])
+		}
+		if idx, ok := byPath[path]; ok {
+			changes[idx].Conflict = true
+			changes[idx].ConflictSides = sides
+		} else {
+			// Conflict-only file (merge commit, no diff hunks). Deduped via
+			// byPath so multi-revision revsets don't produce duplicate entries.
+			byPath[path] = len(changes)
+			changes = append(changes, FileChange{
+				Type: "M", Path: path, Conflict: true, ConflictSides: sides,
+			})
+		}
+	}
+
 	return changes
 }
