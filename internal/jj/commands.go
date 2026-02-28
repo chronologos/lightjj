@@ -36,8 +36,14 @@ func escapeFiles(files []string) []string {
 // Output includes graph characters (│, ○, @, ├─╮, etc.) and _PREFIX: markers
 // for extracting commit data. The graph characters encode the DAG topology
 // which jj computes for us — we just parse it.
+//
+// Uses --ignore-working-copy: the snapshot loop (watcher.go) already runs
+// `jj debug snapshot` every 5s. Without this flag, every log fetch re-stats
+// every tracked file (~485ms on medium repos) AND contends on the WC lock
+// with the snapshot loop. With it: ~33ms. Worst case: an external file edit
+// seen ≤5s late before SSE corrects — same contract as every other read.
 func LogGraph(revset string, limit int) CommandArgs {
-	args := []string{"log", "--color", "never", "--quiet"}
+	args := []string{"log", "--color", "never", "--quiet", "--ignore-working-copy"}
 	if revset != "" {
 		args = append(args, "-r", revset)
 	}
@@ -397,7 +403,7 @@ func ConfigListAliases() CommandArgs {
 // FileShow returns args for `jj file show` to get a file's content at a revision.
 // Uses EscapeFileName for consistency and to prevent dash-prefix flag injection.
 func FileShow(revision string, path string) CommandArgs {
-	return []string{"file", "show", "-r", revision, EscapeFileName(path)}
+	return []string{"file", "show", "-r", revision, "--ignore-working-copy", EscapeFileName(path)}
 }
 
 // FilesBatch returns args for a single jj log template call that emits file
