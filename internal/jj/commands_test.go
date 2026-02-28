@@ -18,6 +18,9 @@ func TestLogGraph(t *testing.T) {
 	assert.Contains(t, args, "500")
 	// Must NOT contain --no-graph — graph chars encode topology
 	assert.NotContains(t, args, "--no-graph")
+	// Snapshot loop handles WC snapshots; log must not redundantly snapshot
+	// (saves ~485ms/call and avoids WC lock contention with the snapshot loop).
+	assert.Contains(t, args, "--ignore-working-copy")
 	// Template must use \x1F field separator (not tabs, which appear in descriptions)
 	joined := strings.Join(args, " ")
 	assert.Contains(t, joined, "-T ")
@@ -35,7 +38,7 @@ func TestLogGraph_NoRevset(t *testing.T) {
 
 func TestFileShow(t *testing.T) {
 	got := FileShow("abc", "src/main.go")
-	assert.Equal(t, []string{"file", "show", "-r", "abc", `file:"src/main.go"`}, got)
+	assert.Equal(t, []string{"file", "show", "-r", "abc", "--ignore-working-copy", `file:"src/main.go"`}, got)
 }
 
 func TestFileShow_EscapesPath(t *testing.T) {
