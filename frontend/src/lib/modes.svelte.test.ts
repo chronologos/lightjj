@@ -196,4 +196,17 @@ describe('createSplitMode', () => {
     expect(mode.parallel).toBe(false)
     expect(mode.active).toBe(true)
   })
+
+  it('review defaults to false; enter(id, true) sets it; cancel resets it', () => {
+    const mode = createSplitMode()
+    expect(mode.review).toBe(false)
+    mode.enter('abc', true)
+    expect(mode.review).toBe(true)
+    expect(mode.active).toBe(true)
+    mode.cancel()
+    expect(mode.review).toBe(false)
+    // Default enter without second arg clears review
+    mode.enter('def')
+    expect(mode.review).toBe(false)
+  })
 })

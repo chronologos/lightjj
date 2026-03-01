@@ -30,7 +30,7 @@
 <footer class="statusbar" class:rebase-active={rebase.active} class:squash-active={squash.active} class:split-active={split.active}>
   {#if split.active}
     <div class="statusbar-left">
-      <span class="mode-badge">split</span>
+      <span class="mode-badge">{split.review ? 'review' : 'split'}</span>
       <span class="key-group">
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
@@ -42,7 +42,7 @@
       {#if splitFileCount}
         <span class="key-divider"></span>
         <span class="key-group">
-          <span class="file-count">{splitFileCount.selected}/{splitFileCount.total} files stay</span>
+          <span class="file-count">{splitFileCount.selected}/{splitFileCount.total} files {split.review ? 'accepted' : 'stay'}</span>
         </span>
       {/if}
     </div>

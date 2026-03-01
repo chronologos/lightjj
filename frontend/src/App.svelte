@@ -339,6 +339,7 @@
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Review revision (accept/reject files)', shortcut: 'v', category: 'Revisions', action: enterReviewMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Commit working copy', shortcut: 'c', category: 'Revisions', action: handleCommit, when: () => !inlineMode },
 
     // Git
@@ -900,15 +901,24 @@
     split.enter(effectiveId(selectedRevision.commit))
   }
 
+  function enterReviewMode() {
+    if (!selectedRevision || checkedRevisions.size > 0) return
+    cancelInlineModes()
+    for (const f of changedFiles) selectedFiles.add(f.path)
+    totalFileCount = changedFiles.length
+    split.enter(effectiveId(selectedRevision.commit), true)
+  }
+
   async function executeSplit() {
     if (!split.revision) return
+    const reviewing = split.review
     // Validate: at least one file must stay (checked) and one must move (unchecked)
     if (selectedFiles.size === totalFileCount) {
-      error = 'Uncheck at least one file to split out'
+      error = reviewing ? 'Uncheck at least one file to reject' : 'Uncheck at least one file to split out'
       return
     }
     if (selectedFiles.size === 0) {
-      error = 'Select at least one file to keep'
+      error = reviewing ? 'Accept at least one file' : 'Select at least one file to keep'
       return
     }
     return withMutation(async () => {
@@ -917,7 +927,9 @@
         const revision = split.revision
         const result = await api.split(revision, files, split.parallel || undefined)
         cancelInlineModes()
-        lastAction = `Split ${revision.slice(0, 8)} (${files.length} files stay)`
+        lastAction = reviewing
+          ? `Reviewed ${revision.slice(0, 8)} (${files.length} accepted)`
+          : `Split ${revision.slice(0, 8)} (${files.length} files stay)`
         commandOutput = result.output
         clearChecks()
         await loadLog()
@@ -1206,6 +1218,12 @@
           enterSplitMode()
         }
         break
+      case 'v':
+        if (selectedRevision && checkedRevisions.size === 0) {
+          e.preventDefault()
+          enterReviewMode()
+        }
+        break
       case 'S':
         if (selectedRevision || checkedRevisions.size > 0) {
           e.preventDefault()
@@ -1465,7 +1483,7 @@
             fileSelectionMode={squash.active || split.active}
             {selectedFiles}
             ontogglefile={toggleFileSelection}
-            splitMode={split.active}
+            fileSelectionLabel={squash.active ? 'squash' : split.review ? 'review' : 'split'}
             onresolve={inlineMode ? undefined : handleResolve}
             onfilesaved={() => withMutation(loadLog)}
             onjjmutation={withMutation}

@@ -18,9 +18,9 @@ function activeSquash(toggle?: 'e' | 'd') {
   return m
 }
 
-function activeSplit(parallel = false) {
+function activeSplit(parallel = false, review = false) {
   const m = createSplitMode()
-  m.enter('x')
+  m.enter('x', review)
   if (parallel) m.handleKey('p')
   return m
 }
@@ -180,6 +180,16 @@ describe('StatusBar', () => {
       const { container } = render(StatusBar, { props: defaultProps({ split: activeSplit() }) })
       const footer = container.querySelector('footer')
       expect(footer?.classList.contains('split-active')).toBe(true)
+    })
+
+    it('shows review badge and accepted suffix when split.review is true', () => {
+      const { container } = render(StatusBar, {
+        props: defaultProps({ split: activeSplit(false, true), splitFileCount: { selected: 4, total: 6 } }),
+      })
+      const badge = container.querySelector('.mode-badge')
+      expect(badge?.textContent).toBe('review')
+      const fileCount = container.querySelector('.file-count')
+      expect(fileCount?.textContent).toBe('4/6 files accepted')
     })
   })
 })

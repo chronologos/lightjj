@@ -84,7 +84,7 @@
     fileSelectionMode: boolean
     selectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
-    splitMode: boolean
+    fileSelectionLabel: 'squash' | 'split' | 'review'
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
@@ -95,7 +95,7 @@
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, splitView = $bindable(false), header,
-    fileSelectionMode, selectedFiles, ontogglefile, splitMode, onresolve,
+    fileSelectionMode, selectedFiles, ontogglefile, fileSelectionLabel, onresolve,
     onfilesaved, onjjmutation,
   }: Props = $props()
 
@@ -782,18 +782,19 @@
     </div>
   {/if}
   {#if fileSelectionMode}
-    <div class="file-selection-panel" class:split-selection={splitMode}>
+    {@const selectionLabels = {
+      squash: { title: 'Squash', countSuffix: 'to move' },
+      split:  { title: 'Split',  countSuffix: 'stay' },
+      review: { title: 'Review', countSuffix: 'accepted' },
+    }[fileSelectionLabel]}
+    <div class="file-selection-panel" class:split-selection={fileSelectionLabel !== 'squash'}>
       <div class="file-selection-header">
-        {#if splitMode}
-          <span class="file-selection-title">Split — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
-        {:else}
-          <span class="file-selection-title">Squash — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
-        {/if}
+        <span class="file-selection-title">{selectionLabels.title} — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
         <span class="file-selection-actions">
           <button class="file-select-action" onclick={() => { for (const f of changedFiles) { if (!selectedFiles.has(f.path)) ontogglefile(f.path) } }}>All</button>
           <button class="file-select-action" onclick={() => { for (const f of changedFiles) { if (selectedFiles.has(f.path)) ontogglefile(f.path) } }}>None</button>
         </span>
-        <span class="file-selection-count">{selectedFiles.size}/{changedFiles.length} {splitMode ? 'stay' : 'to move'}</span>
+        <span class="file-selection-count">{selectedFiles.size}/{changedFiles.length} {selectionLabels.countSuffix}</span>
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="file-selection-list" tabindex="-1"

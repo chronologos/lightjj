@@ -33,7 +33,10 @@ export interface SquashMode extends ModeBase {
 export interface SplitMode extends ModeBase {
   readonly revision: string
   readonly parallel: boolean
-  enter(changeId: string): void
+  /** When true, UI shows "accept/reject" labels instead of "split/stay".
+   *  Same underlying jj split — checked files stay (accepted), rest move to child (rejected). */
+  readonly review: boolean
+  enter(changeId: string, asReview?: boolean): void
 }
 
 export function createRebaseMode(): RebaseMode {
@@ -153,15 +156,18 @@ export function createSplitMode(): SplitMode {
   let active = $state(false)
   let revision = $state('')
   let parallel = $state(false)
+  let review = $state(false)
 
   return {
     get active() { return active },
     get revision() { return revision },
     get parallel() { return parallel },
+    get review() { return review },
 
-    enter(changeId: string) {
+    enter(changeId: string, asReview = false) {
       revision = changeId
       parallel = false
+      review = asReview
       active = true
     },
 
@@ -169,6 +175,7 @@ export function createSplitMode(): SplitMode {
       active = false
       revision = ''
       parallel = false
+      review = false
     },
 
     handleKey(key: string): boolean {
