@@ -28,7 +28,7 @@
       value = ''
       selectedSuggestion = -1
       suggestionsError = ''
-      api.bookmarks().then((bms: Bookmark[]) => {
+      api.bookmarks({ local: true }).then((bms: Bookmark[]) => {
         suggestions = bms.map(b => b.name)
       }).catch((e) => {
         suggestionsError = e instanceof Error ? e.message : 'Failed to load bookmarks'

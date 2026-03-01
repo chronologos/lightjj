@@ -101,11 +101,9 @@
       loading = true
       fetchError = null
       const gen = ++fetchGen
-      api.bookmarks().then(async (bms) => {
+      api.bookmarks({ local: true }).then(async (bms) => {
         if (gen !== fetchGen) return
-        // Filter to local bookmarks — remote-only entries (no local ref) are
-        // managed in the Branches panel, not the quick-action modal.
-        bookmarks = bms.filter(bm => bm.local)
+        bookmarks = bms
         // Remotes are optional (only for track/untrack) — don't fail the modal if jj can't list them
         try { remotes = await api.remotes() } catch { /* ignore */ }
         loading = false
