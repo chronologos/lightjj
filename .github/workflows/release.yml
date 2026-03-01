@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      prev_tag: ${{ steps.check.outputs.prev_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from version.txt
+        id: check
+        run: |
+          VERSION=$(cat version.txt | tr -d '[:space:]')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version v$VERSION detected"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+          # Outputs to ../cmd/lightjj/frontend-dist/ (embedded via //go:embed)
+
+      - name: Cross-compile binaries
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          LDFLAGS="-s -w -X main.version=$VERSION"
+          mkdir -p dist
+
+          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/lightjj-macos-arm64 ./cmd/lightjj
+          GOOS=linux  GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/lightjj-linux-x86_64 ./cmd/lightjj
+          GOOS=linux  GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/lightjj-linux-arm64 ./cmd/lightjj
+
+      - name: Generate checksums
+        working-directory: dist
+        run: shasum -a 256 lightjj-* > checksums.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  release:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG="${{ needs.check-version.outputs.prev_tag }}"
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"- %s" "$PREV_TAG"..HEAD)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s")
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
+          body: |
+            ## lightjj v${{ needs.check-version.outputs.version }}
+
+            Browser UI for Jujutsu version control.
+
+            ### Changes
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### Install
+
+            ```bash
+            # macOS (Apple Silicon; Intel use Rosetta)
+            curl -L https://github.com/${{ github.repository }}/releases/latest/download/lightjj-macos-arm64 -o ~/.local/bin/lightjj
+            chmod +x ~/.local/bin/lightjj
+            xattr -cr ~/.local/bin/lightjj && codesign -s - -f ~/.local/bin/lightjj
+
+            # Linux x86_64
+            curl -L https://github.com/${{ github.repository }}/releases/latest/download/lightjj-linux-x86_64 -o ~/.local/bin/lightjj
+            chmod +x ~/.local/bin/lightjj
+
+            # Linux arm64
+            curl -L https://github.com/${{ github.repository }}/releases/latest/download/lightjj-linux-arm64 -o ~/.local/bin/lightjj
+            chmod +x ~/.local/bin/lightjj
+            ```
+
+            ### Verify
+
+            ```bash
+            shasum -a 256 -c checksums.sha256
+            ```
+          files: |
+            dist/lightjj-macos-arm64
+            dist/lightjj-linux-x86_64
+            dist/lightjj-linux-arm64
+            dist/checksums.sha256
