@@ -192,14 +192,27 @@ function storeInCache(cacheId: string, result: unknown) {
   }
 }
 
-// Check if a revision's diff + files + description are all cached.
-// Used by selectRevision to skip the 50ms debounce on cache hits. All three
-// must be cached — otherwise the "fast path" still triggers a network request
-// on every keypress, defeating the debounce.
+/** Read cached diff/files/description synchronously. Returns null if any key
+ *  is missing. Used by selectRevision to set loader values in the SAME tick
+ *  as selectedIndex — Svelte batches both into one render, eliminating the
+ *  stale-content flash that setTimeout(0) deferral would cause. */
+export function getCached(commitId: string): { diff: string; files: FileChange[]; description: string } | null {
+  const d = cache.get(`diff:${commitId}`) as { diff: string } | undefined
+  const f = cache.get(`files:${commitId}`) as FileChange[] | undefined
+  const desc = cache.get(`desc:${commitId}`) as { description: string } | undefined
+  if (!d || !f || !desc) return null
+  // LRU bump — actively navigating to a revision is the strongest recency
+  // signal. storeInCache does delete+reinsert, matching cachedRequest.
+  storeInCache(`diff:${commitId}`, d)
+  storeInCache(`files:${commitId}`, f)
+  storeInCache(`desc:${commitId}`, desc)
+  return { diff: d.diff, files: f, description: desc.description }
+}
+
+/** Boolean check — delegates to getCached. Used by prefetchRevision and
+ *  api.revision to skip fetches when all three keys are already cached. */
 export function isCached(commitId: string): boolean {
-  return cache.has(`diff:${commitId}`) &&
-         cache.has(`files:${commitId}`) &&
-         cache.has(`desc:${commitId}`)
+  return getCached(commitId) !== null
 }
 
 interface RevisionResponse {
@@ -214,7 +227,9 @@ interface RevisionResponse {
 // match what the individual endpoints return — the cache doesn't care which
 // wire protocol populated it.
 async function fetchRevision(commitId: string): Promise<RevisionResponse> {
-  const result = await request<RevisionResponse>(`/api/revision?revision=${encodeURIComponent(commitId)}`)
+  // immutable=1: commit_id is a content hash, response is valid forever.
+  // Browser disk cache survives page reload; our in-memory cache doesn't.
+  const result = await request<RevisionResponse>(`/api/revision?revision=${encodeURIComponent(commitId)}&immutable=1`)
   storeInCache(`diff:${commitId}`, { diff: result.diff })
   storeInCache(`files:${commitId}`, result.files)
   storeInCache(`desc:${commitId}`, { description: result.description })
@@ -328,7 +343,7 @@ export function effectiveId(commit: LogEntry['commit']): string {
  *  `connected(X|Y)` revset — every consumer had to re-derive which case
  *  by checking `checkedRevisions.size`). */
 export type DiffTarget =
-  | { kind: 'single'; commitId: string; changeId: string }
+  | { kind: 'single'; commitId: string; changeId: string; isWorkingCopy: boolean }
   | { kind: 'multi'; revset: string; commitIds: string[] }
 
 /** Stable cache key for a DiffTarget. commit_id for single-rev

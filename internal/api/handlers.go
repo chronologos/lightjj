@@ -109,6 +109,23 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, bookmarks)
 }
 
+// maybeCacheForever sets Cache-Control: immutable when the client signals
+// (via ?immutable=1) that the revision query param is a commit_id. Commit_id
+// is a content hash — the response for a given commit_id is valid forever.
+// Browser disk cache survives page reload; our in-memory cache doesn't. The
+// backend can't tell commit_id from change_id on its own (both are hex
+// strings), so the frontend opts in.
+//
+// Currently only handleRevision uses this — it's the nav hot path and the
+// only endpoint the frontend marks. Setting this header also suppresses
+// X-JJ-Op-Id in writeJSON (a year-old op-id baked into disk cache would
+// trigger spurious staleness fires on reload).
+func maybeCacheForever(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("immutable") == "1" {
+		w.Header().Set("Cache-Control", "max-age=31536000, immutable")
+	}
+}
+
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {
@@ -213,12 +230,15 @@ func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var desc string
-	if descR := <-descCh; descR.err == nil {
+	descR := <-descCh
+	if descR.err == nil {
 		desc = string(descR.output)
+		maybeCacheForever(w, r)
 	} else {
+		// Degraded response — don't cache forever. A transient failure would
+		// otherwise bake description:"" into the browser disk cache for a year.
 		log.Printf("handleRevision: GetDescription failed for %s: %v", revision, descR.err)
 	}
-
 	s.writeJSON(w, r, http.StatusOK, revisionResponse{
 		Diff:        string(dr.output),
 		Files:       files,

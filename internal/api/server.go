@@ -126,8 +126,14 @@ func (s *Server) routes() {
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
-	if opId := s.getOpId(); opId != "" {
-		w.Header().Set("X-JJ-Op-Id", opId)
+	// Suppress op-id on immutable responses — the header is baked into the
+	// browser disk cache and would surface as a stale op-id on reload,
+	// triggering spurious loadLog() fires via trackOpId. Immutable responses
+	// are per-revision reads; staleness is covered by log + SSE.
+	if w.Header().Get("Cache-Control") == "" {
+		if opId := s.getOpId(); opId != "" {
+			w.Header().Set("X-JJ-Op-Id", opId)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

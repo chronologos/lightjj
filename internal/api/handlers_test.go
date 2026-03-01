@@ -117,6 +117,43 @@ func TestHandleDiff(t *testing.T) {
 	assert.Contains(t, resp["diff"], "+added line")
 }
 
+func TestHandleRevision_CacheControl(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Allow(jj.FilesTemplate("abc")).SetOutput([]byte(""))
+	runner.Allow(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+x"))
+	runner.Allow(jj.GetDescription("abc")).SetOutput([]byte("msg"))
+	srv := newTestServer(runner)
+	srv.cachedOp = "op123" // seed so we can assert suppression
+
+	// Without ?immutable=1 → no Cache-Control, op-id header present
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc", nil))
+	assert.Empty(t, w.Header().Get("Cache-Control"))
+	assert.Equal(t, "op123", w.Header().Get("X-JJ-Op-Id"))
+
+	// With ?immutable=1 → forever-cacheable AND op-id suppressed (would be
+	// baked into disk cache as a stale value, triggering spurious loadLog on reload)
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc&immutable=1", nil))
+	assert.Equal(t, "max-age=31536000, immutable", w.Header().Get("Cache-Control"))
+	assert.Empty(t, w.Header().Get("X-JJ-Op-Id"))
+}
+
+func TestHandleRevision_DegradedNotCached(t *testing.T) {
+	// Transient GetDescription failure → degraded 200 response must NOT be
+	// cached forever (would bake description:"" into browser disk cache).
+	runner := testutil.NewMockRunner(t)
+	runner.Allow(jj.FilesTemplate("abc")).SetOutput([]byte(""))
+	runner.Allow(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+x"))
+	runner.Allow(jj.GetDescription("abc")).SetError(fmt.Errorf("ssh blip"))
+	srv := newTestServer(runner)
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc&immutable=1", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Empty(t, w.Header().Get("Cache-Control"))
+}
+
 func TestHandleDiff_MissingRevision(t *testing.T) {
 	srv := newTestServer(testutil.NewMockRunner(t))
 	req := httptest.NewRequest("GET", "/api/diff", nil)

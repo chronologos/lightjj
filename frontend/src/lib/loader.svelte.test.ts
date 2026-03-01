@@ -233,20 +233,20 @@ describe('createLoader', () => {
     expect(loader.value).toBe(99)
   })
 
-  it('set does not affect generation (in-flight load still wins)', async () => {
-    // set() is for optimistic updates AFTER a mutation succeeds. It does not
-    // cancel loads — if you want that, call reset() first.
+  it('set invalidates in-flight load (authoritative write wins)', async () => {
+    // set() bumps generation so any in-flight load is discarded. This prevents
+    // a race where cache-hit set() is overwritten by a stale network response.
     let resolve!: (v: number) => void
     const promise = new Promise<number>(r => { resolve = r })
     const loader = createLoader(() => promise, 0)
 
     const p = loader.load()
-    loader.set(77) // optimistic write while load in flight
+    loader.set(77) // authoritative write — invalidates in-flight load
     expect(loader.value).toBe(77)
 
     resolve(42)
     await p
-    expect(loader.value).toBe(42) // load result overwrites set
+    expect(loader.value).toBe(77) // set wins — load result discarded
   })
 
   // --- Reference equality guard ---

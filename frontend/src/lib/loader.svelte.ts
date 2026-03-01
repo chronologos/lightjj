@@ -67,18 +67,18 @@ export function createLoader<T, A extends unknown[]>(
     }
   }
 
-  function reset() {
+  function set(v: T) {
+    // Bump generation so any in-flight load() is invalidated. Without this,
+    // a load started before set() could overwrite the authoritative value
+    // when it resolves (its gen check would pass against the old generation).
     generation++
     clearTimeout(loadingTimer)
-    value = initial
     loading = false
+    value = v
     error = ''
   }
 
-  function set(v: T) {
-    value = v
-    error = '' // set() means "I have a known-good value"
-  }
+  const reset = () => set(initial)
 
   return {
     get value() { return value },

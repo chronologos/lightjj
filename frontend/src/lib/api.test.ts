@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, _testInternals, type LogEntry } from './api'
+import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, _testInternals, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -341,6 +341,30 @@ describe('isCached', () => {
     _testInternals.cache.set('files:abc', [])
     _testInternals.cache.set('desc:abc', { description: 'msg' })
     expect(isCached('abc')).toBe(true)
+  })
+})
+
+describe('getCached', () => {
+  it('returns null when nothing cached', () => {
+    expect(getCached('abc')).toBeNull()
+  })
+
+  it('returns null when only partially cached', () => {
+    _testInternals.cache.set('diff:abc', { diff: '+x' })
+    _testInternals.cache.set('files:abc', [{ type: 'M', path: 'a.ts' }])
+    expect(getCached('abc')).toBeNull()
+  })
+
+  it('returns unwrapped values when fully cached', () => {
+    _testInternals.cache.set('diff:abc', { diff: '+x' })
+    _testInternals.cache.set('files:abc', [{ type: 'M', path: 'a.ts' }])
+    _testInternals.cache.set('desc:abc', { description: 'msg' })
+    const result = getCached('abc')
+    expect(result).toEqual({
+      diff: '+x',
+      files: [{ type: 'M', path: 'a.ts' }],
+      description: 'msg',
+    })
   })
 })
 
