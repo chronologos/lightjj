@@ -283,7 +283,7 @@ func TestHandleGitPush(t *testing.T) {
 func TestHandleFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.FilesTemplate("abc")).SetOutput(
-		[]byte("M\x1Fsrc/main.go\x1F7\x1F3\nA\x1Fnew.go\x1F5\x1F0\x1E"))
+		[]byte("M\x1Fsrc/main.go\x1F7\x1F3\nA\x1Fnew.go\x1F5\x1F0\x1E\x1D"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -316,7 +316,7 @@ func TestHandleFiles_MissingRevision(t *testing.T) {
 
 func TestHandleFiles_Empty(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E"))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E\x1D"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -398,7 +398,7 @@ func TestHandleFilesBatch_TooMany(t *testing.T) {
 
 func TestHandleRevision(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("M\x1Fsrc/main.go\x1F2\x1F1\x1E"))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("M\x1Fsrc/main.go\x1F2\x1F1\x1E\x1D"))
 	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("diff --git a/src/main.go b/src/main.go\n"))
 	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("Fix the thing\n"))
 	defer runner.Verify()
@@ -445,7 +445,7 @@ func TestHandleRevision_FilesError(t *testing.T) {
 
 func TestHandleRevision_DescriptionErrorIsSoft(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E"))
+	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E\x1D"))
 	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte(""))
 	runner.Expect(jj.GetDescription("abc")).SetError(fmt.Errorf("template error"))
 	defer runner.Verify()
@@ -1359,7 +1359,7 @@ func TestHandleResolve_RunnerError(t *testing.T) {
 func TestHandleFiles_WithConflicts(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.FilesTemplate("abc")).SetOutput(
-		[]byte("M\x1Fsrc/main.go\x1F7\x1F3\nM\x1Fconflict.go\x1F5\x1F0\x1Econflict.go\x1F2"))
+		[]byte("M\x1Fsrc/main.go\x1F7\x1F3\nM\x1Fconflict.go\x1F5\x1F0\x1Econflict.go\x1F2\x1D"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1380,7 +1380,7 @@ func TestHandleFiles_WithConflicts(t *testing.T) {
 func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.FilesTemplate("abc")).SetOutput(
-		[]byte("M\x1Fsrc/main.go\x1F5\x1F0\x1Ephantom.go\x1F2"))
+		[]byte("M\x1Fsrc/main.go\x1F5\x1F0\x1Ephantom.go\x1F2\x1D"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)

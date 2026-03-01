@@ -23,24 +23,27 @@ type FileChange struct {
 // no brace-syntax expansion, exact line counts — DiffStatEntry gives integers,
 // not proportional ASCII bars).
 //
-// Output: {files section}\x1E{conflicts section}
+// Output per commit: {files section}\x1E{conflicts section}\x1D
 //
 //	files:     status_char\x1Fpath\x1Fadded\x1Fdeleted\n (joined)
 //	conflicts: path\x1Fside_count\n (joined)
+//	\x1D terminates each commit's output (group separator)
 //
 // DiffStatEntry.path() returns the DESTINATION path for renames — no brace
 // expansion needed.
 //
-// Multi-revision caveat: `jj log -r 'X|Y'` runs the template PER-COMMIT (not
-// a net combined diff like `jj diff -r 'X|Y'`). ParseFilesTemplate sums stats
-// on duplicate paths so the file sidebar has no duplicate {#each} keys;
-// the Type and counts are approximate for files touched in multiple commits.
+// Multi-revision: `jj log -r 'X|Y'` runs the template PER-COMMIT (not
+// a net combined diff like `jj diff -r 'X|Y'`). The \x1D separator lets
+// ParseFilesTemplate split per-commit before parsing each chunk's \x1E boundary.
+// Stats on duplicate paths are summed so the file sidebar has no duplicate
+// {#each} keys; Type and counts are approximate for files touched in multiple
+// commits.
 func FilesTemplate(revision string) CommandArgs {
 	tmpl := `self.diff().stat(200).files().map(|f| ` +
 		`f.status_char() ++ "\x1F" ++ f.path() ++ "\x1F" ++ ` +
 		`stringify(f.lines_added()) ++ "\x1F" ++ stringify(f.lines_removed())` +
 		`).join("\n") ++ "\x1E" ++ ` +
-		`conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count())).join("\n")`
+		`conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count())).join("\n") ++ "\x1D"`
 	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
 		"--ignore-working-copy", "-T", tmpl}
 }
@@ -48,58 +51,64 @@ func FilesTemplate(revision string) CommandArgs {
 // ParseFilesTemplate parses FilesTemplate output into a []FileChange.
 // Conflict-only files (in conflicted_files but not in the diff — merge commits
 // can have conflicts with no diff hunks) are appended with Type="M".
-// Multi-revision revsets may emit the same conflict path multiple times;
-// the byPath-keyed merge deduplicates so {#each} keys stay unique.
+//
+// Multi-revision revsets produce one \x1D-delimited chunk per commit. Each
+// chunk contains files\x1Econflicts. The parser processes all chunks, summing
+// stats on duplicate paths so {#each} keys stay unique.
 func ParseFilesTemplate(output string) []FileChange {
-	filesSection, conflictSection, _ := strings.Cut(output, "\x1E")
-
 	changes := []FileChange{}
-	byPath := make(map[string]int) // path → index in changes (for conflict merge)
+	byPath := make(map[string]int) // path → index in changes (for dedup/merge)
 
-	for line := range strings.SplitSeq(filesSection, "\n") {
-		if line == "" {
+	for chunk := range strings.SplitSeq(output, "\x1D") {
+		if chunk == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\x1F", 4)
-		if len(fields) != 4 {
-			continue
-		}
-		add, _ := strconv.Atoi(fields[2])
-		del, _ := strconv.Atoi(fields[3])
-		// Multi-revision revsets emit the template per-commit — sum stats
-		// on duplicate paths to avoid duplicate {#each} keys. Type from the
-		// FIRST occurrence (newest commit in jj log's default newest-first order).
-		if idx, ok := byPath[fields[1]]; ok {
-			changes[idx].Additions += add
-			changes[idx].Deletions += del
-			continue
-		}
-		byPath[fields[1]] = len(changes)
-		changes = append(changes, FileChange{
-			Type: fields[0], Path: fields[1], Additions: add, Deletions: del,
-		})
-	}
+		filesSection, conflictSection, _ := strings.Cut(chunk, "\x1E")
 
-	for line := range strings.SplitSeq(conflictSection, "\n") {
-		if line == "" {
-			continue
-		}
-		fields := strings.SplitN(line, "\x1F", 2)
-		path := fields[0]
-		sides := 0
-		if len(fields) == 2 {
-			sides, _ = strconv.Atoi(fields[1])
-		}
-		if idx, ok := byPath[path]; ok {
-			changes[idx].Conflict = true
-			changes[idx].ConflictSides = sides
-		} else {
-			// Conflict-only file (merge commit, no diff hunks). Deduped via
-			// byPath so multi-revision revsets don't produce duplicate entries.
-			byPath[path] = len(changes)
+		for line := range strings.SplitSeq(filesSection, "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.SplitN(line, "\x1F", 4)
+			if len(fields) != 4 {
+				continue
+			}
+			add, _ := strconv.Atoi(fields[2])
+			del, _ := strconv.Atoi(fields[3])
+			// Sum stats on duplicate paths (multi-rev). Type from the FIRST
+			// occurrence (newest commit in jj log's default newest-first order).
+			if idx, ok := byPath[fields[1]]; ok {
+				changes[idx].Additions += add
+				changes[idx].Deletions += del
+				continue
+			}
+			byPath[fields[1]] = len(changes)
 			changes = append(changes, FileChange{
-				Type: "M", Path: path, Conflict: true, ConflictSides: sides,
+				Type: fields[0], Path: fields[1], Additions: add, Deletions: del,
 			})
+		}
+
+		for line := range strings.SplitSeq(conflictSection, "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.SplitN(line, "\x1F", 2)
+			path := fields[0]
+			sides := 0
+			if len(fields) == 2 {
+				sides, _ = strconv.Atoi(fields[1])
+			}
+			if idx, ok := byPath[path]; ok {
+				changes[idx].Conflict = true
+				changes[idx].ConflictSides = sides
+			} else {
+				// Conflict-only file (merge commit, no diff hunks). Deduped via
+				// byPath so multi-revision revsets don't produce duplicate entries.
+				byPath[path] = len(changes)
+				changes = append(changes, FileChange{
+					Type: "M", Path: path, Conflict: true, ConflictSides: sides,
+				})
+			}
 		}
 	}
 

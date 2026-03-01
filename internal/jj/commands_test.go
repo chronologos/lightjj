@@ -291,6 +291,7 @@ func TestFilesTemplate(t *testing.T) {
 	assert.Contains(t, joined, "conflict_side_count()")
 	assert.Contains(t, joined, `\x1F`)
 	assert.Contains(t, joined, `\x1E`)
+	assert.Contains(t, joined, `\x1D`)
 }
 
 func TestParseFilesTemplate(t *testing.T) {
@@ -301,7 +302,7 @@ func TestParseFilesTemplate(t *testing.T) {
 	}{
 		{
 			name:  "files only, no conflicts",
-			input: "M\x1Fsrc/main.go\x1F7\x1F3\nA\x1Fnew.go\x1F5\x1F0\x1E",
+			input: "M\x1Fsrc/main.go\x1F7\x1F3\nA\x1Fnew.go\x1F5\x1F0\x1E\x1D",
 			want: []FileChange{
 				{Type: "M", Path: "src/main.go", Additions: 7, Deletions: 3},
 				{Type: "A", Path: "new.go", Additions: 5, Deletions: 0},
@@ -309,7 +310,7 @@ func TestParseFilesTemplate(t *testing.T) {
 		},
 		{
 			name:  "file with conflict flag set",
-			input: "M\x1Fa.go\x1F2\x1F1\nM\x1Fb.go\x1F0\x1F0\x1Eb.go\x1F2",
+			input: "M\x1Fa.go\x1F2\x1F1\nM\x1Fb.go\x1F0\x1F0\x1Eb.go\x1F2\x1D",
 			want: []FileChange{
 				{Type: "M", Path: "a.go", Additions: 2, Deletions: 1},
 				{Type: "M", Path: "b.go", Conflict: true, ConflictSides: 2},
@@ -319,29 +320,29 @@ func TestParseFilesTemplate(t *testing.T) {
 			// Merge commits can have conflicted files with no diff hunks.
 			// They must be appended (not dropped) so the UI can show them.
 			name:  "conflict-only file appended",
-			input: "M\x1Fa.go\x1F1\x1F0\x1Ephantom.go\x1F3",
+			input: "M\x1Fa.go\x1F1\x1F0\x1Ephantom.go\x1F3\x1D",
 			want: []FileChange{
 				{Type: "M", Path: "a.go", Additions: 1},
 				{Type: "M", Path: "phantom.go", Conflict: true, ConflictSides: 3},
 			},
 		},
 		{
-			// Multi-revision revsets can emit the same conflict path twice.
-			// byPath-keyed merge dedups so {#each} keys stay unique.
-			// Last-write-wins (same as old MergeConflicts map behavior).
-			name:  "duplicate conflict paths deduped",
-			input: "\x1Efile.go\x1F2\nfile.go\x1F3",
+			// Multi-revision revsets can emit the same conflict path in
+			// separate commits. byPath-keyed merge dedups so {#each} keys
+			// stay unique. Last-write-wins for ConflictSides.
+			name:  "duplicate conflict paths deduped (multi-commit)",
+			input: "\x1Efile.go\x1F2\x1D\x1Efile.go\x1F3\x1D",
 			want: []FileChange{
 				{Type: "M", Path: "file.go", Conflict: true, ConflictSides: 3},
 			},
 		},
 		{
 			// Multi-revision revsets emit the template PER-COMMIT. A file
-			// touched in both commits appears twice in the files section.
+			// touched in both commits appears in separate chunks.
 			// Stats are summed; Type from the first (newest) occurrence.
 			// Without this, duplicate FileChange entries break {#each} keys.
 			name:  "duplicate file paths (multi-rev) — stats summed",
-			input: "M\x1Fa.go\x1F3\x1F1\nA\x1Fa.go\x1F5\x1F0\x1E",
+			input: "M\x1Fa.go\x1F3\x1F1\x1E\x1DA\x1Fa.go\x1F5\x1F0\x1E\x1D",
 			want: []FileChange{
 				{Type: "M", Path: "a.go", Additions: 8, Deletions: 1},
 			},
@@ -349,16 +350,36 @@ func TestParseFilesTemplate(t *testing.T) {
 		{
 			// Clean revision — both template sections empty but \x1E always present.
 			name:  "empty sections (clean revision)",
-			input: "\x1E",
+			input: "\x1E\x1D",
 			want:  []FileChange{},
 		},
 		{
 			// DiffStatEntry.path() returns the DESTINATION for renames — no
 			// brace expansion needed. Template output is already the dest path.
 			name:  "rename has destination path (no braces)",
-			input: "R\x1Fnew_name.go\x1F10\x1F0\x1E",
+			input: "R\x1Fnew_name.go\x1F10\x1F0\x1E\x1D",
 			want: []FileChange{
 				{Type: "R", Path: "new_name.go", Additions: 10},
+			},
+		},
+		{
+			// Multi-commit: each commit produces its own \x1D-terminated chunk.
+			// Without per-commit splitting, commit 2's files land in commit 1's
+			// conflict section and are misinterpreted.
+			name:  "multi-commit — files from all commits visible",
+			input: "M\x1Ffoo.go\x1F10\x1F5\x1E\x1DM\x1Fbar.go\x1F3\x1F1\x1E\x1D",
+			want: []FileChange{
+				{Type: "M", Path: "foo.go", Additions: 10, Deletions: 5},
+				{Type: "M", Path: "bar.go", Additions: 3, Deletions: 1},
+			},
+		},
+		{
+			// Multi-commit where one commit has conflicts and another doesn't.
+			name:  "multi-commit — conflicts correctly separated",
+			input: "M\x1Ffoo.go\x1F10\x1F5\x1Efoo.go\x1F2\x1DM\x1Fbar.go\x1F3\x1F1\x1E\x1D",
+			want: []FileChange{
+				{Type: "M", Path: "foo.go", Additions: 10, Deletions: 5, Conflict: true, ConflictSides: 2},
+				{Type: "M", Path: "bar.go", Additions: 3, Deletions: 1},
 			},
 		},
 	}
