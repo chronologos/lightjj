@@ -513,4 +513,35 @@ describe('createAnnotationStore', () => {
 
     expect(store.forLine('foo.go', 5)).toHaveLength(1)
   })
+
+  it('forLine() reactively updates after remove() — badge-disappears path', async () => {
+    // Regression for the DELETE empty-body json() throw: api.deleteAnnotation
+    // rejected → withBusy's try block threw before list.filter() → badge stuck.
+    // This test locks in the contract: mock resolves (as it would with the
+    // Content-Length fix in api.ts) → list shrinks → forLine returns [].
+    mockAnnotations.mockResolvedValue([
+      mkStoreAnn('a1', { filePath: 'foo.go', lineNum: 5 }),
+    ])
+    mockDelete.mockResolvedValue(undefined)
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+
+    expect(store.forLine('foo.go', 5)).toHaveLength(1)
+    await store.remove('a1')
+    expect(store.forLine('foo.go', 5)).toEqual([])
+  })
+
+  it('remove() propagates api failure — list unchanged on error', async () => {
+    // If deleteAnnotation DOES fail (real server error, not the json-parse
+    // bug), list must stay intact. Silently dropping the item would desync
+    // UI from storage.
+    mockAnnotations.mockResolvedValue([mkStoreAnn('a1')])
+    mockDelete.mockRejectedValue(new Error('500'))
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+
+    await expect(store.remove('a1')).rejects.toThrow('500')
+    expect(store.list).toHaveLength(1) // NOT filtered
+    expect(store.busy).toBe(false) // finally-block cleared it
+  })
 })

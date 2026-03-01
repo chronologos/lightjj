@@ -805,3 +805,53 @@ describe('computeConnectedCommitIds', () => {
     expect(result).toEqual(new Set(['a', 'b'])) // 'invisible' not added
   })
 })
+
+describe('request() empty-body handling', () => {
+  // DELETE /api/annotations returns 200 with no body. Before the
+  // Content-Length check, res.json() threw SyntaxError → deleteAnnotation
+  // failed silently → store's `list = list.filter()` never ran → badge stuck.
+
+  function emptyBodyResponse() {
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k: string) => k === 'Content-Length' ? '0' : null,
+      },
+      json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+    }
+  }
+
+  it('deleteAnnotation resolves on 200 + empty body', async () => {
+    mockFetch.mockResolvedValue(emptyBodyResponse())
+    await expect(api.deleteAnnotation('abc', 'a1')).resolves.toBeUndefined()
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/annotations?changeId=abc&id=a1',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('clearAnnotations resolves on 200 + empty body', async () => {
+    mockFetch.mockResolvedValue(emptyBodyResponse())
+    await expect(api.clearAnnotations('abc')).resolves.toBeUndefined()
+  })
+
+  it('falls back gracefully when Content-Length header missing', async () => {
+    // Some middleware/proxies strip Content-Length. The .catch(() => undefined)
+    // fallback should handle an empty body that lacks the header.
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+    })
+    await expect(api.deleteAnnotation('abc', 'a1')).resolves.toBeUndefined()
+  })
+
+  it('GET with real JSON body still parses normally', async () => {
+    // Regression guard: the empty-body handling must not break valid JSON responses.
+    mockFetch.mockResolvedValue(mockResponse([{ id: 'a1' }]))
+    const result = await api.annotations('abc')
+    expect(result).toEqual([{ id: 'a1' }])
+  })
+})

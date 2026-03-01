@@ -162,7 +162,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       const data = await res.json().catch(() => null) as { error?: string } | null
       throw new Error(data?.error || `HTTP ${res.status}: ${res.statusText}`)
     }
-    return await res.json() as T
+    // DELETE handlers may return 200 with empty body (e.g., /api/annotations).
+    // res.json() on a 0-byte body throws SyntaxError → every request<void>()
+    // silently failed. Check Content-Length first (Go's WriteHeader sets it
+    // to 0 for body-less responses); fall back to graceful catch if unset.
+    const len = res.headers.get('Content-Length')
+    if (len === '0') return undefined as T
+    return await res.json().catch(() => undefined) as T
   } catch (e) {
     if (timeoutId !== undefined) clearTimeout(timeoutId)
     if (e instanceof DOMException && e.name === 'AbortError') {
