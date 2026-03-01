@@ -4,7 +4,7 @@ A fast, keyboard-driven browser UI for [Jujutsu (jj)](https://github.com/jj-vcs/
 
 jj is powerful but its CLI has a learning curve. lightjj gives you a visual revision graph, inline diffs with syntax highlighting, and single-key operations so you can rebase, squash, and manage bookmarks without memorizing flags.
 
-![lightjj screenshot](docs/screenshot.png)
+![lightjj screenshot](screenshot.png)
 
 ## Quick Start
 
