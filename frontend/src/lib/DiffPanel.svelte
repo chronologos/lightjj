@@ -32,13 +32,13 @@
 
 <script lang="ts">
   import { tick } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, type LogEntry, type FileChange, type PullRequest } from './api'
+  import { api, effectiveId, diffTargetKey, type LogEntry, type FileChange, type DiffTarget } from './api'
   import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
   import { groupByWithIndex } from './group-by'
   import { computeWordDiffs } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
-  import DescriptionEditor from './DescriptionEditor.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
   import ContextMenu, { type ContextMenuItem } from './ContextMenu.svelte'
 
@@ -46,31 +46,23 @@
     diffContent: string
     changedFiles: FileChange[]
     selectedRevision: LogEntry | null
-    fullDescription: string
-    checkedRevisions: SvelteSet<string>
-    /** Commit_id-based revision identifier for API calls — single commit_id
-     *  or commit_id-based connected() revset. Computed in App.svelte where
-     *  the revisions array lives. Used for context expansion + conflict fileShow. */
-    activeRevisionId: string | undefined
+    /** What's being diffed. Discriminated union — single commit_id vs
+     *  multi-check revset. Replaces the stringly-typed activeRevisionId +
+     *  checkedRevisions pair; consumers pattern-match instead of re-deriving
+     *  the mode from `checkedRevisions.size === 0`. */
+    diffTarget: DiffTarget | undefined
     diffLoading: boolean
     splitView: boolean
-    descriptionEditing: boolean
-    descriptionDraft: string
-    describeSaved: boolean
-    commitMode: boolean
-    onstartdescribe: () => void
-    ondescribe: () => void
-    oncanceldescribe: () => void
-    ondraftchange: (value: string) => void
-    onbookmarkclick: (name: string) => void
+    /** Revision metadata header (change_id, description, bookmarks, describe
+     *  editor). Rendered in single-rev mode; multi-check shows a simpler
+     *  built-in header. Extracted to a snippet because the describe/bookmark/
+     *  divergence flow is App's concern — DiffPanel just provides a slot. */
+    header?: Snippet
     fileSelectionMode: boolean
     selectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
     splitMode: boolean
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
-    divergentSelected?: boolean
-    onresolveDivergence?: () => void
-    prByBookmark: Map<string, PullRequest>
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
      *  Returns undefined if blocked (another mutation in flight). */
@@ -78,21 +70,21 @@
   }
 
   let {
-    diffContent, changedFiles, selectedRevision, fullDescription, checkedRevisions, activeRevisionId,
-    diffLoading, splitView = $bindable(false), descriptionEditing, descriptionDraft, describeSaved, commitMode,
-    onstartdescribe, ondescribe, oncanceldescribe, ondraftchange, onbookmarkclick,
+    diffContent, changedFiles, selectedRevision, diffTarget,
+    diffLoading, splitView = $bindable(false), header,
     fileSelectionMode, selectedFiles, ontogglefile, splitMode, onresolve,
-    divergentSelected, onresolveDivergence, prByBookmark, onfilesaved, onjjmutation,
+    onfilesaved, onjjmutation,
   }: Props = $props()
+
+  // Stable string key for derivedCache + lastActiveRevId tracking.
+  // commit_id for single-rev; revset string for multi-check.
+  let activeRevisionId = $derived(diffTarget && diffTargetKey(diffTarget))
 
   // --- Local state ---
   let fileSelectIdx: number = $state(0)
   let fileSelectionListEl: HTMLElement | undefined = $state(undefined)
   let panelContentEl: HTMLElement | undefined = $state(undefined)
   let activeFilePath: string | null = $state(null)
-  let descExpanded = $state(false)
-  let descText = $derived(fullDescription || selectedRevision?.description || '(no description)')
-  let descIsMultiline = $derived(descText.includes('\n'))
   let collapsedFiles = new SvelteSet<string>()
 
   // Expanded files: store full-context DiffFile per file path
@@ -113,7 +105,9 @@
     const nums = info.lines.map(l => l.lineNum).filter((n): n is number => n !== null)
     const start = nums.length > 0 ? Math.min(...nums) : null
     const end = nums.length > 0 ? Math.max(...nums) : null
-    const changeId = selectedRevision?.commit.change_id ?? ''
+    // In multi-check mode the line could be from ANY commit in the revset —
+    // omit the @ changeId suffix rather than attribute it to the wrong one.
+    const changeId = diffTarget?.kind === 'single' ? diffTarget.changeId : ''
 
     // Build reference: path:line(-end) @ changeId
     let ref = info.filePath
@@ -136,7 +130,9 @@
   }
 
   async function startEdit(path: string) {
-    if (!selectedRevision || editBusy.has(path)) return
+    // In multi-check mode selectedRevision is the cursor position, not what's
+    // being diffed — api.edit(cursor's changeId) would edit the wrong revision.
+    if (diffTarget?.kind !== 'single' || !selectedRevision || editBusy.has(path)) return
     // Editor lives in the right split column — switch if coming from unified.
     // splitView is $bindable so this persists to config and the parent.
     if (!splitView) splitView = true
@@ -239,11 +235,14 @@
       if (conflictFileDiffs.size > 0) conflictFileDiffs = new Map()
       return
     }
-    const revset = activeRevisionId
-    if (!revset) return
+    // `jj file show -r 'connected(a|b)' path` is undefined — gate on single.
+    // Multi-check conflict-only files stay unfetched (rare; the combined diff
+    // usually includes them anyway).
+    if (diffTarget?.kind !== 'single') return
+    const revId = diffTarget.commitId
     for (const f of files) {
       if (conflictFileDiffs.has(f.path)) continue
-      api.fileShow(revset, f.path).then(result => {
+      api.fileShow(revId, f.path).then(result => {
         if (gen !== conflictFetchGen) return // discard stale responses
         const lines: DiffLine[] = result.content.split('\n').map(line => ({
           type: 'add' as const,
@@ -511,9 +510,8 @@
 
     lastActiveRevId = activeRevisionId
     // Compute cache key for the INCOMING diff. Null for multi-check.
-    lastCollapseCacheKey = (selectedRevision && checkedRevisions.size === 0)
-      ? effectiveId(selectedRevision.commit)
-      : null
+    // changeId (not commitId) — collapse preferences should survive rewrites.
+    lastCollapseCacheKey = diffTarget?.kind === 'single' ? diffTarget.changeId : null
 
     collapsedFiles.clear()
     expandedDiffs = new Map()
@@ -522,7 +520,6 @@
     editBusy.clear()
     editError = ''
     activeFilePath = null
-    descExpanded = false
     conflictFetchGen++ // invalidate in-flight fileShow requests
     conflictFileDiffs = new Map()
     if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
@@ -671,7 +668,7 @@
   })
 
   export function openSearch() {
-    if (!selectedRevision && checkedRevisions.size === 0) return
+    if (!diffTarget) return
     if (searchOpen) {
       // Re-focus and select all
       searchInputEl?.focus()
@@ -821,74 +818,19 @@
 </script>
 
 <div class="panel diff-panel">
-  {#if selectedRevision && checkedRevisions.size === 0}
-    <div class="revision-detail">
-      <div class="detail-header">
-        <div class="detail-ids">
-          <span class="detail-change-id">{selectedRevision.commit.change_id.slice(0, 8)}</span>
-          <span
-            class="detail-description-inline"
-            class:desc-collapsed={descIsMultiline && !descExpanded}
-          >{descText}</span>
-        </div>
-        <div class="panel-actions">
-          {#if describeSaved}
-            <span class="describe-saved">Saved</span>
-          {/if}
-          {#if descIsMultiline}
-            <button class="header-btn desc-expand-btn" onclick={() => descExpanded = !descExpanded} title={descExpanded ? 'Collapse description' : 'Expand description'}>
-              <svg class="desc-expand-icon" class:desc-expand-open={descExpanded} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,4.5 6,7.5 9,4.5"/></svg>
-            </button>
-          {/if}
-          <button class="header-btn" onclick={onstartdescribe} title="Edit description (e)">
-            Describe
-          </button>
-          {#if divergentSelected}
-            <button class="header-btn divergent-btn" onclick={onresolveDivergence} title="Resolve divergent commit">
-              Divergence
-            </button>
-          {/if}
-        </div>
-      </div>
-      {#if selectedRevision.bookmarks?.length}
-        <div class="detail-bookmarks">
-          {#each selectedRevision.bookmarks as bm}
-            {@const pr = prByBookmark.get(bm)}
-            {#if pr}
-              <a class="detail-pr-badge" class:is-draft={pr.is_draft}
-                 href={pr.url} target="_blank" rel="noopener"
-                 title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
-                <span class="pr-name">↗ {bm}</span>
-                <span class="pr-number">#{pr.number}</span>
-              </a>
-            {:else}
-              <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>⑂ {bm}</button>
-            {/if}
-          {/each}
-        </div>
-      {/if}
-    </div>
-  {:else if checkedRevisions.size > 0}
+  {#if header && diffTarget?.kind === 'single'}
+    {@render header()}
+  {:else if diffTarget?.kind === 'multi'}
     <div class="panel-header">
       <span class="panel-title">
         Changes in
-        <span class="header-change-id">{checkedRevisions.size === 1 ? [...checkedRevisions][0].slice(0, 12) : `${checkedRevisions.size} revisions`}</span>
+        <span class="header-change-id">{diffTarget.commitIds.length === 1 ? diffTarget.commitIds[0].slice(0, 12) : `${diffTarget.commitIds.length} revisions`}</span>
       </span>
     </div>
   {:else}
     <div class="panel-header">
       <span class="panel-title">Diff Viewer</span>
     </div>
-  {/if}
-  {#if descriptionEditing && selectedRevision}
-    <DescriptionEditor
-      revision={selectedRevision}
-      draft={descriptionDraft}
-      onsave={ondescribe}
-      oncancel={oncanceldescribe}
-      ondraftchange={ondraftchange}
-      {commitMode}
-    />
   {/if}
   {#if fileSelectionMode}
     <div class="file-selection-panel" class:split-selection={splitMode}>
@@ -938,7 +880,7 @@
       </div>
     </div>
   {/if}
-  {#if (selectedRevision || checkedRevisions.size > 0) && changedFiles.length > 0 && !fileSelectionMode}
+  {#if diffTarget && changedFiles.length > 0 && !fileSelectionMode}
     <div class="file-list-bar">
       <span class="file-list-label">Files ({changedFiles.length}){#if conflictCount > 0}<span class="conflict-count-label"> · {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}</span>{/if}</span>
       {#if totalStats.add > 0 || totalStats.del > 0}
@@ -1024,7 +966,7 @@
         <div class="spinner"></div>
         <span>Loading diff...</span>
       </div>
-    {:else if !selectedRevision && checkedRevisions.size === 0}
+    {:else if !diffTarget}
       <div class="empty-state">
         <span class="empty-hint">Select a revision to view changes</span>
         <span class="empty-subhint">Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to select</span>
@@ -1144,38 +1086,6 @@
     font-weight: 700;
   }
 
-  .panel-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .header-btn {
-    background: transparent;
-    border: 1px solid var(--surface1);
-    color: var(--subtext0);
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 11px;
-    transition: all 0.15s ease;
-  }
-
-  .header-btn:hover {
-    background: var(--surface0);
-    color: var(--text);
-  }
-
-  .divergent-btn {
-    color: var(--red);
-    border-color: var(--red);
-  }
-
-  .divergent-btn:hover {
-    background: rgba(235, 100, 100, 0.15);
-  }
-
   /* Suppress transitions during revision switch to prevent j/k flapping.
      Fully :global() because skip-transitions is toggled via classList (not
      class: directive) so Svelte's compiler can't see it matches. */
@@ -1187,141 +1097,6 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-  }
-
-  /* --- Revision detail --- */
-  .revision-detail {
-    padding: 8px 12px;
-    background: var(--mantle);
-    border-bottom: 1px solid var(--surface0);
-    flex-shrink: 0;
-    font-size: 11px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .detail-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .detail-ids {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .detail-change-id {
-    font-family: var(--font-mono);
-    color: var(--amber);
-    font-weight: 600;
-    font-size: 12px;
-    flex-shrink: 0;
-  }
-
-  .detail-description-inline {
-    color: var(--text);
-    font-size: 12px;
-    min-width: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .detail-description-inline.desc-collapsed {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .desc-expand-btn {
-    padding: 2px 4px;
-  }
-
-  .desc-expand-icon {
-    display: block;
-    transition: transform var(--anim-duration) var(--anim-ease);
-  }
-
-  .desc-expand-icon.desc-expand-open {
-    transform: rotate(180deg);
-  }
-
-  .detail-bookmarks {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
-  }
-
-  .detail-bookmark-badge {
-    display: inline-flex;
-    align-items: center;
-    background: var(--bg-bookmark);
-    color: var(--subtext0);
-    padding: 0 5px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 600;
-    border: 1px solid var(--border-bookmark);
-    line-height: 1.15;
-    letter-spacing: 0.02em;
-    cursor: pointer;
-    font-family: inherit;
-  }
-
-  .detail-pr-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    background: var(--bg-pr);
-    color: var(--subtext0);
-    padding: 0 6px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 600;
-    border: 1px solid var(--border-pr);
-    line-height: 1.15;
-    letter-spacing: 0.02em;
-    cursor: pointer;
-    font-family: inherit;
-    text-decoration: none;
-    transition: border-color var(--anim-duration) var(--anim-ease);
-  }
-
-  .detail-pr-badge:hover {
-    border-color: var(--border-pr-hover);
-  }
-
-  .detail-pr-badge.is-draft {
-    border-style: dashed;
-    opacity: 0.75;
-  }
-
-  .pr-name {
-    color: var(--subtext0);
-  }
-
-  .pr-number {
-    color: var(--overlay0);
-    font-weight: 400;
-  }
-
-  .describe-saved {
-    color: var(--green);
-    font-size: 11px;
-    font-weight: 600;
-    animation: save-flash 1.5s ease-out forwards;
-  }
-
-  @keyframes save-flash {
-    0% { opacity: 1; }
-    70% { opacity: 1; }
-    100% { opacity: 0; }
   }
 
   /* --- File selection panel (split/squash) --- */

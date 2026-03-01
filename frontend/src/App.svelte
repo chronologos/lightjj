@@ -1,11 +1,12 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, prefetchFilesBatch, onStale, watchEvents, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, isCached, prefetchRevision, prefetchFilesBatch, onStale, watchEvents, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
   import RevisionGraph from './lib/RevisionGraph.svelte'
   import DiffPanel, { clearHighlightCache } from './lib/DiffPanel.svelte'
+  import RevisionHeader from './lib/RevisionHeader.svelte'
   import EvologPanel from './lib/EvologPanel.svelte'
   import OplogPanel from './lib/OplogPanel.svelte'
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
@@ -287,7 +288,7 @@
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))
     }, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
-    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size <= 1 },
+    { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(effectiveId(selectedRevision!.commit)), when: () => !inlineMode && !!selectedRevision },
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
@@ -531,27 +532,25 @@
     contextMenuOpen = true
   }
 
-  // The active revision identifier for diff/files/fileShow calls — commit_id
-  // (single selection) or commit_id-based connected() revset (multi-check).
-  // Built from commit_ids (not change_ids) so the cache key is content-
-  // addressed: if a checked commit is rewritten, its commit_id changes, the
-  // revset string changes, and we get a fresh fetch instead of a stale hit.
-  // Passed to DiffPanel for context expansion + conflict fileShow.
+  // What the diff panel is showing — discriminated union replaces the stringly-
+  // typed `activeRevisionId` (which was sometimes a commit_id, sometimes a
+  // `connected(X|Y)` revset). Built from commit_ids so the cache key is
+  // content-addressed: rewrite → new commit_id → fresh fetch, no stale hits.
   // (checkedCommitIds is defined above, shared with impliedCommitIds.)
-  let activeRevisionId = $derived(
+  let diffTarget = $derived<DiffTarget | undefined>(
     checkedCommitIds.length > 0
-      ? multiRevset(checkedCommitIds)
-      : selectedRevision?.commit.commit_id
+      ? { kind: 'multi', revset: multiRevset(checkedCommitIds), commitIds: checkedCommitIds }
+    : selectedRevision
+      ? { kind: 'single', commitId: selectedRevision.commit.commit_id, changeId: effectiveId(selectedRevision.commit) }
+    : undefined
   )
   // Reload diff/files when checked revisions change.
   // Skip during squash/split mode — diff is intentionally frozen on source revision.
   $effect(() => {
-    if (checkedCommitIds.length === 0) return
+    if (diffTarget?.kind !== 'multi') return
     if (squash.active || split.active) return
-    // activeRevisionId is the multiRevset() string when checks exist
-    const revset = activeRevisionId!
-    loadDiffForRevset(revset)
-    loadFilesForRevset(revset)
+    loadDiffForRevset(diffTarget.revset)
+    loadFilesForRevset(diffTarget.revset)
   })
 
   async function runMutation(
@@ -1112,7 +1111,7 @@
         loadLog()
         break
       case 'e':
-        if (selectedRevision && checkedRevisions.size <= 1) {
+        if (selectedRevision && checkedRevisions.size === 0) {
           e.preventDefault()
           startDescriptionEdit()
         }
@@ -1393,31 +1392,35 @@
             {diffContent}
             {changedFiles}
             {selectedRevision}
-            {fullDescription}
-            {checkedRevisions}
-            {activeRevisionId}
+            {diffTarget}
             {diffLoading}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
-            {descriptionEditing}
-            {descriptionDraft}
-            {describeSaved}
-            {commitMode}
-            onstartdescribe={startDescriptionEdit}
-            ondescribe={commitMode ? executeCommit : handleDescribe}
-            oncanceldescribe={() => { descriptionEditing = false; commitMode = false }}
-            ondraftchange={(v) => { descriptionDraft = v }}
-            onbookmarkclick={openBookmarkModal}
             fileSelectionMode={squash.active || split.active}
             {selectedFiles}
             ontogglefile={toggleFileSelection}
             splitMode={split.active}
             onresolve={inlineMode ? undefined : handleResolve}
-            divergentSelected={selectedRevision?.commit.divergent ?? false}
-            onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
-            {prByBookmark}
             onfilesaved={() => withMutation(loadLog)}
             onjjmutation={withMutation}
-          />
+          >
+            {#snippet header()}
+              <RevisionHeader
+                revision={selectedRevision!}
+                {fullDescription}
+                {describeSaved}
+                {descriptionEditing}
+                {descriptionDraft}
+                {commitMode}
+                {prByBookmark}
+                onstartdescribe={startDescriptionEdit}
+                ondescribe={commitMode ? executeCommit : handleDescribe}
+                oncanceldescribe={() => { descriptionEditing = false; commitMode = false }}
+                ondraftchange={(v) => { descriptionDraft = v }}
+                onbookmarkclick={openBookmarkModal}
+                onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
+              />
+            {/snippet}
+          </DiffPanel>
         {/if}
       </div>
 

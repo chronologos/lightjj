@@ -323,6 +323,21 @@ export function effectiveId(commit: LogEntry['commit']): string {
   return (commit.divergent || commit.hidden) ? commit.commit_id : commit.change_id
 }
 
+/** What the diff panel is currently showing. Replaces the stringly-typed
+ *  `activeRevisionId` (which was sometimes a commit_id and sometimes a
+ *  `connected(X|Y)` revset — every consumer had to re-derive which case
+ *  by checking `checkedRevisions.size`). */
+export type DiffTarget =
+  | { kind: 'single'; commitId: string; changeId: string }
+  | { kind: 'multi'; revset: string; commitIds: string[] }
+
+/** Stable cache key for a DiffTarget. commit_id for single-rev
+ *  (content-addressed, self-invalidating); revset string for multi-check
+ *  (embeds commit_ids so still self-invalidating on rewrite). */
+export function diffTargetKey(t: DiffTarget): string {
+  return t.kind === 'single' ? t.commitId : t.revset
+}
+
 /** Builds a diff-safe revset from multiple revision IDs.
  *  connected() fills gaps so jj's "Cannot diff revsets with gaps" error
  *  can't fire. No-op for contiguous/branched selections. */
