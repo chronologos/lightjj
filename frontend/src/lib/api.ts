@@ -417,9 +417,10 @@ export const api = {
     return request<LogEntry[]>(`/api/log?${params}`)
   },
 
-  bookmarks: (revset?: string) => {
+  bookmarks: (opts?: { revset?: string; local?: boolean }) => {
     const params = new URLSearchParams()
-    if (revset) params.set('revset', revset)
+    if (opts?.revset) params.set('revset', opts.revset)
+    if (opts?.local) params.set('local', 'true')
     return request<Bookmark[]>(`/api/bookmarks?${params}`)
   },
 

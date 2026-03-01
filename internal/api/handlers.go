@@ -106,6 +106,19 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bookmarks := jj.ParseBookmarkListOutput(string(output))
+
+	// ?local=true filters to bookmarks with a local ref — used by the
+	// bookmark modal to hide remote-only tracking entries.
+	if r.URL.Query().Get("local") == "true" {
+		filtered := make([]jj.Bookmark, 0, len(bookmarks))
+		for _, bm := range bookmarks {
+			if bm.Local != nil {
+				filtered = append(filtered, bm)
+			}
+		}
+		bookmarks = filtered
+	}
+
 	s.writeJSON(w, r, http.StatusOK, bookmarks)
 }
 
