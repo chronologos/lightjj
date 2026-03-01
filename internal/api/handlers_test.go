@@ -737,8 +737,8 @@ func TestHandleOpLog(t *testing.T) {
 func TestHandleEvolog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.Evolog("abc")).SetOutput([]byte(
-		"d00e01ea\x1f2026-02-27 15:03\x1fsnapshot working copy\x1f3e061968\n" +
-			"3e061968\x1f2026-02-27 15:01\x1fnew empty commit\x1f\n"))
+		"d00e01ea\x1f2026-02-27 15:03\x1fsnapshot working copy\x1f3e061968\x1fdiff --git a/x b/x\n\x1e" +
+			"3e061968\x1f2026-02-27 15:01\x1fnew empty commit\x1f\x1f\x1e"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -753,7 +753,9 @@ func TestHandleEvolog(t *testing.T) {
 	assert.Equal(t, "d00e01ea", resp[0].CommitId)
 	assert.Equal(t, "snapshot working copy", resp[0].Operation)
 	assert.Equal(t, []string{"3e061968"}, resp[0].PredecessorIds)
+	assert.Equal(t, "diff --git a/x b/x\n", resp[0].Diff)
 	assert.Empty(t, resp[1].PredecessorIds)
+	assert.Empty(t, resp[1].Diff)
 }
 
 func TestHandleEvolog_MissingRevision(t *testing.T) {

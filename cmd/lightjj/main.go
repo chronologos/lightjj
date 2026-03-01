@@ -102,7 +102,7 @@ func main() {
 	}()
 
 	httpServer := &http.Server{
-		Handler:           localhostOnly(srv.Mux),
+		Handler:           localhostOnly(api.Gzip(srv.Mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       60 * time.Second,

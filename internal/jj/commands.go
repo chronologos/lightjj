@@ -279,11 +279,17 @@ func Absorb(changeId string, files ...string) CommandArgs {
 	return args
 }
 
+// Evolog emits per-entry records including the rebase-safe inter_diff in git format.
+// inter_diff() diffs the patch each version contributes relative to its own parents
+// (like `jj evolog -p`) — a `diff --from pred --to cur` would instead show parent
+// churn when the revision was rebased between snapshots. Records are \x1E-separated
+// since the embedded diff text contains newlines.
 func Evolog(revision string) CommandArgs {
 	tmpl := `commit.commit_id().short(12) ++ "\x1F" ++ ` +
 		`commit.committer().timestamp() ++ "\x1F" ++ ` +
 		`operation.description() ++ "\x1F" ++ ` +
-		`predecessors.map(|p| p.commit_id().short(12)).join(",") ++ "\n"`
+		`predecessors.map(|p| p.commit_id().short(12)).join(",") ++ "\x1F" ++ ` +
+		`self.inter_diff().git() ++ "\x1E"`
 	return []string{"evolog", "-r", revision, "--no-graph", "--color", "never", "--ignore-working-copy", "-T", tmpl}
 }
 
@@ -292,16 +298,17 @@ type EvologEntry struct {
 	Time           string   `json:"time"`
 	Operation      string   `json:"operation"`
 	PredecessorIds []string `json:"predecessor_ids"`
+	Diff           string   `json:"diff"`
 }
 
 func ParseEvolog(output string) []EvologEntry {
 	entries := []EvologEntry{}
-	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-		if line == "" {
+	for record := range strings.SplitSeq(output, "\x1E") {
+		if record == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x1F", 4)
-		if len(parts) < 4 {
+		parts := strings.SplitN(record, "\x1F", 5)
+		if len(parts) < 5 {
 			continue
 		}
 		var preds []string
@@ -315,6 +322,7 @@ func ParseEvolog(output string) []EvologEntry {
 			Time:           parts[1],
 			Operation:      parts[2],
 			PredecessorIds: preds,
+			Diff:           parts[4],
 		})
 	}
 	return entries

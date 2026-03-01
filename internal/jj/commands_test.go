@@ -535,16 +535,20 @@ func TestEvolog(t *testing.T) {
 }
 
 func TestParseEvolog(t *testing.T) {
-	output := "d00e01ea653d\x1f2026-02-27 15:03:07\x1fsnapshot working copy\x1f3e06196802f1\n" +
-		"3e06196802f1\x1f2026-02-27 15:03:01\x1fsnapshot working copy\x1fb2b7be97c389,abc123\n" +
-		"b48bc18a97e2\x1f2026-02-27 14:49:04\x1fnew empty commit\x1f\n"
+	// Diff text (5th field) contains newlines — \x1E record sep keeps it intact.
+	diffText := "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+	output := "d00e01ea653d\x1f2026-02-27 15:03:07\x1fsnapshot working copy\x1f3e06196802f1\x1f" + diffText + "\x1e" +
+		"3e06196802f1\x1f2026-02-27 15:03:01\x1fsnapshot working copy\x1fb2b7be97c389,abc123\x1f\x1e" +
+		"b48bc18a97e2\x1f2026-02-27 14:49:04\x1fnew empty commit\x1f\x1f\x1e"
 	entries := ParseEvolog(output)
 	assert.Len(t, entries, 3)
 	assert.Equal(t, "d00e01ea653d", entries[0].CommitId)
 	assert.Equal(t, "2026-02-27 15:03:07", entries[0].Time)
 	assert.Equal(t, "snapshot working copy", entries[0].Operation)
 	assert.Equal(t, []string{"3e06196802f1"}, entries[0].PredecessorIds)
+	assert.Equal(t, diffText, entries[0].Diff)
 	assert.Equal(t, []string{"b2b7be97c389", "abc123"}, entries[1].PredecessorIds)
+	assert.Equal(t, "", entries[1].Diff, "empty diff for metadata-only op")
 	assert.Equal(t, "2026-02-27 14:49:04", entries[2].Time)
 	assert.Equal(t, []string{}, entries[2].PredecessorIds)
 }
@@ -556,7 +560,7 @@ func TestParseEvolog_Empty(t *testing.T) {
 }
 
 func TestParseEvolog_Malformed(t *testing.T) {
-	entries := ParseEvolog("only\x1ftwo\x1ffields\n")
+	entries := ParseEvolog("only\x1ftwo\x1ffields\x1e")
 	assert.Empty(t, entries)
 }
 

@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { api, type LogEntry, type EvologEntry } from './api'
+  import type { LogEntry, EvologEntry } from './api'
   import { parseDiffContent } from './diff-parser'
-  import { createLoader } from './loader.svelte'
   import DiffFileView from './DiffFileView.svelte'
 
   interface Props {
@@ -18,26 +17,13 @@
   let selectedIdx: number = $state(-1)
   let entryListEl: HTMLDivElement | undefined = $state()
 
-  // Using createLoader (not manual state) avoids the spinner-freeze bug where
-  // clicking a no-predecessor entry after an in-flight fetch leaves the prior
-  // fetch's loading flag stuck (its finally-block gen check fails to clear it).
-  const interDiff = createLoader(
-    (pred: string, cur: string) => api.diffRange(pred, cur).then(r => r.diff),
-    '',
-  )
-
-  let parsedDiff = $derived(parseDiffContent(interDiff.value))
+  // Diff arrives inline with each entry (rebase-safe inter_diff from the backend
+  // template) — no per-click fetch needed.
   let selectedEntry = $derived(selectedIdx >= 0 ? entries[selectedIdx] : null)
+  let parsedDiff = $derived(selectedEntry ? parseDiffContent(selectedEntry.diff) : [])
 
   function selectEntry(i: number) {
     selectedIdx = i
-    const entry = entries[i]
-    const pred = entry?.predecessor_ids[0]
-    if (pred) {
-      interDiff.load(pred, entry.commit_id)
-    } else {
-      interDiff.reset()
-    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -114,7 +100,7 @@
             <span class="entry-id">{entry.commit_id}</span>
             <span class="entry-op">
               {entry.operation}
-              {#if extraPreds > 0}<span class="entry-multi" title="{extraPreds + 1} predecessors; diff shown from first">(+{extraPreds})</span>{/if}
+              {#if extraPreds > 0}<span class="entry-multi" title="{extraPreds + 1} predecessors">(+{extraPreds})</span>{/if}
             </span>
             <span class="entry-time">{entry.time.slice(0, 19)}</span>
           </button>
@@ -123,17 +109,7 @@
     </div>
 
     <div class="diff-area">
-      {#if interDiff.loading}
-        <div class="empty-state">
-          <div class="spinner"></div>
-          <span>Loading diff...</span>
-        </div>
-      {:else if interDiff.error}
-        <div class="empty-state error-state">
-          <span>⚠ {interDiff.error}</span>
-          <button class="header-btn" onclick={() => selectEntry(selectedIdx)}>Retry</button>
-        </div>
-      {:else if !selectedEntry}
+      {#if !selectedEntry}
         <div class="empty-state">Click an entry to see what changed in that step</div>
       {:else if selectedEntry.predecessor_ids.length === 0}
         <div class="empty-state">Initial entry — no predecessor to diff against</div>
@@ -315,16 +291,6 @@
     padding: 48px 24px;
     color: var(--surface2);
     font-size: 13px;
-  }
-
-  .error-state {
-    color: var(--red);
-  }
-
-  .error-state span {
-    max-width: 600px;
-    text-align: center;
-    word-break: break-word;
   }
 
   .spinner {
