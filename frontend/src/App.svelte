@@ -459,24 +459,28 @@
     const entry = revisions[index]
     if (!entry) return
 
-    // Debounce diff/files loading: highlight moves instantly, but fetches
-    // wait for navigation to settle. Cache hits skip the debounce.
+    // Defer diff/files loading so selectedIndex paints FIRST. Even on cache
+    // hits, DiffPanel render (parsedDiff → DiffFileView cascade → DOM
+    // reconciliation) is synchronous and blocks the RevisionGraph selection
+    // highlight. setTimeout schedules a NEW TASK — the browser paints between
+    // tasks, so the highlight is visible before the diff render starts.
+    //
+    // Held-key coalescing: queued keydown events drain before the setTimeout
+    // task (browsers prioritize input tasks over timer tasks), so each press
+    // clears the previous timer and the final timer reads the final
+    // selectedIndex — only one diff render for N held-key presses.
+    //
+    // Uncached gets 50ms to coalesce network requests; cached only needs one
+    // event-loop tick to yield the paint boundary.
     clearTimeout(navDebounceTimer)
-    const cid = entry.commit.commit_id
-    const cached = isCached(cid)
-    const doLoad = (c: LogEntry['commit']) => {
-      if (checkedRevisions.size === 0) loadDiffAndFiles(c.commit_id)
+    const cached = isCached(entry.commit.commit_id)
+    navDebounceTimer = setTimeout(() => {
+      const current = revisions[selectedIndex]
+      if (!current) return
+      if (checkedRevisions.size === 0) loadDiffAndFiles(current.commit.commit_id)
       // evolog is keyed by change_id (it's the change's history), not commit_id
-      if (evologOpen) loadEvolog(effectiveId(c))
-    }
-    if (cached) {
-      doLoad(entry.commit)
-    } else {
-      navDebounceTimer = setTimeout(() => {
-        const current = revisions[selectedIndex]
-        if (current) doLoad(current.commit)
-      }, 50)
-    }
+      if (evologOpen) loadEvolog(effectiveId(current.commit))
+    }, cached ? 0 : 50)
 
     // Opportunistic prefetch: warm the cache for the next revision in the
     // navigation direction. Only when CURRENT is cached — during rapid uncached

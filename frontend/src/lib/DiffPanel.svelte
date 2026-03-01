@@ -1,5 +1,6 @@
 <script module lang="ts">
   import type { WordSpan } from './word-diff'
+  import { parseDiffContent, type DiffFile } from './diff-parser'
 
   // Module-scoped caches — survive component unmount. DiffPanel is replaced by
   // DivergencePanel via {#if divergence.active} in App.svelte; without module
@@ -12,6 +13,27 @@
   const derivedCache = new Map<string, DerivedCacheEntry>()
   const collapseStateCache = new Map<string, Set<string>>()
   const DERIVED_CACHE_SIZE = 30
+
+  // parsedDiff cache — keyed by raw diff text (same string reference from
+  // api.ts cache, so Map key lookup is a pointer compare, not a content scan).
+  // Returns identical DiffFile[] on revisit → DiffFileView's `file` prop holds
+  // a stable reference → `file.hunks` unchanged → lineNumsByHunk/splitLines/
+  // parsedHunkHeaders $derived chains stay quiet on A→B→A navigation. The
+  // strings are already retained by api.ts's cache (500 entries), so keying on
+  // them here doesn't extend their lifetime.
+  const parsedDiffCache = new Map<string, DiffFile[]>()
+
+  function parseDiffCached(raw: string): DiffFile[] {
+    if (!raw) return []
+    const hit = parsedDiffCache.get(raw)
+    if (hit) {
+      lruSet(parsedDiffCache, raw, hit, DERIVED_CACHE_SIZE)
+      return hit
+    }
+    const result = parseDiffContent(raw)
+    lruSet(parsedDiffCache, raw, result, DERIVED_CACHE_SIZE)
+    return result
+  }
 
   function lruSet<K, V>(cache: Map<K, V>, key: K, value: V, max: number) {
     // LRU bump: delete first so set() moves to end
@@ -35,7 +57,9 @@
   import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { api, effectiveId, diffTargetKey, type LogEntry, type FileChange, type DiffTarget } from './api'
-  import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
+  import { type DiffLine } from './diff-parser'
+  // parseDiffContent + DiffFile imported in <script module> — module-scope
+  // exports are visible to the instance script in Svelte 5.
   import { groupByWithIndex } from './group-by'
   import { computeWordDiffs } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
@@ -199,7 +223,7 @@
     clearEditState(path)
   }
 
-  let parsedDiff = $derived(parseDiffContent(diffContent))
+  let parsedDiff = $derived(parseDiffCached(diffContent))
 
   // Aggregate diff stats across all files
   let totalStats = $derived.by(() => {

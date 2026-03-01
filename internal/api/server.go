@@ -106,6 +106,9 @@ func (s *Server) routes() {
 
 	s.Mux.HandleFunc("GET /api/pull-requests", s.handlePullRequests)
 
+	s.Mux.HandleFunc("GET /api/config", s.handleConfigGet)
+	s.Mux.HandleFunc("POST /api/config", s.handleConfigSet)
+
   // handle file edits
 	s.Mux.HandleFunc("POST /api/file-write", s.handleFileWrite)
 

@@ -1,5 +1,13 @@
 // Persistent user preferences, reactive via Svelte 5 runes.
-// Values sync to localStorage automatically on change.
+//
+// Primary storage: $XDG_CONFIG_HOME/lightjj/config.json via the backend.
+// Survives port changes — spawned workspace instances on different ports
+// share one config (localStorage is origin-keyed and would give each port
+// a blank slate).
+//
+// localStorage stays as a write-through cache: instant initial paint (no
+// flash of default theme while the GET is in flight) + fallback when the
+// backend is unreachable.
 
 const STORAGE_KEY = 'lightjj-config'
 
@@ -19,7 +27,7 @@ const defaults: Config = {
   tutorialVersion: '',
 }
 
-function load(): Partial<Config> {
+function loadLocal(): Partial<Config> {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
   } catch {
@@ -27,34 +35,79 @@ function load(): Partial<Config> {
   }
 }
 
-function save(c: Config) {
+function saveLocal(c: Config) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(c))
+  } catch { /* private mode, quota */ }
+}
+
+// Raw fetch (not api.ts) — config.svelte.ts is imported at module load time
+// before api.ts's EventSource/watchEvents setup should run, and we don't want
+// op-id tracking on a non-jj endpoint.
+async function loadRemote(): Promise<Partial<Config> | null> {
+  try {
+    const res = await fetch('/api/config')
+    if (res.status === 204) return null // SSH mode — no fs access
+    if (!res.ok) return null
+    return await res.json()
   } catch {
-    // localStorage unavailable (private mode, quota)
+    return null
   }
 }
 
-// Migrate legacy single-key storage to the unified config object
-function migrate(): Partial<Config> {
-  const legacy: Partial<Config> = {}
+async function saveRemote(c: Config): Promise<void> {
   try {
-    const old = localStorage.getItem('lightjj-theme')
-    if (old) {
-      legacy.theme = old === 'light' ? 'light' : 'dark'
-      localStorage.removeItem('lightjj-theme')
-    }
-  } catch { /* ignore */ }
-  return legacy
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(c),
+    })
+  } catch { /* backend down — localStorage already has it */ }
 }
 
 function createConfig() {
-  const stored = { ...migrate(), ...load() }
-  let state = $state<Config>({ ...defaults, ...stored })
+  // Start with localStorage for instant paint; remote merges over it async.
+  let state = $state<Config>({ ...defaults, ...loadLocal() })
 
-  // Persist any change
+  // Suppress the save-effect until the remote load completes. Without this,
+  // the effect's initial fire writes localStorage-derived values back to
+  // disk before the real disk values arrive — disk config becomes
+  // unreachable. Reactive so the effect re-runs when it flips to true,
+  // guaranteeing one post-hydration save even if remote values were
+  // identical to localStorage (no-op on disk, confirms sync).
+  let hydrated = $state(false)
+
+  loadRemote().then(remote => {
+    if (remote) {
+      // Narrow unknown-shape remote to known keys. Backend preserves unknown
+      // fields for forward-compat, but we only apply fields we understand.
+      for (const k of Object.keys(defaults) as (keyof Config)[]) {
+        if (k in remote && remote[k] !== undefined) {
+          (state as any)[k] = remote[k]
+        }
+      }
+    }
+    // Set AFTER the property writes so Svelte's microtask-batched effect
+    // sees hydrated=true alongside the new values.
+    hydrated = true
+  })
+
+  let saveTimer: ReturnType<typeof setTimeout> | undefined
   $effect.root(() => {
-    $effect(() => save($state.snapshot(state)))
+    $effect(() => {
+      const snap = $state.snapshot(state)
+      if (!hydrated) return
+      // Debounce both saves. Panel-resize drags set revisionPanelWidth on
+      // every mousemove (~60×/s); without debounce that's 60 JSON.stringify +
+      // localStorage.setItem + POST requests per second. The initial paint
+      // already used localStorage; sub-second freshness during a drag has no
+      // user-visible benefit.
+      clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => {
+        saveLocal(snap)
+        saveRemote(snap)
+      }, 500)
+    })
   })
 
   return {
