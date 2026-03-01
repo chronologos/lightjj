@@ -105,7 +105,7 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bookmarks := jj.ParseBookmarkListOutput(string(output))
+	bookmarks := jj.ParseBookmarkListOutput(string(output), s.DefaultRemote)
 
 	// ?local=true filters to bookmarks with a local ref — used by the
 	// bookmark modal to hide remote-only tracking entries.
@@ -320,7 +320,7 @@ func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	remotes := jj.ParseRemoteListOutput(string(output), "origin")
+	remotes := jj.ParseRemoteListOutput(string(output), s.DefaultRemote)
 	s.writeJSON(w, r, http.StatusOK, remotes)
 }
 
