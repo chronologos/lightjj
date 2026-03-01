@@ -8,13 +8,15 @@
     entries: EvologEntry[]
     loading: boolean
     selectedRevision: LogEntry | null
+    height: number
     onrefresh: () => void
     onclose: () => void
   }
 
-  let { entries, loading, selectedRevision, onrefresh, onclose }: Props = $props()
+  let { entries, loading, selectedRevision, height, onrefresh, onclose }: Props = $props()
 
   let selectedIdx: number = $state(-1)
+  let entryListEl: HTMLDivElement | undefined = $state()
 
   // Using createLoader (not manual state) avoids the spinner-freeze bug where
   // clicking a no-predecessor entry after an in-flight fetch leaves the prior
@@ -37,9 +39,38 @@
       interDiff.reset()
     }
   }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (entries.length === 0) return
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        selectEntry(selectedIdx === -1 ? 0 : Math.min(selectedIdx + 1, entries.length - 1))
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        selectEntry(selectedIdx === -1 ? 0 : Math.max(selectedIdx - 1, 0))
+        break
+    }
+  }
+
+  // Auto-focus entry list when entries load — enables immediate arrow-key step-through.
+  // Clicking back into the revision list (or any global shortcut) takes focus away naturally.
+  $effect(() => {
+    if (entries.length > 0 && entryListEl) {
+      entryListEl.focus()
+    }
+  })
+
+  // Scroll selected entry into view on keyboard nav.
+  $effect(() => {
+    if (selectedIdx >= 0) {
+      entryListEl?.querySelector('.evolog-entry.selected')?.scrollIntoView({ block: 'nearest' })
+    }
+  })
 </script>
 
-<div class="evolog-panel">
+<div class="evolog-panel" style:height="{height}px">
   <div class="panel-header">
     <span class="panel-title">
       Evolution Log
@@ -59,7 +90,7 @@
   </div>
 
   <div class="evolog-body">
-    <div class="entry-list">
+    <div class="entry-list" role="listbox" tabindex="-1" bind:this={entryListEl} onkeydown={handleKeydown}>
       {#if loading && entries.length === 0}
         <div class="empty-state">
           <div class="spinner"></div>
@@ -128,7 +159,6 @@
   .evolog-panel {
     border-top: 1px solid var(--surface1);
     flex-shrink: 0;
-    height: 360px;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -203,6 +233,7 @@
     overflow-y: auto;
     border-right: 1px solid var(--surface0);
     font-size: 12px;
+    outline: none;
   }
 
   .evolog-entry {

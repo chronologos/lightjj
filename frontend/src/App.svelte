@@ -111,6 +111,34 @@
     window.addEventListener('mouseup', onMouseUp)
   }
 
+  // --- Draggable evolog panel height ---
+  let draggingEvologDivider = $state(false)
+
+  function startEvologDividerDrag(e: MouseEvent) {
+    e.preventDefault()
+    draggingEvologDivider = true
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'row-resize'
+
+    function onMouseMove(e: MouseEvent) {
+      // Height is distance from viewport bottom; dragging up makes panel taller.
+      const h = window.innerHeight - e.clientY
+      const maxH = Math.floor(window.innerHeight * 0.7)
+      config.evologPanelHeight = Math.max(120, Math.min(maxH, h))
+    }
+
+    function onMouseUp() {
+      draggingEvologDivider = false
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+  }
+
   let paletteOpen: boolean = $state(false)
   let bookmarkModalOpen: boolean = $state(false)
   let bookmarkModalFilter: string = $state('')
@@ -1469,11 +1497,18 @@
       </div>
 
       {#if evologOpen}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="evolog-divider"
+          class:dragging={draggingEvologDivider}
+          onmousedown={startEvologDividerDrag}
+        ></div>
         {#key selectedRevision?.commit.change_id}
           <EvologPanel
             entries={evologEntries}
             loading={evologLoading}
             {selectedRevision}
+            height={config.evologPanelHeight}
             onrefresh={() => { if (selectedRevision) loadEvolog(effectiveId(selectedRevision.commit)) }}
             onclose={() => { evologOpen = false }}
           />
@@ -1606,6 +1641,30 @@
 
   .panel-divider:hover::after,
   .panel-divider.divider-active::after {
+    background: var(--surface2);
+  }
+
+  .evolog-divider {
+    height: 4px;
+    flex-shrink: 0;
+    cursor: row-resize;
+    position: relative;
+    z-index: 1;
+  }
+
+  .evolog-divider::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 1px;
+    height: 1px;
+    background: transparent;
+    transition: background var(--anim-duration) var(--anim-ease);
+  }
+
+  .evolog-divider:hover::after,
+  .evolog-divider.dragging::after {
     background: var(--surface2);
   }
 
