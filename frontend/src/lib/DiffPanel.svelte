@@ -66,6 +66,9 @@
   import { createDiffDerivation } from './diff-derivation.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
   import ContextMenu, { type ContextMenuItem } from './ContextMenu.svelte'
+  import AnnotationBubble from './AnnotationBubble.svelte'
+  import { createAnnotationStore, exportMarkdown, exportJSON } from './annotations.svelte'
+  import type { Annotation, AnnotationSeverity } from './api'
 
   interface Props {
     diffContent: string
@@ -143,14 +146,112 @@
     const content = info.lines.map(l => l.content).join('\n')
     const fullRef = `${ref}\n${content}`
 
-    diffCtx = {
-      items: [
-        { label: `Copy reference`, action: () => navigator.clipboard.writeText(fullRef) },
-      ],
-      x: e.clientX,
-      y: e.clientY,
-      open: true,
+    const items: ContextMenuItem[] = [
+      { label: `Copy reference`, action: () => navigator.clipboard.writeText(fullRef) },
+    ]
+    // Annotate only makes sense in single-rev mode (needs a stable changeId)
+    // and when selection is a single line (annotations are per-line).
+    if (diffTarget?.kind === 'single' && start !== null && start === end) {
+      items.push({ separator: true })
+      items.push({
+        label: '💬 Annotate',
+        action: () => openAnnotationBubble(info.filePath, start, info.lines[0].content, e.clientX, e.clientY),
+      })
     }
+
+    diffCtx = { items, x: e.clientX, y: e.clientY, open: true }
+  }
+
+  // --- Annotations ---
+  // Store is instance-scoped — annotations are per-changeId, loaded when
+  // diffTarget changes. Multi-check mode (revset) doesn't support annotations
+  // (which commit would they belong to?).
+  const annotations = createAnnotationStore()
+
+  interface AnnotationBubbleState {
+    open: boolean
+    x: number
+    y: number
+    editing: Annotation | null
+    lineContext: { filePath: string; lineNum: number; lineContent: string } | null
+  }
+  let annBubble = $state<AnnotationBubbleState>({
+    open: false, x: 0, y: 0, editing: null, lineContext: null,
+  })
+
+  // Load + re-anchor whenever the displayed revision changes (single-rev only).
+  // Agent iteration = same change_id, new commit_id. After loadLog() runs
+  // (via SSE → onStale), diffTarget.commitId updates → this effect fires →
+  // annotations.load() diffRange-adjusts line numbers. The commitId guard
+  // prevents redundant loads during the cache-hit j/k path where diffTarget
+  // is a fresh object but the strings inside are unchanged.
+  let lastAnnCommitId: string | undefined
+  $effect(() => {
+    if (diffTarget?.kind !== 'single') return
+    const { changeId, commitId } = diffTarget
+    if (annotations.loadedChangeId === changeId && lastAnnCommitId === commitId) return
+    lastAnnCommitId = commitId
+    annotations.load(changeId, commitId).catch(() => {
+      // Annotation load failure shouldn't block diff viewing — degrade silently.
+    })
+  })
+
+  function openAnnotationBubble(filePath: string, lineNum: number, lineContent: string, x: number, y: number) {
+    if (diffTarget?.kind !== 'single') return
+    const existing = annotations.forLine(filePath, lineNum)
+    annBubble = {
+      open: true, x, y,
+      editing: existing[0] ?? null,
+      lineContext: { filePath, lineNum, lineContent },
+    }
+  }
+
+  function handleAnnotationClick(filePath: string, lineNum: number, lineContent: string, e: MouseEvent) {
+    openAnnotationBubble(filePath, lineNum, lineContent, e.clientX, e.clientY)
+  }
+
+  async function saveAnnotation(comment: string, severity: AnnotationSeverity) {
+    if (diffTarget?.kind !== 'single' || !annBubble.lineContext) return
+    if (annBubble.editing) {
+      await annotations.update({ ...annBubble.editing, comment, severity })
+    } else {
+      await annotations.add({
+        changeId: diffTarget.changeId,
+        createdAtCommitId: diffTarget.commitId,
+        ...annBubble.lineContext,
+        comment, severity,
+      })
+    }
+  }
+
+  // Per-file lookup closures — one per DiffFileView so the hot per-line path
+  // stays O(1). The store's forLine() is already Map-backed; this just
+  // captures filePath so the component doesn't need to pass it.
+  function annotationsForFile(filePath: string) {
+    return (lineNum: number) => annotations.forLine(filePath, lineNum)
+  }
+
+  // Summary counts — shown in a compact bar below the file list when non-zero.
+  let openAnns = $derived(annotations.list.filter(a => a.status === 'open'))
+  let orphanedAnns = $derived(annotations.list.filter(a => a.status === 'orphaned'))
+
+  function scrollToAnnotation(ann: Annotation) {
+    // Scroll to the file then to its approximate line position. DiffFileView
+    // doesn't expose per-line scrolling; this gets close enough.
+    scrollToFile(ann.filePath)
+  }
+
+  // Export helpers for command palette (bound via bind:this in App)
+  export function exportAnnotationsMarkdown(): string {
+    if (diffTarget?.kind !== 'single') return ''
+    return exportMarkdown(annotations.list, diffTarget.changeId)
+  }
+  export function exportAnnotationsJSON(): string {
+    if (diffTarget?.kind !== 'single') return ''
+    return exportJSON(annotations.list, diffTarget.changeId, diffTarget.commitId)
+  }
+  export function hasAnnotations(): boolean {
+    return annotations.list.some(a => a.status !== 'resolved')
   }
 
   async function startEdit(path: string) {
@@ -866,6 +967,26 @@
       </div>
     </div>
   {/if}
+  {#if diffTarget?.kind === 'single' && (openAnns.length > 0 || orphanedAnns.length > 0)}
+    <div class="annotations-bar">
+      <span class="annotations-label">💬 {openAnns.length} open{#if orphanedAnns.length > 0} · <span class="orphaned-count">{orphanedAnns.length} possibly addressed</span>{/if}</span>
+      <div class="annotations-chips">
+        {#each openAnns as ann (ann.id)}
+          <button class="ann-chip severity-{ann.severity}" onclick={() => scrollToAnnotation(ann)} title="{ann.filePath}:{ann.lineNum} — {ann.comment}">
+            {ann.filePath.split('/').pop()}:{ann.lineNum}
+          </button>
+        {/each}
+        {#each orphanedAnns as ann (ann.id)}
+          <button class="ann-chip orphaned" onclick={() => openAnnotationBubble(ann.filePath, ann.lineNum, ann.lineContent, 200, 200)} title="(possibly addressed) {ann.comment}">
+            {ann.filePath.split('/').pop()}:?
+          </button>
+        {/each}
+      </div>
+      <button class="ann-export" onclick={() => navigator.clipboard.writeText(exportAnnotationsMarkdown())} title="Copy markdown for agent prompt">
+        Export ↗
+      </button>
+    </div>
+  {/if}
   {#if parsedDiff.length > 0}
     <div class="diff-toolbar">
       <div class="diff-toolbar-left">
@@ -957,6 +1078,8 @@
             onsavefile={saveFile}
             oncanceledit={cancelEdit}
             onlinecontext={openDiffLineContextMenu}
+            annotationsForLine={diffTarget?.kind === 'single' ? annotationsForFile(filePath) : undefined}
+            onannotationclick={(ln, content, e) => handleAnnotationClick(filePath, ln, content, e)}
           />
         {/each}
         {#each conflictOnlyFiles as cf (cf.path)}
@@ -997,6 +1120,17 @@
 </div>
 
 <ContextMenu items={diffCtx.items} x={diffCtx.x} y={diffCtx.y} bind:open={diffCtx.open} />
+
+<AnnotationBubble
+  bind:open={annBubble.open}
+  x={annBubble.x}
+  y={annBubble.y}
+  editing={annBubble.editing}
+  lineContext={annBubble.lineContext ?? undefined}
+  onsave={saveAnnotation}
+  ondelete={annBubble.editing ? () => annotations.remove(annBubble.editing!.id) : undefined}
+  onclose={() => { annBubble.editing = null; annBubble.lineContext = null }}
+/>
 
 <style>
   .panel {
@@ -1331,6 +1465,53 @@
     border-color: var(--conflict-side2-border);
     color: var(--red);
   }
+  /* --- Annotations summary bar --- */
+  .annotations-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    background: rgba(from var(--amber) r g b / 0.04);
+    border-bottom: 1px solid var(--surface0);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .annotations-label { color: var(--subtext0); white-space: nowrap; }
+  .orphaned-count { color: var(--green); }
+  .annotations-chips {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .ann-chip {
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    border-left-width: 3px;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ann-chip:hover { background: var(--surface1); }
+  .ann-chip.severity-must-fix { border-left-color: var(--red); }
+  .ann-chip.severity-suggestion { border-left-color: var(--amber); }
+  .ann-chip.severity-question { border-left-color: var(--blue); }
+  .ann-chip.severity-nitpick { border-left-color: var(--surface2); }
+  .ann-chip.orphaned { opacity: 0.6; border-style: dashed; }
+  .ann-export {
+    background: transparent;
+    border: 1px solid var(--surface1);
+    color: var(--subtext0);
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 10px;
+    cursor: pointer;
+  }
+  .ann-export:hover { color: var(--text); border-color: var(--surface2); }
+
   /* --- Diff toolbar --- */
   .diff-toolbar {
     display: flex;

@@ -346,6 +346,24 @@
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
     { label: 'Clear checked revisions', shortcut: 'Esc', category: 'Actions', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
     { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop, infoOnly: true },
+
+    // Annotations (agent review)
+    { label: 'Export annotations (markdown → clipboard)', category: 'Annotations',
+      action: () => {
+        const md = diffPanelRef?.exportAnnotationsMarkdown() ?? ''
+        navigator.clipboard.writeText(md)
+        lastAction = md ? 'Annotations copied' : 'No annotations to export'
+      },
+      when: () => !inlineMode && !!diffPanelRef?.hasAnnotations(),
+    },
+    { label: 'Export annotations (JSON → clipboard)', category: 'Annotations',
+      action: () => {
+        const json = diffPanelRef?.exportAnnotationsJSON() ?? ''
+        navigator.clipboard.writeText(json)
+        lastAction = json ? 'Annotations JSON copied' : 'No annotations to export'
+      },
+      when: () => !inlineMode && !!diffPanelRef?.hasAnnotations(),
+    },
   ])
 
   // Labels that bake reactive state into strings — only these re-allocate on Space/theme/view toggle.

@@ -111,6 +111,10 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/config", s.handleConfigGet)
 	s.Mux.HandleFunc("POST /api/config", s.handleConfigSet)
 
+	s.Mux.HandleFunc("GET /api/annotations", s.handleAnnotationsGet)
+	s.Mux.HandleFunc("POST /api/annotations", s.handleAnnotationsPost)
+	s.Mux.HandleFunc("DELETE /api/annotations", s.handleAnnotationsDelete)
+
   // handle file edits
 	s.Mux.HandleFunc("POST /api/file-write", s.handleFileWrite)
 

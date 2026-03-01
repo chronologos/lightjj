@@ -2,7 +2,7 @@
   import type { DiffFile, DiffHunk, DiffLine } from './diff-parser'
   import { toSplitView, type SplitLine } from './split-view'
   import type { WordSpan } from './word-diff'
-  import type { FileChange } from './api'
+  import type { FileChange, Annotation } from './api'
   import { findConflicts } from './conflict-parser'
   import type { SearchMatch } from './DiffPanel.svelte'
   import FileEditor from './FileEditor.svelte'
@@ -27,6 +27,15 @@
     onsavefile?: (path: string, content: string) => void
     oncanceledit?: (path: string) => void
     onlinecontext?: (e: MouseEvent, info: DiffLineInfo) => void
+    /** Lookup annotations for a new-side line number. Called per-line during
+     *  render — MUST be O(1) (backed by a Map, not a filter). Empty array =
+     *  no badge. Returned severity drives badge color. */
+    annotationsForLine?: (lineNum: number) => Annotation[]
+    /** Click handler for the annotation gutter badge. Receives the new-side
+     *  line number, the line's raw content (without diff prefix), and the
+     *  click event (for positioning the bubble). Also fires on left-click of
+     *  an unannotated line when Alt is held — quick-annotate shortcut. */
+    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent) => void
   }
 
   export interface DiffLineInfo {
@@ -34,7 +43,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onsavefile, oncanceledit, onlinecontext }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onsavefile, oncanceledit, onlinecontext, annotationsForLine, onannotationclick }: Props = $props()
 
   let editorRef: FileEditor | undefined = $state(undefined)
 
@@ -302,6 +311,18 @@
   })
 </script>
 
+{#snippet gutter(lineNumbers: (number | null)[], rawContent: string)}
+  {@const newLineNum = lineNumbers[lineNumbers.length - 1]}
+  {@const anns = newLineNum !== null && annotationsForLine ? annotationsForLine(newLineNum) : []}
+  {#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{#if anns.length > 0 && newLineNum !== null}<!--
+  --><button
+        class="annotation-badge severity-{anns[0].severity}"
+        class:orphaned={anns[0].status === 'orphaned'}
+        onclick={(e) => { e.stopPropagation(); onannotationclick?.(newLineNum, rawContent, e) }}
+        title="{anns.length} annotation{anns.length > 1 ? 's' : ''}: {anns[0].comment}"
+        aria-label="View annotation"
+      >💬{#if anns.length > 1}<sup>{anns.length}</sup>{/if}</button>{/if}{/snippet}
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 {#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number, conflictMeta?: ConflictLineMeta)}
   {@const searchKey = hunkIdx !== undefined && lineIdx !== undefined ? `${hunkIdx}:${lineIdx}` : ''}
@@ -311,6 +332,7 @@
   {@const innerType = conflictInnerType(conflictMeta, line.content)}
   {@const displayContent = getDisplayContent(isMarker, innerType, line.content)}
   {@const displayPrefix = getDisplayPrefix(isMarker, innerType, inConflict, line.content)}
+  {@const rawContent = line.content.slice(1)}
   {#if isMarker}
     <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
   {:else if lm && lm.length > 0}
@@ -324,7 +346,7 @@
       class:conflict-inner-remove={innerType === 'remove'}
       data-search-match-current={hasCurrent ? 'true' : undefined}
       oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm)}</div>
+    >{@render gutter(lineNumbers, rawContent)}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm)}</div>
   {:else if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
@@ -334,7 +356,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{@html highlightedLines.get(hlKey)}</div>
+    >{@render gutter(lineNumbers, rawContent)}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
       class="diff-line"
@@ -343,7 +365,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{#each spans as span}{#if span.changed}<span
+    >{@render gutter(lineNumbers, rawContent)}<span class="diff-prefix">{displayPrefix}</span>{#each spans as span}{#if span.changed}<span
           class="word-change"
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
   {:else}
@@ -355,7 +377,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
-    >{#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}<span class="diff-prefix">{displayPrefix}</span>{displayContent}</div>
+    >{@render gutter(lineNumbers, rawContent)}<span class="diff-prefix">{displayPrefix}</span>{displayContent}</div>
   {/if}
 {/snippet}
 
@@ -773,6 +795,30 @@
   .diff-context .line-num {
     --line-gutter-border: var(--surface0);
   }
+
+  /* Annotation gutter badge — floats at the right edge of the line so it
+     doesn't push the line content. The diff-line's right padding (12px)
+     reserves the space. Color-coded by severity; dashed outline = orphaned. */
+  .annotation-badge {
+    position: absolute;
+    right: 2px;
+    background: transparent;
+    border: none;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 1px 2px;
+    border-radius: 3px;
+    opacity: 0.7;
+    transition: opacity var(--anim-duration) var(--anim-ease);
+  }
+  .diff-line { position: relative; } /* anchor for badge */
+  .annotation-badge:hover { opacity: 1; }
+  .annotation-badge sup { font-size: 8px; }
+  .annotation-badge.severity-must-fix { filter: hue-rotate(-20deg) saturate(2); }
+  .annotation-badge.severity-question { filter: hue-rotate(180deg); }
+  .annotation-badge.severity-nitpick { opacity: 0.4; }
+  .annotation-badge.orphaned { outline: 1px dashed var(--overlay0); }
 
   .diff-add {
     background: var(--diff-add-bg);

@@ -25,6 +25,23 @@ export interface LogEntry {
   graph_lines: GraphLine[]
 }
 
+export type AnnotationSeverity = 'must-fix' | 'suggestion' | 'question' | 'nitpick'
+export type AnnotationStatus = 'open' | 'resolved' | 'orphaned'
+
+export interface Annotation {
+  id: string
+  changeId: string
+  filePath: string
+  lineNum: number
+  lineContent: string // snapshot for re-anchor after agent iterates
+  comment: string
+  severity: AnnotationSeverity
+  createdAt: number
+  createdAtCommitId: string // for evolog attribution + diffRange re-anchor
+  status: AnnotationStatus
+  resolvedAtCommitId?: string
+}
+
 export interface Bookmark {
   name: string
   local?: { remote: string; commit_id: string; tracked: boolean }
@@ -568,6 +585,22 @@ export const api = {
 
   runAlias: (name: string) =>
     post<{ output: string }>('/api/alias', { name }),
+
+  // Annotations are uncached — they're review-state, not revision content.
+  // The set changes when the user adds/removes/resolves, and when the agent
+  // iterates (re-anchor mutates lineNum/status). Backend is the source of
+  // truth so spawned workspace tabs share one store.
+  annotations: (changeId: string) =>
+    request<Annotation[]>(`/api/annotations?changeId=${encodeURIComponent(changeId)}`),
+
+  saveAnnotation: (ann: Annotation) =>
+    post<Annotation>('/api/annotations', ann),
+
+  deleteAnnotation: (changeId: string, id: string) =>
+    request<void>(`/api/annotations?changeId=${encodeURIComponent(changeId)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  clearAnnotations: (changeId: string) =>
+    request<void>(`/api/annotations?changeId=${encodeURIComponent(changeId)}`, { method: 'DELETE' }),
 }
 
 // Test-only exports for cache inspection/reset

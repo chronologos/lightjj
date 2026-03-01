@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import DiffFileView from './DiffFileView.svelte'
 import type { DiffFile } from './diff-parser'
-import type { FileChange } from './api'
+import type { FileChange, Annotation } from './api'
 import type { WordSpan } from './word-diff'
 
 function makeFile(filePath: string, lines: { type: 'add' | 'remove' | 'context'; content: string }[] = []): DiffFile {
@@ -550,6 +550,147 @@ describe('DiffFileView', () => {
       const addLine = container.querySelector('.diff-add')
       expect(addLine?.textContent).toContain('export function foo')
       expect(addLine?.textContent).not.toContain('++')
+    })
+  })
+
+  describe('annotation gutter badge', () => {
+    function mkAnn(severity: Annotation['severity'], status: Annotation['status'] = 'open'): Annotation {
+      return {
+        id: 'a1', changeId: 'x', filePath: 'test.go', lineNum: 1,
+        lineContent: 'foo', comment: 'fix it', severity,
+        createdAt: 0, createdAtCommitId: 'abc', status,
+      }
+    }
+
+    const fileWithLines = makeFile('test.go', [
+      { type: 'add', content: '+line one' },
+      { type: 'context', content: ' line two' },
+      { type: 'add', content: '+line three' },
+    ])
+
+    it('no badge when annotationsForLine prop absent', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file: fileWithLines }),
+      })
+      expect(container.querySelector('.annotation-badge')).toBeNull()
+    })
+
+    it('no badge when annotationsForLine returns []', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: () => [],
+        }),
+      })
+      expect(container.querySelector('.annotation-badge')).toBeNull()
+    })
+
+    it('renders badge on annotated line only', () => {
+      // Line 2 (new-side) has an annotation; lines 1 and 3 don't.
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: (ln: number) => ln === 2 ? [mkAnn('suggestion')] : [],
+        }),
+      })
+      const badges = container.querySelectorAll('.annotation-badge')
+      expect(badges).toHaveLength(1)
+      expect(badges[0].getAttribute('title')).toContain('fix it')
+    })
+
+    it('badge gets severity class from first annotation', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('must-fix')] : [],
+        }),
+      })
+      const badge = container.querySelector('.annotation-badge')
+      expect(badge?.classList.contains('severity-must-fix')).toBe(true)
+    })
+
+    it('orphaned annotation gets dashed-outline class', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion', 'orphaned')] : [],
+        }),
+      })
+      const badge = container.querySelector('.annotation-badge')
+      expect(badge?.classList.contains('orphaned')).toBe(true)
+    })
+
+    it('multiple annotations on same line show count superscript', () => {
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion'), mkAnn('nitpick')] : [],
+        }),
+      })
+      const badge = container.querySelector('.annotation-badge')
+      expect(badge?.querySelector('sup')?.textContent).toBe('2')
+      expect(badge?.getAttribute('title')).toContain('2 annotations')
+    })
+
+    it('badge click fires onannotationclick with lineNum and raw content', async () => {
+      const onannotationclick = vi.fn()
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion')] : [],
+          onannotationclick,
+        }),
+      })
+      const badge = container.querySelector('.annotation-badge') as HTMLButtonElement
+      await fireEvent.click(badge)
+
+      expect(onannotationclick).toHaveBeenCalledWith(
+        1,
+        'line one', // raw content without the '+' prefix
+        expect.any(MouseEvent),
+      )
+    })
+
+    it('badge click stops propagation (does not trigger line contextmenu)', async () => {
+      // The diff-line has oncontextmenu; the badge onclick must not bubble
+      // up and trigger it. We can't easily test stopPropagation directly,
+      // but we can verify the click doesn't cause unintended side effects.
+      const onlinecontext = vi.fn()
+      const onannotationclick = vi.fn()
+      const { container } = render(DiffFileView, {
+        props: defaultProps({
+          file: fileWithLines,
+          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion')] : [],
+          onannotationclick,
+          onlinecontext,
+        }),
+      })
+      const badge = container.querySelector('.annotation-badge') as HTMLButtonElement
+      await fireEvent.click(badge)
+
+      expect(onannotationclick).toHaveBeenCalled()
+      // onlinecontext is fired by contextmenu (right-click), not click,
+      // so this should be a no-op regardless. But it verifies the wiring.
+      expect(onlinecontext).not.toHaveBeenCalled()
+    })
+
+    it('annotationsForLine called with new-side line numbers only', () => {
+      // Remove lines don't exist in the new file — no new-side number →
+      // annotationsForLine should NOT be called for them (newLineNum is null).
+      const file = makeFile('test.go', [
+        { type: 'remove', content: '-removed' }, // old=1, new=null
+        { type: 'add', content: '+added' },       // old=null, new=1
+        { type: 'context', content: ' kept' },    // old=2, new=2
+      ])
+      const spy = vi.fn((_ln: number): Annotation[] => [])
+      render(DiffFileView, {
+        props: defaultProps({ file, annotationsForLine: spy }),
+      })
+      // Called for new lines 1 and 2 (add, context); NOT for the remove line.
+      const calledWith = spy.mock.calls.map(c => c[0] as number)
+      expect(calledWith).toContain(1)
+      expect(calledWith).toContain(2)
+      expect(calledWith).not.toContain(null)
     })
   })
 })

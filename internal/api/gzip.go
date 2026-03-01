@@ -7,7 +7,7 @@ import (
 )
 
 // gzipWriter wraps ResponseWriter to transparently compress the body.
-// Lazy init in Write so 204/304 stay empty and don't advertise gzip encoding.
+// Lazy gzip.Writer init so 204/304 responses stay empty (no gzip trailer bytes).
 type gzipWriter struct {
 	http.ResponseWriter
 	gz *gzip.Writer
@@ -15,8 +15,6 @@ type gzipWriter struct {
 
 func (w *gzipWriter) Write(b []byte) (int, error) {
 	if w.gz == nil {
-		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Del("Content-Length")
 		w.gz = gzip.NewWriter(w.ResponseWriter)
 	}
 	return w.gz.Write(b)
@@ -56,6 +54,12 @@ func Gzip(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Set BEFORE next.ServeHTTP — http.ServeContent reads Content-Encoding
+		// to decide whether to set Content-Length. Setting it lazily in Write()
+		// is too late: ServeContent has already called WriteHeader with the
+		// uncompressed length → browser sees ERR_CONTENT_LENGTH_MISMATCH.
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Del("Content-Length")
 		gw := &gzipWriter{ResponseWriter: w}
 		defer gw.close()
 		next.ServeHTTP(gw, r)

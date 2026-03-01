@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,9 +59,37 @@ func TestGzip_EmptyBody(t *testing.T) {
 	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
-	// Lazy init means no body AND no Content-Encoding header on 204.
+	// Lazy gzip.Writer init means no body bytes written (no gzip trailer).
+	// Content-Encoding IS still set — cosmetically odd on 204 but browsers
+	// don't care, and setting it pre-handler is required for http.ServeContent
+	// to suppress Content-Length (see Gzip() comment).
 	assert.Equal(t, 0, w.Body.Len())
-	assert.Empty(t, w.Header().Get("Content-Encoding"))
+}
+
+func TestGzip_ServeContent(t *testing.T) {
+	// http.ServeContent sets Content-Length from the file size. The middleware
+	// must set Content-Encoding BEFORE the handler runs so ServeContent knows
+	// to suppress that header (browser otherwise sees ERR_CONTENT_LENGTH_MISMATCH).
+	payload := strings.Repeat("x", 1000)
+	h := Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "test.txt", time.Time{}, strings.NewReader(payload))
+	}))
+
+	req := httptest.NewRequest("GET", "/test.txt", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
+	// ServeContent should NOT have set Content-Length (it checks Content-Encoding first).
+	assert.Empty(t, w.Header().Get("Content-Length"))
+
+	gr, err := gzip.NewReader(w.Body)
+	require.NoError(t, err)
+	decompressed, err := io.ReadAll(gr)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(decompressed))
 }
 
 func TestGzip_Unwrap(t *testing.T) {

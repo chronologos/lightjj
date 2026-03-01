@@ -45,6 +45,7 @@ internal/
     integration_test.go    — Integration tests (build-tagged)
     watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic debug snapshot
     config.go              — Server-side config storage (os.UserConfigDir()/lightjj/config.json)
+    annotations.go         — CRUD for per-changeId review comments (annotations/{changeId}.json); changeId path-traversal validation via regex
     gzip.go                — Gzip response middleware (lazy-init writer, sync.Pool, Flush passthrough for SSE)
   parser/                  — Graph log parser
     graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[]
@@ -84,6 +85,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     modes.svelte.ts        — Rebase/squash/split mode state factories. SplitMode.review distinguishes 'v' (review: accepted/rejected labels) from 's' (split: stays/moves labels) — same jj split underneath
     config.svelte.ts       — Reactive config singleton — primary storage os.UserConfigDir()/lightjj/config.json, localStorage as write-through cache
     recent-actions.svelte.ts — localStorage-backed frequency counter for bookmarks
+    annotations.svelte.ts   — Per-line review comment store for agent workflows. createAnnotationStore() + reanchor() + exportMarkdown/JSON. Server-side storage via /api/annotations (workspace tabs share). Re-anchor via diffRange delta + ±5 content scan.
+    AnnotationBubble.svelte — Annotation create/edit popup (severity select + textarea)
     WelcomeModal.svelte    — "What's new" modal shown on version bump; content from tutorial-content.ts
     tutorial-content.ts    — Feature announcements keyed by version
     version.ts             — APP_VERSION constant (bump to show WelcomeModal)
