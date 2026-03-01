@@ -187,6 +187,32 @@
     revsetInputEl?.focus()
   }
 
+  // Hover is tracked in JS, not via CSS :hover. The :hover pseudo-class
+  // recomputes on every paint — layout shifts (error bar mount/unmount,
+  // batch-actions bar toggle, scrollIntoView, post-rebase DOM reshuffle)
+  // slide :hover onto whatever row is NOW under a stationary mouse. A
+  // suppress-flag approach is whack-a-mole: every layout-affecting state
+  // must be tracked, including parent state that isn't even a prop.
+  //
+  // mousemove fires ONLY on physical pointer movement (UI Events spec) —
+  // never on layout shift. Hover state built on it cannot go stale. During
+  // j/k + scrollIntoView, hoveredIndex stays at the row the mouse last
+  // touched; if that row scrolls off-screen the highlight is simply
+  // invisible. No phantom.
+  //
+  // Side benefit: entryIndex is per-revision, so hovering ANY row
+  // (including connectors) highlights the whole revision group. This
+  // replaces 8 sibling-chain :has() rules with one class selector.
+  let hoveredIndex = $state(-1)
+  function onListMouseMove(e: MouseEvent) {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.graph-row')
+    const idx = row ? Number(row.dataset.entry) : -1
+    if (idx !== hoveredIndex) hoveredIndex = idx
+  }
+  function onListMouseLeave() {
+    hoveredIndex = -1
+  }
+
   // Scroll the selected node row into view when selectedIndex changes.
   // Svelte 5 effects run after DOM updates, so no rAF needed.
   $effect(() => {
@@ -254,17 +280,19 @@
       <div class="empty-state">No revisions found</div>
     {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="revision-list" class:refreshing={isRefreshing} bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list">
+      <div class="revision-list" class:refreshing={isRefreshing} onmousemove={onListMouseMove} onmouseleave={onListMouseLeave} bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list">
         {#each flatLines as line, lineIdx (effectiveId(revisions[line.entryIndex].commit) + ':' + line.lineKey)}
           {@const isChecked = checkedRevisions.has(effectiveId(revisions[line.entryIndex]?.commit))}
           {@const isImplied = !isChecked && impliedCommitIds.has(revisions[line.entryIndex]?.commit.commit_id)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
             class="graph-row"
+            data-entry={line.entryIndex}
             class:node-row={line.isNode}
             class:bookmark-row={line.isBookmarkLine}
             class:desc-row={line.isDescLine}
             class:selected={selectedIndex === line.entryIndex}
+            class:hovered={hoveredIndex === line.entryIndex}
             class:checked={isChecked}
             class:implied={isImplied}
             class:wc={line.isWorkingCopy}
@@ -628,39 +656,12 @@
     transition: box-shadow var(--anim-duration) var(--anim-ease);
   }
 
-  .graph-row:hover:not(.selected) {
-    background: var(--bg-hover);
-  }
-
-  /* Hovering any row in a revision group highlights all rows in that group.
-     DOM order is either: node → desc (no bookmarks) or node → bookmark → desc.
-     Use explicit sibling chains to avoid crossing revision boundaries. */
-
-  /* No bookmarks: node ↔ desc */
-  .graph-row.node-row:not(.selected):has(+ .graph-row.desc-row:hover) {
-    background: var(--bg-hover);
-  }
-  .graph-row.node-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
-    background: var(--bg-hover);
-  }
-
-  /* With bookmarks: node ↔ bookmark ↔ desc */
-  .graph-row.node-row:not(.selected):has(+ .graph-row.bookmark-row:hover) {
-    background: var(--bg-hover);
-  }
-  .graph-row.node-row:not(.selected):has(+ .graph-row.bookmark-row + .graph-row.desc-row:hover) {
-    background: var(--bg-hover);
-  }
-  .graph-row.node-row:hover:not(.selected) + .graph-row.bookmark-row:not(.selected) {
-    background: var(--bg-hover);
-  }
-  .graph-row.node-row:hover:not(.selected) + .graph-row.bookmark-row + .graph-row.desc-row:not(.selected) {
-    background: var(--bg-hover);
-  }
-  .graph-row.bookmark-row:hover:not(.selected) + .graph-row.desc-row:not(.selected) {
-    background: var(--bg-hover);
-  }
-  .graph-row.bookmark-row:not(.selected):has(+ .graph-row.desc-row:hover) {
+  /* .hovered is JS-managed (hoveredIndex state, mousemove-driven) — see
+     comment in script. All rows of a revision share entryIndex, so one
+     class selector replaces the 8 sibling-chain :has() rules that :hover
+     required. Source order: this comes BEFORE .selected/.checked/.implied
+     so those backgrounds win on overlap. */
+  .graph-row.hovered:not(.selected) {
     background: var(--bg-hover);
   }
 
