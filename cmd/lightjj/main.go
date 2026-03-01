@@ -34,6 +34,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj debug snapshot` interval (0 to disable)")
 	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
+	defaultRemote := flag.String("default-remote", "origin", "Remote name to prefer in bookmark/remote lists")
 	flag.Parse()
 
 	if *showVersion {
@@ -65,6 +66,7 @@ func main() {
 	}
 
 	srv := api.NewServer(cmdRunner, resolvedRepoDir)
+	srv.DefaultRemote = *defaultRemote
 
 	// Filesystem watch + SSE auto-refresh. Nil in SSH mode or if disabled.
 	if !*noWatch {

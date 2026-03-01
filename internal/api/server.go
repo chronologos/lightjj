@@ -21,9 +21,10 @@ import (
 
 // Server holds the HTTP handler and its dependencies.
 type Server struct {
-	Runner   runner.CommandRunner
-	Mux      *http.ServeMux
-	RepoDir  string // absolute path to repo root (empty for SSH mode)
+	Runner        runner.CommandRunner
+	Mux           *http.ServeMux
+	RepoDir       string // absolute path to repo root (empty for SSH mode)
+	DefaultRemote string // preferred remote name for bookmark/remote sorting; main.go can override
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
@@ -42,10 +43,11 @@ type Server struct {
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {
 	s := &Server{
-		Runner:       r,
-		Mux:          http.NewServeMux(),
-		RepoDir:      repoDir,
-		ExecGhPRList: defaultExecGhPRList,
+		Runner:        r,
+		Mux:           http.NewServeMux(),
+		RepoDir:       repoDir,
+		DefaultRemote: "origin",
+		ExecGhPRList:  defaultExecGhPRList,
 	}
 	s.routes()
 	return s

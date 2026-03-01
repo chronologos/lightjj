@@ -85,14 +85,14 @@ func TestParseBookmarkListOutput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ParseBookmarkListOutput(tt.input))
+			assert.Equal(t, tt.want, ParseBookmarkListOutput(tt.input, "origin"))
 		})
 	}
 }
 
 func TestParseBookmarkListOutput_NonLocal(t *testing.T) {
 	output := "alpha\x1forigin\x1ffalse\x1ffalse\x1ffalse\x1f2\nmain\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fb\nmain\x1fgit\x1ftrue\x1ffalse\x1ffalse\x1fb\nmain\x1forigin\x1ftrue\x1ffalse\x1ffalse\x1fb\nzeta\x1forigin\x1ffalse\x1ffalse\x1ffalse\x1fc"
-	bookmarks := ParseBookmarkListOutput(output)
+	bookmarks := ParseBookmarkListOutput(output, "origin")
 	assert.Len(t, bookmarks, 3)
 
 	alpha := bookmarks[slices.IndexFunc(bookmarks, func(b Bookmark) bool { return b.Name == "alpha" })]
@@ -169,7 +169,7 @@ func TestBookmark_IsTrackable(t *testing.T) {
 func TestParseBookmarkListOutput_ConflictAndBackwards(t *testing.T) {
 	// conflict=true, backwards=true
 	input := "main\x1f.\x1ffalse\x1ftrue\x1ftrue\x1fabc"
-	bookmarks := ParseBookmarkListOutput(input)
+	bookmarks := ParseBookmarkListOutput(input, "origin")
 	assert.Len(t, bookmarks, 1)
 	assert.True(t, bookmarks[0].Conflict)
 	assert.True(t, bookmarks[0].Backwards)
@@ -177,11 +177,17 @@ func TestParseBookmarkListOutput_ConflictAndBackwards(t *testing.T) {
 }
 
 func TestParseBookmarkListOutput_MultipleRemotes(t *testing.T) {
-	// Bookmark with local + two remotes — origin should be first regardless of input order
+	// Bookmark with local + two remotes — defaultRemote should be first regardless of input order
 	input := "main\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fabc\nmain\x1fupstream\x1ftrue\x1ffalse\x1ffalse\x1fdef\nmain\x1forigin\x1ftrue\x1ffalse\x1ffalse\x1fghi"
-	bookmarks := ParseBookmarkListOutput(input)
+	bookmarks := ParseBookmarkListOutput(input, "origin")
 	assert.Len(t, bookmarks, 1)
 	assert.Len(t, bookmarks[0].Remotes, 2)
 	assert.Equal(t, "origin", bookmarks[0].Remotes[0].Remote, "origin should be first")
 	assert.Equal(t, "upstream", bookmarks[0].Remotes[1].Remote)
+
+	// With non-default default: "upstream" should sort to front instead
+	bookmarks = ParseBookmarkListOutput(input, "upstream")
+	assert.Len(t, bookmarks[0].Remotes, 2)
+	assert.Equal(t, "upstream", bookmarks[0].Remotes[0].Remote, "upstream should be first when it is the default")
+	assert.Equal(t, "origin", bookmarks[0].Remotes[1].Remote)
 }

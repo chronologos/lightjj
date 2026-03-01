@@ -26,8 +26,9 @@ func (b Bookmark) IsTrackable() bool {
 }
 
 // ParseBookmarkListOutput parses the \x1F-delimited output from
-// `jj bookmark list` with a custom template.
-func ParseBookmarkListOutput(output string) []Bookmark {
+// `jj bookmark list` with a custom template. defaultRemote is sorted to
+// the front of each bookmark's Remotes slice.
+func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 	lines := strings.Split(output, "\n")
 	bookmarkMap := make(map[string]*Bookmark)
 	var orderedNames []string
@@ -74,7 +75,7 @@ func ParseBookmarkListOutput(output string) []Bookmark {
 				Tracked:  tracked,
 				CommitId: commitId,
 			}
-			if remoteName == "origin" {
+			if remoteName == defaultRemote {
 				bookmark.Remotes = append([]BookmarkRemote{remote}, bookmark.Remotes...)
 			} else {
 				bookmark.Remotes = append(bookmark.Remotes, remote)
