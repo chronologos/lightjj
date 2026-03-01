@@ -47,7 +47,7 @@ function saveLocal(c: Config) {
 async function loadRemote(): Promise<Partial<Config> | null> {
   try {
     const res = await fetch('/api/config')
-    if (res.status === 204) return null // SSH mode — no fs access
+    if (res.status === 204) return null // backend can't resolve config dir
     if (!res.ok) return null
     return await res.json()
   } catch {
@@ -76,6 +76,8 @@ function createConfig() {
   // guaranteeing one post-hydration save even if remote values were
   // identical to localStorage (no-op on disk, confirms sync).
   let hydrated = $state(false)
+  let resolveReady: () => void
+  const ready = new Promise<void>(r => { resolveReady = r })
 
   loadRemote().then(remote => {
     if (remote) {
@@ -90,6 +92,7 @@ function createConfig() {
     // Set AFTER the property writes so Svelte's microtask-batched effect
     // sees hydrated=true alongside the new values.
     hydrated = true
+    resolveReady()
   })
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -97,16 +100,12 @@ function createConfig() {
     $effect(() => {
       const snap = $state.snapshot(state)
       if (!hydrated) return
-      // Debounce both saves. Panel-resize drags set revisionPanelWidth on
-      // every mousemove (~60×/s); without debounce that's 60 JSON.stringify +
-      // localStorage.setItem + POST requests per second. The initial paint
-      // already used localStorage; sub-second freshness during a drag has no
-      // user-visible benefit.
+      saveLocal(snap) // synchronous — next page load paints this instantly
+      // Debounce the fs write. Panel-resize drags set revisionPanelWidth on
+      // every mousemove (~60×/s); without debounce that's 60 POST requests
+      // per second of dragging, each doing read-merge-write-rename on disk.
       clearTimeout(saveTimer)
-      saveTimer = setTimeout(() => {
-        saveLocal(snap)
-        saveRemote(snap)
-      }, 500)
+      saveTimer = setTimeout(() => saveRemote(snap), 500)
     })
   })
 
@@ -125,6 +124,11 @@ function createConfig() {
 
     get tutorialVersion() { return state.tutorialVersion },
     set tutorialVersion(v: string) { state.tutorialVersion = v },
+
+    /** Resolves when the remote config has been loaded and merged. Callers that
+     *  need the "real" config (not just localStorage defaults) should await this
+     *  before reading — e.g., the tutorial/what's-new check. */
+    ready,
   }
 }
 

@@ -1194,7 +1194,9 @@
   loadPullRequests()
 
   // --- Tutorial / What's New ---
-  {
+  // Must await config.ready so we read the disk-persisted tutorialVersion, not
+  // the localStorage default (which is empty on a fresh origin/port).
+  config.ready.then(() => {
     const currentSemver = parseSemver(APP_VERSION)
     const storedVersion = config.tutorialVersion
     const storedSemver = parseSemver(storedVersion)
@@ -1218,7 +1220,7 @@
     } else if (storedVersion !== APP_VERSION) {
       config.tutorialVersion = APP_VERSION
     }
-  }
+  })
 
   function dismissWelcome() {
     welcomeOpen = false
