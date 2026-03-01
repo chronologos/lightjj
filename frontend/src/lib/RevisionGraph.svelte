@@ -348,7 +348,7 @@
                 <span class="mode-badge badge-target">&lt;&lt; into &gt;&gt;</span>
               {/if}
               {#if isSplitSource}
-                <span class="mode-badge badge-source">&lt;&lt; split &gt;&gt;</span>
+                <span class="mode-badge badge-source">&lt;&lt; {split.review ? 'review' : 'split'} &gt;&gt;</span>
               {/if}
               {#if entry.commit.divergent}
                 <span class="divergent-badge">divergent</span>

@@ -85,58 +85,41 @@
   let evologEntries = $derived(evolog.value)
   let evologLoading = $derived(evolog.loading)
 
-  // --- Draggable revision panel divider ---
-  let draggingDivider = $state(false)
-
-  function startDividerDrag(e: MouseEvent) {
+  // --- Draggable dividers (revision panel width + evolog panel height) ---
+  // Shared helper handles the listener-cleanup boilerplate; callers supply only
+  // the cursor style and the per-move resize math.
+  function startDrag(e: MouseEvent, cursor: string, setDragging: (v: boolean) => void, onMove: (e: MouseEvent) => void) {
     e.preventDefault()
-    draggingDivider = true
+    setDragging(true)
     document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'col-resize'
-
-    function onMouseMove(e: MouseEvent) {
-      // Clamp between 280 and 600
-      config.revisionPanelWidth = Math.max(280, Math.min(600, e.clientX))
-    }
-
+    document.body.style.cursor = cursor
     function onMouseUp() {
-      draggingDivider = false
+      setDragging(false)
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
-      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-
-    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onMouseUp)
   }
 
-  // --- Draggable evolog panel height ---
+  let draggingDivider = $state(false)
+  function startDividerDrag(e: MouseEvent) {
+    startDrag(e, 'col-resize', v => draggingDivider = v, e => {
+      config.revisionPanelWidth = Math.max(280, Math.min(600, e.clientX))
+    })
+  }
+
   let draggingEvologDivider = $state(false)
-
   function startEvologDividerDrag(e: MouseEvent) {
-    e.preventDefault()
-    draggingEvologDivider = true
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'row-resize'
-
-    function onMouseMove(e: MouseEvent) {
-      // Height is distance from viewport bottom; dragging up makes panel taller.
-      const h = window.innerHeight - e.clientY
+    startDrag(e, 'row-resize', v => draggingEvologDivider = v, e => {
+      // Height is distance from viewport bottom (dragging up = taller).
+      // StatusBar offset is intentionally ignored — matches the X-axis divider
+      // which uses raw clientX assuming panel edge is at viewport left.
       const maxH = Math.floor(window.innerHeight * 0.7)
-      config.evologPanelHeight = Math.max(120, Math.min(maxH, h))
-    }
-
-    function onMouseUp() {
-      draggingEvologDivider = false
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-    }
-
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
+      config.evologPanelHeight = Math.max(120, Math.min(maxH, window.innerHeight - e.clientY))
+    })
   }
 
   let paletteOpen: boolean = $state(false)
@@ -316,6 +299,8 @@
   // Closures capture live refs, so `when:` / `action:` can safely read mutable state.
   // `staticCommands` is $derived.by with zero reactive deps — the thunk defers
   // evaluation past TDZ for handlers defined below, and computes exactly once.
+  // NB: keep all reactive reads inside closures (when:/action:) — a direct read
+  // in label/shortcut would silently make this re-compute on every state change.
   const noop = () => {}
   let staticCommands = $derived.by<PaletteCommand[]>(() => [
     // Navigation
@@ -384,6 +369,8 @@
       })),
   )
 
+  // Category grouping in the palette's cheatsheet view is handled by Map.groupBy
+  // (CommandPalette.svelte), so spread order here doesn't affect visual grouping.
   let commands = $derived<PaletteCommand[]>([...staticCommands, ...dynamicCommands, ...aliasCommands])
 
   // --- API actions ---
@@ -893,21 +880,14 @@
     }
   }
 
-  function enterSplitMode() {
+  function enterSplitMode(asReview = false) {
     if (!selectedRevision || checkedRevisions.size > 0) return
     cancelInlineModes()
     for (const f of changedFiles) selectedFiles.add(f.path)
     totalFileCount = changedFiles.length
-    split.enter(effectiveId(selectedRevision.commit))
+    split.enter(effectiveId(selectedRevision.commit), asReview)
   }
-
-  function enterReviewMode() {
-    if (!selectedRevision || checkedRevisions.size > 0) return
-    cancelInlineModes()
-    for (const f of changedFiles) selectedFiles.add(f.path)
-    totalFileCount = changedFiles.length
-    split.enter(effectiveId(selectedRevision.commit), true)
-  }
+  const enterReviewMode = () => enterSplitMode(true)
 
   async function executeSplit() {
     if (!split.revision) return
@@ -1480,10 +1460,9 @@
             diffTarget={loadedTarget}
             {diffLoading}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
-            fileSelectionMode={squash.active || split.active}
+            fileSelectionMode={squash.active ? 'squash' : split.active ? (split.review ? 'review' : 'split') : false}
             {selectedFiles}
             ontogglefile={toggleFileSelection}
-            fileSelectionLabel={squash.active ? 'squash' : split.review ? 'review' : 'split'}
             onresolve={inlineMode ? undefined : handleResolve}
             onfilesaved={() => withMutation(loadLog)}
             onjjmutation={withMutation}

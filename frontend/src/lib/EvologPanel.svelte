@@ -54,10 +54,13 @@
     }
   }
 
-  // Auto-focus entry list when entries load — enables immediate arrow-key step-through.
-  // Clicking back into the revision list (or any global shortcut) takes focus away naturally.
+  // Auto-focus entry list once when entries first load — enables immediate arrow-key
+  // step-through. The {#key} wrapper in App.svelte remounts this component on revision
+  // nav, resetting `didAutoFocus`. Guard prevents focus-steal on future live-refresh.
+  let didAutoFocus = false
   $effect(() => {
-    if (entries.length > 0 && entryListEl) {
+    if (!didAutoFocus && entries.length > 0 && entryListEl) {
+      didAutoFocus = true
       entryListEl.focus()
     }
   })

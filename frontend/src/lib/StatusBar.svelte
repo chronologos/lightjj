@@ -35,10 +35,12 @@
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
       </span>
-      <span class="key-divider"></span>
-      <span class="key-group">
-        <kbd class="key" class:key-active={split.parallel}>p</kbd><span class="key-label" class:key-label-active={split.parallel}>parallel</span>
-      </span>
+      {#if !split.review}
+        <span class="key-divider"></span>
+        <span class="key-group">
+          <kbd class="key" class:key-active={split.parallel}>p</kbd><span class="key-label" class:key-label-active={split.parallel}>parallel</span>
+        </span>
+      {/if}
       {#if splitFileCount}
         <span class="key-divider"></span>
         <span class="key-group">

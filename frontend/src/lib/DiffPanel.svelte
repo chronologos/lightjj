@@ -81,10 +81,11 @@
      *  built-in header. Extracted to a snippet because the describe/bookmark/
      *  divergence flow is App's concern — DiffPanel just provides a slot. */
     header?: Snippet
-    fileSelectionMode: boolean
+    /** When truthy, shows the file-selection panel (checkbox list). The string
+     *  value drives title/count labels. `false` = normal diff view. */
+    fileSelectionMode: 'squash' | 'split' | 'review' | false
     selectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
-    fileSelectionLabel: 'squash' | 'split' | 'review'
     onresolve?: (file: string, tool: ':ours' | ':theirs') => void
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
@@ -95,7 +96,7 @@
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, splitView = $bindable(false), header,
-    fileSelectionMode, selectedFiles, ontogglefile, fileSelectionLabel, onresolve,
+    fileSelectionMode, selectedFiles, ontogglefile, onresolve,
     onfilesaved, onjjmutation,
   }: Props = $props()
 
@@ -786,8 +787,8 @@
       squash: { title: 'Squash', countSuffix: 'to move' },
       split:  { title: 'Split',  countSuffix: 'stay' },
       review: { title: 'Review', countSuffix: 'accepted' },
-    }[fileSelectionLabel]}
-    <div class="file-selection-panel" class:split-selection={fileSelectionLabel !== 'squash'}>
+    }[fileSelectionMode]}
+    <div class="file-selection-panel" class:split-selection={fileSelectionMode !== 'squash'}>
       <div class="file-selection-header">
         <span class="file-selection-title">{selectionLabels.title} — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
         <span class="file-selection-actions">

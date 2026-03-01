@@ -190,6 +190,10 @@ describe('StatusBar', () => {
       expect(badge?.textContent).toBe('review')
       const fileCount = container.querySelector('.file-count')
       expect(fileCount?.textContent).toBe('4/6 files accepted')
+      // parallel hint hidden in review mode — semantically unclear what "parallel review" means
+      const keys = container.querySelectorAll('.key:not(.action-key)')
+      const pKey = Array.from(keys).find(k => k.textContent === 'p')
+      expect(pKey).toBeUndefined()
     })
   })
 })

@@ -147,6 +147,12 @@ func TestParseRemoteListOutput(t *testing.T) {
 			defaultRemote: "origin",
 			want:          []string{"origin", "upstream", "fork"},
 		},
+		{
+			name:          "non-origin default sorted to front",
+			output:        "origin https://github.com/user/repo.git\nupstream https://github.com/upstream/repo.git\n",
+			defaultRemote: "upstream",
+			want:          []string{"upstream", "origin"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
