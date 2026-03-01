@@ -45,6 +45,7 @@ internal/
     integration_test.go    — Integration tests (build-tagged)
     watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic debug snapshot
     config.go              — Server-side config storage (os.UserConfigDir()/lightjj/config.json)
+    gzip.go                — Gzip response middleware (lazy-init writer, sync.Pool, Flush passthrough for SSE)
   parser/                  — Graph log parser
     graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[]
     graph_test.go          — Graph parser tests
@@ -68,7 +69,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     BookmarkModal.svelte   — Bookmark management modal
     BookmarkInput.svelte   — Bookmark name input with autocomplete
     GitModal.svelte        — Git push/fetch modal
-    EvologPanel.svelte     — Evolution log: clickable entry list → per-step diff via diffRange (reuses DiffFileView)
+    EvologPanel.svelte     — Evolution log: entry list with inline diffs (server emits rebase-safe inter_diff per entry), ArrowUp/Down navigation
     OplogPanel.svelte      — Operation log panel
     DivergencePanel.svelte — Divergent commit resolution panel (compare versions, keep/abandon)
     diff-parser.ts         — Unified diff parser

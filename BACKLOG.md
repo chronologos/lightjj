@@ -6,13 +6,13 @@ Features to support human-in-the-loop review of agent work across jj worktrees.
 
 - [x] **Copy reference from diff lines** (Small) — Right-click selected diff lines → "Copy reference" with `path:line-range @ changeId` + line content. Detects native text selection via `window.getSelection()` + `Range.intersectsNode()` to find all `.diff-line` elements in the selection. Falls back to single clicked line. `DiffFileView` exports `DiffLineInfo` interface (reusable for future annotations). `DiffPanel` formats the reference with the revision's change ID.
 - [x] **Per-step evolog diffs** (Small) — `jj evolog` now emits structured template output (`CommitEvolutionEntry` type: commit_id, timestamp, operation description, predecessor IDs). EvologPanel shows a clickable entry list; clicking an entry fetches `api.diffRange(predecessor, current)` and renders via existing `DiffFileView`. Zero new state tracking — hidden evolution commits are fully addressable by `jj diff --from X --to Y`. `{#key selectedRevision?.commit.change_id}` in App.svelte resets panel state on revision change. Multi-predecessor entries show `(+N)` badge; origin entries dimmed.
-- [ ] **Evolog: rebase-safe inter-diff** (Small) — `diffRange(pred, cur)` shows parent churn when the revision was rebased between snapshots. `CommitEvolutionEntry.inter_diff()` template method is rebase-safe (same as `jj evolog -p`). For now the "agent editing WC" case has stable parents so this is a non-issue; worth a follow-up if agents start rebasing.
+- [x] **Evolog: rebase-safe inter-diff** (Small) — Template now emits `self.inter_diff().git()` inline as a 5th field per entry (record sep `\x1E` since diff text has newlines). `EvologEntry` struct/interface gained `Diff string`. EvologPanel dropped its `createLoader`/`api.diffRange` dependency entirely — diff arrives with the entry list, zero per-click round-trip. Net -30 LOC, pure-presentation component, rebase-safe by construction.
 - [x] **Evolog: keyboard navigation** (Small) — ArrowUp/Down to step through entries. `.entry-list` is `tabindex="-1"` with `role="listbox"`, auto-focuses when entries load, `scrollIntoView({block:'nearest'})` on selection change.
 - [x] **Evolog: resizable panel height** (Small) — top-border drag handle in App.svelte (mirrors `startDividerDrag` for Y-axis, clamped 120px–70vh). Persisted in `config.evologPanelHeight` (debounced save to `/api/config`).
 - [x] **Auto-refresh via filesystem watch** (Medium) — `fsnotify` on `.jj/repo/op_heads/heads/` + SSE push (`GET /api/events`) to frontend. Periodic `jj debug snapshot` (5s default, `--snapshot-interval` flag) catches raw file edits, fires **only when SSE subscribers exist** to avoid oplog pollution. 150ms server-side debounce coalesces multi-commit rebase bursts. Frontend `EventSource` → `notifyOpId()` → existing `onStale()` callbacks; same `lastOpId` dedup as HTTP header path so UI-initiated mutations don't double-fire. `http.ResponseController.SetWriteDeadline(time.Time{})` disables the 120s WriteTimeout for the SSE handler only. SSH mode returns 204 (watcher nil) → frontend closes EventSource cleanly. `--no-watch` flag to disable. New `internal/api/watcher.go`. Adds `fsnotify` Go dependency.
-- [ ] **Inline diff annotations** (Medium-Large) — Click diff line to add a comment, stored in localStorage keyed by `changeId + filePath + lineNumber`. Fuzzy re-matching via `lineContent` snapshot. Export as structured JSON for agent prompts. New `annotations.svelte.ts`. ~2-3 days.
+- [ ] **Inline diff annotations** (Medium) — Per-line review comments for agent iteration feedback. Right-click diff line → "Annotate" (alongside existing "Copy reference" — `DiffLineInfo` at `DiffFileView.svelte:32` already extracts `{filePath, lines: [{lineNum, content}]}`). `annotations.svelte.ts` store keyed by `changeId`, each entry `{filePath, lineNum, lineContent, comment, createdAt}`. Fuzzy re-anchor: on load, if `parsedDiff[lineNum].content !== snapshot`, scan ±5 lines for exact match (line drift from agent edits above/below). `💬` gutter badge + inline bubble in DiffFileView. "Export annotations" palette command → JSON blob pasted into agent's next prompt. localStorage-backed (same pattern as `recent-actions.svelte.ts`); config-server storage is a stretch if cross-device sync matters. ~2 days for exact-match re-anchor; +1 day for Levenshtein.
 - [x] **File-level accept/reject mode** (Small) — `SplitMode.review: boolean` field, `enter(id, asReview)` second param. `v` key / palette entry "Review revision". UI branches on `split.review`: badge "review"/"split", count suffix "accepted"/"stay", `lastAction` "Reviewed … (N accepted)". `DiffPanel` prop `splitMode: boolean` → `fileSelectionLabel: 'squash'|'split'|'review'`. Same jj split under the hood — checked=accepted=stays, unchecked=rejected=moves to child.
-- [ ] **Hunk-level accept/reject** (Large) — Per-hunk checkboxes in DiffFileView. Requires programmatic patch application (no jj CLI hunk selection). Mini patch-apply engine. ~3-5 days. Depends on file-level accept/reject.
+- [ ] **Hunk-level accept/reject** (Medium) — Per-hunk checkboxes in DiffFileView during review mode. **Via `jj split --tool` diff-editor protocol**: tool receives `$left`/`$right` directories, modifies `$right` in place, jj reads it back as the first half of the split. lightjj binary re-enters as the tool (`--apply-hunks=<spec.json>` flag): read `$left/file` + `$right/file`, apply only accepted hunks from spec to left content, write `$right/file`, exit 0. jj handles all revision graph work (descendant rebasing, etc). Hunk application is line-splicing on the already-parsed `DiffFile.hunks` (context lines verify offset, `-` skip, `+` insert). Spec passed via temp file. SSH caveat: tool must exist on remote — hunk-level is local-only unless binary is shipped. ~1-2 days.
 
 ## Architecture Review Round 2 (2026-02-26)
 
@@ -93,7 +93,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] Squash mode StatusBar file count now says "N/M files to move" for parity with split's "N/M files stay".
 - [x] Add bulk select/deselect toggle for file checkboxes (applies to squash + split modes).
 - [ ] No list virtualization for large repos (500+ commits).
-- [ ] No HTTP response compression (especially impacts SSH mode).
+- [x] No HTTP response compression — `api.Gzip()` middleware (`gzip.go`) wraps the mux in `main.go`. Lazy gzip.Writer init (204/304 stay empty), `sync.Pool` for writer reuse, `Flush()` passthrough for SSE. 3 tests covering compress/skip/empty-body.
 - [x] `highlightDiff` re-highlights all files when one is expanded. Fixed: `expandFile()` now only highlights the expanded file.
 - [x] Diff parser uses `a/` (source) path from git headers — duplicate keys crash on copy/rename. Fixed to use `b/` (destination).
 - [x] No word-diff skip for non-code files — SVGs/XML/JSON/lock files cause freeze. Added `shouldSkipWordDiff` with extension + line-count limits.
@@ -131,7 +131,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 **Larger refactors (half day+):**
 - [x] `App.svelte` rebase state extraction — moved rebase/squash/split mode state to `modes.svelte.ts`, theme CSS to `theme.css`, added `runMutation` helper (App.svelte 1590→1269 lines)
 - [ ] List virtualization for large repos — `@tanstack/virtual` for 500+ commit histories
-- [ ] HTTP response compression (gzip middleware) — mainly benefits SSH mode
+- [x] HTTP response compression (gzip middleware) — see Suggestions section
 - [x] Integration tests — build-tagged tests against a real jj repo
 - [ ] Frontend DOM integration tests (in progress)
 - [x] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
@@ -163,7 +163,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] `LogGraph` / `FileShow` command builder direct tests (`Status` removed as dead code)
 - [x] HTTP 405 for wrong method — Go 1.22 method-prefixed routes auto-return 405; test locks in the behaviour
 - [x] `ParseGraphLog("")` empty input
-- [ ] `EvologPanel` keyboard nav — ArrowUp/Down boundary clamping, `selectedIdx === -1` → 0 for both keys, empty-entries no-op. Follow CommandPalette.test.ts pattern (fireEvent.keyDown on `.entry-list`).
+- [x] `EvologPanel` keyboard nav — ArrowUp/Down boundary clamping, `selectedIdx === -1` → 0 for both keys, empty-entries no-op. 11 tests in `EvologPanel.test.ts` (rendering + keyboard + diff-display states).
 
 ## UI Inspirations
 

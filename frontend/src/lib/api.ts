@@ -305,6 +305,10 @@ export interface EvologEntry {
   time: string
   operation: string
   predecessor_ids: string[]
+  /** Rebase-safe inter_diff (git format) — computed server-side via the
+   *  CommitEvolutionEntry.inter_diff() template method. Empty string for
+   *  metadata-only operations (describe, no-content rebase). */
+  diff: string
 }
 
 export interface Workspace {
