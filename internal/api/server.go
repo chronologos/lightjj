@@ -131,6 +131,11 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v
 	// triggering spurious loadLog() fires via trackOpId. Immutable responses
 	// are per-revision reads; staleness is covered by log + SSE.
 	if w.Header().Get("Cache-Control") == "" {
+		// Dynamic responses must not be cached — the same URL (e.g. /api/log)
+		// returns different data after mutations. Without this, browsers may
+		// serve stale responses from memory cache (observed: bookmark * persists
+		// after git push until hard-refresh bypasses cache).
+		w.Header().Set("Cache-Control", "no-store")
 		if opId := s.getOpId(); opId != "" {
 			w.Header().Set("X-JJ-Op-Id", opId)
 		}

@@ -125,10 +125,10 @@ func TestHandleRevision_CacheControl(t *testing.T) {
 	srv := newTestServer(runner)
 	srv.cachedOp = "op123" // seed so we can assert suppression
 
-	// Without ?immutable=1 → no Cache-Control, op-id header present
+	// Without ?immutable=1 → no-store (dynamic response), op-id header present
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc", nil))
-	assert.Empty(t, w.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 	assert.Equal(t, "op123", w.Header().Get("X-JJ-Op-Id"))
 
 	// With ?immutable=1 → forever-cacheable AND op-id suppressed (would be
@@ -151,7 +151,9 @@ func TestHandleRevision_DegradedNotCached(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc&immutable=1", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Empty(t, w.Header().Get("Cache-Control"))
+	// Degraded response gets no-store (not forever-cacheable) — a transient
+	// description failure must not be baked into browser disk cache.
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 }
 
 func TestHandleDiff_MissingRevision(t *testing.T) {
