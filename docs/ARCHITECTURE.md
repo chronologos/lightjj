@@ -397,6 +397,8 @@ flowchart TD
 
 **Mode objects over individual props** — `RevisionGraph` and `StatusBar` receive `{rebase, squash, split}` mode objects (from `modes.svelte.ts` factories with reactive getters) instead of 11+ individual props. Reactivity is preserved (Svelte tracks `.active`, `.sources`, etc. access); prop count drops 31→23 / 12→8.
 
+**`mousemove`-driven hover over `:hover`** — `RevisionGraph` tracks `hoveredIndex` via a delegated `mousemove` handler (`closest('.graph-row')` → `dataset.entry`). `mousemove` fires only on physical pointer movement; `:hover`/`mouseenter` recompute on every paint and "slide" when layout shifts (error bar mount, `scrollIntoView`, post-rebase reshuffle) — phantom highlight under a stationary mouse while j/k moves `.selected` elsewhere. Building on `mousemove` makes this structurally impossible: no event fires during layout shift → state can't change. Side benefit: `hoveredIndex` shares `entryIndex` domain with `selectedIndex`, so all rows of a revision get `class:hovered` from one equality check — replaces 8 sibling-chain `:has()` CSS rules with one.
+
 **`$derived` over `@const` for expensive template computations** — `toSplitView`, `computeSplitLineNumbers`, `computeLineNumbers` moved from `{@const}` (re-evaluates every render) to `$derived` (recomputes only when `file.hunks`/`splitView` change). This matters because `highlightedLines` updates trigger template re-renders without those dependencies changing.
 
 **Bounded log fetch** — `GET /api/log` defaults to `--limit 500`, caps at 1000. Prevents unbounded payload/DOM on large repos.
