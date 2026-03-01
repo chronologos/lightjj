@@ -30,7 +30,7 @@ flowchart TD
     subgraph go["Go Binary — single process, //go:embed frontend-dist/"]
         handlers["HTTP Handlers<br/><small>internal/api</small>"]:::blue
         builders["Command Builders<br/><small>internal/jj — pure, []string out</small>"]:::green
-        parsers["Output Parsers<br/><small>ParseGraphLog · ParseDiffStat · ParseBookmarks</small>"]:::green
+        parsers["Output Parsers<br/><small>ParseGraphLog · ParseFilesTemplate · ParseBookmarks</small>"]:::green
         runner["CommandRunner interface<br/><small>internal/runner</small>"]:::purple
         local["LocalRunner<br/><small>exec jj</small>"]:::purple
         ssh["SSHRunner<br/><small>exec ssh host jj</small>"]:::purple
@@ -58,7 +58,7 @@ flowchart TD
 |--------|------|---------|
 | GET | `/api/log` | Graph log with revset + limit |
 | GET | `/api/diff`, `/api/diff-range` | Unified diff (single revision or from/to range) |
-| GET | `/api/files` | File list + stats + conflict status (3 parallel subprocess calls — DiffSummary, DiffStat, ConflictedFiles template) |
+| GET | `/api/files` | File list + stats + conflict status (single `FilesTemplate` subprocess — status char, exact +/- counts, conflict side-counts in one `jj log -T` call) |
 | GET | `/api/bookmarks`, `/api/remotes`, `/api/description` | Metadata reads |
 | GET | `/api/oplog`, `/api/evolog` | Operation/evolution history — structured `\x1F`-delimited template output. Evolog entries include predecessor commit IDs; the frontend shows per-step diffs via `/api/diff-range` (hidden evolution commits are addressable by `jj diff --from X --to Y`). |
 | GET | `/api/file-show` | Raw file content at revision (for conflict viewing + inline editor) |
@@ -86,12 +86,11 @@ func Rebase(from SelectedRevisions, to string, ...) CommandArgs
 Also contains data models and parsers:
 - `Commit` — includes `ChangePrefix`/`CommitPrefix` for highlighted IDs, `Immutable` bool (from `◆` glyph), `Divergent` bool (from template `divergent` expression), `WorkingCopies []string` (for multi-workspace display)
 - `Bookmark` — bookmark model + output parsers
-- `FileChange` — file change model with `ConflictSides int`; `DiffStat`/`DiffSummary`/`ConflictedFiles` parsers; `expandRenamePath` (shared rename-brace resolver)
-- `ConflictEntry` — conflict path + arity from template output
+- `FileChange` — file change model with `ConflictSides int`. `FilesTemplate`/`ParseFilesTemplate` combine `self.diff().stat().files()` (status char, destination path, exact `lines_added`/`lines_removed` integers) and `conflicted_files.map()` (path + `conflict_side_count`) in a single `jj log -T` call. Multi-revision revsets emit the template per-commit; the parser sums stats on duplicate paths and keeps the first-seen type (newest commit in jj's default order).
 - `SelectedRevisions` — multi-revision selection helper
-- `Workspace` — workspace model + parser
+- `Workspace` — workspace model; `WorkspaceList` builder uses `WorkspaceRef.name()` + `.target()` template methods (no `": "` delimiter parsing)
 
-**Template-based structured output** — When jj exposes a template method for the data you need, use it instead of parsing human-readable output. `ConflictedFiles` uses `Commit.conflicted_files()` + `TreeEntry.conflict_side_count()` (jj ≥ 0.36) with `\x1F`-delimited fields — eliminates regex parsing, exit-code special-casing, and works correctly with multi-revision revsets (union). See `jj help -k templates` before adding text-based parsers.
+**Template-based structured output** — When jj exposes a template method for the data you need, use it instead of parsing human-readable output. `FilesTemplate` replaced three separate subprocesses (`DiffSummary`, `DiffStat`, `ConflictedFiles`) plus a `\d+ \| \d+ [+-]*` regex and a `{src => dst}` brace-expansion resolver — the template gives you integers and destination paths directly, exits 0 on clean revisions, and tolerates arbitrary filenames. See `jj help -k templates` before adding text-based parsers.
 
 ### Command Runner (`internal/runner/`)
 
@@ -114,6 +113,8 @@ Two implementations:
 Thin HTTP handlers. Each handler: parses request → calls command builder → executes via runner → returns JSON. No business logic — just plumbing.
 
 The server includes an operation ID cache (`cachedOp`) that tracks jj's current operation. Every JSON response includes an `X-JJ-Op-Id` header. Mutation endpoints refresh the cache asynchronously via `runMutation()`, which centralizes the post-mutation pattern (run command → refresh op ID → return output).
+
+`refreshOpId()` reads `.jj/repo/op_heads/heads/` directly when `RepoDir` is set — the op-id IS the filename (128 hex chars, truncated to 12 for `short()`), and jj atomically swaps that file on every operation. `os.ReadDir` is <1ms vs ~15-20ms for a `jj op log` subprocess. Falls back to the subprocess for SSH mode (`RepoDir == ""`), divergent op heads (>1 file), or secondary workspaces where `.jj/repo` is a pointer file (ENOTDIR).
 
 Handlers use `httptest.NewRecorder` + `testutil.MockRunner` for testing, so they never touch a real jj process in tests.
 
@@ -170,17 +171,15 @@ sequenceDiagram
     R-->>H: output
 
     par async refresh (doesn't block response)
-        H->>R: jj op log --limit 1
-        R->>J: exec
-        J-->>R: new op-id
-        R-->>H: cachedOp = "op2"
+        H->>H: os.ReadDir(.jj/repo/op_heads/heads)
+        Note over H: filename[:12] = "op2"<br/>(<1ms, no subprocess)
+        H->>H: cachedOp = "op2"
     end
 
     H-->>A: 200 {output} + X-JJ-Op-Id: op2
 
     Note over A: trackOpId sees op1 → op2
-    A->>A: responseCache.clear()
-    Note over A: immutableCache untouched
+    Note over A: cache NOT cleared —<br/>commit_id-keyed entries<br/>stay valid across ops
 
     A->>S: fire staleCallbacks()
     S->>A: api.log()  (auto-refresh)
@@ -193,18 +192,18 @@ sequenceDiagram
     A-->>S: render fresh log
 ```
 
-**Read path** is the lower half of this sequence (steps 17-23) without the preceding mutation. Key difference: the read path uses `cachedRequest()` which may return cached data immediately with zero subprocess spawns — see the two-tier cache section below.
+**Read path** is the lower half of this sequence without the preceding mutation. Key difference: the read path uses `cachedRequest()` which may return cached data immediately with zero subprocess spawns — see the commit_id cache section below.
 
 ### State synchronization
 
-Every API response carries an `X-JJ-Op-Id` header with jj's current operation ID. The frontend tracks this value; when it changes (due to mutations from the UI or external CLI usage detected on next request), the API client clears its mutable response cache and fires stale callbacks that trigger a log refresh. Cached data for immutable commits lives in a separate cache that survives op-id changes — immutable commits' diffs/files/descriptions are stable by definition.
+Every API response carries an `X-JJ-Op-Id` header with jj's current operation ID. The frontend tracks this value; when it changes (due to mutations from the UI, external CLI usage, or an SSE push from the fsnotify watcher), the API client fires stale callbacks that trigger a log refresh. **The per-revision cache is never cleared on op-id change** — it's keyed by commit_id, which is a content hash. If a commit_id still exists after the operation, its cached diff/files/description are provably still valid.
 
 ### Divergence resolution
 
 Divergent commits (multiple commits sharing the same change ID) are detected via the `Divergent` field on the `Commit` struct. The frontend uses `effectiveId(commit)` — which falls back to `commit_id` for divergent/hidden commits — for all identity operations (DOM keys, checked sets, mutation API calls), since `change_id` is ambiguous for divergent commits.
 
 ```
-User selects divergent commit → "Divergence ⚠" button appears in DiffPanel header
+User selects divergent commit → "Divergence" button appears in RevisionHeader
   → Click opens DivergencePanel (replaces DiffPanel)
   → Panel fetches api.log('change_id(X)') → all divergent versions
   → Fetches api.files(commitId) for each version in parallel → computes file union
@@ -236,7 +235,7 @@ Conflicts are detected via the `conflicted_files` template (`Commit.conflicted_f
 
 ### Inline file editing
 
-`FileEditor.svelte` wraps CodeMirror 6 in the split-view right column. Clicking Edit in unified view auto-switches to split (via `splitView = $bindable` write-back). Indent detection scans the first 200 indented lines to configure `indentUnit` (tabs vs N-spaces); `tabSize=4` matches `.diff-line { tab-size: 4 }` so columns align. Hunk folding collapses unchanged regions with 3 lines of context. `POST /api/file-write` writes directly to the filesystem — no jj command, since jj auto-snapshots on the next API call that doesn't use `--ignore-working-copy`.
+`FileEditor.svelte` wraps CodeMirror 6 in the split-view right column. Clicking Edit in unified view auto-switches to split (via `splitView = $bindable` write-back). Indent detection scans the first 200 indented lines to configure `indentUnit` (tabs vs N-spaces); `tabSize=4` matches `.diff-line { tab-size: 4 }` so columns align. Hunk folding collapses unchanged regions with 3 lines of context. `POST /api/file-write` writes directly to the filesystem — no jj command. The snapshot loop (`watcher.go`, 5s interval) picks up the write via `jj debug snapshot`, which advances op_heads → fsnotify fires → SSE pushes the new op-id → frontend reloads. Editing is gated on `diffTarget.kind === 'single'` — in multi-check mode the cursor position isn't what's being diffed, so `api.edit(cursor's changeId)` would target the wrong revision.
 
 ## Testing Strategy
 
@@ -270,7 +269,7 @@ flowchart TD
 
 | Layer | Count | Coverage |
 |-------|-------|----------|
-| Go unit | ~100 | Command builders, parsers (DiffStat, BookmarkList, GraphLog, WorkspaceList), models (`Commit.GetChangeId`, `SelectedRevisions`) |
+| Go unit | ~100 | Command builders, parsers (FilesTemplate, BookmarkList, GraphLog, WorkspaceList), models (`Commit.GetChangeId`, `SelectedRevisions`) |
 | Go handlers | ~180 | Every endpoint's happy path + validation (400) + runner error (500) via `runnerErrorTest` helper |
 | Go integration | ~30 | Build-tagged. CRUD journey, divergence resolution, diff-range file filtering, bookmark lifecycle |
 | Frontend logic | ~150 | api.ts cache/op-id, diff-parser, word-diff LCS, split-view alignment, loader races, mode factories |
@@ -298,13 +297,15 @@ defer runner.Verify()  // asserts all expectations called
 
 5. **`--tool :git` for diffs** — Users may have external diff tools configured (e.g., difftastic with `--color=always`). The web API forces jj's git-format diff output to get clean, parseable output.
 
-6. **Immutable commit detection via graph glyphs** — The graph parser checks for `◆` vs `○` vs `@` when parsing node rows. `◆` sets `Immutable: true` on the `Commit` struct. The frontend uses this to dim immutable commits and color gutter symbols (`○` blue, `@` green) without needing a separate API call.
+6. **`--ignore-working-copy` on reads** — Without it, every `jj log`/`file show` re-stats every tracked file (~485ms in a large repo, measured). The snapshot loop (`watcher.go`) already runs `jj debug snapshot` every 5s, so read-path snapshots are redundant work that also contends on the WC lock — concurrent snapshotting commands serialize (measured 85% CPU for 5 parallel logs), while `--ignore-working-copy` commands parallelize freely (221% CPU). Worst case: an external file edit is visible ≤5s late before the SSE correction arrives — the same contract every other read already has.
 
-7. **Tracked view** — The revision panel supports a Log/Tracked toggle (`t` key). Tracked view issues a `jj log` request with the `tracked_remote_bookmarks()` revset, giving a focused view of remote branches without changing any global state.
+7. **Immutable commit detection via graph glyphs** — The graph parser checks for `◆` vs `○` vs `@` when parsing node rows. `◆` sets `Immutable: true` on the `Commit` struct. The frontend uses this to dim immutable commits and color gutter symbols (`○` blue, `@` green) without needing a separate API call.
 
-8. **Op-ID staleness detection** — Every response carries `X-JJ-Op-Id`. The frontend detects operation changes and auto-refreshes. Mutation endpoints refresh the cached op-id asynchronously to avoid adding latency.
+8. **Tracked view** — The revision panel supports a Log/Tracked toggle (`t` key). Tracked view issues a `jj log` request with the `tracked_remote_bookmarks()` revset, giving a focused view of remote branches without changing any global state.
 
-9. **Divergent commit identity** — Divergent commits share the same `change_id`, so the frontend uses `effectiveId()` (falls back to `commit_id`) for identity operations. The `change_id()` revset function (not `all:` which doesn't exist in jj 0.38) resolves all divergent versions. Divergence offsets (`/0`, `/1`) are computed client-side by lexicographic commit ID sort, matching jj's convention. The DivergencePanel is self-fetching — it receives only a `changeId` and manages its own data loading with separate generation counters for version fetching and diff fetching.
+9. **Op-ID staleness detection** — Every response carries `X-JJ-Op-Id`. The frontend detects operation changes and auto-refreshes. Mutation endpoints refresh the cached op-id asynchronously to avoid adding latency.
+
+10. **Divergent commit identity** — Divergent commits share the same `change_id`, so the frontend uses `effectiveId()` (falls back to `commit_id`) for identity operations. The `change_id()` revset function (not `all:` which doesn't exist in jj 0.38) resolves all divergent versions. Divergence offsets (`/0`, `/1`) are computed client-side by lexicographic commit ID sort, matching jj's convention. The DivergencePanel is self-fetching — it receives only a `changeId` and manages its own data loading with separate generation counters for version fetching and diff fetching.
 
 ## Frontend Performance Patterns
 
@@ -358,7 +359,7 @@ flowchart LR
 - `wordDiffsByFile: Map<filePath, Map<hunkIdx, Map<lineIdx, spans>>>` — same progressive-async pattern as Shiki. LCS computation yields between files; single-file context expansion only recomputes that file's entry. Stable `EMPTY_WD` singleton.
 - `matchesByFile` — search matches pre-grouped by `filePath` via `groupByWithIndex()`, preserving global indices so `currentMatchIdx` comparison still works. Match-free files receive `EMPTY_MATCHES` (stable singleton), so their `lineMatchMap` `$derived` never reads `currentMatchIdx` → no dependency → no recompute on Enter/Shift+Enter.
 
-**Two-tier response cache** — `api.ts` maintains two Maps: `responseCache` (keyed by `${cacheId}@${opId}`, cleared on every op-id change) and `immutableCache` (keyed by bare `cacheId`, survives op-id changes, bounded at 300 entries with insertion-order LRU eviction). Immutable commits' diffs/files/descriptions can't change, so they're cached across operations. The separate cache avoids any re-keying logic on op-id changes — `trackOpId` just calls `responseCache.clear()`. Cache hits on the immutable tier bump the entry to the end of the Map (delete + re-insert), giving true LRU behaviour.
+**commit_id-keyed cache** — `api.ts` maintains a single 500-entry LRU Map keyed by `diff:<commit_id>` / `files:<commit_id>` / `desc:<commit_id>`. A commit_id is a content hash of tree + parents + message — if it hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation, no concurrent-request staleness guard. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants — the rest stay warm. `clearAllCaches()` is reserved for explicit user-triggered hard refresh.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
@@ -372,35 +373,23 @@ flowchart TD
     classDef green fill:#EDEECF,stroke:#66800B,color:#66800B
     classDef orange fill:#FFE7CE,stroke:#BC5215,color:#BC5215
     classDef blue fill:#E1ECEB,stroke:#205EA6,color:#205EA6
-    classDef red fill:#FFE1D5,stroke:#AF3029,color:#AF3029
+    classDef purple fill:#F0EAEC,stroke:#5E409D,color:#5E409D
 
-    start(["cachedRequest(id, url, immutable)"])
-    start --> checkImm{immutableCache<br/>has id?}
-    checkImm -->|yes| bumpLRU["LRU bump<br/><small>delete + re-insert</small>"]:::green
-    bumpLRU --> hit1["return cached ✓"]:::green
+    start(["cachedRequest('diff:' + commit_id, url)"])
+    start --> check{cache has<br/>key?}
+    check -->|yes| bumpLRU["LRU bump<br/><small>delete + re-insert</small>"]:::green
+    bumpLRU --> hit["return cached ✓"]:::green
 
-    checkImm -->|no| checkMut{responseCache<br/>has id@opId?}
-    checkMut -->|yes| hit2["return cached ✓"]:::green
+    check -->|no| fetch["fetch(url)"]:::blue
+    fetch --> store["storeInCache<br/><small>delete-first, evict oldest if >500</small>"]:::orange
+    store --> ret[return result]
 
-    checkMut -->|no| fetch["fetch(url)"]:::blue
-    fetch --> isImm{immutable<br/>param?}
-
-    isImm -->|true| evict{size ≥ 300?}
-    evict -->|yes| drop["evict oldest<br/><small>keys().next()</small>"]:::orange
-    evict -->|no| storeImm
-    drop --> storeImm["immutableCache.set(id, data)"]:::orange
-    storeImm --> ret1[return result]
-
-    isImm -->|false| checkOp{opId unchanged<br/>since fetch?}
-    checkOp -->|yes| storeMut["responseCache.set(id@opId, data)"]:::orange
-    checkOp -->|no| stale["don't cache<br/><small>(concurrent request advanced opId)</small>"]:::red
-    storeMut --> ret2[return result]
-    stale --> ret3[return result]
-
-    opchange["— op-id changes —"]:::red
-    opchange --> clearMut["responseCache.clear()"]:::red
-    opchange --> keepImm["immutableCache untouched"]:::green
+    opchange["— op-id changes —<br/><small>(mutation, external jj, SSE push)</small>"]:::purple
+    opchange --> fire["fire staleCallbacks()<br/><small>→ loadLog()</small>"]:::purple
+    opchange -.->|"no effect"| keep["cache untouched<br/><small>commit_id-keyed entries<br/>stay valid across ops</small>"]:::green
 ```
+
+**Derived-computation cache** — `DiffPanel`'s `<script module>` holds `derivedCache` (30-entry LRU) mapping `activeRevisionId → {highlightsByFile, wordDiffsByFile}`. Shiki + word-diff LCS cost ~500ms per diff; without this cache, revisiting a commit re-ran them even though the diff text was already cached in api.ts. Module scope survives DiffPanel unmount (DivergencePanel takes its slot via `{#if}`). `clearHighlightCache()` is exported so `toggleTheme()` can invalidate `.highlights` (word diffs are theme-agnostic) even when the component isn't mounted.
 
 **`createLoader()` factory** — `loader.svelte.ts` encapsulates the generation-counter async pattern. Each `load()` supersedes any in-flight call; only the latest-started result is applied. The `loading` flag is deferred via `setTimeout(0)` so microtask-fast cache hits never flip it, preventing reactive-update cascades during cached j/k navigation. Exposes `.error` (cleared on successful load/set/reset) for inline error display. App.svelte declares 6 loaders instead of 6 hand-rolled load functions + 6 generation counters + 11 `$state` vars.
 
