@@ -8,7 +8,7 @@ import (
 // FileChange represents a file affected by a revision, with per-file stats and
 // conflict info. Populated by ParseFilesTemplate from structured template output.
 type FileChange struct {
-	Type          string `json:"type"`           // A (added), M (modified), D (deleted), R (renamed)
+	Type          string `json:"type"` // A (added), M (modified), D (deleted), R (renamed)
 	Path          string `json:"path"`
 	Additions     int    `json:"additions"`
 	Deletions     int    `json:"deletions"`
@@ -24,8 +24,9 @@ type FileChange struct {
 // not proportional ASCII bars).
 //
 // Output: {files section}\x1E{conflicts section}
-//   files:     status_char\x1Fpath\x1Fadded\x1Fdeleted\n (joined)
-//   conflicts: path\x1Fside_count\n (joined)
+//
+//	files:     status_char\x1Fpath\x1Fadded\x1Fdeleted\n (joined)
+//	conflicts: path\x1Fside_count\n (joined)
 //
 // DiffStatEntry.path() returns the DESTINATION path for renames — no brace
 // expansion needed.
@@ -55,7 +56,7 @@ func ParseFilesTemplate(output string) []FileChange {
 	changes := []FileChange{}
 	byPath := make(map[string]int) // path → index in changes (for conflict merge)
 
-	for _, line := range strings.Split(filesSection, "\n") {
+	for line := range strings.SplitSeq(filesSection, "\n") {
 		if line == "" {
 			continue
 		}
@@ -79,7 +80,7 @@ func ParseFilesTemplate(output string) []FileChange {
 		})
 	}
 
-	for _, line := range strings.Split(conflictSection, "\n") {
+	for line := range strings.SplitSeq(conflictSection, "\n") {
 		if line == "" {
 			continue
 		}

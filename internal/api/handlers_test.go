@@ -556,7 +556,6 @@ func TestHandleLog_InvalidLimit(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-
 func TestHandleMutation_MissingFields(t *testing.T) {
 	srv := newTestServer(testutil.NewMockRunner(t))
 
@@ -1842,7 +1841,7 @@ func TestDecodeBody_ExceedsMaxSize(t *testing.T) {
 	srv := newTestServer(testutil.NewMockRunner(t))
 	// Create a JSON body larger than 1MB
 	bigString := strings.Repeat("x", 1<<20+100)
-	body := []byte(fmt.Sprintf(`{"revision":"%s"}`, bigString))
+	body := fmt.Appendf(nil, `{"revision":"%s"}`, bigString)
 	req := jsonPost("/api/new", body)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -1893,9 +1892,9 @@ func TestMethodNotAllowed(t *testing.T) {
 	cases := []struct {
 		method, path string
 	}{
-		{"POST", "/api/log"},        // read endpoint
-		{"GET", "/api/new"},         // mutation endpoint
-		{"DELETE", "/api/abandon"},  // wrong method entirely
+		{"POST", "/api/log"},       // read endpoint
+		{"GET", "/api/new"},        // mutation endpoint
+		{"DELETE", "/api/abandon"}, // wrong method entirely
 		{"GET", "/api/bookmark/set"},
 	}
 	for _, tc := range cases {

@@ -92,7 +92,7 @@ func ParseBookmarkListOutput(output string) []Bookmark {
 // ParseRemoteListOutput parses `jj git remote list` output into remote names.
 func ParseRemoteListOutput(output string, defaultRemote string) []string {
 	remotes := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		if name := strings.TrimSpace(line); name != "" {
 			remotes = append(remotes, strings.Fields(name)[0])
 		}

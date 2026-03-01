@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,9 +67,7 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 	if existing, err := os.ReadFile(path); err == nil {
 		json.Unmarshal(existing, &merged) // best-effort; corrupt file → treat as empty
 	}
-	for k, v := range incoming {
-		merged[k] = v
-	}
+	maps.Copy(merged, incoming)
 
 	out, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {

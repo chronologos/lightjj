@@ -41,12 +41,12 @@ func ParseAliases(output string) []Alias {
 		if strings.HasPrefix(line, "aliases.") {
 			flush()
 			// Split on first " = " to separate name from value
-			eqIdx := strings.Index(line, " = ")
-			if eqIdx < 0 {
+			before, after, ok := strings.Cut(line, " = ")
+			if !ok {
 				continue
 			}
-			currentName = strings.TrimPrefix(line[:eqIdx], "aliases.")
-			currentValue.WriteString(line[eqIdx+3:])
+			currentName = strings.TrimPrefix(before, "aliases.")
+			currentValue.WriteString(after)
 		} else if currentName != "" {
 			// Continuation line for multi-line array
 			currentValue.WriteString(line)
