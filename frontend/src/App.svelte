@@ -1432,6 +1432,10 @@
             onjjmutation={withMutation}
           >
             {#snippet header()}
+              <!-- {#key} resets RevisionHeader local state (descExpanded) on nav.
+                   Replaces the manual previous-value reset effect that Svelte
+                   5.50+ flags as state_referenced_locally. -->
+              {#key effectiveId(selectedRevision!.commit)}
               <RevisionHeader
                 revision={selectedRevision!}
                 {fullDescription}
@@ -1447,6 +1451,7 @@
                 onbookmarkclick={openBookmarkModal}
                 onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
               />
+              {/key}
             {/snippet}
           </DiffPanel>
         {/if}

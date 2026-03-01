@@ -10,6 +10,7 @@
 // multiple derivations (highlights + wordDiffs) can share one LRU bucket and
 // evict together.
 
+import { untrack } from 'svelte'
 import type { DiffFile } from './diff-parser'
 
 type MaybePromise<T> = T | Promise<T>
@@ -63,6 +64,15 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
   let byFile = $state<Map<string, R>>(new Map())
   let generation = 0
 
+  // Imperative setter — methods are called from $effect bodies in DiffPanel,
+  // and Svelte 5.44+ batching (PR #17145) folds the template effect that
+  // reads byFile into the same flush pass. Without untrack(), the sync write
+  // here + template read + effectiveFiles/expandedDiffs cycle accumulates
+  // depth past MAX → effect_update_depth_exceeded. untrack() severs the
+  // tracking link: callers own the reactive dependencies (effectiveFiles,
+  // activeRevisionId), not the internal output state they're populating.
+  const setByFile = (m: Map<string, R>) => untrack(() => { byFile = m })
+
   function fileLineCount(file: DiffFile): number {
     let n = 0
     for (const h of file.hunks) n += h.lines.length
@@ -74,7 +84,7 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
     const cached = readMemo(cacheKey)
     if (!cached || cached.size === 0) return false
     generation++ // abort any in-flight run
-    byFile = cached
+    setByFile(cached)
     return true
   }
 
@@ -90,7 +100,7 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
     // Clear stale output immediately so downstream consumers (DiffFileView)
     // don't render old-revision colors against new-revision text while the
     // first file is computing.
-    byFile = new Map()
+    setByFile(new Map())
 
     const done = new Map<string, R>()
     let linesProcessed = 0
@@ -111,22 +121,25 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
 
       done.set(file.filePath, await compute(file, isStale))
       if (isStale()) return
-      byFile = new Map(done)
+      setByFile(new Map(done))
     }
 
     if (cacheKey && writeMemo && !isStale()) {
-      writeMemo(cacheKey, byFile)
+      writeMemo(cacheKey, untrack(() => byFile))
     }
   }
 
   function update(file: DiffFile) {
     const gen = ++generation // abort any in-flight run() holding a stale snapshot
-    const next = new Map(byFile)
+    // untrack the read — update() is called from the derivation $effect in
+    // DiffPanel; tracking byFile here would make the effect depend on its
+    // own output.
+    const next = new Map(untrack(() => byFile))
     if (skip(file)) {
       // e.g. context expansion pushed the file over the skip threshold —
       // drop the pre-expansion entry rather than keep stale data.
       next.delete(file.filePath)
-      byFile = next
+      setByFile(next)
       return
     }
     const isStale = () => gen !== generation
@@ -138,19 +151,19 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
       // when superseded.
       result.then(r => {
         if (isStale()) return
-        const m = new Map(byFile)
+        const m = new Map(untrack(() => byFile))
         m.set(file.filePath, r)
-        byFile = m
+        setByFile(m)
       })
       return
     }
     next.set(file.filePath, result)
-    byFile = next
+    setByFile(next)
   }
 
   function clear() {
     generation++
-    byFile = new Map()
+    setByFile(new Map())
   }
 
   return {

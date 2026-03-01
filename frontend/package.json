@@ -15,10 +15,10 @@
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.3.1",
-    "@tsconfig/svelte": "^5.0.7",
+    "@tsconfig/svelte": "^5.0.8",
     "jsdom": "^28.1.0",
-    "svelte": "^5.43.12",
-    "svelte-check": "^4.3.6",
+    "svelte": "^5.53.6",
+    "svelte-check": "^4.4.4",
     "typescript": "~5.9.3",
     "vite": "^7.3.1",
     "vitest": "^4.0.18"
@@ -32,6 +32,6 @@
     "@codemirror/language": "^6.12.2",
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.15",
-    "shiki": "^3.22.0"
+    "shiki": "^4.0.0"
   }
 }

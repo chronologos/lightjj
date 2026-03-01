@@ -24,18 +24,12 @@
     ondraftchange, onbookmarkclick, onresolveDivergence,
   }: Props = $props()
 
+  // descExpanded resets on navigation via {#key} in App.svelte (component
+  // remounts). No manual reset effect — Svelte 5.50+ flags the previous-value
+  // sentinel pattern as state_referenced_locally.
   let descExpanded = $state(false)
   let descText = $derived(fullDescription || revision.description || '(no description)')
   let descIsMultiline = $derived(descText.includes('\n'))
-
-  // Collapse the expanded description when navigating away.
-  let lastChangeId = revision.commit.change_id
-  $effect(() => {
-    if (revision.commit.change_id !== lastChangeId) {
-      lastChangeId = revision.commit.change_id
-      descExpanded = false
-    }
-  })
 </script>
 
 <div class="revision-detail">
