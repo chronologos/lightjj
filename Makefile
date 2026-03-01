@@ -7,10 +7,10 @@ build: frontend
 	go build -o lightjj ./cmd/lightjj
 
 frontend:
-	cd frontend && bun install && bun run build
+	cd frontend && pnpm install && pnpm run build
 
 dev:
-	cd frontend && bun run dev
+	cd frontend && pnpm run dev
 
 clean:
 	rm -f lightjj
