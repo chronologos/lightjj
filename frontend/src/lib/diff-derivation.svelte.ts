@@ -64,14 +64,14 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
   let byFile = $state<Map<string, R>>(new Map())
   let generation = 0
 
-  // Imperative setter — methods are called from $effect bodies in DiffPanel,
-  // and Svelte 5.44+ batching (PR #17145) folds the template effect that
-  // reads byFile into the same flush pass. Without untrack(), the sync write
-  // here + template read + effectiveFiles/expandedDiffs cycle accumulates
-  // depth past MAX → effect_update_depth_exceeded. untrack() severs the
-  // tracking link: callers own the reactive dependencies (effectiveFiles,
-  // activeRevisionId), not the internal output state they're populating.
-  const setByFile = (m: Map<string, R>) => untrack(() => { byFile = m })
+  // Read helper for use inside methods called from the derivation $effect
+  // in DiffPanel. Without untrack, `new Map(byFile)` establishes byFile as
+  // a dep of that effect; subsequent writes to byFile then trigger
+  // schedule_possible_effect_self_invalidation → effect_update_depth_exceeded.
+  // (Maps aren't deep-proxied, so it's the Source-level dep that matters, not
+  // iteration tracking.) Writes DON'T need untrack — Svelte's untracking flag
+  // doesn't affect mark_reactions or self-invalidation scheduling for writes.
+  const readByFile = () => untrack(() => byFile)
 
   function fileLineCount(file: DiffFile): number {
     let n = 0
@@ -84,7 +84,7 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
     const cached = readMemo(cacheKey)
     if (!cached || cached.size === 0) return false
     generation++ // abort any in-flight run
-    setByFile(cached)
+    byFile = cached
     return true
   }
 
@@ -100,7 +100,7 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
     // Clear stale output immediately so downstream consumers (DiffFileView)
     // don't render old-revision colors against new-revision text while the
     // first file is computing.
-    setByFile(new Map())
+    byFile = new Map()
 
     const done = new Map<string, R>()
     let linesProcessed = 0
@@ -121,25 +121,25 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
 
       done.set(file.filePath, await compute(file, isStale))
       if (isStale()) return
-      setByFile(new Map(done))
+      byFile = new Map(done)
     }
 
     if (cacheKey && writeMemo && !isStale()) {
-      writeMemo(cacheKey, untrack(() => byFile))
+      // `done` not `byFile` — independent reference, never aliased with the
+      // Source's current value (which would make a future tryRestore no-op
+      // on equality check if no intervening write happened).
+      writeMemo(cacheKey, done)
     }
   }
 
   function update(file: DiffFile) {
     const gen = ++generation // abort any in-flight run() holding a stale snapshot
-    // untrack the read — update() is called from the derivation $effect in
-    // DiffPanel; tracking byFile here would make the effect depend on its
-    // own output.
-    const next = new Map(untrack(() => byFile))
+    const next = new Map(readByFile())
     if (skip(file)) {
       // e.g. context expansion pushed the file over the skip threshold —
       // drop the pre-expansion entry rather than keep stale data.
       next.delete(file.filePath)
-      setByFile(next)
+      byFile = next
       return
     }
     const isStale = () => gen !== generation
@@ -151,19 +151,21 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
       // when superseded.
       result.then(r => {
         if (isStale()) return
-        const m = new Map(untrack(() => byFile))
+        // Post-await: active_reaction is null, untrack is a no-op. But
+        // readByFile() reads consistently so we don't second-guess context.
+        const m = new Map(readByFile())
         m.set(file.filePath, r)
-        setByFile(m)
+        byFile = m
       })
       return
     }
     next.set(file.filePath, result)
-    setByFile(next)
+    byFile = next
   }
 
   function clear() {
     generation++
-    setByFile(new Map())
+    byFile = new Map()
   }
 
   return {

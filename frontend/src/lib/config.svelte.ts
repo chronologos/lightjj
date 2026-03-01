@@ -16,6 +16,7 @@ interface Config {
   splitView: boolean
   reduceMotion: boolean
   revisionPanelWidth: number
+  evologPanelHeight: number
   tutorialVersion: string
 }
 
@@ -24,6 +25,7 @@ const defaults: Config = {
   splitView: false,
   reduceMotion: false,
   revisionPanelWidth: 420,
+  evologPanelHeight: 360,
   tutorialVersion: '',
 }
 
@@ -121,6 +123,9 @@ function createConfig() {
 
     get revisionPanelWidth() { return state.revisionPanelWidth },
     set revisionPanelWidth(v: number) { state.revisionPanelWidth = v },
+
+    get evologPanelHeight() { return state.evologPanelHeight },
+    set evologPanelHeight(v: number) { state.evologPanelHeight = v },
 
     get tutorialVersion() { return state.tutorialVersion },
     set tutorialVersion(v: string) { state.tutorialVersion = v },
