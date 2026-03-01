@@ -284,8 +284,12 @@
   }
 
   // --- Command palette ---
+  // Split into static (allocated once) + dynamic (rebuilt only when labels change).
+  // Closures capture live refs, so `when:` / `action:` can safely read mutable state.
+  // `staticCommands` is $derived.by with zero reactive deps — the thunk defers
+  // evaluation past TDZ for handlers defined below, and computes exactly once.
   const noop = () => {}
-  let commands: PaletteCommand[] = $derived.by(() => [
+  let staticCommands = $derived.by<PaletteCommand[]>(() => [
     // Navigation
     { label: 'Move down', shortcut: 'j', category: 'Navigation', action: noop, infoOnly: true },
     { label: 'Move up', shortcut: 'k', category: 'Navigation', action: noop, infoOnly: true },
@@ -304,8 +308,6 @@
     { label: 'Edit description', shortcut: 'e', category: 'Revisions', action: startDescriptionEdit, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Edit selected revision', category: 'Revisions', action: () => handleEdit(effectiveId(selectedRevision!.commit)), when: () => !inlineMode && !!selectedRevision },
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
-    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
-    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
@@ -320,10 +322,7 @@
     { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal, when: () => !inlineMode },
     { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { closeAllModals(); bookmarkInputOpen = true }, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
 
-    // View
-    { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
-    { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
-    { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', category: 'View', action: toggleViewMode },
+    // View (non-dynamic)
     { label: 'Toggle split/unified diff', category: 'View', action: () => { config.splitView = !config.splitView } },
     { label: 'Toggle operation log', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
@@ -333,9 +332,19 @@
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
     { label: 'Clear checked revisions', shortcut: 'Esc', category: 'Actions', action: clearChecksAndReload, when: () => checkedRevisions.size > 0 },
     { label: 'Command palette', shortcut: '\u2318K', category: 'Actions', action: noop, infoOnly: true },
+  ])
 
-    // Aliases — filtered to exclude builtins that already have palette entries
-    ...aliases
+  // Labels that bake reactive state into strings — only these re-allocate on Space/theme/view toggle.
+  let dynamicCommands = $derived<PaletteCommand[]>([
+    { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
+    { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
+    { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
+    { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
+    { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', category: 'View', action: toggleViewMode },
+  ])
+
+  let aliasCommands = $derived<PaletteCommand[]>(
+    aliases
       .filter(a => !isBuiltinAlias(a))
       .map(a => ({
         label: a.name,
@@ -344,7 +353,9 @@
         action: () => handleRunAlias(a.name),
         when: () => !inlineMode,
       })),
-  ])
+  )
+
+  let commands = $derived<PaletteCommand[]>([...staticCommands, ...dynamicCommands, ...aliasCommands])
 
   // --- API actions ---
   async function loadWorkspaces() {
