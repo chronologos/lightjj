@@ -126,7 +126,7 @@ func parseNodeLine(line string) GraphRow {
 
 	// working_copies outputs "base2@ default@" — space-separated workspace names with @ suffix
 	if len(parts) > 4 && parts[4] != "" {
-		for _, wc := range strings.Fields(parts[4]) {
+		for wc := range strings.FieldsSeq(parts[4]) {
 			name := strings.TrimSuffix(wc, "@")
 			if name != "" {
 				row.Commit.WorkingCopies = append(row.Commit.WorkingCopies, name)
@@ -142,7 +142,7 @@ func parseNodeLine(line string) GraphRow {
 	// Bookmarks are joined with \x1F in the template. After SplitN(7), remaining
 	// separators within the bookmarks field delimit individual bookmark names.
 	if len(parts) > 6 && parts[6] != "" {
-		for _, bm := range strings.Split(parts[6], "\x1f") {
+		for bm := range strings.SplitSeq(parts[6], "\x1f") {
 			bm = strings.TrimSpace(bm)
 			if bm != "" {
 				row.Bookmarks = append(row.Bookmarks, bm)

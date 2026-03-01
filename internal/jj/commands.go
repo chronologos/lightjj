@@ -294,7 +294,7 @@ type EvologEntry struct {
 
 func ParseEvolog(output string) []EvologEntry {
 	entries := []EvologEntry{}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		if line == "" {
 			continue
 		}
@@ -350,7 +350,7 @@ type OpEntry struct {
 
 func ParseOpLog(output string) []OpEntry {
 	entries := []OpEntry{}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		if line == "" {
 			continue
 		}
@@ -448,7 +448,7 @@ type FilesBatchEntry struct {
 // \x1F-separated fields: status_char, path, additions, deletions).
 func ParseFilesBatch(output string) map[string]FilesBatchEntry {
 	result := make(map[string]FilesBatchEntry)
-	for _, record := range strings.Split(output, "\x1D") {
+	for record := range strings.SplitSeq(output, "\x1D") {
 		if record == "" {
 			continue
 		}
@@ -459,7 +459,7 @@ func ParseFilesBatch(output string) map[string]FilesBatchEntry {
 		commitId := parts[0]
 		conflicted := parts[1] == "1"
 		files := []*FileChange{}
-		for _, line := range strings.Split(parts[2], "\n") {
+		for line := range strings.SplitSeq(parts[2], "\n") {
 			if line == "" {
 				continue
 			}
@@ -506,7 +506,7 @@ type Workspace struct {
 // Each line: name\x1Fchange_id\x1Fcommit_id
 func ParseWorkspaceList(output string) []Workspace {
 	workspaces := []Workspace{}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		parts := strings.SplitN(line, "\x1F", 3)
 		if len(parts) != 3 {
 			continue
