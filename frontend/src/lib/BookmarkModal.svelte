@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { api, type Bookmark } from './api'
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
@@ -22,6 +23,8 @@
   let query: string = $state('')
   let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
+  let modalEl: HTMLDivElement | undefined = $state(undefined)
+  let inputFocused: boolean = $state(false)
   let bookmarks: Bookmark[] = $state([])
   let remotes: string[] = $state([])
   let loading: boolean = $state(false)
@@ -29,210 +32,288 @@
   let previousFocus: HTMLElement | null = null
   let fetchGen: number = 0
 
-  const history = recentActions('bookmark-ops')
+  // Double-press confirmation for destructive ops. First press arms the key
+  // and flips the footer hint red; second press of the SAME key fires. Any
+  // other key (nav, Enter, Escape, mouse, different action) disarms. No
+  // timeout — moving to a different bookmark voids the confirmation naturally.
+  let armed: 'd' | 'f' | 't' | null = $state(null)
 
-  function opKey(op: BookmarkOp): string {
-    return op.remote ? `${op.action}:${op.bookmark}@${op.remote}` : `${op.action}:${op.bookmark}`
-  }
+  // Frequency-sort by bookmark name (not by action) — if you've been touching
+  // a bookmark you want it at the top regardless of which op you last used.
+  const history = recentActions('bookmark-modal')
 
-  function opLabel(op: BookmarkOp): string {
-    const suffix = op.remote ? `@${op.remote}` : ''
-    return `${op.action} ${op.bookmark}${suffix}`
-  }
-
-  function buildOps(bms: Bookmark[], changeId: string | null, availableRemotes: string[]): BookmarkOp[] {
-    const ops: BookmarkOp[] = []
-    for (const bm of bms) {
-      if (changeId && bm.commit_id !== changeId) {
-        ops.push({ action: 'move', bookmark: bm.name })
-      }
-      if (bm.local) {
-        ops.push({ action: 'delete', bookmark: bm.name })
-      }
-      ops.push({ action: 'forget', bookmark: bm.name })
-      // Track/untrack for existing remote entries
-      for (const remote of bm.remotes ?? []) {
-        const action = remote.tracked ? 'untrack' : 'track'
-        ops.push({ action, bookmark: bm.name, remote: remote.remote })
-      }
-      // Offer track for local-only bookmarks against available remotes
-      if (bm.local && !bm.remotes?.length) {
-        for (const remote of availableRemotes) {
-          ops.push({ action: 'track', bookmark: bm.name, remote })
-        }
-      }
-    }
-    return ops
-  }
-
-  let allOps = $derived(buildOps(bookmarks, currentCommitId, remotes))
-
-  // Split ops into recent (previously used) and the rest, sorted by frequency
-  let { recent: recentOps, rest: otherOps } = $derived.by(() => {
-    if (!open) return { recent: [] as BookmarkOp[], rest: [] as BookmarkOp[] }
-    let ops = allOps
-    if (filterBookmark) {
-      ops = ops.filter(op => op.bookmark === filterBookmark)
-    }
-    if (query) {
-      ops = ops.filter(op => fuzzyMatch(query, opLabel(op)))
-      // When searching, don't split — show flat results ranked by relevance
-      return { recent: [] as BookmarkOp[], rest: ops }
-    }
-    const recent: BookmarkOp[] = []
-    const rest: BookmarkOp[] = []
-    for (const op of ops) {
-      if (history.count(opKey(op)) > 0) recent.push(op)
-      else rest.push(op)
-    }
-    // Sort recent by frequency (most used first)
-    recent.sort((a, b) => history.count(opKey(b)) - history.count(opKey(a)))
-    return { recent, rest }
+  let filtered = $derived.by(() => {
+    if (!open) return []
+    let bms = bookmarks
+    if (filterBookmark) bms = bms.filter(b => b.name === filterBookmark)
+    if (query) return bms.filter(b => fuzzyMatch(query, b.name))
+    // No query: recent first. Hoist counts — history.count() parses
+    // localStorage on every call; inside the sort comparator that's 2N·logN
+    // synchronous JSON.parse calls.
+    const counts = new Map(bms.map(b => [b.name, history.count(b.name)]))
+    return [...bms].sort((a, b) => counts.get(b.name)! - counts.get(a.name)!)
   })
 
-  // Flat list for keyboard navigation (recent + rest)
-  let flatOps = $derived([...recentOps, ...otherOps])
+  let selected = $derived(filtered[index] as Bookmark | undefined)
+
+  // Per-selection action availability. Drives footer hint dimming and key
+  // handler guards. No forget entry — forget is always available for any
+  // selection (only dimmed when nothing is selected).
+  interface TrackInfo { action: 'track' | 'untrack'; remote: string }
+  let can = $derived.by(() => {
+    const bm = selected
+    if (!bm) return { move: false, del: false, track: null as TrackInfo | null }
+    return {
+      move: !!currentCommitId && bm.commit_id !== currentCommitId,
+      del: !!bm.local,
+      track: trackInfo(bm),
+    }
+  })
+
+  function trackInfo(bm: Bookmark): TrackInfo | null {
+    // Prefer an existing remote entry; toggle its tracked state.
+    // ParseBookmarkListOutput sorts the default remote first, so [0] is it.
+    // Multi-remote: [1..] unreachable here — rare, use CLI.
+    const r = bm.remotes?.[0]
+    if (r) return { action: r.tracked ? 'untrack' : 'track', remote: r.remote }
+    if (remotes[0]) return { action: 'track', remote: remotes[0] }
+    return null
+  }
 
   $effect(() => {
     if (open) {
       previousFocus = document.activeElement as HTMLElement | null
       query = ''
       index = 0
+      armed = null
       loading = true
       fetchError = null
       const gen = ++fetchGen
       api.bookmarks({ local: true }).then(async (bms) => {
         if (gen !== fetchGen) return
+        let rs: string[] = []
+        try { rs = await api.remotes() } catch { /* optional */ }
+        if (gen !== fetchGen) return // re-check: modal may have closed/reopened during remotes await
         bookmarks = bms
-        // Remotes are optional (only for track/untrack) — don't fail the modal if jj can't list them
-        try { remotes = await api.remotes() } catch { /* ignore */ }
+        remotes = rs
         loading = false
       }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
-      inputEl?.focus()
+      // {#if open} hasn't mounted yet on this tick — modalEl is undefined.
+      // tick() resolves after DOM flush. Same pattern as ContextMenu/AnnotationBubble.
+      tick().then(() => modalEl?.focus())
     }
   })
 
-  // Clamp index when filtered list shrinks
   $effect(() => {
-    if (open && index >= flatOps.length && flatOps.length > 0) {
-      index = flatOps.length - 1
+    if (open && index >= filtered.length && filtered.length > 0) {
+      index = filtered.length - 1
     }
   })
 
   function close() {
-    fetchError = null
     open = false
     onclose()
     previousFocus?.focus()
   }
 
-  function execute(op: BookmarkOp) {
-    history.record(opKey(op))
+  function fire(op: BookmarkOp) {
+    history.record(op.bookmark)
     close()
     onexecute(op)
   }
 
+  const DESTRUCTIVE = new Set<BookmarkOp['action']>(['delete', 'forget', 'untrack'])
+
+  // Returns true if the op was armed (caller should NOT fire), false if it
+  // was already armed or is non-destructive (caller fires).
+  function confirmGate(key: 'd' | 'f' | 't', action: BookmarkOp['action']): boolean {
+    if (!DESTRUCTIVE.has(action)) { armed = null; return false }
+    if (armed === key) { armed = null; return false }
+    armed = key
+    return true
+  }
+
+  function disarm() { armed = null }
+
+  function moveSelected(bm: Bookmark | undefined) {
+    disarm()
+    if (bm && can.move) fire({ action: 'move', bookmark: bm.name })
+  }
+
   function scrollActiveIntoView() {
     requestAnimationFrame(() => {
-      const el = document.querySelector('.bm-item-active')
-      el?.scrollIntoView({ block: 'nearest' })
+      modalEl?.querySelector('.bm-item-active')?.scrollIntoView({ block: 'nearest' })
     })
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    const inInput = document.activeElement === inputEl
+    const bm = selected
+
     switch (e.key) {
       case 'ArrowDown':
       case 'j':
-        if (e.key === 'j' && inInput) break
+        if (e.key === 'j' && inputFocused) return
         e.preventDefault()
-        index = Math.min(index + 1, Math.max(flatOps.length - 1, 0))
+        disarm()
+        if (inputFocused) modalEl?.focus()
+        index = Math.min(index + 1, Math.max(filtered.length - 1, 0))
         scrollActiveIntoView()
-        break
+        return
       case 'ArrowUp':
       case 'k':
-        if (e.key === 'k' && inInput) break
+        if (e.key === 'k' && inputFocused) return
         e.preventDefault()
+        disarm()
         index = Math.max(index - 1, 0)
         scrollActiveIntoView()
-        break
+        return
       case 'Enter':
         e.preventDefault()
         e.stopPropagation()
-        if (flatOps[index]) execute(flatOps[index])
-        break
+        moveSelected(bm)
+        return
       case 'Escape':
         e.preventDefault()
         e.stopPropagation()
+        if (armed) { disarm(); return }
+        if (query) { query = ''; modalEl?.focus(); return }
         close()
-        break
+        return
+      case '/':
+        if (inputFocused) return
+        e.preventDefault()
+        e.stopPropagation()
+        disarm()
+        inputEl?.focus()
+        return
+    }
+
+    // Action keys — only when not typing in the filter. preventDefault
+    // unconditionally so guarded-off keys don't bubble to App.svelte's
+    // global handler (anyModalOpen guard catches them today, but that's a
+    // load-bearing coincidence).
+    if (inputFocused || !bm) return
+    switch (e.key) {
+      case 'd':
+        e.preventDefault()
+        if (!can.del) { disarm(); return }
+        if (confirmGate('d', 'delete')) return
+        fire({ action: 'delete', bookmark: bm.name })
+        return
+      case 'f':
+        e.preventDefault()
+        if (confirmGate('f', 'forget')) return
+        fire({ action: 'forget', bookmark: bm.name })
+        return
+      case 't': {
+        e.preventDefault()
+        const t = can.track
+        if (!t) { disarm(); return }
+        if (confirmGate('t', t.action)) return // track is non-destructive → falls through
+        fire({ action: t.action, bookmark: bm.name, remote: t.remote })
+        return
+      }
+      default:
+        // Any unhandled key disarms. Prevents stale armed state when the
+        // user fat-fingers a letter between the two presses.
+        disarm()
     }
   }
 
-  const actionColors: Record<string, string> = {
-    move: 'var(--amber)',
-    delete: 'var(--red)',
-    forget: 'var(--amber)',
-    track: 'var(--green)',
-    untrack: 'var(--overlay0)',
-  }
+  let inputCollapsed = $derived(!query && !inputFocused)
 </script>
 
 {#if open}
   <div class="bm-backdrop" onclick={close} role="presentation"></div>
-  <div class="bm-modal" onkeydown={handleKeydown} role="dialog" aria-label="Bookmark operations" tabindex="-1">
-    <div class="bm-header">Bookmark Operations</div>
+  <div
+    bind:this={modalEl}
+    class="bm-modal"
+    onkeydown={handleKeydown}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Bookmarks"
+    aria-describedby="bm-footer"
+    tabindex="-1"
+  >
+    <div class="bm-header">
+      Bookmarks
+      <span class="bm-header-hint"><kbd>/</kbd> to filter</span>
+    </div>
     <input
       bind:this={inputEl}
       bind:value={query}
       class="bm-input"
+      class:bm-input-collapsed={inputCollapsed}
       type="text"
-      placeholder="Filter bookmarks..."
-      oninput={() => { index = 0 }}
+      placeholder="Filter..."
+      tabindex={inputCollapsed ? -1 : 0}
+      aria-hidden={inputCollapsed}
+      oninput={() => { index = 0; disarm() }}
+      onfocus={() => { inputFocused = true }}
+      onblur={() => { inputFocused = false }}
     />
-    <div class="bm-results">
+    <!-- tabindex=-1: programmatically focusable (satisfies aria-activedescendant
+         requirement) but not in tab order. Same pattern as RevisionGraph. -->
+    <div
+      class="bm-results"
+      role="listbox"
+      tabindex="-1"
+      aria-label="Bookmarks"
+      aria-activedescendant={selected ? `bm-opt-${index}` : undefined}
+    >
       {#if loading}
-        <div class="bm-empty">Loading bookmarks...</div>
+        <div class="bm-empty">Loading...</div>
       {:else if fetchError}
-        <div class="bm-empty" style="color: var(--red)">{fetchError}</div>
-      {:else if flatOps.length === 0}
-        <div class="bm-empty">No matching operations</div>
+        <div class="bm-empty bm-error" role="alert">{fetchError}</div>
+      {:else if filtered.length === 0}
+        <div class="bm-empty">No matching bookmarks</div>
       {:else}
-        {#if recentOps.length > 0}
-          <div class="bm-section-label">Recent</div>
-          {#each recentOps as op, i}
-            <button
-              class="bm-item"
-              class:bm-item-active={i === index}
-              onclick={() => execute(op)}
-              onmouseenter={() => { index = i }}
-            >
-              <span class="bm-action" style="color: {actionColors[op.action]}">{op.action}</span>
-              <span class="bm-label">{op.bookmark}{#if op.remote}@{op.remote}{/if}</span>
-              {#if op.action === 'move'}
-                <span class="bm-arrow">→ here</span>
-              {/if}
-            </button>
-          {/each}
-          {#if otherOps.length > 0}
-            <div class="bm-section-label">All</div>
-          {/if}
-        {/if}
-        {#each otherOps as op, i}
-          {@const flatIdx = recentOps.length + i}
-          <button
+        {#each filtered as bm, i (bm.name)}
+          {@const here = bm.commit_id === currentCommitId}
+          {@const track = trackInfo(bm)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -- Enter on the
+               modal's onkeydown fires the same action as click. -->
+          <div
+            id="bm-opt-{i}"
             class="bm-item"
-            class:bm-item-active={flatIdx === index}
-            onclick={() => execute(op)}
-            onmouseenter={() => { index = flatIdx }}
+            class:bm-item-active={i === index}
+            onmousemove={() => { if (index !== i) { index = i; disarm() } }}
+            onclick={() => moveSelected(bm)}
+            role="option"
+            tabindex="-1"
+            aria-selected={i === index}
           >
-            <span class="bm-action" style="color: {actionColors[op.action]}">{op.action}</span>
-            <span class="bm-label">{op.bookmark}{#if op.remote}@{op.remote}{/if}</span>
-            {#if op.action === 'move'}
-              <span class="bm-arrow">→ here</span>
+            <span class="bm-name">{bm.name}</span>
+            {#if here}
+              <span class="bm-here">→ here</span>
+            {:else}
+              <span class="bm-commit">{bm.commit_id.slice(0, 8)}</span>
             {/if}
-          </button>
+            {#if bm.conflict}
+              <span class="bm-badge bm-badge-conflict">conflict</span>
+            {:else if track?.action === 'untrack'}
+              <span class="bm-badge bm-badge-tracked">⊙ {track.remote}</span>
+            {:else if bm.local}
+              <span class="bm-badge">○ local</span>
+            {/if}
+          </div>
         {/each}
+      {/if}
+    </div>
+    <div id="bm-footer" class="bm-footer">
+      {#if armed === 'd'}
+        <span class="bm-confirm"><kbd>d</kbd> again to delete <b>{selected?.name}</b> · Esc to cancel</span>
+      {:else if armed === 'f'}
+        <span class="bm-confirm"><kbd>f</kbd> again to forget <b>{selected?.name}</b> · Esc to cancel</span>
+      {:else if armed === 't'}
+        <span class="bm-confirm"><kbd>t</kbd> again to untrack <b>{selected?.name}@{can.track?.remote}</b> · Esc to cancel</span>
+      {:else}
+        <span class:dim={!can.move}><kbd>⏎</kbd> move here</span>
+        <span class:dim={!can.del}><kbd>d</kbd> delete</span>
+        <span class:dim={!selected}><kbd>f</kbd> forget</span>
+        <span class:dim={!can.track}>
+          <kbd>t</kbd> {can.track?.action ?? 'track'}{#if can.track} <span class="bm-remote">({can.track.remote})</span>{/if}
+        </span>
       {/if}
     </div>
   </div>
@@ -251,8 +332,8 @@
     top: 20%;
     left: 50%;
     transform: translateX(-50%);
-    width: 480px;
-    max-height: 400px;
+    width: 520px;
+    max-height: 420px;
     background: var(--base);
     border: 1px solid var(--surface1);
     border-radius: 8px;
@@ -261,15 +342,26 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    outline: none;
   }
 
   .bm-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
     padding: 10px 16px 6px;
     font-size: 12px;
     font-weight: 700;
     color: var(--subtext0);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  .bm-header-hint {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--surface2);
   }
 
   .bm-input {
@@ -282,59 +374,110 @@
     font-family: inherit;
     font-size: 13px;
     outline: none;
+    transition: max-height 0.12s ease, padding 0.12s ease, opacity 0.12s ease;
+    max-height: 40px;
   }
 
-  .bm-input::placeholder {
-    color: var(--surface2);
+  /* Collapse the input when unused — recency sort + action keys mean most
+     interactions never touch the filter. / expands it. */
+  .bm-input-collapsed {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-width: 0;
+    opacity: 0;
   }
+
+  .bm-input::placeholder { color: var(--surface2); }
 
   .bm-results {
     overflow-y: auto;
     padding: 4px 0;
+    flex: 1;
+    min-height: 0;
   }
 
   .bm-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: 100%;
+    gap: 10px;
     padding: 6px 16px;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    font-family: inherit;
     font-size: 13px;
+    user-select: none;
     cursor: pointer;
-    text-align: left;
   }
 
-  .bm-item-active {
-    background: var(--surface0);
-  }
+  .bm-item-active { background: var(--surface0); }
 
-  .bm-action {
-    font-size: 11px;
-    font-weight: 700;
-    min-width: 52px;
-    text-transform: uppercase;
-  }
-
-  .bm-label {
+  .bm-name {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .bm-arrow {
-    color: var(--surface2);
+  .bm-commit {
+    font-family: var(--font-mono, monospace);
     font-size: 11px;
+    color: var(--overlay0);
   }
 
-  .bm-section-label {
-    padding: 6px 16px 2px;
+  .bm-here {
+    font-size: 11px;
+    color: var(--green);
+  }
+
+  .bm-badge {
     font-size: 10px;
-    font-weight: 700;
-    color: var(--surface2);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--surface0);
+    color: var(--overlay1);
+  }
+
+  .bm-badge-tracked { color: var(--blue); }
+  .bm-badge-conflict { color: var(--red); background: color-mix(in srgb, var(--red) 15%, transparent); }
+
+  .bm-footer {
+    display: flex;
+    gap: 14px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--surface0);
+    font-size: 11px;
+    color: var(--subtext0);
+    background: var(--mantle);
+  }
+
+  .bm-footer .dim { opacity: 0.3; }
+
+  .bm-confirm {
+    color: var(--red);
+    animation: bm-pulse 0.15s ease;
+  }
+
+  .bm-confirm b { font-weight: 600; }
+
+  @keyframes bm-pulse {
+    from { opacity: 0.4; }
+    to { opacity: 1; }
+  }
+
+  .bm-remote {
+    color: var(--overlay0);
+  }
+
+  kbd {
+    display: inline-block;
+    min-width: 14px;
+    padding: 1px 4px;
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    text-align: center;
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    border-radius: 3px;
+    color: var(--text);
   }
 
   .bm-empty {
@@ -343,4 +486,6 @@
     text-align: center;
     font-size: 13px;
   }
+
+  .bm-error { color: var(--red); }
 </style>
