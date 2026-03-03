@@ -94,7 +94,7 @@ Also contains data models and parsers:
 
 ### Command Runner (`internal/runner/`)
 
-Interface with three methods:
+The single seam between HTTP handlers and subprocess execution:
 
 ```go
 type CommandRunner interface {
@@ -107,7 +107,7 @@ type CommandRunner interface {
 
 Two implementations:
 - **LocalRunner** — executes `jj <args>` as a local subprocess with `Dir` set to the repo path. `RunRaw` execs `argv[0]` directly in the same dir.
-- **SSHRunner** — wraps jj commands as `ssh <host> "jj -R <path> <args>"`, delegates to LocalRunner with `Binary: "ssh"`. `RunRaw` wraps as `ssh <host> "cd <path> && <argv>"` — `gh` has no `-R` equivalent, it infers the repo from cwd.
+- **SSHRunner** — wraps jj commands as `ssh <host> "jj -R <path> <args>"`, delegates to LocalRunner with `Binary: "ssh"`. `RunRaw` wraps as `ssh <host> "cd -- <path> && <argv>"` — `gh` has no `-R` equivalent, it infers the repo from cwd.
 
 `RunRaw` exists so sidecar tooling runs **where the repo lives**. `gh pr list` on your laptop against an SSH-remote repo would look for a `.git` in the wrong place; routing it through the runner sends the command to the remote host with its `gh auth` state.
 

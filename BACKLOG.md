@@ -264,15 +264,11 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 
 ## State Synchronization
 
-**Implemented: Op-ID header (option 1).** Every API response includes `X-JJ-Op-Id`. The frontend (`api.ts`) tracks this value; when it changes, the cache is cleared and stale callbacks fire to refresh the log. Mutation endpoints refresh the cached op-id asynchronously via `runMutation()`.
+**Implemented: Op-ID header + fsnotify SSE.** Every API response includes `X-JJ-Op-Id`; `api.ts` tracks it and fires `onStale()` callbacks on change. Local mode: `fsnotify` on `.jj/repo/op_heads/heads/` pushes events via SSE (`GET /api/events`) — instant refresh on any mutation including CLI use in another terminal. Periodic `jj debug snapshot` (5s, only when SSE subscribers exist) catches raw file edits. SSH mode: SSE returns 204, falls back to op-id header only — see [SSH inotify pipe](#p3--advanced) for the remote-watcher plan.
 
-**Future improvements:**
+**Remaining:**
 
-1. **Polling endpoint** (simple): `GET /api/op-id` returns current operation ID. Frontend polls every N seconds. Refresh if changed. Adds network traffic but works without SSE/WebSocket.
-
-2. **File watch + SSE** (best UX): Backend watches `.jj/repo/op_heads/` directory using fsnotify. On change, push event via Server-Sent Events to connected frontends. Instant refresh on any repo mutation — including CLI usage in another terminal. This is the ideal end state.
-
-3. **Snapshot on focus**: When the browser tab gains focus (`visibilitychange` event), call `jj debug snapshot` to capture working copy changes, then check op-id and refresh if needed.
+- **Snapshot on `visibilitychange`** — fire `jj debug snapshot` immediately when the tab gains focus instead of waiting up to 5s for the periodic loop. Tiny (~10 lines), worth doing.
 
 ## Graph View Notes
 
