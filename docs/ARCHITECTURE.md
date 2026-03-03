@@ -98,15 +98,18 @@ Interface with three methods:
 
 ```go
 type CommandRunner interface {
-    Run(ctx, args)            → ([]byte, error)       // synchronous
-    RunWithInput(ctx, args, stdin) → ([]byte, error)   // with stdin
-    Stream(ctx, args)         → (io.ReadCloser, error) // streaming
+    Run(ctx, args)            → ([]byte, error)       // jj subcommand
+    RunWithInput(ctx, args, stdin) → ([]byte, error)   // jj subcommand + stdin
+    Stream(ctx, args)         → (io.ReadCloser, error) // jj subcommand, streaming
+    RunRaw(ctx, argv)         → ([]byte, error)       // non-jj binary (gh)
 }
 ```
 
 Two implementations:
-- **LocalRunner** — executes `jj <args>` as a local subprocess with `Dir` set to the repo path
-- **SSHRunner** — wraps jj commands as `ssh <host> "jj -R <path> <args>"`, delegates to LocalRunner with `Binary: "ssh"`
+- **LocalRunner** — executes `jj <args>` as a local subprocess with `Dir` set to the repo path. `RunRaw` execs `argv[0]` directly in the same dir.
+- **SSHRunner** — wraps jj commands as `ssh <host> "jj -R <path> <args>"`, delegates to LocalRunner with `Binary: "ssh"`. `RunRaw` wraps as `ssh <host> "cd <path> && <argv>"` — `gh` has no `-R` equivalent, it infers the repo from cwd.
+
+`RunRaw` exists so sidecar tooling runs **where the repo lives**. `gh pr list` on your laptop against an SSH-remote repo would look for a `.git` in the wrong place; routing it through the runner sends the command to the remote host with its `gh auth` state.
 
 ### API Layer (`internal/api/`)
 

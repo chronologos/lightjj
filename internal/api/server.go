@@ -28,10 +28,6 @@ type Server struct {
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
-	// ExecGhPRList runs `gh pr list` and returns the raw JSON output.
-	// Injected at construction; tests can override with a stub.
-	ExecGhPRList func(ctx context.Context, repoDir string) ([]byte, error)
-
 	spawnedWorkspaces map[string]string // workspace name → URL of spawned instance
 	children          []*exec.Cmd       // spawned workspace instances
 	childrenMu        sync.Mutex
@@ -47,7 +43,6 @@ func NewServer(r runner.CommandRunner, repoDir string) *Server {
 		Mux:           http.NewServeMux(),
 		RepoDir:       repoDir,
 		DefaultRemote: "origin",
-		ExecGhPRList:  defaultExecGhPRList,
 	}
 	s.routes()
 	return s

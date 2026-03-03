@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -96,6 +97,35 @@ func TestLocalRunner_RunWithInput_SharesErrorHandling(t *testing.T) {
 	_, err := r.RunWithInput(context.Background(), []string{"-c", "echo err >&2; exit 1"}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exit code 1: err")
+}
+
+func TestLocalRunner_RunRaw(t *testing.T) {
+	// RunRaw execs argv[0] directly (not "jj"), with the same error
+	// formatting as Run. Use a shRunner whose Binary is "sh" — RunRaw
+	// must ignore that and use argv[0] instead.
+	r := shRunner()
+	out, err := r.RunRaw(context.Background(), []string{"printf", "raw"})
+	require.NoError(t, err)
+	assert.Equal(t, "raw", string(out))
+}
+
+func TestLocalRunner_RunRaw_PreservesErrorFormatting(t *testing.T) {
+	r := shRunner()
+	_, err := r.RunRaw(context.Background(), []string{"sh", "-c", "echo nope >&2; exit 4"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit code 4: nope")
+}
+
+func TestLocalRunner_RunRaw_HonorsRepoDir(t *testing.T) {
+	// gh infers owner/repo from cwd. If RunRaw doesn't propagate RepoDir
+	// to cmd.Dir, gh runs wherever lightjj was started and returns PRs
+	// for the wrong repo (or none).
+	dir := t.TempDir()
+	want, _ := filepath.EvalSymlinks(dir) // darwin: /var → /private/var
+	r := &LocalRunner{Binary: "jj", RepoDir: dir}
+	out, err := r.RunRaw(context.Background(), []string{"pwd", "-P"})
+	require.NoError(t, err)
+	assert.Equal(t, want, string(out))
 }
 
 func TestLocalRunner_Run_TrimsTrailingNewlines(t *testing.T) {

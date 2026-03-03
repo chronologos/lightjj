@@ -17,6 +17,23 @@ func TestSSHRunner_wrapArgs(t *testing.T) {
 	assert.Contains(t, got[1], "'@'")
 }
 
+func TestSSHRunner_wrapRaw(t *testing.T) {
+	r := NewSSHRunner("user@host", "/home/user/repo")
+	got := r.wrapRaw([]string{"gh", "pr", "list", "--author", "@me"})
+
+	assert.Equal(t, "user@host", got[0])
+	// cd into the repo so gh can infer owner/repo from the git remote.
+	// -- terminates option parsing in case RepoPath starts with a dash.
+	assert.Equal(t, "cd -- '/home/user/repo' && 'gh' 'pr' 'list' '--author' '@me'", got[1])
+}
+
+func TestSSHRunner_wrapRaw_QuotesRepoPath(t *testing.T) {
+	r := NewSSHRunner("user@host", "/home/user/it's mine")
+	got := r.wrapRaw([]string{"gh", "pr", "list"})
+
+	assert.Contains(t, got[1], `cd -- '/home/user/it'"'"'s mine' &&`)
+}
+
 func TestShellQuote(t *testing.T) {
 	assert.Equal(t, "''", shellQuote(""))
 	assert.Equal(t, "'simple'", shellQuote("simple"))

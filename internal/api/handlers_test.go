@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1651,12 +1650,9 @@ func TestHandlePullRequests(t *testing.T) {
 	ghJSON := `[{"headRefName":"alice/feature-x","url":"https://github.com/org/repo/pull/123","number":123,"isDraft":false},{"headRefName":"alice/wip","url":"https://github.com/org/repo/pull/42","number":42,"isDraft":true}]`
 
 	runner := testutil.NewMockRunner(t)
+	runner.Expect(ghPRListArgv).SetOutput([]byte(ghJSON))
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.RepoDir = "/tmp/test-repo"
-	srv.ExecGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
-		return []byte(ghJSON), nil
-	}
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -1674,29 +1670,12 @@ func TestHandlePullRequests(t *testing.T) {
 	assert.True(t, prs[1].IsDraft)
 }
 
-func TestHandlePullRequests_SSHMode(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	defer runner.Verify()
-	srv := newTestServer(runner) // RepoDir is "" (SSH mode)
-
-	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var prs []PullRequest
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
-	assert.Empty(t, prs)
-}
-
 func TestHandlePullRequests_GhError(t *testing.T) {
+	// gh not installed / not authed / wrong repo → empty list, no 500.
 	runner := testutil.NewMockRunner(t)
+	runner.Expect(ghPRListArgv).SetError(fmt.Errorf("gh: not authenticated"))
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.RepoDir = "/tmp/test-repo"
-	srv.ExecGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
-		return nil, fmt.Errorf("gh: not authenticated")
-	}
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -1710,12 +1689,9 @@ func TestHandlePullRequests_GhError(t *testing.T) {
 
 func TestHandlePullRequests_InvalidJSON(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
+	runner.Expect(ghPRListArgv).SetOutput([]byte("not json"))
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.RepoDir = "/tmp/test-repo"
-	srv.ExecGhPRList = func(ctx context.Context, repoDir string) ([]byte, error) {
-		return []byte("not json"), nil
-	}
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()

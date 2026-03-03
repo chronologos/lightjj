@@ -19,4 +19,10 @@ type CommandRunner interface {
 
 	// Stream executes a jj command and returns a streaming reader for its stdout.
 	Stream(ctx context.Context, args []string) (io.ReadCloser, error)
+
+	// RunRaw executes an arbitrary command (argv[0] is the binary) in the
+	// repo's working directory. Unlike Run, this does NOT prepend "jj".
+	// Used for sidecar tooling (gh) that must run where the repo lives —
+	// in SSH mode that means on the remote host.
+	RunRaw(ctx context.Context, argv []string) ([]byte, error)
 }

@@ -24,11 +24,7 @@ func NewSSHRunner(host string, repoPath string) *SSHRunner {
 }
 
 func (r *SSHRunner) wrapArgs(jjArgs []string) []string {
-	quoted := make([]string, len(jjArgs))
-	for i, arg := range jjArgs {
-		quoted[i] = shellQuote(arg)
-	}
-	remoteCmd := fmt.Sprintf("jj -R %s %s", shellQuote(r.RepoPath), strings.Join(quoted, " "))
+	remoteCmd := fmt.Sprintf("jj -R %s %s", shellQuote(r.RepoPath), quoteAll(jjArgs))
 	return []string{r.Host, remoteCmd}
 }
 
@@ -44,9 +40,29 @@ func (r *SSHRunner) Stream(ctx context.Context, args []string) (io.ReadCloser, e
 	return r.local.Stream(ctx, r.wrapArgs(args))
 }
 
+// wrapRaw builds an ssh invocation that runs argv in the remote repo
+// directory. gh has no -R equivalent; it infers the repo from cwd, so we
+// cd into RepoPath first.
+func (r *SSHRunner) wrapRaw(argv []string) []string {
+	remoteCmd := fmt.Sprintf("cd -- %s && %s", shellQuote(r.RepoPath), quoteAll(argv))
+	return []string{r.Host, remoteCmd}
+}
+
+func (r *SSHRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
+	return r.local.Run(ctx, r.wrapRaw(argv))
+}
+
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func quoteAll(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = shellQuote(a)
+	}
+	return strings.Join(quoted, " ")
 }

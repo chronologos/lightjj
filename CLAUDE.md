@@ -98,7 +98,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 ### Go backend
 
 - **Command builders are pure functions.** `internal/jj/commands.go` takes parameters, returns `[]string`. No execution, no config reads, no globals. If you need a new jj command, add a function here.
-- **Never call `exec.Command` outside of `internal/runner/`.** All jj execution goes through the `CommandRunner` interface.
+- **Never call `exec.Command` outside of `internal/runner/`.** All jj execution goes through the `CommandRunner` interface. Non-jj sidecar tools (`gh`) go through `Runner.RunRaw(argv)` — this is what makes them work in SSH mode (they run on the remote host, not locally).
 - **Test with MockRunner.** Use `testutil.NewMockRunner(t)` with `.Expect(args).SetOutput(output)` and `defer runner.Verify()`. See existing tests for the pattern. Also supports `SetExpectedStdin()`, `SetError()`, and `Allow()` for flexible matching.
 - **API handlers are thin.** Parse request → call command builder → call runner → return JSON. No business logic in handlers.
 - **Mutation handlers use `runMutation()`.** Centralizes run + async op-id refresh. Exception: `handleDescribe` uses `RunWithInput` directly.

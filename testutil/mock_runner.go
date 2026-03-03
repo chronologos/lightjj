@@ -148,3 +148,11 @@ func (m *MockRunner) Stream(_ context.Context, args []string) (io.ReadCloser, er
 	e := m.findExpectation(args)
 	return io.NopCloser(bytes.NewReader(e.output)), e.err
 }
+
+// RunRaw routes through the same expectation table as Run — the mock doesn't
+// distinguish "jj subcommand" from "raw binary". Tests simply Expect the full
+// argv (e.g. {"gh", "pr", "list", ...}).
+func (m *MockRunner) RunRaw(_ context.Context, argv []string) ([]byte, error) {
+	e := m.findExpectation(argv)
+	return e.output, e.err
+}

@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -877,27 +876,24 @@ type PullRequest struct {
 	IsDraft  bool   `json:"is_draft"`
 }
 
-// defaultExecGhPRList is the production implementation of ExecGhPRList.
-func defaultExecGhPRList(ctx context.Context, repoDir string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
-		"--state", "open",
-		"--author", "@me",
-		"--json", "headRefName,url,number,isDraft",
-		"--limit", "100")
-	cmd.Dir = repoDir
-	return cmd.Output()
+// ghPRListArgv is the gh invocation for listing the current user's open PRs.
+// Passed to Runner.RunRaw so it executes where the repo lives (local or SSH).
+// STATIC — never append request-derived input; this flows to a remote shell
+// via SSHRunner.wrapRaw.
+var ghPRListArgv = []string{
+	"gh", "pr", "list",
+	"--state", "open",
+	"--author", "@me",
+	"--json", "headRefName,url,number,isDraft",
+	"--limit", "100",
 }
 
 func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 	empty := []PullRequest{}
 
-	if s.RepoDir == "" {
-		s.writeJSON(w, r, http.StatusOK, empty)
-		return
-	}
-
-	out, err := s.ExecGhPRList(r.Context(), s.RepoDir)
+	out, err := s.Runner.RunRaw(r.Context(), ghPRListArgv)
 	if err != nil {
+		log.Printf("pull-requests: gh failed (badges disabled): %v", err)
 		s.writeJSON(w, r, http.StatusOK, empty)
 		return
 	}
@@ -909,6 +905,7 @@ func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 		IsDraft     bool   `json:"isDraft"`
 	}
 	if err := json.Unmarshal(out, &ghPRs); err != nil {
+		log.Printf("pull-requests: gh output not JSON (badges disabled): %v", err)
 		s.writeJSON(w, r, http.StatusOK, empty)
 		return
 	}

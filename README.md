@@ -66,10 +66,13 @@ ssh -L 3001:localhost:3001 user@host \
 
 `--remote user@host:/path` also works but adds ~400ms per command. Enable SSH ControlMaster to reduce this to ~20ms.
 
+In `--remote` mode, `gh pr list` is also run over SSH — install and `gh auth login` on the remote host if you want PR badges on bookmarks.
+
 ## Requirements
 
 - **jj >= 0.38**
 - **Go >= 1.21** (build from source)
+- **gh** (optional) — for PR badges. Must be installed and authed wherever the repo lives (remote host when using `--remote`)
 
 ## Development
 

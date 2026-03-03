@@ -81,6 +81,13 @@ func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]b
 	return output, nil
 }
 
+func (r *LocalRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
+	// Fresh struct rather than mutating r.Binary — Server.Runner is shared
+	// across HTTP handler goroutines. Reuses run()'s exit-code/stderr handling.
+	sub := &LocalRunner{Binary: argv[0], RepoDir: r.RepoDir}
+	return sub.run(ctx, argv[1:], "")
+}
+
 func (r *LocalRunner) Stream(ctx context.Context, args []string) (io.ReadCloser, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
