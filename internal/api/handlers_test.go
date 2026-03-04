@@ -193,6 +193,45 @@ func TestHandleAbandon(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleRestore(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Restore("abc", []string{"main.go"})).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(restoreRequest{Revision: "abc", Files: []string{"main.go"}})
+	req := jsonPost("/api/restore", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRestore_NoRevision(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(restoreRequest{Files: []string{"main.go"}})
+	req := jsonPost("/api/restore", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleRestore_NoFiles(t *testing.T) {
+	// Empty files would run `jj restore -c X` → empties whole revision.
+	// Handler must reject. [""] rejected too — `file:""` is a fileset
+	// expression, not "no file".
+	for _, files := range [][]string{nil, {""}, {"a.go", ""}} {
+		srv := newTestServer(testutil.NewMockRunner(t))
+		body, _ := json.Marshal(restoreRequest{Revision: "abc", Files: files})
+		req := jsonPost("/api/restore", body)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code, "files=%v", files)
+	}
+}
+
 func TestHandleDescribe(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	args, _ := jj.SetDescription("abc", "new description")

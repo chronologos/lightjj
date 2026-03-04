@@ -254,6 +254,38 @@
     return annotations.list.some(a => a.status !== 'resolved')
   }
 
+  // Capability gate for per-file mutations (Edit, Discard). Derived to
+  // `undefined` when the button shouldn't render — DiffFileView's
+  // `{#if ondiscard}` then hides it. Gates: single-rev only (multi-check
+  // diff = which commit would we restore into?), mutable only (jj rejects
+  // restore on immutable; hide, don't invite the error).
+  let canMutateFiles = $derived(diffTarget?.kind === 'single' && !diffTarget.immutable)
+
+  async function discardFile(path: string) {
+    // editBusy guard: startEdit releases the mutation lock after api.edit,
+    // then awaits fileShow (holding only editBusy). Without this guard a
+    // Discard click during that window races: restore succeeds, then the
+    // resumed startEdit populates editFileContents with pre-discard content.
+    if (diffTarget?.kind !== 'single' || editBusy.has(path)) return
+    const revId = diffTarget.changeId
+    editBusy.add(path)
+    editError = ''
+    try {
+      const result = onjjmutation
+        ? await onjjmutation(() => api.restore(revId, [path]))
+        : await api.restore(revId, [path])
+      if (result === undefined && onjjmutation) {
+        editError = 'Operation in progress — try again'
+      }
+      // No manual refresh: runMutation → op-id change → SSE → log refresh →
+      // new commit_id → diff/files re-fetched. Same flow as abandon/squash.
+    } catch (e) {
+      editError = `Discard failed: ${e instanceof Error ? e.message : String(e)}`
+    } finally {
+      editBusy.delete(path)
+    }
+  }
+
   async function startEdit(path: string) {
     if (diffTarget?.kind !== 'single' || editBusy.has(path)) return
     // Editor lives in the right split column — switch if coming from unified.
@@ -1074,7 +1106,8 @@
             editing={editingFiles.has(filePath)}
             editContent={editFileContents.get(filePath)}
             editBusy={editBusy.has(filePath)}
-            onedit={startEdit}
+            onedit={canMutateFiles ? startEdit : undefined}
+            ondiscard={canMutateFiles ? discardFile : undefined}
             onsavefile={saveFile}
             oncanceledit={cancelEdit}
             onlinecontext={openDiffLineContextMenu}

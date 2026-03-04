@@ -484,6 +484,32 @@ func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.Abandon(revs, req.IgnoreImmutable))
 }
 
+type restoreRequest struct {
+	Revision string   `json:"revision"`
+	Files    []string `json:"files"`
+}
+
+func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
+	var req restoreRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	// `jj restore -c X` with no files empties the whole revision. That's
+	// abandon's job — enforce at least one non-empty file so a frontend bug
+	// can't silently nuke a commit's content. [""] is rejected too:
+	// `file:""` is a fileset expression, not "no file".
+	if len(req.Files) == 0 || slices.Contains(req.Files, "") {
+		s.writeError(w, http.StatusBadRequest, "files is required")
+		return
+	}
+	s.runMutation(w, r, jj.Restore(req.Revision, req.Files))
+}
+
 type describeRequest struct {
 	Revision    string `json:"revision"`
 	Description string `json:"description"`

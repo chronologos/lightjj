@@ -24,6 +24,7 @@
     editContent?: string
     editBusy?: boolean
     onedit?: (path: string) => void
+    ondiscard?: (path: string) => void
     onsavefile?: (path: string, content: string) => void
     oncanceledit?: (path: string) => void
     onlinecontext?: (e: MouseEvent, info: DiffLineInfo) => void
@@ -43,7 +44,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onsavefile, oncanceledit, onlinecontext, annotationsForLine, onannotationclick }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, annotationsForLine, onannotationclick }: Props = $props()
 
   let editorRef: FileEditor | undefined = $state(undefined)
 
@@ -410,6 +411,13 @@
     {/if}
     {#if onedit && !editing && fileStats?.type !== 'D'}
       <button class="edit-file-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(filePath) }} title="Edit this file (switches to split view)">{editBusy ? 'Loading…' : 'Edit'}</button>
+    {/if}
+    {#if ondiscard && !editing && fileStats?.type !== 'R'}
+      <!-- A→delete-file, D→undelete, M→revert — all valid restore targets.
+           R (rename) gated out: `jj restore -c X file:"<dest>"` only matches
+           the new path; source path isn't restored → rename becomes a delete.
+           Proper fix needs source-path plumbing through diff-parser. -->
+      <button class="edit-file-btn discard-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); ondiscard(filePath) }} title="Discard changes to this file from this revision (jj restore)">Discard</button>
     {/if}
     {#if editing && onsavefile && oncanceledit}
       <button class="edit-file-btn edit-save-btn" disabled={editBusy || !editorRef} onclick={(e: MouseEvent) => { e.stopPropagation(); if (editorRef) onsavefile(filePath, editorRef.getContent()) }} title="Save changes (Ctrl+S)">{editBusy ? 'Saving…' : 'Save'}</button>
@@ -1171,6 +1179,10 @@
     background: var(--amber);
     border-color: var(--amber);
     color: var(--base);
+  }
+  .discard-btn:hover {
+    border-color: var(--red);
+    color: var(--red);
   }
   .edit-save-btn:hover {
     opacity: 0.85;

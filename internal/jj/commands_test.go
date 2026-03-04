@@ -426,13 +426,13 @@ func TestDiffEdit(t *testing.T) {
 }
 
 func TestRestore(t *testing.T) {
-	got := Restore("abc", []string{"main.go"}, false)
+	got := Restore("abc", []string{"main.go"})
 	assert.Equal(t, []string{"restore", "-c", "abc", `file:"main.go"`}, got)
 }
 
-func TestRestore_Interactive(t *testing.T) {
-	got := Restore("abc", nil, true)
-	assert.Contains(t, got, "--interactive")
+func TestRestore_MultipleFiles(t *testing.T) {
+	got := Restore("abc", []string{"a.go", "b/c.go"})
+	assert.Equal(t, []string{"restore", "-c", "abc", `file:"a.go"`, `file:"b/c.go"`}, got)
 }
 
 func TestSnapshot(t *testing.T) {

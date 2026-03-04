@@ -138,11 +138,13 @@ func Diff(revision string, fileName string, color string, extraArgs ...string) C
 	return args
 }
 
-func Restore(revision string, files []string, interactive bool) CommandArgs {
+// Restore resets the named files in `revision` to their content at `revision`'s
+// parent(s) — undoes this revision's changes to those files. Uses `-c` (changes-in)
+// which is `--from rev- --into rev` for single-parent revisions, or restore-to-merge
+// for merge commits. Callers must pass at least one file; `jj restore -c X` with
+// no files empties the whole revision, which is abandon's job.
+func Restore(revision string, files []string) CommandArgs {
 	args := []string{"restore", "-c", revision}
-	if interactive {
-		args = append(args, "--interactive")
-	}
 	args = append(args, escapeFiles(files)...)
 	return args
 }

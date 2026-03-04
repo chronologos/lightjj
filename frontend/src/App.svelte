@@ -399,19 +399,34 @@
     } catch { /* static <title> fallback is fine */ }
   }
 
-  function formatTitle(host: string, path: string): string {
-    // Hostname: first3…last3 if it shortens; strip common .local suffix first
-    const h = host.replace(/\.local$/, '')
-    const shortHost = h.length > 7 ? `${h.slice(0, 3)}…${h.slice(-3)}` : h
+  // Visually distinct, platform-stable glyphs. No flags/people/hands (vary
+  // wildly across OS/font), no skin-tone modifiers. Contiguous string iterates
+  // by codepoint via spread — simpler than an array literal.
+  const HOST_EMOJI = [...'🦊🐸🐙🦉🐢🦀🐝🦋🐌🦔🌵🍄🌻🍋🍉🍇🥝🥥🔥💧⚡🌈🪐⭐🎲🧩🔑🧲']
 
-    // Path: single-letter per component except the last. Handles both / and \.
-    // /Users/iant/3pcode/lightjj → /U/i/3/lightjj
+  function hostEmoji(host: string): string {
+    // djb2 — we just need a stable spread, not crypto.
+    let h = 5381
+    for (let i = 0; i < host.length; i++) h = ((h << 5) + h + host.charCodeAt(i)) | 0
+    return HOST_EMOJI[Math.abs(h) % HOST_EMOJI.length]
+  }
+
+  function formatTitle(host: string, path: string): string {
+    const MAX = 10
+
+    // Path: single-letter per component except last, then drop leading letters
+    // until ≤MAX. /Users/iant/3pcode/lightjj → /U/i/3/lightjj → …/lightjj
     const parts = path.split(/[/\\]/)
     const last = parts.pop() || path
-    const shortPath = parts.map(p => p.slice(0, 1)).join('/') + '/' + last
+    const letters = parts.map(p => p.slice(0, 1))
+    let shortPath = letters.join('/') + '/' + last
+    while (shortPath.length > MAX && letters.length) {
+      letters.shift()
+      shortPath = '…' + letters.join('/') + '/' + last
+    }
 
-    if (!shortHost) return `${last} — lightjj`
-    return `${shortHost}:${shortPath} — lightjj`
+    if (!host) return `${last} — lightjj`
+    return `${hostEmoji(host)} ${shortPath} — lightjj`
   }
 
   async function loadWorkspaces() {
@@ -625,7 +640,7 @@
   }
 
   function singleTarget(c: LogEntry['commit']): DiffTarget {
-    return { kind: 'single', commitId: c.commit_id, changeId: effectiveId(c), isWorkingCopy: c.is_working_copy }
+    return { kind: 'single', commitId: c.commit_id, changeId: effectiveId(c), isWorkingCopy: c.is_working_copy, immutable: c.immutable }
   }
 
   // INTENT — what the diff panel should be showing, derived from cursor + checks.
