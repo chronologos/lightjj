@@ -2,8 +2,10 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -217,6 +219,81 @@ func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []stri
 	}
 	s.refreshOpId()
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+}
+
+// streamMutation is runMutation for slow network ops (git push/fetch). Streams
+// combined stdout+stderr line-by-line as NDJSON: `{"line":"..."}` per progress
+// line, terminated by `{"done":true,"output"|"error":...,"op_id":...}`.
+//
+// jj git push writes everything to stderr (stdout is 0 bytes) — that's why
+// StreamCombined not Stream. The exit code surfaces via rc.Close() = cmd.Wait(),
+// but by then the stream already carried jj's error text as lines, so closeErr
+// is effectively a boolean; the accumulated output becomes the error message.
+//
+// Status 200 is committed before the process runs; errors surface in-band only.
+// op_id rides the terminal frame (header slot already flushed) so the frontend
+// can dedup against SSE — without this, SSE arrives with the new op-id and
+// fires a redundant loadLog() (the race runMutation's doc warns about).
+func (s *Server) streamMutation(w http.ResponseWriter, r *http.Request, args []string) {
+	rc, err := s.Runner.StreamCombined(r.Context(), args)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rc.Close() // idempotent; panic safety net — reaps subprocess
+
+	// Disable WriteTimeout — push over slow network can exceed 120s.
+	// Returns ErrNotSupported on httptest.ResponseRecorder; ignored.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+
+	flusher, _ := w.(http.Flusher)
+	flush := func() {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	var output strings.Builder
+	enc := json.NewEncoder(w)
+	sc := bufio.NewScanner(rc)
+	// Remote git hooks can dump arbitrary stderr; default 64KB token limit
+	// would silently truncate mid-push (ErrTooLong looks like EOF here).
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		output.WriteString(line)
+		output.WriteByte('\n')
+		if line == "" {
+			continue // don't ship empty frames; frontend would just filter them
+		}
+		_ = enc.Encode(map[string]string{"line": line})
+		flush()
+	}
+	scanErr := sc.Err()
+
+	closeErr := rc.Close()
+	if r.Context().Err() != nil {
+		return // client gone — skip refreshOpId (~440ms in SSH mode) + dead write
+	}
+	opId := s.refreshOpId()
+
+	done := map[string]any{"done": true, "op_id": opId}
+	out := strings.TrimRight(output.String(), "\n")
+	if err := errors.Join(closeErr, scanErr); err != nil {
+		msg := out
+		if msg == "" {
+			msg = err.Error()
+		}
+		done["error"] = msg
+	} else {
+		done["output"] = out
+	}
+	_ = enc.Encode(done)
+	flush()
 }
 
 // getOpId returns the cached op-id (may be empty on first call).

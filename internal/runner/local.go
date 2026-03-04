@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // LocalRunner executes jj commands as local subprocesses.
@@ -89,11 +90,25 @@ func (r *LocalRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error)
 }
 
 func (r *LocalRunner) Stream(ctx context.Context, args []string) (io.ReadCloser, error) {
+	return r.stream(ctx, args, false)
+}
+
+func (r *LocalRunner) StreamCombined(ctx context.Context, args []string) (io.ReadCloser, error) {
+	return r.stream(ctx, args, true)
+}
+
+func (r *LocalRunner) stream(ctx context.Context, args []string, mergeStderr bool) (io.ReadCloser, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
+	}
+	if mergeStderr {
+		// StdoutPipe() set cmd.Stdout to the pipe's write end — reuse it
+		// for stderr so both fds write to the same pipe. OS-level dup;
+		// both close on process exit.
+		cmd.Stderr = cmd.Stdout
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -103,10 +118,17 @@ func (r *LocalRunner) Stream(ctx context.Context, args []string) (io.ReadCloser,
 
 type streamCloser struct {
 	io.ReadCloser
-	cmd *exec.Cmd
+	cmd  *exec.Cmd
+	once sync.Once
+	err  error
 }
 
+// Close is idempotent so callers can `defer rc.Close()` as a panic safety net
+// AND explicitly close to capture the exit error. Second call returns cached err.
 func (s *streamCloser) Close() error {
-	_ = s.ReadCloser.Close()
-	return s.cmd.Wait()
+	s.once.Do(func() {
+		_ = s.ReadCloser.Close()
+		s.err = s.cmd.Wait()
+	})
+	return s.err
 }

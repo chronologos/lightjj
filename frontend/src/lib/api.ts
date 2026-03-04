@@ -156,7 +156,7 @@ export function wireAutoRefresh(): () => void {
   })
 
   // In-flight flag: rapid alt-tabbing shouldn't stack requests. In SSH mode
-  // each snapshot is two round trips (debug snapshot + op log ≈ 880ms) — N
+  // each snapshot is two round trips (util snapshot + op log ≈ 880ms) — N
   // concurrent calls is N× SSH traffic, most of it redundant.
   let snapshotInFlight = false
   const onVisible = () => {
@@ -218,6 +218,62 @@ function post<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+}
+
+/** Consumes an NDJSON stream from streamMutation: `{"line":...}` progress
+ *  lines until `{"done":true, output|error}`. onLine fires per progress line
+ *  as it arrives (live status-bar update). Resolves/rejects on the terminal
+ *  message — same `{output}` shape as runMutation so callers stay unchanged. */
+async function streamPost(
+  url: string,
+  body: unknown,
+  onLine: (line: string) => void,
+): Promise<{ output: string }> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    // Pre-stream rejection (400 validation) — still JSON, not NDJSON.
+    const data = await res.json().catch(() => null) as { error?: string } | null
+    throw new Error(data?.error || `HTTP ${res.status}`)
+  }
+  if (!res.body) throw new Error('no response body')
+
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buf = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += value
+      let nl: number
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const raw = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        if (!raw) continue
+        const msg = JSON.parse(raw)
+        if (msg.done) {
+          // In-band op-id (header slot was already flushed) — restores SSE
+          // dedup parity with runMutation so the watcher's broadcast doesn't
+          // fire a redundant loadLog().
+          if (msg.op_id) notifyOpId(msg.op_id)
+          if (msg.error) throw new Error(msg.error)
+          return { output: msg.output ?? '' }
+        }
+        if (msg.line !== undefined) onLine(msg.line)
+      }
+    }
+  } finally {
+    // cancel() propagates through TextDecoderStream to abort the fetch body
+    // source → server's r.Context() cancels → jj subprocess killed. On the
+    // happy path (return/throw after msg.done) the stream is drained and
+    // cancel is a no-op. releaseLock() alone would leak: WriteTimeout is
+    // disabled server-side, so a throw mid-stream would strand the handler.
+    reader.cancel().catch(() => {})
+  }
+  throw new Error('stream ended without completion marker')
 }
 
 async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
@@ -628,11 +684,11 @@ export const api = {
   bookmarkUntrack: (name: string, remote: string) =>
     post<{ output: string }>('/api/bookmark/untrack', { name, remote }),
 
-  gitPush: (flags?: string[]) =>
-    post<{ output: string }>('/api/git/push', { flags }),
+  gitPush: (flags: string[] | undefined, onLine: (line: string) => void) =>
+    streamPost('/api/git/push', { flags }, onLine),
 
-  gitFetch: (flags?: string[]) =>
-    post<{ output: string }>('/api/git/fetch', { flags }),
+  gitFetch: (flags: string[] | undefined, onLine: (line: string) => void) =>
+    streamPost('/api/git/fetch', { flags }, onLine),
 
   resolve: (revision: string, file: string, tool: ':ours' | ':theirs') =>
     post<{ output: string }>('/api/resolve', { revision, file, tool }),
