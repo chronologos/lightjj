@@ -27,18 +27,20 @@ func TestMockRunner_ExpectError(t *testing.T) {
 	assert.EqualError(t, err, "immutable")
 }
 
-func TestMockRunner_Stream(t *testing.T) {
+func TestMockRunner_StreamCombined(t *testing.T) {
 	runner := NewMockRunner(t)
-	runner.Expect([]string{"log"}).SetOutput([]byte("line1\nline2\n"))
+	runner.Expect([]string{"git", "push"}).
+		SetOutput([]byte("progress\n")).
+		SetError(errors.New("exit status 1"))
 	defer runner.Verify()
 
-	reader, err := runner.Stream(context.Background(), []string{"log"})
-	assert.NoError(t, err)
+	reader, err := runner.StreamCombined(context.Background(), []string{"git", "push"})
+	assert.NoError(t, err) // error surfaces on Close, not open — models cmd.Wait()
 
 	buf := make([]byte, 1024)
 	n, _ := reader.Read(buf)
-	assert.Equal(t, "line1\nline2\n", string(buf[:n]))
-	reader.Close()
+	assert.Equal(t, "progress\n", string(buf[:n]))
+	assert.EqualError(t, reader.Close(), "exit status 1")
 }
 
 func TestMockRunner_RunWithInput(t *testing.T) {

@@ -225,9 +225,13 @@
   // Scoped so it only re-scans when revisions changes, not on every loading/mutating flip.
   let workingCopyEntry = $derived(revisions.find(r => r.commit.is_working_copy))
 
+  // Live progress line from streamMutation (git push/fetch). Takes precedence
+  // over the generic "Working..." while a stream is feeding it.
+  let mutationProgress: string = $state('')
+
   let statusText = $derived.by(() => {
     if (inlineMode) return ''
-    if (mutating) return 'Working...'
+    if (mutating) return mutationProgress || 'Working...'
     if (loading) return revisions.length > 0 ? 'Refreshing...' : 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
     if (lastAction) return lastAction
@@ -761,12 +765,21 @@
     })
   }
 
-  const handleGitOp = (type: 'push' | 'fetch', flags: string[]) =>
-    runMutation(
-      () => type === 'push' ? api.gitPush(flags) : api.gitFetch(flags),
+  const handleGitOp = (type: 'push' | 'fetch', flags: string[]) => {
+    // Stream progress to status bar. mutationProgress wins over "Working..."
+    // in statusText; blank lines skipped so it doesn't flash empty. .finally()
+    // clears it on both resolve and reject — runMutation's `after` only runs
+    // on success, which would leak a stale line into the next (non-streaming)
+    // mutation's status.
+    const onLine = (line: string) => { if (line.trim()) mutationProgress = line.trim() }
+    mutationProgress = `git ${type}…`
+    return runMutation(
+      () => (type === 'push' ? api.gitPush : api.gitFetch)(flags, onLine)
+              .finally(() => { mutationProgress = '' }),
       `Git ${type} complete`,
       { after: () => loadPullRequests() },
     )
+  }
 
   function handleBookmarkSet(name: string) {
     if (!selectedRevision) return

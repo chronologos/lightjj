@@ -219,7 +219,7 @@ func TestHandleRestore_NoRevision(t *testing.T) {
 
 func TestHandleRestore_NoFiles(t *testing.T) {
 	// Empty files would run `jj restore -c X` → empties whole revision.
-	// Handler must reject. [""] rejected too — `file:""` is a fileset
+	// Handler must reject. [""] rejected too — `root-file:""` is a fileset
 	// expression, not "no file".
 	for _, files := range [][]string{nil, {""}, {"a.go", ""}} {
 		srv := newTestServer(testutil.NewMockRunner(t))
@@ -319,7 +319,8 @@ func TestHandleBookmarkSet(t *testing.T) {
 
 func TestHandleGitPush(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.GitPush("--bookmark", "main")).SetOutput([]byte(""))
+	runner.Expect(jj.GitPush("--bookmark", "main")).SetOutput([]byte(
+		"Changes to push to origin:\n  Move forward bookmark main from aaa to bbb\n"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -329,6 +330,24 @@ func TestHandleGitPush(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/x-ndjson", w.Header().Get("Content-Type"))
+
+	// NDJSON: one {"line":...} per progress line, then {"done":true,"output":...}
+	lines := strings.Split(strings.TrimRight(w.Body.String(), "\n"), "\n")
+	require.Len(t, lines, 3)
+
+	var l0, l1 map[string]string
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &l0))
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &l1))
+	assert.Equal(t, "Changes to push to origin:", l0["line"])
+	assert.Equal(t, "  Move forward bookmark main from aaa to bbb", l1["line"])
+
+	var done map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[2]), &done))
+	assert.Equal(t, true, done["done"])
+	assert.Nil(t, done["error"])
+	assert.Contains(t, done["output"], "Move forward bookmark main")
+	assert.Equal(t, "abc123", done["op_id"]) // newTestServer's allowed CurrentOpId
 }
 
 func TestHandleDivergence(t *testing.T) {
@@ -1188,8 +1207,13 @@ func TestHandleRebase_RunnerError(t *testing.T) {
 }
 
 func TestHandleGitPush_RunnerError(t *testing.T) {
+	// Real-world failure: jj writes "Error: ..." to stderr (streamed as a line),
+	// then exits non-zero (surfaces on Close). streamMutation echoes the streamed
+	// content as the error message — closeErr.Error() is just "exit status 1".
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.GitPush("--all")).SetError(errors.New("push failed"))
+	runner.Expect(jj.GitPush("--all")).
+		SetOutput([]byte("Error: bookmark main is conflicted\n")).
+		SetError(errors.New("exit status 1"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1198,7 +1222,31 @@ func TestHandleGitPush_RunnerError(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	// Headers already flushed before error detected — status is 200.
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	lines := strings.Split(strings.TrimRight(w.Body.String(), "\n"), "\n")
+	var done map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[len(lines)-1]), &done))
+	assert.Equal(t, true, done["done"])
+	assert.Equal(t, "Error: bookmark main is conflicted", done["error"])
+}
+
+func TestHandleGitPush_RunnerErrorNoOutput(t *testing.T) {
+	// Pathological: exit-nonzero with nothing written. Fall back to closeErr text.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.GitPush("--all")).SetError(errors.New("exit status 128"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(gitFlagsRequest{Flags: []string{"--all"}})
+	req := jsonPost("/api/git/push", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	var done map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimRight(w.Body.String(), "\n")), &done))
+	assert.Equal(t, "exit status 128", done["error"])
 }
 
 // --- Commit tests ---

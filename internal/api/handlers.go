@@ -515,7 +515,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	// `jj restore -c X` with no files empties the whole revision. That's
 	// abandon's job — enforce at least one non-empty file so a frontend bug
 	// can't silently nuke a commit's content. [""] is rejected too:
-	// `file:""` is a fileset expression, not "no file".
+	// `root-file:""` is a fileset expression, not "no file".
 	if len(req.Files) == 0 || slices.Contains(req.Files, "") {
 		s.writeError(w, http.StatusBadRequest, "files is required")
 		return
@@ -819,7 +819,7 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.runMutation(w, r, jj.GitPush(req.Flags...))
+	s.streamMutation(w, r, jj.GitPush(req.Flags...))
 }
 
 type splitRequest struct {
@@ -855,7 +855,7 @@ func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.runMutation(w, r, jj.GitFetch(req.Flags...))
+	s.streamMutation(w, r, jj.GitFetch(req.Flags...))
 }
 
 // Whitelisted merge tools for resolve to prevent arbitrary tool execution.

@@ -144,9 +144,20 @@ func (m *MockRunner) RunWithInput(_ context.Context, args []string, stdin string
 	return e.output, e.err
 }
 
-func (m *MockRunner) Stream(_ context.Context, args []string) (io.ReadCloser, error) {
+// mockStream models real StreamCombined semantics: body drains first, error
+// surfaces on Close (= cmd.Wait exit code). Tests for the error path would
+// be misleading if err returned up-front — the handler has already flushed
+// 200 + progress lines by the time Close reports failure.
+type mockStream struct {
+	*bytes.Reader
+	err error
+}
+
+func (m *mockStream) Close() error { return m.err }
+
+func (m *MockRunner) StreamCombined(_ context.Context, args []string) (io.ReadCloser, error) {
 	e := m.findExpectation(args)
-	return io.NopCloser(bytes.NewReader(e.output)), e.err
+	return &mockStream{Reader: bytes.NewReader(e.output), err: e.err}, nil
 }
 
 // RunRaw routes through the same expectation table as Run — the mock doesn't

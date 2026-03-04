@@ -36,8 +36,10 @@ func (r *SSHRunner) RunWithInput(ctx context.Context, args []string, stdin strin
 	return r.local.RunWithInput(ctx, r.wrapArgs(args), stdin)
 }
 
-func (r *SSHRunner) Stream(ctx context.Context, args []string) (io.ReadCloser, error) {
-	return r.local.Stream(ctx, r.wrapArgs(args))
+func (r *SSHRunner) StreamCombined(ctx context.Context, args []string) (io.ReadCloser, error) {
+	// Merging the local ssh process's stderr→stdout also merges the remote's:
+	// ssh routes remote stderr → local stderr, remote stdout → local stdout.
+	return r.local.StreamCombined(ctx, r.wrapArgs(args))
 }
 
 // wrapRaw builds an ssh invocation that runs argv in the remote repo
