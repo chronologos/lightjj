@@ -32,7 +32,7 @@ func main() {
 	addr := flag.String("addr", "localhost:0", "Listen address (default: random port on localhost)")
 	noBrowser := flag.Bool("no-browser", false, "Don't open browser automatically")
 	showVersion := flag.Bool("version", false, "Print version and exit")
-	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj debug snapshot` interval (0 to disable)")
+	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj util snapshot` interval (0 to disable)")
 	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
 	defaultRemote := flag.String("default-remote", "origin", "Remote name to prefer in bookmark/remote lists")
 	flag.Parse()

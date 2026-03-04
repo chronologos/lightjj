@@ -268,7 +268,7 @@
     // resumed startEdit populates editFileContents with pre-discard content.
     if (diffTarget?.kind !== 'single' || editBusy.has(path)) return
     const revId = diffTarget.changeId
-    // Renames need both paths: `jj restore -c X file:"dest"` only matches
+    // Renames need both paths: `jj restore -c X root-file:"dest"` only matches
     // the new path → rename would become a delete of the source.
     const files = sourcePath ? [sourcePath, path] : [path]
     editBusy.add(path)

@@ -38,13 +38,13 @@ func TestLogGraph_NoRevset(t *testing.T) {
 
 func TestFileShow(t *testing.T) {
 	got := FileShow("abc", "src/main.go")
-	assert.Equal(t, []string{"file", "show", "-r", "abc", "--ignore-working-copy", `file:"src/main.go"`}, got)
+	assert.Equal(t, []string{"file", "show", "-r", "abc", "--ignore-working-copy", `root-file:"src/main.go"`}, got)
 }
 
 func TestFileShow_EscapesPath(t *testing.T) {
 	// Dash-prefixed paths could be interpreted as flags without EscapeFileName
 	got := FileShow("abc", "-rm")
-	assert.Equal(t, `file:"-rm"`, got[len(got)-1])
+	assert.Equal(t, `root-file:"-rm"`, got[len(got)-1])
 }
 
 func TestNew(t *testing.T) {
@@ -82,7 +82,7 @@ func TestDiff_NoColor(t *testing.T) {
 
 func TestDiff_WithFile(t *testing.T) {
 	got := Diff("abc", "src/main.go", "")
-	assert.Contains(t, got, `file:"src/main.go"`)
+	assert.Contains(t, got, `root-file:"src/main.go"`)
 }
 
 func TestSquash(t *testing.T) {
@@ -98,7 +98,7 @@ func TestSquash_AllFlags(t *testing.T) {
 	assert.Contains(t, got, "--use-destination-message")
 	assert.Contains(t, got, "--interactive")
 	assert.Contains(t, got, "--ignore-immutable")
-	assert.Contains(t, got, `file:"file.go"`)
+	assert.Contains(t, got, `root-file:"file.go"`)
 }
 
 func TestBookmarkSet(t *testing.T) {
@@ -144,14 +144,14 @@ func TestEscapeFileName(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"simple", "simple.go", `file:"simple.go"`},
-		{"spaces", "path with spaces/file.go", `file:"path with spaces/file.go"`},
-		{"double quote", `has"quote.go`, `file:"has\"quote.go"`},
-		{"backslash", `path\to\file.go`, `file:"path\\to\\file.go"`},
-		{"backslash and quote", `a\"b.go`, `file:"a\\\"b.go"`},
-		{"unicode", "fichier-\u00e9t\u00e9.go", `file:"fichier-été.go"`},
-		{"unicode CJK", "\u6587\u4ef6.txt", `file:"文件.txt"`},
-		{"multiple spaces", "a  b  c.go", `file:"a  b  c.go"`},
+		{"simple", "simple.go", `root-file:"simple.go"`},
+		{"spaces", "path with spaces/file.go", `root-file:"path with spaces/file.go"`},
+		{"double quote", `has"quote.go`, `root-file:"has\"quote.go"`},
+		{"backslash", `path\to\file.go`, `root-file:"path\\to\\file.go"`},
+		{"backslash and quote", `a\"b.go`, `root-file:"a\\\"b.go"`},
+		{"unicode", "fichier-\u00e9t\u00e9.go", `root-file:"fichier-été.go"`},
+		{"unicode CJK", "\u6587\u4ef6.txt", `root-file:"文件.txt"`},
+		{"multiple spaces", "a  b  c.go", `root-file:"a  b  c.go"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,7 +171,7 @@ func TestSplit(t *testing.T) {
 	assert.Contains(t, got, "--parallel")
 	assert.NotContains(t, got, "--interactive")
 	assert.Contains(t, got, "-m")
-	assert.Contains(t, got, `file:"main.go"`)
+	assert.Contains(t, got, `root-file:"main.go"`)
 }
 
 func TestSplit_NoFilesNoMessage(t *testing.T) {
@@ -205,7 +205,7 @@ func TestCurrentOpId(t *testing.T) {
 
 func TestDebugSnapshot(t *testing.T) {
 	got := DebugSnapshot()
-	assert.Equal(t, CommandArgs{"debug", "snapshot"}, got)
+	assert.Equal(t, CommandArgs{"util", "snapshot"}, got)
 }
 
 func TestFilesBatch(t *testing.T) {
@@ -427,12 +427,12 @@ func TestDiffEdit(t *testing.T) {
 
 func TestRestore(t *testing.T) {
 	got := Restore("abc", []string{"main.go"})
-	assert.Equal(t, []string{"restore", "-c", "abc", `file:"main.go"`}, got)
+	assert.Equal(t, []string{"restore", "-c", "abc", `root-file:"main.go"`}, got)
 }
 
 func TestRestore_MultipleFiles(t *testing.T) {
 	got := Restore("abc", []string{"a.go", "b/c.go"})
-	assert.Equal(t, []string{"restore", "-c", "abc", `file:"a.go"`, `file:"b/c.go"`}, got)
+	assert.Equal(t, []string{"restore", "-c", "abc", `root-file:"a.go"`, `root-file:"b/c.go"`}, got)
 }
 
 func TestDuplicate(t *testing.T) {
@@ -443,7 +443,7 @@ func TestDuplicate(t *testing.T) {
 
 func TestAbsorb(t *testing.T) {
 	got := Absorb("abc", "main.go", "test.go")
-	assert.Equal(t, []string{"absorb", "--from", "abc", "--color", "never", `file:"main.go"`, `file:"test.go"`}, got)
+	assert.Equal(t, []string{"absorb", "--from", "abc", "--color", "never", `root-file:"main.go"`, `root-file:"test.go"`}, got)
 }
 
 func TestAbsorb_NoFiles(t *testing.T) {
@@ -515,8 +515,8 @@ func TestDiffRange(t *testing.T) {
 
 func TestDiffRange_WithFiles(t *testing.T) {
 	got := DiffRange("abc", "def", []string{"src/main.go", "README.md"})
-	assert.Contains(t, got, `file:"src/main.go"`)
-	assert.Contains(t, got, `file:"README.md"`)
+	assert.Contains(t, got, `root-file:"src/main.go"`)
+	assert.Contains(t, got, `root-file:"README.md"`)
 	assert.Equal(t, "abc", got[2]) // --from value
 	assert.Equal(t, "def", got[4]) // --to value
 }
@@ -601,11 +601,11 @@ func TestParseWorkspaceList_Empty(t *testing.T) {
 
 func TestResolve(t *testing.T) {
 	got := Resolve("abc", "src/main.go", ":ours")
-	assert.Equal(t, []string{"resolve", "--tool", ":ours", "-r", "abc", `file:"src/main.go"`}, got)
+	assert.Equal(t, []string{"resolve", "--tool", ":ours", "-r", "abc", `root-file:"src/main.go"`}, got)
 }
 
 func TestResolve_EscapedFile(t *testing.T) {
 	got := Resolve("abc", `path with "quotes".go`, ":theirs")
-	assert.Equal(t, []string{"resolve", "--tool", ":theirs", "-r", "abc", `file:"path with \"quotes\".go"`}, got)
+	assert.Equal(t, []string{"resolve", "--tool", ":theirs", "-r", "abc", `root-file:"path with \"quotes\".go"`}, got)
 }
 

@@ -1,5 +1,14 @@
 # lightjj Backlog
 
+## jj 0.39 compat (2026-03-04)
+
+- [x] **`debug snapshot` → `util snapshot`** (Trivial) — jj 0.39 deprecated `debug snapshot` (removed v0.45). Periodic loop fires every 5s → deprecation warning firehose. `DebugSnapshot()` args changed; function name kept (4 call sites, zero semantic delta). `README.md:73` bumped min jj to 0.39.
+- [ ] **Workspace relative paths** (Small) — jj 0.39's `workspace add` writes relative paths into `workspace_store/index`. `spawnWorkspaceInstance` (`server.go:295`) hard-rejects `!filepath.IsAbs` → **new workspaces can't spawn** via the UI. Existing absolute-path entries unaffected. Fix: resolve relative to `filepath.Dir(storePath)` = `.jj/repo/workspace_store/` (verify this is the anchor jj uses — could be `.jj/repo/` or the repo root). Parser (`workspace_store.go`) is fine — just returns the string; only the `IsAbs` check + `filepath.Join` at the consumer needs changing.
+- [ ] **`git push --option` / `-o`** (Trivial) — Add to `allowedGitPushFlags` (`handlers.go:20`). Passes server-side push options (Gerrit reviewers, GitLab merge options). Low demand; wait for a request.
+- [ ] **`jj bookmark advance`** (Small) — Built-in `jj tug`. Could replace or supplement the BookmarkModal's move action. `revsets.bookmark-advance-from`/`-to` are user config, not our concern.
+- [ ] **`--simplify-parents` on rebase** (Trivial) — Add to `Rebase()` builder signature, wire a checkbox in rebase mode. Useful when rebasing onto a descendant of the old parent.
+- [ ] **Template list methods** (Investigate) — `first()`/`get(N)`/`take()` on lists. Check if `FilesTemplate` (`file_change.go:43`) or the evolog template could drop a `.map()` layer.
+
 ## Agent Workflow (2026-02-27)
 
 Features to support human-in-the-loop review of agent work across jj worktrees.

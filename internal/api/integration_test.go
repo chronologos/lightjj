@@ -288,7 +288,7 @@ func TestIntegrationFiles_Rename(t *testing.T) {
 		filepath.Join(r.RepoDir, "dir/b/file.txt"),
 	))
 	// FilesTemplate uses --ignore-working-copy; trigger snapshot explicitly.
-	jjExec("debug", "snapshot")
+	jjExec("util", "snapshot")
 
 	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/files?revision=@")
@@ -991,7 +991,7 @@ func TestJourneyEditModifyReturn(t *testing.T) {
 	// 2. Modify a.txt in commit A.
 	writeFile(t, r.RepoDir, "a.txt", "modified a")
 	// Snapshot so the diff endpoint (which uses --ignore-working-copy) sees the change.
-	jjExec("debug", "snapshot")
+	jjExec("util", "snapshot")
 
 	// 3. Verify the diff shows the modification.
 	gw := apiGet(t, srv, fmt.Sprintf("/api/diff?revision=%s", commitA.Commit.ChangeId))

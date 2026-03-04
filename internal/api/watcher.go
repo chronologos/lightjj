@@ -264,7 +264,7 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 			if n == 0 {
 				continue
 			}
-			// `jj debug snapshot` is cheap when nothing changed (~15ms) and
+			// `jj util snapshot` is cheap when nothing changed (~15ms) and
 			// advances op_heads only if the WC actually differs. Transient
 			// errors (repo lock) are expected; persistent failure is worth
 			// surfacing once so the user knows auto-refresh is degraded.

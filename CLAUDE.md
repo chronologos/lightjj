@@ -43,7 +43,7 @@ internal/
     handlers.go            — All endpoint implementations, flag validation
     handlers_test.go       — Handler tests with MockRunner
     integration_test.go    — Integration tests (build-tagged)
-    watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic debug snapshot
+    watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic util snapshot
     config.go              — Server-side config storage (os.UserConfigDir()/lightjj/config.json)
     annotations.go         — CRUD for per-changeId review comments (annotations/{changeId}.json); changeId path-traversal validation via regex
     gzip.go                — Gzip response middleware (lazy-init writer, sync.Pool, Flush passthrough for SSE)
@@ -108,7 +108,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Use `--tool :git`** when requesting diff output for the web API. Users may have external diff formatters (difftastic) configured that output ANSI codes.
 - **Use `--color never`** for any jj output the backend will parse. Use `--color always` only if passing through to a terminal.
 - **Use `\x1F` (unit separator)** as the field delimiter in jj templates, not tabs. Tabs can appear in commit descriptions and break parsing.
-- **Use `--ignore-working-copy` on read commands** (`log`, `file show`, `workspace list`). The snapshot loop (`watcher.go`) runs `jj debug snapshot` every 5s — read-path snapshots are redundant (~485ms/call wasted) and contend on the WC lock. Do NOT use on mutations or anything that needs the freshest WC state.
+- **Use `root-file:"path"` (via `EscapeFileName`) for file arguments**, never `file:`. `file:` is cwd-relative — it breaks in secondary workspaces (divergent rev authored in A, viewed from B) and in SSH mode (`wrapArgs` uses `-R`, no cd → remote cwd is `~`). `root-file:` anchors at the workspace root. Not `root:` — that's prefix-recursive; `root:"a"` would match `a/` too.
+- **Use `--ignore-working-copy` on read commands** (`log`, `file show`, `workspace list`). The snapshot loop (`watcher.go`) runs `jj util snapshot` every 5s — read-path snapshots are redundant (~485ms/call wasted) and contend on the WC lock. Do NOT use on mutations or anything that needs the freshest WC state.
 - **Prefer templates over human-output parsing.** Check `jj help -k templates` before writing regex/string parsers. `FilesTemplate` uses `self.diff().stat().files()` + `conflicted_files.map()` — one subprocess returns status char, path, exact +/- counts, and conflict side-counts. `DiffStatEntry.path()` returns the DESTINATION path for renames (no brace expansion needed). Exits 0 on clean revisions, works with multi-revision revsets, no regex.
 - **Parsers return empty slices, not nil.** This ensures JSON serialization produces `[]` not `null`.
 - **`NewServer(runner, repoDir)`** takes the resolved repo dir as second arg. Pass `""` for SSH mode or tests. The `RepoDir` enables workspace store reading and child process spawning. `Server.DefaultRemote` defaults to `"origin"` in the constructor body; `main.go` overrides post-construction from the `--default-remote` flag (zero test churn across existing call sites).

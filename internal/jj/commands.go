@@ -17,11 +17,16 @@ const (
 
 type CommandArgs = []string
 
-// EscapeFileName wraps a filename for safe use in jj file: arguments.
+// EscapeFileName wraps a path as a jj fileset pattern. Uses root-file: (not
+// file:) — callers pass paths from diff/template output, which are workspace-
+// root-relative. file: is cwd-relative and breaks in secondary workspaces AND
+// SSH mode (wrapArgs uses -R, no cd → remote cwd is ~): jj walks .. →
+// "Invalid component '..' in repo-relative path". Not root: — that's
+// prefix-recursive (root:"a" matches a/ too), not exact-file.
 func EscapeFileName(fileName string) string {
 	fileName = strings.ReplaceAll(fileName, "\\", "\\\\")
 	fileName = strings.ReplaceAll(fileName, "\"", "\\\"")
-	return fmt.Sprintf("file:\"%s\"", fileName)
+	return fmt.Sprintf("root-file:\"%s\"", fileName)
 }
 
 func escapeFiles(files []string) []string {
@@ -38,7 +43,7 @@ func escapeFiles(files []string) []string {
 // which jj computes for us — we just parse it.
 //
 // Uses --ignore-working-copy: the snapshot loop (watcher.go) already runs
-// `jj debug snapshot` every 5s. Without this flag, every log fetch re-stats
+// `jj util snapshot` every 5s. Without this flag, every log fetch re-stats
 // every tracked file (~485ms on medium repos) AND contends on the WC lock
 // with the snapshot loop. With it: ~33ms. Worst case: an external file edit
 // seen ≤5s late before SSE corrects — same contract as every other read.
@@ -335,8 +340,13 @@ func CurrentOpId() CommandArgs {
 // DebugSnapshot asks jj to snapshot the working copy. Advances op_heads only
 // if the WC actually differs. Used by the filesystem watcher to catch raw file
 // edits that jj hasn't observed yet.
+//
+// Was `debug snapshot` until jj 0.39 promoted it to `util snapshot` (the old
+// form is deprecated, removed in v0.45). Function name kept for call-site
+// stability — the periodic loop fires this every 5s, so the deprecation
+// warning would have been a log-spam firehose.
 func DebugSnapshot() CommandArgs {
-	return []string{"debug", "snapshot"}
+	return []string{"util", "snapshot"}
 }
 
 func OpLog(limit int) CommandArgs {

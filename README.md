@@ -70,7 +70,7 @@ In `--remote` mode, `gh pr list` is also run over SSH — install and `gh auth l
 
 ## Requirements
 
-- **jj >= 0.38**
+- **jj >= 0.39**
 - **Go >= 1.21** (build from source)
 - **gh** (optional) — for PR badges. Must be installed and authed wherever the repo lives (remote host when using `--remote`)
 
