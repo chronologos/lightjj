@@ -377,7 +377,7 @@ export function effectiveId(commit: LogEntry['commit']): string {
  *  `connected(X|Y)` revset — every consumer had to re-derive which case
  *  by checking `checkedRevisions.size`). */
 export type DiffTarget =
-  | { kind: 'single'; commitId: string; changeId: string; isWorkingCopy: boolean }
+  | { kind: 'single'; commitId: string; changeId: string; isWorkingCopy: boolean; immutable: boolean }
   | { kind: 'multi'; revset: string; commitIds: string[] }
 
 /** Stable cache key for a DiffTarget. commit_id for single-rev
@@ -538,6 +538,9 @@ export const api = {
 
   abandon: (revisions: string[], ignoreImmutable = false) =>
     post<{ output: string }>('/api/abandon', { revisions, ignore_immutable: ignoreImmutable }),
+
+  restore: (revision: string, files: string[]) =>
+    post<{ output: string }>('/api/restore', { revision, files }),
 
   describe: (revision: string, description: string) =>
     post<{ output: string }>('/api/describe', { revision, description }),
