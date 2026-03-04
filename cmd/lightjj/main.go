@@ -44,6 +44,7 @@ func main() {
 
 	var cmdRunner runner.CommandRunner
 	var resolvedRepoDir string // absolute path for local mode, empty for SSH
+	var displayHost, displayPath string
 
 	if *remote != "" {
 		host, path, err := parseRemoteSpec(*remote)
@@ -51,6 +52,12 @@ func main() {
 			log.Fatalf("invalid remote: %v", err)
 		}
 		cmdRunner = runner.NewSSHRunner(host, path)
+		// Strip user@ prefix for display
+		displayHost = host
+		if at := strings.LastIndex(host, "@"); at != -1 {
+			displayHost = host[at+1:]
+		}
+		displayPath = path
 	} else {
 		dir := *repoDir
 		if dir == "" {
@@ -63,10 +70,14 @@ func main() {
 		lr := runner.NewLocalRunner(dir)
 		resolvedRepoDir = lr.RepoDir
 		cmdRunner = lr
+		displayHost, _ = os.Hostname()
+		displayPath = resolvedRepoDir
 	}
 
 	srv := api.NewServer(cmdRunner, resolvedRepoDir)
 	srv.DefaultRemote = *defaultRemote
+	srv.Hostname = displayHost
+	srv.RepoPath = displayPath
 
 	// Filesystem watch + SSE auto-refresh. Nil in SSH mode or if disabled.
 	if !*noWatch {

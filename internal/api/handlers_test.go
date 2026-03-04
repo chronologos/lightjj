@@ -625,6 +625,22 @@ func TestHandleGetDescription_MissingRevision(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandleInfo(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	srv.Hostname = "myhost"
+	srv.RepoPath = "/home/user/repo"
+
+	req := httptest.NewRequest("GET", "/api/info", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var got map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "myhost", got["hostname"])
+	assert.Equal(t, "/home/user/repo", got["repo_path"])
+}
+
 func TestHandleRemotes(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.GitRemoteList()).SetOutput([]byte("origin https://github.com/test/repo.git\n"))

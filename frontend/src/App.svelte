@@ -392,6 +392,28 @@
   let commands = $derived<PaletteCommand[]>([...staticCommands, ...dynamicCommands, ...aliasCommands])
 
   // --- API actions ---
+  async function loadInfo() {
+    try {
+      const { hostname, repo_path } = await api.info()
+      document.title = formatTitle(hostname, repo_path)
+    } catch { /* static <title> fallback is fine */ }
+  }
+
+  function formatTitle(host: string, path: string): string {
+    // Hostname: first3…last3 if it shortens; strip common .local suffix first
+    const h = host.replace(/\.local$/, '')
+    const shortHost = h.length > 7 ? `${h.slice(0, 3)}…${h.slice(-3)}` : h
+
+    // Path: single-letter per component except the last. Handles both / and \.
+    // /Users/iant/3pcode/lightjj → /U/i/3/lightjj
+    const parts = path.split(/[/\\]/)
+    const last = parts.pop() || path
+    const shortPath = parts.map(p => p.slice(0, 1)).join('/') + '/' + last
+
+    if (!shortHost) return `${last} — lightjj`
+    return `${shortHost}:${shortPath} — lightjj`
+  }
+
   async function loadWorkspaces() {
     try {
       const result = await api.workspaces()
@@ -1267,6 +1289,7 @@
   })
 
   loadLog()
+  loadInfo()
   loadWorkspaces()
   loadAliases()
   loadPullRequests()

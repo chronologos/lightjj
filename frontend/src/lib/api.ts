@@ -82,6 +82,7 @@ export function clearAllCaches(): void {
   cache.clear()
   _remotes = undefined
   _aliases = undefined
+  _info = undefined
 }
 
 // notifyOpId is the single op-id ingestion point. Called by both the HTTP
@@ -306,6 +307,12 @@ export async function prefetchFilesBatch(commitIds: string[]): Promise<void> {
 // user edits jj config externally. clearAllCaches() (hard refresh) resets.
 let _remotes: Promise<string[]> | undefined
 let _aliases: Promise<Alias[]> | undefined
+let _info: Promise<InfoResponse> | undefined
+
+export interface InfoResponse {
+  hostname: string
+  repo_path: string
+}
 
 export interface FileChange {
   type: string
@@ -491,6 +498,8 @@ export const api = {
     post<{ ok: boolean }>('/api/file-write', { path, content }),
 
   remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
+
+  info: () => _info ??= request<InfoResponse>('/api/info').catch(e => { _info = undefined; throw e }),
 
   // Workspaces is session-stable (changes only if user adds a workspace).
   // Plain request for now — promise-memoize later if load frequency warrants.

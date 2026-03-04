@@ -338,6 +338,13 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
 }
 
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, r, http.StatusOK, map[string]string{
+		"hostname":  s.Hostname,
+		"repo_path": s.RepoPath,
+	})
+}
+
 type workspacesResponse struct {
 	Current    string              `json:"current"`
 	Workspaces []workspaceWithPath `json:"workspaces"`
