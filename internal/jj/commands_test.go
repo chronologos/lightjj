@@ -435,10 +435,6 @@ func TestRestore_MultipleFiles(t *testing.T) {
 	assert.Equal(t, []string{"restore", "-c", "abc", `file:"a.go"`, `file:"b/c.go"`}, got)
 }
 
-func TestSnapshot(t *testing.T) {
-	assert.Equal(t, []string{"debug", "snapshot"}, Snapshot())
-}
-
 func TestDuplicate(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
 	got := Duplicate(from, "def", "-d")

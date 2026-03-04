@@ -24,7 +24,7 @@
     editContent?: string
     editBusy?: boolean
     onedit?: (path: string) => void
-    ondiscard?: (path: string) => void
+    ondiscard?: (path: string, sourcePath?: string) => void
     onsavefile?: (path: string, content: string) => void
     oncanceledit?: (path: string) => void
     onlinecontext?: (e: MouseEvent, info: DiffLineInfo) => void
@@ -412,12 +412,10 @@
     {#if onedit && !editing && fileStats?.type !== 'D'}
       <button class="edit-file-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(filePath) }} title="Edit this file (switches to split view)">{editBusy ? 'Loading…' : 'Edit'}</button>
     {/if}
-    {#if ondiscard && !editing && fileStats?.type !== 'R'}
-      <!-- A→delete-file, D→undelete, M→revert — all valid restore targets.
-           R (rename) gated out: `jj restore -c X file:"<dest>"` only matches
-           the new path; source path isn't restored → rename becomes a delete.
-           Proper fix needs source-path plumbing through diff-parser. -->
-      <button class="edit-file-btn discard-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); ondiscard(filePath) }} title="Discard changes to this file from this revision (jj restore)">Discard</button>
+    {#if ondiscard && !editing}
+      <!-- A→delete-file, D→undelete, M→revert, R→undo-rename (pass both paths).
+           Rename-with-edits never hits the R path: jj decomposes it to A+D. -->
+      <button class="edit-file-btn discard-btn" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); ondiscard(filePath, file.sourcePath) }} title="Discard changes to this file from this revision (jj restore)">Discard</button>
     {/if}
     {#if editing && onsavefile && oncanceledit}
       <button class="edit-file-btn edit-save-btn" disabled={editBusy || !editorRef} onclick={(e: MouseEvent) => { e.stopPropagation(); if (editorRef) onsavefile(filePath, editorRef.getContent()) }} title="Save changes (Ctrl+S)">{editBusy ? 'Saving…' : 'Save'}</button>

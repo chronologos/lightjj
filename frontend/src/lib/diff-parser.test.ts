@@ -263,6 +263,32 @@ describe('filePathFromHeader', () => {
     expect(filePathFromHeader('Modified regular file path with spaces/file.go:')).toBe('path with spaces/file.go')
   })
 
+  it('parses sourcePath from git-style rename header', () => {
+    // Pure rename: jj diff --tool :git emits `rename from`/`rename to` with no hunks.
+    // sourcePath feeds Discard — passing only dest to `jj restore -c` would
+    // delete the new path without restoring the old one.
+    const raw = `diff --git a/src/old.go b/src/new.go
+rename from src/old.go
+rename to src/new.go`
+    const files = parseDiffContent(raw)
+    expect(files).toHaveLength(1)
+    expect(files[0].filePath).toBe('src/new.go')
+    expect(files[0].sourcePath).toBe('src/old.go')
+    expect(files[0].hunks).toHaveLength(0)
+    expect(files[0].header).toContain('rename from src/old.go')
+  })
+
+  it('leaves sourcePath undefined for non-rename diffs', () => {
+    const raw = `diff --git a/foo.ts b/foo.ts
+--- a/foo.ts
++++ b/foo.ts
+@@ -1 +1 @@
+-old
++new`
+    const files = parseDiffContent(raw)
+    expect(files[0].sourcePath).toBeUndefined()
+  })
+
   it('uses destination (b/) path for git-style copy/rename headers', () => {
     // Copies produce "diff --git a/source b/destination" where source != destination.
     // Using the b/ path avoids duplicate keys when the same source is copied to multiple destinations.

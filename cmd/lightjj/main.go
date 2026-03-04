@@ -43,7 +43,8 @@ func main() {
 	}
 
 	var cmdRunner runner.CommandRunner
-	var resolvedRepoDir string // absolute path for local mode, empty for SSH
+	var sshRunner *runner.SSHRunner // non-nil only in --remote mode; used for the SSH watcher
+	var resolvedRepoDir string      // absolute path for local mode, empty for SSH
 	var displayHost, displayPath string
 
 	if *remote != "" {
@@ -51,7 +52,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("invalid remote: %v", err)
 		}
-		cmdRunner = runner.NewSSHRunner(host, path)
+		sshRunner = runner.NewSSHRunner(host, path)
+		cmdRunner = sshRunner
 		// Strip user@ prefix for display
 		displayHost = host
 		if at := strings.LastIndex(host, "@"); at != -1 {
@@ -79,9 +81,14 @@ func main() {
 	srv.Hostname = displayHost
 	srv.RepoPath = displayPath
 
-	// Filesystem watch + SSE auto-refresh. Nil in SSH mode or if disabled.
+	// Filesystem watch + SSE auto-refresh. Local mode uses fsnotify; SSH mode
+	// pipes inotifywait over a persistent stream (Linux remotes only).
 	if !*noWatch {
-		srv.Watcher = api.NewWatcher(srv, *snapshotInterval)
+		if sshRunner != nil {
+			srv.Watcher = api.NewSSHWatcher(srv, sshRunner.StreamRaw)
+		} else {
+			srv.Watcher = api.NewWatcher(srv, *snapshotInterval)
+		}
 	}
 
 	// Serve embedded frontend static files

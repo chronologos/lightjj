@@ -261,19 +261,22 @@
   // restore on immutable; hide, don't invite the error).
   let canMutateFiles = $derived(diffTarget?.kind === 'single' && !diffTarget.immutable)
 
-  async function discardFile(path: string) {
+  async function discardFile(path: string, sourcePath?: string) {
     // editBusy guard: startEdit releases the mutation lock after api.edit,
     // then awaits fileShow (holding only editBusy). Without this guard a
     // Discard click during that window races: restore succeeds, then the
     // resumed startEdit populates editFileContents with pre-discard content.
     if (diffTarget?.kind !== 'single' || editBusy.has(path)) return
     const revId = diffTarget.changeId
+    // Renames need both paths: `jj restore -c X file:"dest"` only matches
+    // the new path → rename would become a delete of the source.
+    const files = sourcePath ? [sourcePath, path] : [path]
     editBusy.add(path)
     editError = ''
     try {
       const result = onjjmutation
-        ? await onjjmutation(() => api.restore(revId, [path]))
-        : await api.restore(revId, [path])
+        ? await onjjmutation(() => api.restore(revId, files))
+        : await api.restore(revId, files)
       if (result === undefined && onjjmutation) {
         editError = 'Operation in progress — try again'
       }

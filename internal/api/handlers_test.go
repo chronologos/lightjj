@@ -290,6 +290,19 @@ func TestHandleUndo(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleSnapshot(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.DebugSnapshot()).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := jsonPost("/api/snapshot", []byte("{}"))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestHandleBookmarkSet(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.BookmarkSet("abc", "feature")).SetOutput([]byte(""))

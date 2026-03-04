@@ -44,8 +44,8 @@ function saveLocal(c: Config) {
 }
 
 // Raw fetch (not api.ts) — config.svelte.ts is imported at module load time
-// before api.ts's EventSource/watchEvents setup should run, and we don't want
-// op-id tracking on a non-jj endpoint.
+// before api.ts's auto-refresh setup should run, and we don't want op-id
+// tracking on a non-jj endpoint.
 async function loadRemote(): Promise<Partial<Config> | null> {
   try {
     const res = await fetch('/api/config')

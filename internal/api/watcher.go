@@ -3,8 +3,10 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -34,6 +36,15 @@ type Watcher struct {
 	stop chan struct{}
 }
 
+func newWatcher(srv *Server) *Watcher {
+	return &Watcher{
+		srv:      srv,
+		subs:     make(map[chan string]struct{}),
+		debounce: 150 * time.Millisecond,
+		stop:     make(chan struct{}),
+	}
+}
+
 // NewWatcher constructs a watcher for the given server. Returns nil if the
 // server has no local RepoDir (SSH mode) — SSE auto-refresh requires a local
 // filesystem to observe.
@@ -41,17 +52,34 @@ func NewWatcher(srv *Server, snapshotInterval time.Duration) *Watcher {
 	if srv.RepoDir == "" {
 		return nil
 	}
-	w := &Watcher{
-		srv:      srv,
-		headsDir: filepath.Join(srv.RepoDir, ".jj", "repo", "op_heads", "heads"),
-		subs:     make(map[chan string]struct{}),
-		debounce: 150 * time.Millisecond,
-		stop:     make(chan struct{}),
-	}
+	w := newWatcher(srv)
+	w.headsDir = filepath.Join(srv.RepoDir, ".jj", "repo", "op_heads", "heads")
 	if err := w.start(snapshotInterval); err != nil {
 		log.Printf("watcher: disabled (%v)", err)
 		return nil
 	}
+	return w
+}
+
+// StreamFunc opens a persistent pipe to argv running in the repo's directory.
+// Matches SSHRunner.StreamRaw — passed as a closure so watcher.go stays free
+// of runner imports.
+type StreamFunc func(ctx context.Context, argv []string) (io.ReadCloser, error)
+
+// NewSSHWatcher constructs a watcher that reads fs events from inotifywait -m
+// piped over SSH. Each stdout line = one event; content is ignored — any line
+// means op_heads changed. Snapshot loop is not started (would need a second
+// persistent SSH pipe). Linux remotes only (inotify-tools).
+//
+// The argv is built here (not in main.go) because the heads-dir path is jj
+// on-disk layout knowledge that watcher.go already owns for the local case.
+// The path is relative: streamRaw cd's into the repo first.
+func NewSSHWatcher(srv *Server, streamRaw StreamFunc) *Watcher {
+	w := newWatcher(srv)
+	argv := []string{"inotifywait", "-m", "-q", "-e", "create", ".jj/repo/op_heads/heads"}
+	go w.sshWatchLoop(func(ctx context.Context) (io.ReadCloser, error) {
+		return streamRaw(ctx, argv)
+	})
 	return w
 }
 
@@ -120,6 +148,102 @@ func (w *Watcher) watchLoop() {
 	}
 }
 
+// sshWatchLoop consumes a line-oriented event stream and broadcasts debounced
+// op-id changes. Reconnects with exponential backoff on stream close. Bails
+// permanently only if the stream dies in <3s without ever yielding a line
+// (inotifywait missing → immediate `command not found` exit); a long-idle
+// stream that later drops is a network blip on a quiet repo → reconnect.
+func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, error)) {
+	// One context for the loop's lifetime, cancelled when Close() fires. All
+	// streams derive from it so exec.CommandContext kills the remote ssh process.
+	// The select on ctx.Done() lets this watchdog exit if sshWatchLoop returns
+	// early (defer cancel()) without waiting for w.stop.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-w.stop:
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
+
+	var timer *time.Timer
+	fire := func() {
+		// refreshOpId in SSH mode is a ~440ms round trip. Skip if no one's
+		// listening — mirrors snapshotLoop's gate.
+		if !w.hasSubscribers() {
+			return
+		}
+		w.broadcast(w.srv.refreshOpId())
+	}
+
+	backoff := time.Second
+	everSawLine := false
+
+	for ctx.Err() == nil {
+		opened := time.Now()
+		stream, err := open(ctx)
+		if err != nil {
+			if !everSawLine {
+				log.Printf("watcher: ssh stream failed (%v); auto-refresh disabled", err)
+				return
+			}
+			log.Printf("watcher: ssh stream dropped (%v), reconnecting in %v", err, backoff)
+			if !sleepCtx(ctx, backoff) {
+				return
+			}
+			backoff = min(backoff*2, 30*time.Second)
+			continue
+		}
+
+		sc := bufio.NewScanner(stream)
+		for sc.Scan() {
+			if !everSawLine {
+				everSawLine = true
+				log.Printf("watcher: ssh inotify connected")
+			}
+			backoff = time.Second
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = time.AfterFunc(w.debounce, fire)
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		stream.Close()
+
+		if ctx.Err() != nil {
+			return
+		}
+		// Distinguish "tool missing" (remote shell exits immediately) from
+		// "tool present, idle repo, SSH dropped later" by stream lifetime.
+		// inotifywait with a valid dir holds the pipe open indefinitely.
+		if !everSawLine && time.Since(opened) < 3*time.Second {
+			log.Printf("watcher: ssh stream closed immediately without events; inotify-tools not installed on remote? auto-refresh disabled")
+			return
+		}
+		log.Printf("watcher: ssh stream closed, reconnecting in %v", backoff)
+		if !sleepCtx(ctx, backoff) {
+			return
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
+}
+
+// sleepCtx blocks for d or until ctx is done. Returns false if ctx cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // snapshotLoop periodically asks jj to snapshot the working copy. This catches
 // raw file edits (editor saves, agent writes) that haven't been observed by jj
 // yet. The snapshot itself mutates op_heads, which triggers watchLoop → SSE.
@@ -160,6 +284,12 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 			}
 		}
 	}
+}
+
+func (w *Watcher) hasSubscribers() bool {
+	w.subsMu.Lock()
+	defer w.subsMu.Unlock()
+	return len(w.subs) > 0
 }
 
 // subscribe registers a channel to receive op-id broadcasts. Call the returned

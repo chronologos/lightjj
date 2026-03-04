@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, diffTargetKey, prefetchRevision, prefetchFilesBatch, onStale, watchEvents, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, diffTargetKey, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -1292,10 +1292,10 @@
       else if (inlineMode) staleWhileInMode = true
     })
   })
-  // SSE auto-refresh: server pushes op-id changes from fsnotify. Flows through
-  // the same notifyOpId → onStale path as the HTTP header, so the guards above
-  // apply identically. Effect cleanup closes the EventSource on unmount.
-  $effect(() => watchEvents())
+  // Auto-refresh sources: SSE push (fsnotify/inotifywait) + tab-focus snapshot.
+  // Both route through notifyOpId → onStale so the guards above apply. The
+  // body reads no reactive state → runs once on mount, cleanup on unmount.
+  $effect(() => wireAutoRefresh())
   $effect(() => {
     if (!inlineMode && staleWhileInMode) {
       staleWhileInMode = false

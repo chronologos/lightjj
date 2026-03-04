@@ -16,6 +16,12 @@ export interface DiffHunk {
 export interface DiffFile {
   header: string
   filePath: string
+  // Source path for pure renames (from `rename from <path>` in git-diff header).
+  // Only present when jj emits an explicit rename record — rename-with-edits
+  // decomposes into separate A+D entries instead. Used by Discard to pass BOTH
+  // paths to `jj restore -c`: dest-only would delete the new path without
+  // restoring the source, turning the rename into a delete.
+  sourcePath?: string
   hunks: DiffHunk[]
 }
 
@@ -53,6 +59,9 @@ export function parseDiffContent(raw: string): DiffFile[] {
       if (currentFile) {
         currentFile.header += '\n' + line
       }
+    } else if (currentFile && line.startsWith('rename from ')) {
+      currentFile.sourcePath = line.slice('rename from '.length)
+      currentFile.header += '\n' + line
     } else if (currentHunk) {
       if (line.startsWith('+')) {
         currentHunk.lines.push({ type: 'add', content: line })
