@@ -622,6 +622,19 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.Undo())
 }
 
+// handleSnapshot asks jj to observe the working copy on demand. Called by the
+// frontend on tab focus so users don't wait up to 5s for the periodic loop
+// after editing in another terminal. If the WC is unchanged, op_heads doesn't
+// advance and the frontend's notifyOpId dedup makes this a no-op. Works in SSH
+// mode too (no fsnotify there — the X-JJ-Op-Id header carries the refresh).
+func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	if err := decodeBody(w, r, &struct{}{}); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.runMutation(w, r, jj.DebugSnapshot())
+}
+
 func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Message string `json:"message"`

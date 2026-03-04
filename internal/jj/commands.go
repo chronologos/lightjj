@@ -157,10 +157,6 @@ func Redo() CommandArgs {
 	return []string{"redo"}
 }
 
-func Snapshot() CommandArgs {
-	return []string{"debug", "snapshot"}
-}
-
 func BookmarkSet(revision string, name string) CommandArgs {
 	return []string{"bookmark", "set", "-r", revision, name}
 }

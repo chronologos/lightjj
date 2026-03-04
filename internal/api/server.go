@@ -93,6 +93,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/split", s.handleSplit)
 	s.Mux.HandleFunc("POST /api/resolve", s.handleResolve)
 	s.Mux.HandleFunc("POST /api/undo", s.handleUndo)
+	s.Mux.HandleFunc("POST /api/snapshot", s.handleSnapshot)
 	s.Mux.HandleFunc("POST /api/commit", s.handleCommit)
 
 	s.Mux.HandleFunc("POST /api/bookmark/set", s.handleBookmarkSet)

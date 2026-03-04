@@ -86,7 +86,7 @@ export function clearAllCaches(): void {
 }
 
 // notifyOpId is the single op-id ingestion point. Called by both the HTTP
-// header path (trackOpId) and the SSE push path (watchEvents). The lastOpId
+// header path (trackOpId) and the SSE push path (wireAutoRefresh). The lastOpId
 // comparison deduplicates across sources: a UI-initiated mutation fires the
 // header first, then the SSE event arrives ~150ms later with the same op-id
 // and is a no-op. Fires staleCallbacks to trigger loadLog() — the cache is
@@ -113,12 +113,14 @@ function trackOpId(res: Response) {
   if (opId) notifyOpId(opId)
 }
 
-// watchEvents opens an SSE connection to /api/events and routes incoming
-// op-id pushes through the same dedup path as the HTTP header. Auto-reconnects
-// via the browser's native EventSource retry. If the server returns non-200
-// (204 for SSH mode, 404 if route missing), readyState goes to CLOSED and we
-// stop — no polling fallback; the header path already covers UI mutations.
-export function watchEvents(): () => void {
+// wireAutoRefresh sets up both auto-refresh sources:
+//   1. SSE (/api/events) — server pushes op-id on fsnotify/inotifywait events
+//   2. visibilitychange → POST /api/snapshot — fires on tab focus so users
+//      don't wait up to 5s for the server loop after editing elsewhere
+// Both feed notifyOpId → onStale. Works in SSH mode: SSE may close (no watcher)
+// but the snapshot response's X-JJ-Op-Id header still carries refresh.
+// Returns a cleanup fn that tears down both.
+export function wireAutoRefresh(): () => void {
   const es = new EventSource('/api/events')
 
   es.addEventListener('op', (ev) => {
@@ -138,7 +140,23 @@ export function watchEvents(): () => void {
     }
   })
 
-  return () => es.close()
+  // In-flight flag: rapid alt-tabbing shouldn't stack requests. In SSH mode
+  // each snapshot is two round trips (debug snapshot + op log ≈ 880ms) — N
+  // concurrent calls is N× SSH traffic, most of it redundant.
+  let snapshotInFlight = false
+  const onVisible = () => {
+    if (document.visibilityState !== 'visible' || snapshotInFlight) return
+    snapshotInFlight = true
+    api.snapshot()
+      .catch(() => {}) // WC lock contention expected; next tick catches up
+      .finally(() => { snapshotInFlight = false })
+  }
+  document.addEventListener('visibilitychange', onVisible)
+
+  return () => {
+    es.close()
+    document.removeEventListener('visibilitychange', onVisible)
+  }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -567,6 +585,8 @@ export const api = {
     }),
 
   undo: () => post<{ output: string }>('/api/undo', {}),
+
+  snapshot: () => post<{ output: string }>('/api/snapshot', {}),
 
   commit: (message: string = '') => post<{ output: string }>('/api/commit', { message }),
 
