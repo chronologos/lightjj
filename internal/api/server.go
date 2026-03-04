@@ -25,6 +25,8 @@ type Server struct {
 	Mux           *http.ServeMux
 	RepoDir       string // absolute path to repo root (empty for SSH mode)
 	DefaultRemote string // preferred remote name for bookmark/remote sorting; main.go can override
+	Hostname      string // display hostname for tab title (local os.Hostname or SSH host); main.go sets
+	RepoPath      string // display repo path for tab title (RepoDir or SSH remote path); main.go sets
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
@@ -77,6 +79,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/evolog", s.handleEvolog)
 	s.Mux.HandleFunc("GET /api/diff-range", s.handleDiffRange)
 	s.Mux.HandleFunc("GET /api/file-show", s.handleFileShow)
+	s.Mux.HandleFunc("GET /api/info", s.handleInfo)
 	s.Mux.HandleFunc("GET /api/workspaces", s.handleWorkspaces)
 	s.Mux.HandleFunc("POST /api/workspace/open", s.handleWorkspaceOpen)
 
