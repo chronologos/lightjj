@@ -112,6 +112,25 @@ describe('classify — stack detection', () => {
     expect(groups[0].conflictedBookmarks).toEqual([{ name: 'my/feature', changeId: 'D' }])
   })
 
+  it('descendants contains ONLY direct children of divergent commits (roots, not chains)', () => {
+    // D1 hangs off the divergent tip; D2 hangs off D1. Both appear in the
+    // revset ((divergent()&mutable())::) but only D1's parent is in the
+    // divergent set — D2's parent is D1 which is itself a descendant.
+    //
+    // This is what makes `jj rebase -s <rebaseSources>` safe: -s D1 -s D2
+    // would FLATTEN them (both reparent to dest as siblings, chain broken).
+    // -s D1 alone pulls D2 along. The classifier filter gives us roots-only
+    // by construction — this test pins that so a future "let's show the
+    // whole chain in the UI" refactor can't silently reintroduce flattening.
+    const groups = classify([
+      e({ change_id: 'X', commit_id: 'x0', parent_commit_ids: ['t0'], parent_change_ids: ['T'] }),
+      e({ change_id: 'X', commit_id: 'x1', parent_commit_ids: ['t1'], parent_change_ids: ['T'] }),
+      e({ change_id: 'D1', commit_id: 'd1', parent_commit_ids: ['x1'], parent_change_ids: ['X'], divergent: false, empty: false }),
+      e({ change_id: 'D2', commit_id: 'd2', parent_commit_ids: ['d1'], parent_change_ids: ['D1'], divergent: false, empty: false }),
+    ])
+    expect(groups[0].descendants.map(d => d.commit_id)).toEqual(['d1']) // d2 excluded
+  })
+
   it('two independent stacks → two groups', () => {
     const groups = classify([
       ...fourLevelStack,

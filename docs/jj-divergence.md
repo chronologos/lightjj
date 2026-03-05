@@ -115,4 +115,4 @@ Revset: `(stale_root::):: ~ ::keeper_tip ~ divergent()` — finds them correctly
 
 - **Divergent merge commits** — `parents[0]` comparison is wrong. Compare full parent sets? Rare enough to punt.
 - **"Fresher trunk" for pure-rebase recommendation** — `parent.contained_in("::trunk()")` one-bit check: if one parent is in trunk ancestry and the other isn't, the in-ancestry one is stale (trunk moved past it). Both in ancestry → need ancestor-distance. Not implemented; pure-rebase just shows "trees identical, either is safe" without picking.
-- **"Rebase onto keeper" in non-empty-descendant confirm** — currently only [Abandon anyway]. `jj rebase -s <desc> -d <keeper_tip>` before abandon is usually what the user wants.
+- ~~**"Rebase onto keeper" in non-empty-descendant confirm**~~ — shipped. `jj rebase -s <roots> -d <keeper_tip>` before abandon. `g.descendants` is roots-only by classifier construction (only entries whose parent is in the divergent set), so `-s` flattening can't happen — `-s D1` pulls its chain, D2-on-D1 never enters the set.
