@@ -307,16 +307,36 @@ func (s *Server) spawnLocked(name, workspacePath string) (url string, addr strin
 
 // readWorkspaceStore reads and parses the workspace store index file.
 // Returns nil map if RepoDir is empty (SSH mode) or if the file can't be read.
+//
+// jj 0.39+ writes RELATIVE paths (anchored at .jj/repo/ — the shared store
+// all workspaces point back to). Pre-0.39 wrote absolute. We resolve here,
+// not in the parser, because resolution needs RepoDir (fs knowledge the pure
+// parser shouldn't have). Both callers need absolute: spawnWorkspaceInstance
+// rejects !IsAbs, and the current-workspace match (wsPath == s.RepoDir) would
+// compare "../../" to "/Users/...".
 func (s *Server) readWorkspaceStore() (map[string]string, error) {
 	if s.RepoDir == "" {
 		return nil, nil
 	}
-	storePath := filepath.Join(s.RepoDir, ".jj", "repo", "workspace_store", "index")
-	data, err := os.ReadFile(storePath)
+	repoStore := filepath.Join(s.RepoDir, ".jj", "repo")
+	data, err := os.ReadFile(filepath.Join(repoStore, "workspace_store", "index"))
 	if err != nil {
 		return nil, fmt.Errorf("reading workspace store: %w", err)
 	}
-	return jj.ParseWorkspaceStorePaths(data)
+	raw, err := jj.ParseWorkspaceStorePaths(data)
+	if err != nil {
+		return nil, err
+	}
+	resolved := make(map[string]string, len(raw))
+	for name, p := range raw {
+		if filepath.IsAbs(p) {
+			resolved[name] = filepath.Clean(p)
+		} else {
+			// Join handles ".." traversal: Join("/r/.jj/repo", "../../") → "/r"
+			resolved[name] = filepath.Join(repoStore, p)
+		}
+	}
+	return resolved, nil
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
