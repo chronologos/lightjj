@@ -13,7 +13,7 @@
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
-  import DivergencePanel from './lib/DivergencePanel.svelte'
+  import DivergencePanel, { type KeepPlan } from './lib/DivergencePanel.svelte'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
   import { createLoader } from './lib/loader.svelte'
   import { config } from './lib/config.svelte'
@@ -803,32 +803,29 @@
     )
   }
 
-  async function handleKeepDivergent(keptCommitId: string, abandonIds: string[]) {
+  async function handleKeepDivergent(plan: KeepPlan) {
     return withMutation(async () => {
       try {
-        // Snapshot conflicted bookmarks BEFORE abandon — --retain-bookmarks
-        // may auto-resolve them by moving to the parent, losing the conflict flag
-        const bookmarksBefore = await api.bookmarks()
-        const conflictedNames = bookmarksBefore
-          .filter(b => b.conflict && abandonIds.includes(b.commit_id))
-          .map(b => b.name)
+        // Plan is computed by DivergencePanel from the classify() group
+        // structure: stack-aware abandon set (all levels of losing columns +
+        // empty descendants), per-change_id bookmark repoints (not stack tip).
+        // Non-empty descendants already went through the panel's confirm.
+        await api.abandon(plan.abandonCommitIds)
 
-        await api.abandon(abandonIds)
-
-        // Move all previously-conflicted bookmarks to the kept commit.
-        // Serial (not Promise.all): concurrent jj mutations can produce divergent
-        // op history. N is tiny (1-3) and this is a rare manual action.
-        for (const name of conflictedNames) {
-          await api.bookmarkSet(keptCommitId, name)
+        // Serial: concurrent jj mutations can produce divergent op history.
+        // N is tiny (0-3) and this is a rare manual action.
+        for (const { name, targetCommitId } of plan.bookmarkRepoints) {
+          await api.bookmarkSet(targetCommitId, name)
         }
 
         divergence.cancel()
-        lastAction = `Resolved divergence — kept ${keptCommitId.slice(0, 8)}`
+        lastAction = `Resolved divergence — kept ${plan.keeperCommitId.slice(0, 8)}` +
+          (plan.abandonCommitIds.length > 1 ? ` (abandoned ${plan.abandonCommitIds.length})` : '')
         await loadLog()
       } catch (e: any) {
         // Don't close panel on error — let user see state and retry
         showError(e.message || 'Failed to resolve divergence')
-        await loadLog() // always refresh to show current reality
+        await loadLog()
       }
     })
   }
@@ -1503,11 +1500,17 @@
         <div class="panel-divider" class:divider-active={draggingDivider} onmousedown={startDividerDrag}></div>
 
         {#if divergence.active}
-          <DivergencePanel
-            changeId={divergence.changeId}
-            onkeep={handleKeepDivergent}
-            onclose={() => divergence.cancel()}
-          />
+          <!-- {#key} enforces what DivergencePanel assumes: changeId never
+               changes in-place. createDivergenceMode.enter() doesn't guard
+               against re-entry; the key does. Fresh mount = no stale-promise
+               races, no gen counter needed in the version-load path. -->
+          {#key divergence.changeId}
+            <DivergencePanel
+              changeId={divergence.changeId}
+              onkeep={handleKeepDivergent}
+              onclose={() => divergence.cancel()}
+            />
+          {/key}
         {:else}
           <DiffPanel
             bind:this={diffPanelRef}
