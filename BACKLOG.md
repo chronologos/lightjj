@@ -3,7 +3,7 @@
 ## jj 0.39 compat (2026-03-04)
 
 - [x] **`debug snapshot` → `util snapshot`** (Trivial) — jj 0.39 deprecated `debug snapshot` (removed v0.45). Periodic loop fires every 5s → deprecation warning firehose. `DebugSnapshot()` args changed; function name kept (4 call sites, zero semantic delta). `README.md:73` bumped min jj to 0.39.
-- [ ] **Workspace relative paths** (Small) — jj 0.39's `workspace add` writes relative paths into `workspace_store/index`. `spawnWorkspaceInstance` (`server.go:295`) hard-rejects `!filepath.IsAbs` → **new workspaces can't spawn** via the UI. Existing absolute-path entries unaffected. Fix: resolve relative to `filepath.Dir(storePath)` = `.jj/repo/workspace_store/` (verify this is the anchor jj uses — could be `.jj/repo/` or the repo root). Parser (`workspace_store.go`) is fine — just returns the string; only the `IsAbs` check + `filepath.Join` at the consumer needs changing.
+- [x] **Workspace relative paths** (Small) — jj 0.39 anchors at `.jj/repo/` (verified: `default` → `../../`, secondary → `../../../sibling`). `readWorkspaceStore` resolves via `filepath.Join(repoStore, p)` (handles `..` traversal) before returning; callers (spawn IsAbs check, current-match `==`) both fixed at once. Parser stays pure. `s.RepoDir` comes from `jj workspace root` — already symlink-resolved, so the resolved path and RepoDir agree without `EvalSymlinks`.
 - [ ] **`git push --option` / `-o`** (Trivial) — Add to `allowedGitPushFlags` (`handlers.go:20`). Passes server-side push options (Gerrit reviewers, GitLab merge options). Low demand; wait for a request.
 - [ ] **`jj bookmark advance`** (Small) — Built-in `jj tug`. Could replace or supplement the BookmarkModal's move action. `revsets.bookmark-advance-from`/`-to` are user config, not our concern.
 - [ ] **`--simplify-parents` on rebase** (Trivial) — Add to `Rebase()` builder signature, wire a checkbox in rebase mode. Useful when rebasing onto a descendant of the old parent.
@@ -40,7 +40,7 @@ Four-agent deep analysis (Go backend, Svelte frontend, performance paths, API de
 - [x] **Log limit clamp policy** — `>1000` was clamping to 500 instead of 1000.
 - [x] **`highlightedLines` invalidates all DiffFileViews** — progressive Shiki updates replaced global Map → every file re-rendered. Now `highlightsByFile: Map<filePath, Map<key, html>>`; inner Maps for unchanged files keep their reference, so only newly-highlighted files re-render.
 - [x] **`searchMatches` O(files × matches)** — every DiffFileView received full match array and filtered per-file. Pre-grouped by filePath in parent via `groupByWithIndex()`. O(matches) total.
-- [x] **Sequential bookmark loop in divergence resolution** — `for await` → `Promise.all`.
+- [x] ~~**Sequential bookmark loop in divergence resolution** — `for await` → `Promise.all`.~~ **Reverted**: concurrent jj mutations produce divergent op history. Serial loop is correct; N is tiny (0-3).
 - [x] **Cmd+F diff search** — search bar with match counter, Enter/Shift+Enter navigation, `<mark>` highlights, auto-expand collapsed files.
 
 ### Remaining — Performance
@@ -268,7 +268,8 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
-- [x] Divergent commit resolution UI — detect divergent commits via `Divergent` field, show `divergent` badge + dashed ring in graph, DivergencePanel for comparing versions with color-coded cards (red=from, green=to), cross-version diff filtered to union of changed files, parent info display, "Keep" action with bookmark conflict resolution, `/N` offset labels matching jj convention
+- [x] Divergent commit resolution UI — `GET /api/divergence` + `classify()` (stack grouping via parent-change_id walk + `alignColumns` commit_id permutation, `alignable` bailout, tautology-guarded `liveVersion`). Panel renders columns (one per /N version, rows = stack levels). `KeepPlan` abandons losing columns + empty descendants, repoints bookmarks per-change_id (not tip). Non-empty descendants confirm. Cross-column-merge warning. `/N` = index emission order (NOT commit_id sort — that was the old bug). See docs/jj-divergence.md.
+- [ ] Divergence: "Rebase onto keeper" in non-empty-descendant confirm — currently only [Abandon anyway] / [Cancel]. `jj rebase -s <descendant> -d <keeper_tip>` before abandon is usually what the user wants.
 - [x] Bookmark → GitHub PR linking — `GET /api/pull-requests` shells `gh pr list`, `prByBookmark` map in App.svelte, bookmark badges linked to PRs with `#number` suffix. Draft PRs dimmed.
 - [x] Cmd+F diff search — intercept `Cmd+F` / `Ctrl+F` in the diff panel, search bar with match counter, Enter/Shift+Enter navigation, `<mark>` highlights, auto-expand collapsed files. Case-insensitive, 2-char minimum. Future: case toggle, regex.
 

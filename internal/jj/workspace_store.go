@@ -5,7 +5,10 @@ import (
 )
 
 // ParseWorkspaceStorePaths reads the binary workspace_store/index file
-// and returns a map of workspace name → absolute directory path.
+// and returns a map of workspace name → directory path. jj 0.39+ writes
+// paths RELATIVE to .jj/repo/; pre-0.39 wrote absolute. This parser
+// returns whatever is in the bytes — resolution against a RepoDir is the
+// server layer's job (api/server.go readWorkspaceStore).
 //
 // The file uses protobuf encoding:
 //

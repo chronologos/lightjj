@@ -1329,6 +1329,60 @@ func TestHandleWorkspaces(t *testing.T) {
 	assert.Equal(t, "", resp.Current) // no RepoDir set in test
 }
 
+// wsStoreEntry builds a protobuf workspace_store record (jj's on-disk format).
+// Strings <128 bytes → single-byte varints → trivial hand-encoding. See
+// jj/workspace_store.go for the schema.
+func wsStoreEntry(name, path string) []byte {
+	inner := append(
+		append([]byte{0x0a, byte(len(name))}, name...),  // field 1: name
+		append([]byte{0x12, byte(len(path))}, path...)..., // field 2: path
+	)
+	return append([]byte{0x0a, byte(len(inner))}, inner...) // outer field 1: entry
+}
+
+func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
+	// jj 0.39 writes paths relative to .jj/repo/. The default workspace at
+	// the repo root is "../../" (two levels up from .jj/repo/). A secondary
+	// workspace at ../sibling is "../../../sibling". Pre-0.39 wrote absolute.
+	// readWorkspaceStore must resolve both so spawnWorkspaceInstance's IsAbs
+	// check passes and the wsPath==RepoDir current-workspace match works.
+	repoDir := t.TempDir()
+	storeDir := filepath.Join(repoDir, ".jj", "repo", "workspace_store")
+	require.NoError(t, os.MkdirAll(storeDir, 0o755))
+
+	var store []byte
+	store = append(store, wsStoreEntry("default", "../../")...)         // jj 0.39 relative
+	store = append(store, wsStoreEntry("legacy", "/abs/legacy/path")...) // pre-0.39 absolute
+	require.NoError(t, os.WriteFile(filepath.Join(storeDir, "index"), store, 0o644))
+
+	srv := &Server{RepoDir: repoDir}
+	got, err := srv.readWorkspaceStore()
+	require.NoError(t, err)
+
+	// ../../ from {repoDir}/.jj/repo/ → {repoDir}. filepath.Join cleans the dots.
+	assert.Equal(t, repoDir, got["default"])
+	// Absolute passes through (Clean'd — idempotent here).
+	assert.Equal(t, "/abs/legacy/path", got["legacy"])
+	// Both are now IsAbs — spawnWorkspaceInstance won't reject.
+	assert.True(t, filepath.IsAbs(got["default"]))
+	assert.True(t, filepath.IsAbs(got["legacy"]))
+}
+
+func TestReadWorkspaceStore_CurrentWorkspaceMatch(t *testing.T) {
+	// The second break: handlers.go:396 does wsPath == s.RepoDir to identify
+	// "current". With ../../ → repoDir resolution, the match works.
+	repoDir := t.TempDir()
+	storeDir := filepath.Join(repoDir, ".jj", "repo", "workspace_store")
+	require.NoError(t, os.MkdirAll(storeDir, 0o755))
+	store := wsStoreEntry("default", "../../")
+	require.NoError(t, os.WriteFile(filepath.Join(storeDir, "index"), store, 0o644))
+
+	srv := &Server{RepoDir: repoDir}
+	got, _ := srv.readWorkspaceStore()
+
+	assert.Equal(t, srv.RepoDir, got["default"]) // the exact == check handlers.go does
+}
+
 func TestHandleWorkspaces_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.WorkspaceList()).SetError(errors.New("workspace list failed"))

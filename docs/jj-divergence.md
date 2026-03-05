@@ -99,48 +99,20 @@ Revset: `(stale_root::):: ~ ::keeper_tip ~ divergent()` — finds them correctly
 
 `jj bookmark set <name> -r <keeper_version_of_same_change_id>` — NOT `<keeper_tip>`. A bookmark on the stack's middle commit (change_id B) should repoint to B's keeper, not jump to D. Map by change_id.
 
-## Implementation
+## Implementation (shipped 2026-03-05)
 
-### Template (tested, jj 0.39)
+- Template/parser: `internal/jj/divergence.go` — 10 fields, NO `committer.timestamp` (see §"Failed heuristics")
+- Endpoint: `GET /api/divergence` (`handlers.go`)
+- Classifier: `frontend/src/lib/divergence.ts` — `classify()` + `alignColumns()` + `refineRebaseKind()`
+- Panel: `DivergencePanel.svelte` — unified column rendering for stack AND single; `{#key changeId}` in parent enforces single-mount
+- 29 frontend tests, 9 backend
 
-```
-revset:   (divergent() & mutable())::
-template: change_id ++ "\x1F" ++
-          commit_id ++ "\x1F" ++
-          if(divergent, "1", "") ++ "\x1F" ++
-          parents.map(|p| p.commit_id()).join(",") ++ "\x1F" ++
-          parents.map(|p| p.change_id()).join(",") ++ "\x1F" ++
-          committer.timestamp().format("%+") ++ "\x1F" ++
-          if(self.contained_in("::working_copies()"), "1", "") ++ "\x1F" ++
-          local_bookmarks.map(|b| b.name()).join(",") ++ "\x1F" ++
-          description.first_line() ++ "\n"
-```
+### Column alignment (found during review, not in initial design)
 
-- `.join(",")` required — without it, lists render space-separated
-- `.format("%+")` → RFC3339, ECMA-262-guaranteed `new Date()` parseable (raw format relies on V8 lenience)
-- `local_bookmarks.map(|b| b.name())` strips `@origin` tracking suffix and `*` ahead-marker
-- `(divergent() & mutable())::` — descendants of mutable are provably mutable (immutable = `::immutable_heads()`; if X is mutable, no descendant can be an ancestor of an immutable head). No outer filter needed.
-
-### Endpoint
-
-**Dedicated `/api/divergence`**, not a param on `/api/log`. Existing `LogGraph` parser (`parser/graph.go:104`) hardcodes `SplitN(rest, "\x1F", 7)` with bookmarks-last; adding 3 fields means bumping the split count + new `Commit` struct fields + index rewiring. A separate parser for a separate shape is cleaner than bloating the hot-path log template.
-
-### UX routing
-
-| Kind | UI |
-|---|---|
-| Immutable | Suppress entirely. Permanent, unactionable. |
-| Stack | **DivergentStackPanel** — side-by-side columns. Live badge ONLY if `@` isn't tautologically on one side. Non-empty descendant → confirm modal. Bookmark repoint by change_id match. |
-| Metadata drift | Show both descriptions side-by-side, [Keep] button on each. No auto-pick. |
-| Edit conflict | Current DivergencePanel — correct for this. |
-| Pure rebase / Rebase+edit (single) | Current panel + live badge (guarded) + tree-delta banner (after fileUnion subtraction) |
-
-### Sort order fix
-
-`DivergencePanel.svelte:62` sorts by `commit_id`. Change to: preserve `api.log('change_id(X)')` emission order. That's jj's index order = `/N` offsets.
+`findRoot` checks parent **change_ids** match, but `/N` emission is per-commit index position. A 4-step rebase-then-describe sequence produces crossed columns: `A/0=A₂, A/1=A₁, B/0=B₃(parent A₁), B/1=B₂(parent A₂)`. Without alignment, `buildPlan(0)` keeps `{A₂, B₃}` but abandons B₃'s parent — jj auto-rebases B₃ onto trunk, silently wrong. `alignColumns()` permutes by parent **commit_id**; returns `null` on arity mismatch or non-bijective mapping → `alignable: false` → panel disables Keep.
 
 ## Open questions
 
-- **3+ way mutable** — taxonomy handles via parent-grouping but 2-column UX doesn't scale. List + radio, or N-column grid?
 - **Divergent merge commits** — `parents[0]` comparison is wrong. Compare full parent sets? Rare enough to punt.
-- **"Fresher trunk" computation** — `distance_to(trunk())` needs a revset per version. Cheap approximation: `parent.committer_timestamp()` is available but has the same clock-skew/`--at-op` problem. Better: `parent.contained_in("::trunk()")` — if one parent is in trunk's ancestry and the other isn't, the in-ancestry one is stale (trunk moved past it). If both are in ancestry: compare ancestor-distance. Punt for v1.
+- **"Fresher trunk" for pure-rebase recommendation** — `parent.contained_in("::trunk()")` one-bit check: if one parent is in trunk ancestry and the other isn't, the in-ancestry one is stale (trunk moved past it). Both in ancestry → need ancestor-distance. Not implemented; pure-rebase just shows "trees identical, either is safe" without picking.
+- **"Rebase onto keeper" in non-empty-descendant confirm** — currently only [Abandon anyway]. `jj rebase -s <desc> -d <keeper_tip>` before abandon is usually what the user wants.
