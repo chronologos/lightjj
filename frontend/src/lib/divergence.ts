@@ -50,19 +50,37 @@ export function classify(entries: DivergenceEntry[]): DivergenceGroup[] {
     byChange.set(e.change_id, arr)
   }
 
-  // Stack detection: X inherits divergence if its versions' parent_change_ids
-  // all agree AND that parent is itself divergent. Walk up to the root.
+  // Stack detection: X inherits divergence if every version's parent COMMIT
+  // is a commit in byChange[p0]. Walk up to the root.
+  //
+  // The commit-presence check is what makes this walk follow real DAG edges
+  // and therefore terminate (minimum-depth argument: cycle's shallowest
+  // commit must have a strictly-shallower parent also in the cycle →
+  // contradiction). byChange.has(change_id) alone is NOT a DAG edge — it's
+  // a label coincidence. byChange is filtered by `& mutable()`; a version's
+  // parent can be the IMMUTABLE copy of a change whose mutable copy is in
+  // byChange → byChange.has() true but edge is phantom. One phantom edge in
+  // a 154-node warm-merge chain closed a cycle → stack overflow.
+  //
+  // Both arity guards (>=2) are semantic, not termination: stack inheritance
+  // needs 2+ copies at BOTH levels. A 1-copy parent with a 2-copy child would
+  // chain them, root has nVersions=1, panel shows "immutable sibling" error
+  // for the user's genuinely-resolvable 2-copy click. A 1-copy child isn't
+  // panel-resolvable at all.
+  //
+  // The commit-check subsumes the old change_id .every(): parent_commit_ids
+  // and parent_change_ids are positionally aligned (same parents.map() in the
+  // template); a commit_id in byChange[p0] has change_id p0 by construction.
   const rootOf = new Map<string, string>()
   const findRoot = (cid: string): string => {
     const cached = rootOf.get(cid)
     if (cached) return cached
     const vs = byChange.get(cid)!
-    // Check: do all versions share a single parent change_id, and is it in byChange?
-    // Using parent_change_ids[0] — divergent merges (multi-parent) are punted per doc.
     const p0 = vs[0].parent_change_ids[0]
-    const inherits = p0 !== undefined
-      && vs.every(v => v.parent_change_ids[0] === p0)
-      && byChange.has(p0)
+    const parentCommits = new Set(byChange.get(p0)?.map(v => v.commit_id))
+    const inherits = vs.length >= 2
+      && parentCommits.size >= 2
+      && vs.every(v => parentCommits.has(v.parent_commit_ids[0]))
     const root = inherits ? findRoot(p0) : cid
     rootOf.set(cid, root)
     return root

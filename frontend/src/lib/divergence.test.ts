@@ -143,6 +143,101 @@ describe('classify — stack detection', () => {
   })
 })
 
+describe('classify — findRoot phantom-edge cycle guard', () => {
+  // Real crash (large monorepo with warm-merge train, 2026-03-05): 154-node
+  // cycle → stack overflow.
+  //
+  // byChange is filtered by `& mutable()`. A change can be divergent with one
+  // mutable copy + one immutable copy; only the mutable one enters byChange.
+  // The mutable copy's parent can be the IMMUTABLE copy of another change
+  // whose MUTABLE copy is also in byChange. byChange.has(parent_change_id)
+  // returns true, but the actual parent commit isn't in the set → recursing
+  // follows an edge that doesn't exist in our filtered view of the DAG. One
+  // such phantom edge closed a 154-node cycle in a warm-merge chain.
+
+  it('does not recurse through phantom edges (parent change in set, parent COMMIT not)', () => {
+    // A's mutable copy has parent_commit=b_imm. B's mutable copy (b_mut) is
+    // in byChange. byChange.has('B') is true but b_imm !== b_mut. Without
+    // the commit-presence check, findRoot(A) → findRoot(B) via phantom edge.
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a0', parent_commit_ids: ['b_imm'], parent_change_ids: ['B'] }),
+      e({ change_id: 'A', commit_id: 'a1', parent_commit_ids: ['b_imm'], parent_change_ids: ['B'] }),
+      // B's copy in byChange has a DIFFERENT commit_id than A's actual parent
+      e({ change_id: 'B', commit_id: 'b_mut', parent_commit_ids: ['t'], parent_change_ids: ['T'] }),
+      e({ change_id: 'B', commit_id: 'b_mut2', parent_commit_ids: ['t'], parent_change_ids: ['T'] }),
+    ])
+    // A and B are independent roots — NOT chained. The parent-change-id match
+    // is a coincidence of change_id reuse across the mutable/immutable boundary.
+    expect(groups).toHaveLength(2)
+    expect(groups.find(g => g.rootChangeId === 'A')?.changeIds).toEqual(['A'])
+    expect(groups.find(g => g.rootChangeId === 'B')?.changeIds).toEqual(['B'])
+  })
+
+  it('does not walk single-copy entries (immutable sibling filtered out)', () => {
+    // vs.length === 1 → .every() trivially true. With 154 single-copy merges
+    // whose parent_change_ids[0] form a phantom cycle, this blew the stack.
+    // A single-copy change isn't stack-inherited (nothing to "all agree" on)
+    // AND isn't panel-resolvable (can't abandon immutable sibling) — don't walk.
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a', parent_commit_ids: ['pb'], parent_change_ids: ['B'] }),
+      e({ change_id: 'B', commit_id: 'b', parent_commit_ids: ['pc'], parent_change_ids: ['C'] }),
+      e({ change_id: 'C', commit_id: 'c', parent_commit_ids: ['pa'], parent_change_ids: ['A'] }), // cycle!
+    ])
+    // Previously: findRoot('A') → findRoot('B') → findRoot('C') → findRoot('A') → ∞
+    // Now: each is its own root (vs.length < 2 bails immediately)
+    expect(groups).toHaveLength(3)
+    for (const g of groups) expect(g.changeIds).toHaveLength(1)
+  })
+
+  it('still walks when parent commits ARE in byChange (real stack preserved)', () => {
+    // The original 4-change stack: each version's parent_commit_id IS the
+    // commit_id of an entry in byChange. Real DAG edges → walk is safe.
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a0', parent_commit_ids: ['t0'], parent_change_ids: ['T'] }),
+      e({ change_id: 'A', commit_id: 'a1', parent_commit_ids: ['t1'], parent_change_ids: ['T'] }),
+      e({ change_id: 'B', commit_id: 'b0', parent_commit_ids: ['a0'], parent_change_ids: ['A'] }),
+      e({ change_id: 'B', commit_id: 'b1', parent_commit_ids: ['a1'], parent_change_ids: ['A'] }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].rootChangeId).toBe('A')
+    expect(groups[0].changeIds).toEqual(['A', 'B'])
+  })
+
+  it('mixed: one version has in-set parent, other has phantom → NOT inherited', () => {
+    // The .every() is what requires ALL versions. If b0's parent a0 is real
+    // but b1's parent a_ghost is phantom, B is NOT stack-inherited — only
+    // one descent chain exists, the other is into immutable land.
+    // (Old code chained them — wrong output, not a crash. Pin both.)
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a0', parent_commit_ids: ['t0'], parent_change_ids: ['T'] }),
+      e({ change_id: 'A', commit_id: 'a1', parent_commit_ids: ['t1'], parent_change_ids: ['T'] }),
+      e({ change_id: 'B', commit_id: 'b0', parent_commit_ids: ['a0'],      parent_change_ids: ['A'] }),
+      e({ change_id: 'B', commit_id: 'b1', parent_commit_ids: ['a_ghost'], parent_change_ids: ['A'] }),
+    ])
+    expect(groups).toHaveLength(2)
+  })
+
+  it('1-copy parent + 2-copy child → child is its own root (parentCommits.size >= 2)', () => {
+    // A is divergent-with-immutable-sibling (1 mutable copy). B is genuinely
+    // 2-way divergent, both copies descending from A's single mutable commit.
+    // With parentCommits.size > 0, findRoot chained B under A → root has
+    // nVersions=1 → panel showed "immutable sibling, jj abandon {A's commit}"
+    // — but the user clicked B, which IS resolvable. size >= 2 fixes: B's
+    // divergence isn't inherited from A (nothing to inherit from a single
+    // copy), it's B's own fork. B stays its own root.
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a_only', parent_commit_ids: ['t'], parent_change_ids: ['T'] }),
+      e({ change_id: 'B', commit_id: 'b0', parent_commit_ids: ['a_only'], parent_change_ids: ['A'] }),
+      e({ change_id: 'B', commit_id: 'b1', parent_commit_ids: ['a_only'], parent_change_ids: ['A'] }),
+    ])
+    expect(groups).toHaveLength(2)
+    const gB = groups.find(g => g.rootChangeId === 'B')!
+    expect(gB.changeIds).toEqual(['B'])
+    expect(gB.versions[0]).toHaveLength(2) // still 2-way resolvable
+    expect(gB.kind).toBe('same-parent')    // both from a_only
+  })
+})
+
 describe('classify — column alignment', () => {
   // Agent-found bug: findRoot checks parent CHANGE_IDs match, but /N emission
   // order is per-commit index position. Crossed columns → buildPlan abandons

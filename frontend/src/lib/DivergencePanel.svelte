@@ -103,6 +103,24 @@
         loading = false
         return
       }
+      if (found.versions[0].length < 2) {
+        // Divergent-with-immutable-sibling: the other copy was filtered out
+        // by `& mutable()`. Can't abandon it (it's in trunk's DAG permanently).
+        // This is the "never clears" case from docs/jj-divergence.md — the
+        // panel has nothing to offer. Common in repos with automated
+        // warm-merge trains where trunk was rewritten.
+        //
+        // findRoot's parentCommits.size >= 2 guard ensures these never chain
+        // as roots of resolvable stacks — versions[0] here is always the
+        // clicked change. commit_id (not change_id) in the abandon hint:
+        // `jj abandon <change_id>` on a divergent change errors with
+        // "resolved to more than one revision".
+        error = `Change ${id} is divergent with an immutable copy (likely in trunk history). ` +
+          'The immutable copy cannot be abandoned; this divergence will persist. ' +
+          'To discard your mutable copy instead: jj abandon ' + found.versions[0][0].commit_id
+        loading = false
+        return
+      }
       // fileUnion BEFORE group: the diff effect depends on both. Setting
       // group first would fire it with fileUnion empty → unfiltered fetch
       // (large, includes trunk churn), then fileUnion lands → fires again

@@ -256,7 +256,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [ ] **SSH jj command latency** — ~440ms per call via Coder ProxyCommand. Options in order of complexity: (a) **SSH ControlMaster** — user-side SSH config (`ControlMaster auto`, `ControlPersist 10m`), zero code changes, eliminates TCP/auth handshake for subsequent calls; (b) **Run lightjj on remote + port-forward** — `ssh -L 3001:localhost:3001 host "lightjj -R /path --addr localhost:3001 --no-browser"`, full local-quality perf, fsnotify watcher works natively, sidesteps every SSH-latency issue (documented in README); (c) **stdin/stdout multiplexing protocol** — one persistent SSH session, commands + responses over a simple framed protocol, complex.
 - [ ] SSH remote repo browser
 - [x] Live file watching (auto-refresh on working copy changes) — fsnotify on `.jj/repo/op_heads/heads/` + periodic `jj debug snapshot` → SSE push. See Agent Workflow section.
-- [ ] Git push/fetch with progress indication
+- [x] Git push/fetch with progress indication — `streamMutation` NDJSON → `streamPost` → `mutationProgress` in status bar. See commit `c2261066`.
 - [x] Diff syntax highlighting (language-aware, Shiki)
 - [x] Context expansion at hunk boundaries — "Show N hidden lines" buttons between hunks, click to expand full file context
 - [x] Parse user aliases from jj config and expose them dynamically in the UI — `aliasCommands` in App.svelte, `api.aliases()` promise-memoized
@@ -269,7 +269,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
 - [x] Divergent commit resolution UI — `GET /api/divergence` + `classify()` (stack grouping via parent-change_id walk + `alignColumns` commit_id permutation, `alignable` bailout, tautology-guarded `liveVersion`). Panel renders columns (one per /N version, rows = stack levels). `KeepPlan` abandons losing columns + empty descendants, repoints bookmarks per-change_id (not tip). Non-empty descendants confirm. Cross-column-merge warning. `/N` = index emission order (NOT commit_id sort — that was the old bug). See docs/jj-divergence.md.
-- [ ] Divergence: "Rebase onto keeper" in non-empty-descendant confirm — currently only [Abandon anyway] / [Cancel]. `jj rebase -s <descendant> -d <keeper_tip>` before abandon is usually what the user wants.
+- [x] Divergence: "Rebase onto keeper" in non-empty-descendant confirm — third button (green, leftmost). `rebaseSources` runs before abandon. Safe from `-s` flattening: `g.descendants` is roots-only by classifier construction. See commit `e4160a26`.
 - [x] Bookmark → GitHub PR linking — `GET /api/pull-requests` shells `gh pr list`, `prByBookmark` map in App.svelte, bookmark badges linked to PRs with `#number` suffix. Draft PRs dimmed.
 - [x] Cmd+F diff search — intercept `Cmd+F` / `Ctrl+F` in the diff panel, search bar with match counter, Enter/Shift+Enter navigation, `<mark>` highlights, auto-expand collapsed files. Case-insensitive, 2-char minimum. Future: case toggle, regex.
 

@@ -86,6 +86,14 @@ stacks = groupBy(mutableDivergentChanges, findRoot)
 
 **Gap:** assumes single-parent commits. Divergent merges need full parent-set comparison.
 
+### Phantom-edge cycle (crash found 2026-03-05)
+
+The naive check — "parent change_id agrees and is in byChange" — can loop forever. `byChange` is filtered by `& mutable()`. A commit's parent can be the **immutable** copy of a change whose **mutable** copy is in byChange. `byChange.has(parent_change_id)` returns true but the actual parent commit was filtered out. Recursing follows an edge that doesn't exist in our view of the DAG.
+
+Observed in a large monorepo with an automated warm-merge train: 154 merge commits, each divergent (mutable + immutable copy), forming a chain. One commit's parent was the immutable copy of a change further up → phantom edge closed the loop → `findRoot` stack overflow.
+
+Fix (`divergence.ts:56-78`): require `vs.length >= 2` (single-copy entries aren't stack-inherited — nothing to "all agree" on) AND each version's `parent_commit_ids[0]` must be a commit_id present in `byChange.get(p0)`. This constrains the walk to real commit-DAG edges, which are acyclic. The panel separately rejects single-version groups as "divergent with immutable sibling, cannot resolve" — can't abandon immutable copies.
+
 ## Collateral — what "Keep A" must also do
 
 ### 1. Non-divergent descendants of the losing stack
