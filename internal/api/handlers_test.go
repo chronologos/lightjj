@@ -331,6 +331,49 @@ func TestHandleGitPush(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleDivergence(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	// Two divergent versions of X: /0 wc-reachable, /1 stale. Parser-level
+	// behavior is covered in jj/divergence_test.go; this just checks the
+	// handler wires Run→Parse→JSON without mangling.
+	runner.Expect(jj.Divergence()).SetOutput([]byte(
+		"X\x1Fabc\x1F1\x1Fp1\x1Fpc1\x1F1\x1F\x1Fv0\x1F\x1F\n" +
+			"X\x1Fdef\x1F1\x1Fp2\x1Fpc1\x1F\x1F\x1Fv1\x1F\x1F\n"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/divergence", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var entries []jj.DivergenceEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	assert.Len(t, entries, 2)
+	assert.Equal(t, "abc", entries[0].CommitId) // emission order preserved — /0 first
+	assert.True(t, entries[0].WCReachable)
+	assert.False(t, entries[1].WCReachable)
+	// Same parent_change_id (pc1) but different parent_commit_id (p1≠p2) →
+	// stack-inherited. Classifier checks this client-side.
+	assert.Equal(t, entries[0].ParentChangeIds, entries[1].ParentChangeIds)
+	assert.NotEqual(t, entries[0].ParentCommitIds, entries[1].ParentCommitIds)
+}
+
+func TestHandleDivergence_Empty(t *testing.T) {
+	// No divergence → [] not null (frontend expects .length).
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Divergence()).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/divergence", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "[]\n", w.Body.String())
+}
+
 func TestHandleFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.FilesTemplate("abc")).SetOutput(

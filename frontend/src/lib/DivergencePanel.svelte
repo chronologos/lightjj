@@ -58,8 +58,11 @@
     // bare change IDs error on divergent commits in jj
     api.log('change_id(' + id + ')').then(async result => {
       if (gen !== versionGen) return
-      // Sort by commit_id for stable ordering
-      versions = result.sort((a, b) => a.commit.commit_id.localeCompare(b.commit.commit_id))
+      // Preserve jj's emission order = index-insertion order = /N offsets
+      // (GlobalCommitPosition descending, lib/src/index.rs:217). versions[0]
+      // is /0. commit_id sort would mislabel — commit_id is a content hash,
+      // unrelated to /N. See docs/jj-divergence.md §"/N offset ordering".
+      versions = result
       compareFrom = 0
       compareTo = Math.min(1, versions.length - 1)
 

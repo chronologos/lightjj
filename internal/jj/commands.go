@@ -314,17 +314,11 @@ func ParseEvolog(output string) []EvologEntry {
 		if len(parts) < 5 {
 			continue
 		}
-		var preds []string
-		if parts[3] != "" {
-			preds = strings.Split(parts[3], ",")
-		} else {
-			preds = []string{}
-		}
 		entries = append(entries, EvologEntry{
 			CommitId:       parts[0],
 			Time:           parts[1],
 			Operation:      parts[2],
-			PredecessorIds: preds,
+			PredecessorIds: splitNonEmpty(parts[3], ","),
 			Diff:           parts[4],
 		})
 	}

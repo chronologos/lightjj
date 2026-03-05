@@ -197,6 +197,19 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, jj.ParseFilesTemplate(string(output)))
 }
 
+// handleDivergence returns the classification dataset: mutable divergent
+// commits + their descendants, with parent-change-ids/wc-reachable/empty
+// signals. Classification (stack grouping, kind, tautology guard) happens
+// client-side — this is pure data. See docs/jj-divergence.md.
+func (s *Server) handleDivergence(w http.ResponseWriter, r *http.Request) {
+	output, err := s.Runner.Run(r.Context(), jj.Divergence())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, jj.ParseDivergence(string(output)))
+}
+
 // revisionResponse is the batch payload for diff + files + description.
 // Matches the shape of the three individual endpoints' combined output so the
 // frontend can seed individual cache keys from a single fetch.

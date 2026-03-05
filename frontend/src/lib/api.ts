@@ -42,6 +42,21 @@ export interface Annotation {
   resolvedAtCommitId?: string
 }
 
+// One commit in the divergence dataset (mutable divergent + their descendants).
+// Mirrors internal/jj/divergence.go DivergenceEntry. See docs/jj-divergence.md.
+export interface DivergenceEntry {
+  change_id: string
+  commit_id: string
+  divergent: boolean
+  parent_commit_ids: string[]
+  parent_change_ids: string[]
+  wc_reachable: boolean     // contained_in("::working_copies()") — needs tautology guard, see divergence.ts
+  bookmarks: string[]
+  description: string
+  empty: boolean            // for descendant-confirm: empty → silent abandon, non-empty → prompt
+  is_working_copy: boolean  // @ IS this commit — tautology guard for wc_reachable
+}
+
 export interface Bookmark {
   name: string
   local?: { remote: string; commit_id: string; tracked: boolean }
@@ -540,6 +555,11 @@ export const api = {
     const params = new URLSearchParams({ revision })
     return request<EvologEntry[]>(`/api/evolog?${params}`)
   },
+
+  // Uncached: depends on op state (a mutation can create/resolve divergence
+  // without changing any commit_id the panel already holds). Fetched on panel
+  // open + after any mutation — same cadence as evolog.
+  divergence: () => request<DivergenceEntry[]>('/api/divergence'),
 
   diffRange: (from: string, to: string, files?: string[]) => {
     const params = new URLSearchParams({ from, to })
