@@ -30,8 +30,15 @@
   let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
   let commandOutput: string = $state('')
   let revsetFilter: string = $state('')
-  let viewMode: 'log' | 'tracked' = $state('log')
   const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
+  // viewMode is a discretization of revsetFilter, not independent state — the
+  // toggle just writes a preset string into the textbox. Typing anything else
+  // auto-surfaces a third "Custom" tab.
+  const viewMode = $derived(
+    revsetFilter === '' ? 'log'
+    : revsetFilter === TRACKED_REVSET ? 'tracked'
+    : 'custom'
+  )
   let describeSaved: boolean = $state(false)
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
@@ -376,7 +383,7 @@
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
     { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
-    { label: viewMode === 'log' ? 'Switch to tracked view' : 'Switch to log view', category: 'View', action: toggleViewMode },
+    { label: viewMode === 'tracked' ? 'Switch to log view' : 'Switch to tracked view', category: 'View', action: () => setViewMode(viewMode === 'tracked' ? 'log' : 'tracked') },
   ])
 
   let aliasCommands = $derived<PaletteCommand[]>(
@@ -466,7 +473,7 @@
 
   async function loadLog(resetSelection = false) {
     error = ''
-    const revset = revsetFilter || (viewMode === 'tracked' ? TRACKED_REVSET : undefined)
+    const revset = revsetFilter || undefined
     const ok = await log.load(revset)
     blurActiveInput()
     if (!ok) return // superseded or errored — don't post-process stale state
@@ -791,10 +798,11 @@
   }
 
   function handleBookmarkOp(op: BookmarkOp) {
-    if (op.action === 'move' && !selectedRevision) return
+    if ((op.action === 'move' || op.action === 'advance') && !selectedRevision) return
     const changeId = selectedRevision ? effectiveId(selectedRevision.commit) : ''
     const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
       move: () => api.bookmarkMove(op.bookmark, changeId),
+      advance: () => api.bookmarkAdvance(op.bookmark, changeId),
       delete: () => api.bookmarkDelete(op.bookmark),
       forget: () => api.bookmarkForget(op.bookmark),
       track: () => api.bookmarkTrack(op.bookmark, op.remote!),
@@ -1077,9 +1085,8 @@
     handleRevsetSubmit()
   }
 
-  function toggleViewMode() {
-    revsetFilter = ''
-    viewMode = viewMode === 'log' ? 'tracked' : 'log'
+  function setViewMode(mode: 'log' | 'tracked') {
+    revsetFilter = mode === 'tracked' ? TRACKED_REVSET : ''
     handleRevsetSubmit()
   }
 
@@ -1505,7 +1512,7 @@
             onrevsetclear={clearRevsetFilter}
             onrevsetchange={(v) => { revsetFilter = v }}
             onrevsetescaped={clearRevsetFilter}
-            onviewmodechange={toggleViewMode}
+            onviewmodechange={setViewMode}
             onbookmarkclick={openBookmarkModal}
             {rebase}
             {squash}

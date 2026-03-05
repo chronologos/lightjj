@@ -5,9 +5,9 @@
 - [x] **`debug snapshot` → `util snapshot`** (Trivial) — jj 0.39 deprecated `debug snapshot` (removed v0.45). Periodic loop fires every 5s → deprecation warning firehose. `DebugSnapshot()` args changed; function name kept (4 call sites, zero semantic delta). `README.md:73` bumped min jj to 0.39.
 - [x] **Workspace relative paths** (Small) — jj 0.39 anchors at `.jj/repo/` (verified: `default` → `../../`, secondary → `../../../sibling`). `readWorkspaceStore` resolves via `filepath.Join(repoStore, p)` (handles `..` traversal) before returning; callers (spawn IsAbs check, current-match `==`) both fixed at once. Parser stays pure. `s.RepoDir` comes from `jj workspace root` — already symlink-resolved, so the resolved path and RepoDir agree without `EvalSymlinks`.
 - [ ] **`git push --option` / `-o`** (Trivial) — Add to `allowedGitPushFlags` (`handlers.go:20`). Passes server-side push options (Gerrit reviewers, GitLab merge options). Low demand; wait for a request.
-- [ ] **`jj bookmark advance`** (Small) — Built-in `jj tug`. Could replace or supplement the BookmarkModal's move action. `revsets.bookmark-advance-from`/`-to` are user config, not our concern.
+- [x] **`jj bookmark advance`** (Small) — `a` key in BookmarkModal. Forward-only move: jj refuses backwards/sideways (`Error: Refusing to advance bookmark backwards or sideways`), so no confirm gate — accidentally hitting `a` on the wrong bookmark is harmless. Same `can.move` gate as Enter. Enter = unconditional move (has `--allow-backwards`); `a` = safe-move. `revsets.bookmark-advance-from`/`-to` are user config, not our concern.
 - [ ] **`--simplify-parents` on rebase** (Trivial) — Add to `Rebase()` builder signature, wire a checkbox in rebase mode. Useful when rebasing onto a descendant of the old parent.
-- [ ] **Template list methods** (Investigate) — `first()`/`get(N)`/`take()` on lists. Check if `FilesTemplate` (`file_change.go:43`) or the evolog template could drop a `.map()` layer.
+- [x] **Template list methods** (Investigated — no change) — `first()`/`get(N)`/`take()` on lists. Every `.map()` in our templates is `.map(transform).join(sep)` over the full list (parents, bookmarks, files, predecessors). The new methods only help for subset/single-element access; we want all elements transformed. Irreducible.
 
 ## Agent Workflow (2026-02-27)
 

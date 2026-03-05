@@ -588,6 +588,29 @@ func TestHandleBookmarkMove(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleBookmarkAdvance(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkAdvance("abc", "feature")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "feature"})
+	req := jsonPost("/api/bookmark/advance", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleBookmarkAdvance_Validation(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc"}) // no name
+	req := jsonPost("/api/bookmark/advance", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestHandleBookmarkForget(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.BookmarkForget("feature")).SetOutput([]byte(""))
@@ -1985,6 +2008,11 @@ func TestHandleBookmarkDelete_RunnerError(t *testing.T) {
 func TestHandleBookmarkMove_RunnerError(t *testing.T) {
 	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "main"})
 	runnerErrorTest(t, "POST", "/api/bookmark/move", jj.BookmarkMove("abc", "main", "--allow-backwards"), "move failed", body)
+}
+
+func TestHandleBookmarkAdvance_RunnerError(t *testing.T) {
+	body, _ := json.Marshal(bookmarkRevisionRequest{Revision: "abc", Name: "main"})
+	runnerErrorTest(t, "POST", "/api/bookmark/advance", jj.BookmarkAdvance("abc", "main"), "advance failed", body)
 }
 
 func TestHandleBookmarkForget_RunnerError(t *testing.T) {

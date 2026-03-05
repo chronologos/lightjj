@@ -770,6 +770,19 @@ func (s *Server) handleBookmarkMove(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.BookmarkMove(req.Revision, req.Name, "--allow-backwards"))
 }
 
+func (s *Server) handleBookmarkAdvance(w http.ResponseWriter, r *http.Request) {
+	var req bookmarkRevisionRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" || req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "revision and name are required")
+		return
+	}
+	s.runMutation(w, r, jj.BookmarkAdvance(req.Revision, req.Name))
+}
+
 func (s *Server) handleBookmarkForget(w http.ResponseWriter, r *http.Request) {
 	var req bookmarkNameRequest
 	if err := decodeBody(w, r, &req); err != nil {

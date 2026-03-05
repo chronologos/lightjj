@@ -249,6 +249,27 @@ describe('BookmarkModal', () => {
       await fireEvent.keyDown(modal(), { key: 'Enter' })
       expect(onexecute).toHaveBeenCalledWith({ action: 'move', bookmark: 'feat' })
     })
+
+    it('a (advance) fires on single press — jj refuses backwards, so no gate needed', async () => {
+      const onexecute = vi.fn()
+      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat', commit_id: 'aaa' })])
+      await renderSettled(defaultProps({ currentCommitId: 'bbb', onexecute }))
+
+      await fireEvent.keyDown(modal(), { key: 'a' })
+      expect(onexecute).toHaveBeenCalledWith({ action: 'advance', bookmark: 'feat' })
+    })
+
+    it('a disarms a pending destructive confirmation', async () => {
+      const onexecute = vi.fn()
+      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat', local: { remote: 'origin', commit_id: 'x', tracked: true }, commit_id: 'aaa' })])
+      await renderSettled(defaultProps({ currentCommitId: 'bbb', onexecute }))
+
+      await fireEvent.keyDown(modal(), { key: 'd' }) // arm delete
+      expect(footer()).toContain('again to delete')
+      await fireEvent.keyDown(modal(), { key: 'a' }) // disarms + fires advance
+      expect(onexecute).toHaveBeenCalledWith({ action: 'advance', bookmark: 'feat' })
+      expect(onexecute).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('action availability guards', () => {
@@ -258,6 +279,15 @@ describe('BookmarkModal', () => {
       await renderSettled(defaultProps({ currentCommitId: 'same', onexecute }))
 
       await fireEvent.keyDown(modal(), { key: 'Enter' })
+      expect(onexecute).not.toHaveBeenCalled()
+    })
+
+    it('a is no-op when bookmark already at current commit (same gate as move)', async () => {
+      const onexecute = vi.fn()
+      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat', commit_id: 'same' })])
+      await renderSettled(defaultProps({ currentCommitId: 'same', onexecute }))
+
+      await fireEvent.keyDown(modal(), { key: 'a' })
       expect(onexecute).not.toHaveBeenCalled()
     })
 

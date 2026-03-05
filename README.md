@@ -26,7 +26,7 @@ lightjj
 - **Diff viewer** — unified/split modes, Shiki syntax highlighting, word-level diffs, context expansion, conflict A/B labels
 - **Inline annotations** — per-line review comments keyed by `change_id`; auto-re-anchor when the agent rewrites; export as markdown or JSON
 - **Inline rebase** — pick source mode (`-r`/`-s`/`-b`), target mode (onto/after/before), cursor to destination, Enter
-- **Bookmarks & git** — set/move/delete/track bookmarks, push/fetch with flag validation
+- **Bookmarks & git** — set/move/advance/delete/track bookmarks, push/fetch with flag validation
 - **Multi-select** — batch abandon, squash, rebase across revisions
 - **Op log & evolog** — full operation history and per-revision evolution with inter-diffs
 - **Workspaces** — detect and switch between jj workspaces; one-click spawn a new lightjj instance

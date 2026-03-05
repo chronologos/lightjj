@@ -66,7 +66,7 @@ flowchart TD
 | POST | `/api/new`, `/api/edit`, `/api/abandon`, `/api/undo`, `/api/commit` | Basic mutations |
 | POST | `/api/rebase`, `/api/squash`, `/api/split`, `/api/resolve` | Structured mutations |
 | POST | `/api/describe` | Set description (uses `RunWithInput` for stdin) |
-| POST | `/api/bookmark/{set,delete,move,forget,track,untrack}` | Bookmark ops |
+| POST | `/api/bookmark/{set,delete,move,advance,forget,track,untrack}` | Bookmark ops |
 | POST | `/api/git/{push,fetch}` | Git remote ops (flag-whitelisted) |
 | POST | `/api/alias` | Run a user-configured jj alias (validated against config) |
 | POST | `/api/workspace/open` | Spawn child lightjj instance for another workspace |

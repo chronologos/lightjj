@@ -172,6 +172,14 @@ func BookmarkMove(revision string, bookmark string, extraFlags ...string) Comman
 	return args
 }
 
+// BookmarkAdvance is move restricted to forward-only (ancestor→descendant).
+// jj 0.39's built-in `jj tug`. Unlike move, this refuses sideways/backwards
+// moves — so accidentally hitting the wrong bookmark is safe. No
+// --allow-backwards; that's the point.
+func BookmarkAdvance(revision string, bookmark string) CommandArgs {
+	return []string{"bookmark", "advance", bookmark, "--to", revision}
+}
+
 func BookmarkDelete(name string) CommandArgs {
 	return []string{"bookmark", "delete", name}
 }

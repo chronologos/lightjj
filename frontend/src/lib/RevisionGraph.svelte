@@ -11,7 +11,7 @@
     loading: boolean
     mutating: boolean
     revsetFilter: string
-    viewMode: 'log' | 'tracked'
+    viewMode: 'log' | 'tracked' | 'custom'
     lastCheckedIndex: number
     onselect: (index: number) => void
     oncheck: (changeId: string, index: number) => void
@@ -24,7 +24,7 @@
     onrevsetclear: () => void
     onrevsetchange: (value: string) => void
     onrevsetescaped: () => void
-    onviewmodechange: () => void
+    onviewmodechange: (mode: 'log' | 'tracked') => void
     onbookmarkclick: (name: string) => void
     rebase: RebaseMode
     squash: SquashMode
@@ -226,8 +226,11 @@
   <div class="panel-header">
     <span class="panel-title">Revisions</span>
     <div class="view-toggle">
-      <button class="view-btn" class:view-btn-active={viewMode === 'log'} onclick={() => { if (viewMode !== 'log') onviewmodechange() }}>Log</button>
-      <button class="view-btn" class:view-btn-active={viewMode === 'tracked'} onclick={() => { if (viewMode !== 'tracked') onviewmodechange() }}>Tracked</button>
+      <button class="view-btn" class:view-btn-active={viewMode === 'log'} onclick={() => { if (viewMode !== 'log') onviewmodechange('log') }}>Log</button>
+      <button class="view-btn" class:view-btn-active={viewMode === 'tracked'} onclick={() => { if (viewMode !== 'tracked') onviewmodechange('tracked') }}>Tracked</button>
+      {#if viewMode === 'custom'}
+        <button class="view-btn view-btn-active" onclick={focusRevsetInput}>Custom</button>
+      {/if}
     </div>
     {#if revisions.length > 0}
       <span class="panel-badge">{revisions.length}{#if checkedRevisions.size > 0} ({checkedRevisions.size} checked){/if}</span>

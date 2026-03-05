@@ -68,7 +68,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
     ContextMenu.svelte     — Reusable right-click context menu (positioned at cursor)
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
-    BookmarkModal.svelte   — Bookmark modal: noun-first list, Enter=move, d/f/t action keys with double-press confirm for destructive ops (armed state + DESTRUCTIVE set). Modal (not input) holds focus on open — `tick().then(() => modalEl?.focus())` since `{#if open}` hasn't mounted when `$effect` fires.
+    BookmarkModal.svelte   — Bookmark modal: noun-first list, Enter=move, a=advance (forward-only, jj refuses backwards — no confirm), d/f/t action keys with double-press confirm for destructive ops (armed state + DESTRUCTIVE set). Modal (not input) holds focus on open — `tick().then(() => modalEl?.focus())` since `{#if open}` hasn't mounted when `$effect` fires.
     BookmarkInput.svelte   — Bookmark name input with autocomplete
     GitModal.svelte        — Git push/fetch modal
     EvologPanel.svelte     — Evolution log: entry list with inline diffs (server emits rebase-safe inter_diff per entry), ArrowUp/Down navigation

@@ -396,6 +396,11 @@ func TestBookmarkMove(t *testing.T) {
 	assert.Equal(t, []string{"bookmark", "move", "feature", "--to", "abc"}, got)
 }
 
+func TestBookmarkAdvance(t *testing.T) {
+	got := BookmarkAdvance("abc", "feature")
+	assert.Equal(t, []string{"bookmark", "advance", "feature", "--to", "abc"}, got)
+}
+
 func TestBookmarkForget(t *testing.T) {
 	got := BookmarkForget("feature")
 	assert.Equal(t, []string{"bookmark", "forget", "feature"}, got)

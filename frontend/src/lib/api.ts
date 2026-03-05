@@ -675,6 +675,9 @@ export const api = {
   bookmarkMove: (name: string, revision: string) =>
     post<{ output: string }>('/api/bookmark/move', { name, revision }),
 
+  bookmarkAdvance: (name: string, revision: string) =>
+    post<{ output: string }>('/api/bookmark/advance', { name, revision }),
+
   bookmarkForget: (name: string) =>
     post<{ output: string }>('/api/bookmark/forget', { name }),
 

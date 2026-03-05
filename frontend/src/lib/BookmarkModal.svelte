@@ -5,7 +5,7 @@
   import { recentActions } from './recent-actions.svelte'
 
   export interface BookmarkOp {
-    action: 'move' | 'delete' | 'forget' | 'track' | 'untrack'
+    action: 'move' | 'advance' | 'delete' | 'forget' | 'track' | 'untrack'
     bookmark: string
     remote?: string
   }
@@ -194,6 +194,13 @@
     // load-bearing coincidence).
     if (inputFocused || !bm) return
     switch (e.key) {
+      case 'a':
+        // advance: forward-only move. jj refuses backwards/sideways, so no
+        // confirm gate — wrong bookmark is harmless. Same gate as move.
+        e.preventDefault()
+        disarm()
+        if (can.move) fire({ action: 'advance', bookmark: bm.name })
+        return
       case 'd':
         e.preventDefault()
         if (!can.del) { disarm(); return }
@@ -309,6 +316,7 @@
         <span class="bm-confirm"><kbd>t</kbd> again to untrack <b>{selected?.name}@{can.track?.remote}</b> · Esc to cancel</span>
       {:else}
         <span class:dim={!can.move}><kbd>⏎</kbd> move here</span>
+        <span class:dim={!can.move}><kbd>a</kbd> advance</span>
         <span class:dim={!can.del}><kbd>d</kbd> delete</span>
         <span class:dim={!selected}><kbd>f</kbd> forget</span>
         <span class:dim={!can.track}>
@@ -441,6 +449,7 @@
 
   .bm-footer {
     display: flex;
+    flex-wrap: wrap;
     gap: 14px;
     padding: 8px 16px;
     border-top: 1px solid var(--surface0);
