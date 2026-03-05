@@ -14,8 +14,15 @@
     abandonCommitIds: string[]       // losing column + empty descendants
     bookmarkRepoints: { name: string; targetCommitId: string }[]
     // Non-empty descendants are NOT in abandonCommitIds — they go through
-    // confirm first. If confirmed, caller appends them before executing.
+    // confirm first. Confirm resolves them into EITHER abandonCommitIds
+    // OR rebaseSources (never both). A plan with nonEmptyDescendants still
+    // populated never reaches onkeep — execute() is only called post-confirm.
     nonEmptyDescendants: DivergenceEntry[]
+    // Descendants to rebase onto keeperCommitId BEFORE the abandon. Rebase
+    // first: if abandon ran first, jj would auto-rebase D onto the loser-
+    // stack's parent (trunk), and then our explicit rebase would hit a
+    // twice-rebased tree. -s mode (not -r) so D's own descendants follow.
+    rebaseSources: string[]
   }
 
   interface Props {
@@ -69,9 +76,14 @@
 
   // --- Non-empty descendant confirm ---
   // When keeping a column would abandon a non-empty descendant of the loser,
-  // stash the plan and show a confirm. [Abandon anyway] appends them; user
-  // can also cancel. (docs/jj-divergence.md: "rebase onto keeper instead" is
-  // deferred — needs api.rebase wiring + more UX.)
+  // stash the plan and show a confirm. [Rebase onto keeper] is the default
+  // (green, leftmost); [Abandon anyway] for throwaway content.
+  //
+  // rebaseSources is safe from -s flattening: g.descendants is roots-only
+  // by classifier construction (divergence.ts:108 — only entries whose
+  // parent is in the divergent set). A D2-on-D1 chain has D2's parent = D1
+  // (non-divergent) → D2 never enters g.descendants → never in rebaseSources.
+  // `jj rebase -s D1` pulls D2 along. See divergence.test.ts pin test.
   let pendingPlan: KeepPlan | null = $state(null)
 
   // Version load runs exactly once per mount — {#if divergence.active} in
@@ -172,8 +184,18 @@
       abandonCommitIds,
       bookmarkRepoints,
       nonEmptyDescendants,
+      rebaseSources: [],
     }
   }
+
+  // keeperIdx is derivable from pendingPlan (the root-level commit NOT in
+  // the abandon list). Both confirm handlers need it; compute once here.
+  let pendingKeeperIdx = $derived.by(() => {
+    if (!pendingPlan || !group) return -1
+    return group.versions[0].findIndex(
+      v => !pendingPlan!.abandonCommitIds.includes(v.commit_id)
+    )
+  })
 
   async function handleKeep(idx: number) {
     if (!group || !group.alignable || keepingIdx >= 0) return
@@ -197,19 +219,26 @@
 
   function confirmAbandonDescendants() {
     if (!pendingPlan) return
-    const merged: KeepPlan = {
+    execute({
       ...pendingPlan,
       abandonCommitIds: [
         ...pendingPlan.abandonCommitIds,
         ...pendingPlan.nonEmptyDescendants.map(d => d.commit_id),
       ],
       nonEmptyDescendants: [],
-    }
-    // Find which column this plan was for — keeper is the one NOT in abandon list
-    const keeperIdx = group!.versions[0].findIndex(
-      v => !pendingPlan!.abandonCommitIds.includes(v.commit_id)
-    )
-    execute(merged, keeperIdx)
+    }, pendingKeeperIdx)
+  }
+
+  function confirmRebaseDescendants() {
+    if (!pendingPlan) return
+    // Descendants move to the keeper's tip; the stale stack is then abandoned
+    // with no children pinning it visible. App.svelte runs the rebase BEFORE
+    // the abandon (single batched `jj rebase -s D1 -s D2 -d tip`).
+    execute({
+      ...pendingPlan,
+      rebaseSources: pendingPlan.nonEmptyDescendants.map(d => d.commit_id),
+      nonEmptyDescendants: [],
+    }, pendingKeeperIdx)
   }
 
   // Kind → badge text. Panel shows what it knows; refined kinds appear once
@@ -253,16 +282,23 @@
         <!-- Non-empty descendant confirm — blocks the view until resolved -->
         <div class="confirm-overlay">
           <div class="confirm-box">
-            <div class="confirm-title">This will also abandon</div>
+            <div class="confirm-title">Non-empty commits on the losing stack</div>
             {#each pendingPlan.nonEmptyDescendants as d}
               <div class="confirm-item">
                 <span class="confirm-id">{d.commit_id.slice(0, 8)}</span>
                 <span class="confirm-desc">{d.description || '(no description)'}</span>
               </div>
             {/each}
-            <div class="confirm-hint">These are non-empty commits on top of the losing stack. Abandoning loses their content.</div>
+            <div class="confirm-hint">Rebase moves them (and their descendants) onto the keeper. Abandon discards their content.</div>
             <div class="confirm-actions">
-              <button class="btn-danger" onclick={confirmAbandonDescendants}>Abandon anyway</button>
+              <button class="btn-primary" onclick={confirmRebaseDescendants}
+                title="jj rebase -s onto {pendingPlan.keeperCommitId.slice(0, 8)} — keeps their content, moves them to the winning stack">
+                Rebase onto keeper
+              </button>
+              <button class="btn-danger" onclick={confirmAbandonDescendants}
+                title="Discards their content">
+                Abandon anyway
+              </button>
               <button class="btn-secondary" onclick={() => pendingPlan = null}>Cancel</button>
             </div>
           </div>
@@ -518,6 +554,10 @@
   .confirm-desc { color: var(--text); }
   .confirm-hint { margin-top: 10px; font-size: 11px; color: var(--overlay0); }
   .confirm-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .btn-primary {
+    padding: 4px 12px; background: var(--green); color: var(--crust);
+    border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600;
+  }
   .btn-danger {
     padding: 4px 12px; background: var(--red); color: var(--crust);
     border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600;

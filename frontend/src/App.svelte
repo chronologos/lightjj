@@ -819,21 +819,28 @@
   async function handleKeepDivergent(plan: KeepPlan) {
     return withMutation(async () => {
       try {
-        // Plan is computed by DivergencePanel from the classify() group
-        // structure: stack-aware abandon set (all levels of losing columns +
-        // empty descendants), per-change_id bookmark repoints (not stack tip).
-        // Non-empty descendants already went through the panel's confirm.
+        // Plan computed by DivergencePanel from the classify() group. Order:
+        //   1. Rebase — moves non-empty descendants to the keeper tip first.
+        //      If abandon ran first, jj would auto-rebase D onto the loser-
+        //      stack's parent (trunk); our explicit rebase would then hit a
+        //      twice-rebased tree. -s (not -r) so D's descendants follow.
+        //   2. Abandon — losing columns + empty descendants. Stale stack now
+        //      has no children pinning it visible.
+        //   3. Bookmarks — per-change_id repoint, not stack tip.
+        // Serial throughout: concurrent jj mutations → divergent op history.
+        if (plan.rebaseSources.length > 0) {
+          await api.rebase(plan.rebaseSources, plan.keeperCommitId, '-s', '-d')
+        }
         await api.abandon(plan.abandonCommitIds)
-
-        // Serial: concurrent jj mutations can produce divergent op history.
-        // N is tiny (0-3) and this is a rare manual action.
         for (const { name, targetCommitId } of plan.bookmarkRepoints) {
           await api.bookmarkSet(targetCommitId, name)
         }
 
         divergence.cancel()
-        lastAction = `Resolved divergence — kept ${plan.keeperCommitId.slice(0, 8)}` +
-          (plan.abandonCommitIds.length > 1 ? ` (abandoned ${plan.abandonCommitIds.length})` : '')
+        const parts = [`kept ${plan.keeperCommitId.slice(0, 8)}`]
+        if (plan.rebaseSources.length > 0) parts.push(`rebased ${plan.rebaseSources.length}`)
+        if (plan.abandonCommitIds.length > 1) parts.push(`abandoned ${plan.abandonCommitIds.length}`)
+        lastAction = `Resolved divergence — ${parts.join(', ')}`
         await loadLog()
       } catch (e: any) {
         // Don't close panel on error — let user see state and retry
