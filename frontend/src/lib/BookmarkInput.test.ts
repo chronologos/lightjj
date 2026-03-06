@@ -17,7 +17,7 @@ function makeBookmark(name: string): Bookmark {
   return {
     name,
     conflict: false,
-    backwards: false,
+    synced: false,
     commit_id: 'aaa111',
   }
 }

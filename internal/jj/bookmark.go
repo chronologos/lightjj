@@ -1,20 +1,32 @@
 package jj
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 type BookmarkRemote struct {
 	Remote   string `json:"remote"`
 	CommitId string `json:"commit_id"`
 	Tracked  bool   `json:"tracked"`
+	// Ahead = commits on remote not in local (pull needed).
+	// Behind = commits in local not on remote (push needed).
+	// Only meaningful when Tracked; zero otherwise.
+	Ahead  int `json:"ahead"`
+	Behind int `json:"behind"`
 }
 
 type Bookmark struct {
-	Name      string           `json:"name"`
-	Local     *BookmarkRemote  `json:"local,omitempty"`
-	Remotes   []BookmarkRemote `json:"remotes,omitempty"`
-	Conflict  bool             `json:"conflict"`
-	Backwards bool             `json:"backwards"`
-	CommitId  string           `json:"commit_id"`
+	Name    string           `json:"name"`
+	Local   *BookmarkRemote  `json:"local,omitempty"` // nil = remote-only OR deleted-local
+	Remotes []BookmarkRemote `json:"remotes,omitempty"`
+	// AddedTargets: "+" sides of a conflict. For non-conflict, single
+	// element equal to CommitId. Source of truth for conflict resolution UI.
+	AddedTargets []string `json:"added_targets,omitempty"`
+	Conflict     bool     `json:"conflict"`
+	// Synced: true iff local matches all tracked remotes.
+	Synced   bool   `json:"synced"`
+	CommitId string `json:"commit_id"` // empty when Conflict
 }
 
 func (b Bookmark) IsDeletable() bool {
@@ -35,7 +47,7 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 
 	for _, b := range lines {
 		parts := strings.Split(b, "\x1f")
-		if len(parts) < 6 {
+		if len(parts) < 9 {
 			continue
 		}
 
@@ -43,8 +55,11 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 		remoteName := parts[1]
 		tracked := parts[2] == "true"
 		conflict := parts[3] == "true"
-		backwards := parts[4] == "true"
-		commitId := parts[5]
+		commitId := parts[4] // empty when conflict (template guard)
+		addedTargets := splitNonEmpty(parts[5], ",")
+		ahead, _ := strconv.Atoi(parts[6])
+		behind, _ := strconv.Atoi(parts[7])
+		synced := parts[8] == "true"
 
 		if remoteName == "git" {
 			continue
@@ -53,10 +68,9 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 		bookmark, exists := bookmarkMap[name]
 		if !exists {
 			bookmark = &Bookmark{
-				Name:      name,
-				Conflict:  conflict,
-				Backwards: backwards,
-				CommitId:  commitId,
+				Name:     name,
+				Conflict: conflict,
+				CommitId: commitId,
 			}
 			bookmarkMap[name] = bookmark
 			orderedNames = append(orderedNames, name)
@@ -69,11 +83,16 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 				Tracked:  tracked,
 			}
 			bookmark.CommitId = commitId
+			bookmark.Conflict = conflict
+			bookmark.AddedTargets = addedTargets
+			bookmark.Synced = synced
 		} else {
 			remote := BookmarkRemote{
 				Remote:   remoteName,
 				Tracked:  tracked,
 				CommitId: commitId,
+				Ahead:    ahead,
+				Behind:   behind,
 			}
 			if remoteName == defaultRemote {
 				bookmark.Remotes = append([]BookmarkRemote{remote}, bookmark.Remotes...)

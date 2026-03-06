@@ -57,13 +57,27 @@ export interface DivergenceEntry {
   is_working_copy: boolean  // @ IS this commit — tautology guard for wc_reachable
 }
 
+export interface BookmarkRemote {
+  remote: string
+  commit_id: string
+  tracked: boolean
+  // ahead = commits on remote not in local (pull needed)
+  // behind = commits in local not on remote (push needed)
+  // Only meaningful when tracked; zero otherwise.
+  ahead: number
+  behind: number
+}
+
 export interface Bookmark {
   name: string
-  local?: { remote: string; commit_id: string; tracked: boolean }
-  remotes?: { remote: string; commit_id: string; tracked: boolean }[]
+  local?: BookmarkRemote  // undefined = remote-only OR deleted-local
+  remotes?: BookmarkRemote[]
+  // added_targets: "+" sides of a conflict. For non-conflict, single
+  // element equal to commit_id. Source of truth for conflict resolution.
+  added_targets?: string[]
   conflict: boolean
-  backwards: boolean
-  commit_id: string
+  synced: boolean
+  commit_id: string  // empty when conflict
 }
 
 // Op-ID tracking: detect when jj state changes outside the UI.

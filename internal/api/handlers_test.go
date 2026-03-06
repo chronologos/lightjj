@@ -85,7 +85,7 @@ func TestHandleLog_Empty(t *testing.T) {
 
 func TestHandleBookmarks(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fabc"))
+	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1fabc\x1fabc\x1f0\x1f0\x1ftrue"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1307,7 +1307,7 @@ func TestHandleCommit_RunnerError(t *testing.T) {
 
 func TestHandleBookmarks_WithRevset(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.BookmarkList("main")).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1ffalse\x1fabc"))
+	runner.Expect(jj.BookmarkList("main")).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1fabc\x1fabc\x1f0\x1f0\x1ftrue"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)

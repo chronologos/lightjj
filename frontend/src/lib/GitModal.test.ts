@@ -21,7 +21,7 @@ function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     local: overrides.local,
     remotes: overrides.remotes,
     conflict: overrides.conflict ?? false,
-    backwards: overrides.backwards ?? false,
+    synced: overrides.synced ?? false,
     commit_id: overrides.commit_id ?? 'aaa111',
   }
 }
@@ -65,7 +65,7 @@ describe('GitModal', () => {
 
     it('local bookmark → shows per-bookmark push op', async () => {
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: 'origin', commit_id: 'aaa', tracked: true } }),
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'aaa', tracked: false, ahead: 0, behind: 0 } }),
       ])
       mockRemotes.mockResolvedValue(['origin'])
       const { container } = render(GitModal, { props: defaultProps() })
