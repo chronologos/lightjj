@@ -123,9 +123,13 @@ export function createSquashMode(): SquashMode {
   }
 }
 
-export interface DivergenceMode extends ModeBase {
+// Not ModeBase — divergence lives in anyModalOpen (DivergencePanel replaces
+// DiffPanel), not inlineMode. Never reaches handleInlineNav's mode.handleKey().
+export interface DivergenceMode {
+  readonly active: boolean
   readonly changeId: string
   enter(id: string): void
+  cancel(): void
 }
 
 export function createDivergenceMode(): DivergenceMode {
@@ -144,10 +148,6 @@ export function createDivergenceMode(): DivergenceMode {
     cancel() {
       active = false
       changeId = ''
-    },
-
-    handleKey(_key: string): boolean {
-      return false // no keyboard shortcuts yet
     },
   }
 }

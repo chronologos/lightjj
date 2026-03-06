@@ -343,11 +343,11 @@
     // Git
     { label: 'Git fetch', shortcut: 'f', category: 'Git', action: () => handleGitOp('fetch', []), when: () => !inlineMode },
     { label: 'Git push', shortcut: 'p', category: 'Git', action: () => handleGitOp('push', []), when: () => !inlineMode },
-    { label: 'Git operations (advanced)', shortcut: 'g', category: 'Git', action: () => { closeAllModals(); gitModalOpen = true }, when: () => !inlineMode },
+    { label: 'Git operations (advanced)', shortcut: 'g', category: 'Git', action: () => openModal('git'), when: () => !inlineMode },
 
     // Bookmarks
     { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal, when: () => !inlineMode },
-    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => { closeAllModals(); bookmarkInputOpen = true }, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => openModal('bookmarkInput'), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
 
     // View (non-dynamic)
     { label: 'Toggle split/unified diff', category: 'View', action: () => { config.splitView = !config.splitView } },
@@ -601,7 +601,7 @@
       { label: 'Squash...', shortcut: 'S', action: () => { selectByChangeId(changeId); enterSquashMode() } },
       { label: 'Split...', shortcut: 's', action: () => { selectByChangeId(changeId); enterSplitMode() } },
       { separator: true },
-      { label: 'Set bookmark...', shortcut: 'B', action: () => { selectByChangeId(changeId); bookmarkInputOpen = true } },
+      { label: 'Set bookmark...', shortcut: 'B', action: () => { selectByChangeId(changeId); openModal('bookmarkInput') } },
     ]
     if (entry?.commit.divergent) {
       items.push(
@@ -984,6 +984,9 @@
     bookmarkInputOpen = false
     gitModalOpen = false
     contextMenuOpen = false
+    // dismissWelcome (not welcomeOpen=false) — persist tutorialVersion so it
+    // doesn't re-show next launch. Guarded: Cmd+K path calls this frequently.
+    if (welcomeOpen) dismissWelcome()
   }
 
   function cancelInlineModes() {
@@ -1002,10 +1005,25 @@
     cancelInlineModes()
   }
 
-  function openBookmarkModal(filter?: string) {
+  // Close-then-open. Keyboard callers have provably passed !anyModalOpen +
+  // !inlineMode gates (closeAllModals is a no-op there); palette/context-menu
+  // callers haven't. One helper means both paths get the guard.
+  //
+  // Palette is NOT here — Cmd+K uses closeModals() (not closeAllModals()) so
+  // inline modes survive palette open/close. The other modals don't want that.
+  type ModalName = 'git' | 'bookmark' | 'bookmarkInput'
+  function openModal(name: ModalName) {
     closeAllModals()
+    switch (name) {
+      case 'git': gitModalOpen = true; break
+      case 'bookmark': bookmarkModalOpen = true; break
+      case 'bookmarkInput': bookmarkInputOpen = true; break
+    }
+  }
+
+  function openBookmarkModal(filter?: string) {
     bookmarkModalFilter = filter ?? ''
-    bookmarkModalOpen = true
+    openModal('bookmark')
   }
 
   async function toggleOplog() {
@@ -1060,146 +1078,143 @@
   }
 
   // --- Keyboard shortcuts ---
+  //
+  // Dispatcher reads as policy:
+  //   globalOverrides → inlineCommit → isInInput → modifier → modal →
+  //   inlineNav → escape → global → logView
+  //
+  // Ordering is load-bearing. Each gate's placement is deliberate:
+  //   - globalOverrides (Cmd+K/F) BEFORE isInInput: work inside text fields.
+  //   - inlineCommit BEFORE isInInput: FileSelectionPanel holds focus during
+  //     squash/split; Enter still executes. (cm-editor sub-filter inside.)
+  //   - modifier AFTER globalOverrides: Cmd+C etc. pass through to browser.
+  //   - inlineNav swallows EVERYTHING: no normal-mode keys leak into modes.
+
+  function isInInput(t: HTMLElement) {
+    return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || !!t.closest('.cm-editor')
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     const target = e.target as HTMLElement
+    if (handleGlobalOverrides(e)) return
+    if (handleInlineCommit(e, target)) return
+    if (isInInput(target)) return
+    if (e.metaKey || e.ctrlKey) return
+    if (anyModalOpen) return
+    if (inlineMode) return handleInlineNav(e)
+    if (e.key === 'Escape') return handleEscapeStack()
+    if (handleGlobalKeys(e)) return
+    if (activeView !== 'log') return
+    handleLogKeys(e)
+  }
 
-    // Cmd+K / Ctrl+K opens palette from anywhere
-    if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+  // Cmd+K / Cmd+F — fire regardless of input focus, mode, or open modals.
+  function handleGlobalOverrides(e: KeyboardEvent): boolean {
+    if (!(e.metaKey || e.ctrlKey)) return false
+    if (e.key === 'k') {
       e.preventDefault()
+      // closeModals not closeAllModals — Cmd+K during rebase opens the palette
+      // WITHOUT cancelling the rebase; closing it returns you to rebase mode.
       closeModals()
       paletteOpen = true
-      return
+      return true
     }
-
-    // Cmd+F / Ctrl+F opens diff search
-    if (e.key === 'f' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'f') {
       e.preventDefault()
       diffPanelRef?.openSearch()
-      return
+      return true
     }
+    return false
+  }
 
-    // Inline mode Enter/Escape must fire even when focusable elements in the
-    // diff panel have focus (e.g. file selection items during split/squash).
-    // But let CodeMirror and text inputs handle their own Enter/Escape.
-    if (inlineMode && (e.key === 'Enter' || e.key === 'Escape')) {
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('.cm-editor')) return
-      e.preventDefault()
-      if (e.key === 'Enter') {
-        if (split.active) executeSplit()
-        else if (squash.active) executeSquash()
-        else if (rebase.active) executeRebase()
-      } else {
-        cancelInlineModes()
-      }
-      return
+  // Inline mode Enter/Escape — must fire even when FileSelectionPanel holds
+  // focus (it's a <div tabindex=-1> inside the diff panel). But cm-editor and
+  // text inputs handle their own Enter/Escape, so sub-filter on those.
+  function handleInlineCommit(e: KeyboardEvent, target: HTMLElement): boolean {
+    if (!inlineMode || (e.key !== 'Enter' && e.key !== 'Escape')) return false
+    // Stop the dispatcher — input handles natively. Returning true here also
+    // dedups the isInInput call the dispatcher would make next.
+    if (isInInput(target)) return true
+    e.preventDefault()
+    if (e.key === 'Enter') {
+      if (split.active) executeSplit()
+      else if (squash.active) executeSquash()
+      else executeRebase()  // inlineMode && !split && !squash ⇒ rebase
+    } else {
+      cancelInlineModes()
     }
+    return true
+  }
 
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('.cm-editor')) return
+  // j/k (per-mode semantics) + delegate to mode.handleKey(). Swallows ALL
+  // keys — normal-mode shortcuts (t/u/b/r/...) deliberately don't leak through.
+  //
+  // j/k semantics differ: squash uses selectRevisionCursorOnly (cursor moves,
+  // diff stays frozen on source — that's what you're squashing). Rebase uses
+  // full selectRevision (diff follows — destination preview). Split has NO j/k
+  // (operates on a fixed revision).
+  function handleInlineNav(e: KeyboardEvent): void {
+    const [mode, jk] = split.active ? [split, undefined] as const
+                     : squash.active ? [squash, selectRevisionCursorOnly] as const
+                     : [rebase, selectRevision] as const
+    if (jk && navKey(e, jk)) return
+    if (mode.handleKey(e.key)) e.preventDefault()
+  }
 
-    // Let unhandled Cmd/Ctrl combos (Cmd+C, Cmd+V, Cmd+A, Cmd+Z, etc.)
-    // pass through to the browser. Only Cmd+K and Cmd+F are intercepted above.
-    if (e.metaKey || e.ctrlKey) return
-
-    // Skip all shortcuts when any modal is open (modals handle their own keys)
-    if (anyModalOpen) return
-
-    // Split mode: no j/k (operates on fixed revision), p toggles parallel
-    if (split.active) {
-      if (split.handleKey(e.key)) { e.preventDefault(); return }
-      return
+  // j/k bounds-checked navigation. Returns true if handled.
+  function navKey(e: KeyboardEvent, select: (idx: number) => void): boolean {
+    if (e.key === 'j' && selectedIndex < revisions.length - 1) {
+      e.preventDefault(); select(selectedIndex + 1); return true
     }
-
-    // Squash mode: j/k navigate (cursor only, keep source diff), e/d toggles
-    if (squash.active) {
-      if (e.key === 'j' && selectedIndex < revisions.length - 1) { e.preventDefault(); selectRevisionCursorOnly(selectedIndex + 1); return }
-      if (e.key === 'k' && selectedIndex > 0) { e.preventDefault(); selectRevisionCursorOnly(selectedIndex - 1); return }
-      if (squash.handleKey(e.key)) { e.preventDefault(); return }
-      return
+    if (e.key === 'k' && selectedIndex > 0) {
+      e.preventDefault(); select(selectedIndex - 1); return true
     }
+    return false
+  }
 
-    // Rebase mode: j/k navigate, source/target mode keys
-    if (rebase.active) {
-      if (e.key === 'j' && selectedIndex < revisions.length - 1) { e.preventDefault(); selectRevision(selectedIndex + 1); return }
-      if (e.key === 'k' && selectedIndex > 0) { e.preventDefault(); selectRevision(selectedIndex - 1); return }
-      if (rebase.handleKey(e.key)) { e.preventDefault(); return }
-      return
-    }
+  // Escape backs out of the most-nested thing. Priority stack:
+  // inline modes (handled in handleInlineCommit) > description editor >
+  // checked revisions > error toast > nothing.
+  function handleEscapeStack(): void {
+    if (descriptionEditing) { descriptionEditing = false; commitMode = false }
+    else if (checkedRevisions.size > 0) clearChecksAndReload()
+    else if (error) dismissError()
+  }
 
-    // Escape: description editor, checked revisions, errors (inline modes handled above)
-    if (e.key === 'Escape') {
-      if (descriptionEditing) {
-        descriptionEditing = false
-        commitMode = false
-      } else if (checkedRevisions.size > 0) {
-        clearChecksAndReload()
-      } else if (error) {
-        dismissError()
-      }
-      return
-    }
-
-    // Global shortcuts — inline modes already returned above
+  // View-independent keys. `false` = not ours, fall through to log-view.
+  function handleGlobalKeys(e: KeyboardEvent): boolean {
     switch (e.key) {
-      case 't':
-        e.preventDefault()
-        toggleTheme()
-        return
-      case 'u':
-        e.preventDefault()
-        handleUndo()
-        return
-      case 'c':
-        e.preventDefault()
-        handleCommit()
-        return
-      case 'f':
-        e.preventDefault()
-        handleGitOp('fetch', [])
-        return
-      case 'p':
-        e.preventDefault()
-        handleGitOp('push', [])
-        return
-      case 'g':
-        e.preventDefault()
-        closeAllModals()
-        gitModalOpen = true
-        return
+      case 't': e.preventDefault(); toggleTheme(); return true
+      case 'u': e.preventDefault(); handleUndo(); return true
+      case 'c': e.preventDefault(); handleCommit(); return true
+      case 'f': e.preventDefault(); handleGitOp('fetch', []); return true
+      case 'p': e.preventDefault(); handleGitOp('push', []); return true
+      case 'g': e.preventDefault(); openModal('git'); return true
       case 'w':
         e.preventDefault()
         if (workspaceList.length > 1) wsDropdownOpen = !wsDropdownOpen
-        return
-      case '1':
-        e.preventDefault()
-        activeView = 'log'
-        return
-      case '2':
-        e.preventDefault()
-        activeView = 'branches'
-        return
-      case '3':
-        e.preventDefault()
-        activeView = 'operations'
-        loadOplog()
-        return
+        return true
+      case '1': e.preventDefault(); activeView = 'log'; return true
+      case '2': e.preventDefault(); activeView = 'branches'; return true
+      case '3': e.preventDefault(); activeView = 'operations'; loadOplog(); return true
     }
+    return false
+  }
 
-    // Log-view-only shortcuts
-    if (activeView !== 'log') return
+  // Log-view keys. Sub-gates:
+  //   singleOnly  — action is semantically single-revision (e/s/v/B)
+  //   oneOrMany   — works on cursor OR checks (R/S)
+  //   selection   — cursor only, check-agnostic (Space/Enter)
+  // These mirror the enter*Mode functions' internal gates — keyboard gate
+  // avoids preventDefault on disallowed state; function gate protects
+  // palette/context-menu callers.
+  function handleLogKeys(e: KeyboardEvent): void {
+    if (navKey(e, selectRevision)) return
+
+    const singleOnly = selectedRevision && checkedRevisions.size === 0
+    const oneOrMany = selectedRevision || checkedRevisions.size > 0
 
     switch (e.key) {
-      case 'j':
-        e.preventDefault()
-        if (selectedIndex < revisions.length - 1) {
-          selectRevision(selectedIndex + 1)
-        }
-        break
-      case 'k':
-        e.preventDefault()
-        if (selectedIndex > 0) {
-          selectRevision(selectedIndex - 1)
-        }
-        break
       case ' ':
         if (selectedRevision) {
           e.preventDefault()
@@ -1212,63 +1227,20 @@
           nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
         }
         break
-      case 'r':
-        e.preventDefault()
-        loadLog()
-        break
-      case 'e':
-        if (selectedRevision && checkedRevisions.size === 0) {
-          e.preventDefault()
-          startDescriptionEdit()
-        }
-        break
+      case 'r': e.preventDefault(); loadLog(); break
+      case 'b': e.preventDefault(); openBookmarkModal(); break
+      case '/': e.preventDefault(); revisionGraphRef?.focusRevsetInput(); break
       case 'n':
         e.preventDefault()
-        if (checkedRevisions.size > 0) {
-          handleNewFromChecked()
-        } else if (selectedRevision) {
-          handleNew(effectiveId(selectedRevision.commit))
-        }
+        if (checkedRevisions.size > 0) handleNewFromChecked()
+        else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))
         break
-      case 'b':
-        e.preventDefault()
-        openBookmarkModal()
-        break
-      case 'R':
-        if (selectedRevision || checkedRevisions.size > 0) {
-          e.preventDefault()
-          enterRebaseMode()
-        }
-        break
-      case 's':
-        if (selectedRevision && checkedRevisions.size === 0) {
-          e.preventDefault()
-          enterSplitMode()
-        }
-        break
-      case 'v':
-        if (selectedRevision && checkedRevisions.size === 0) {
-          e.preventDefault()
-          enterReviewMode()
-        }
-        break
-      case 'S':
-        if (selectedRevision || checkedRevisions.size > 0) {
-          e.preventDefault()
-          enterSquashMode()
-        }
-        break
-      case 'B':
-        if (selectedRevision && checkedRevisions.size === 0) {
-          e.preventDefault()
-          closeAllModals()
-          bookmarkInputOpen = true
-        }
-        break
-      case '/':
-        e.preventDefault()
-        revisionGraphRef?.focusRevsetInput()
-        break
+      case 'e': if (singleOnly) { e.preventDefault(); startDescriptionEdit() } break
+      case 's': if (singleOnly) { e.preventDefault(); enterSplitMode() } break
+      case 'v': if (singleOnly) { e.preventDefault(); enterReviewMode() } break
+      case 'B': if (singleOnly) { e.preventDefault(); openModal('bookmarkInput') } break
+      case 'R': if (oneOrMany) { e.preventDefault(); enterRebaseMode() } break
+      case 'S': if (oneOrMany) { e.preventDefault(); enterSquashMode() } break
     }
   }
 
@@ -1433,7 +1405,7 @@
         <button class="toolbar-btn" onclick={() => { if (!inlineMode) handleGitOp('push', []) }} disabled={inlineMode || mutating} title="Push (p)">
           Push
         </button>
-        <button class="toolbar-btn" onclick={() => { if (!inlineMode) { closeAllModals(); gitModalOpen = true } }} disabled={inlineMode || mutating} title="Git operations (g)">
+        <button class="toolbar-btn" onclick={() => { if (!inlineMode) openModal('git') }} disabled={inlineMode || mutating} title="Git operations (g)">
           Git…
         </button>
         <span class="toolbar-divider"></span>
