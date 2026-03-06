@@ -47,24 +47,21 @@
   }
 </script>
 
-<div class="shell">
+<!-- TabBar is rendered by App (between its toolbar and workspace) via snippet
+     prop. It lives outside {#key} here — one instance for the session, state
+     (tabs, path-input text) survives tab switches. App just positions it. -->
+{#snippet tabBar()}
   <TabBar {tabs} activeId={activeTabId} onswitch={switchTab} onopen={handleOpen} onclose={handleClose} />
   {#if error}
     <div class="shell-error">{error} <button onclick={() => error = ''}>×</button></div>
   {/if}
-  {#key activeTabId}
-    <App />
-  {/key}
-</div>
+{/snippet}
+
+{#key activeTabId}
+  <App {tabBar} />
+{/key}
 
 <style>
-  .shell {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
-  }
-
   .shell-error {
     padding: 4px 12px;
     background: var(--red-bg);

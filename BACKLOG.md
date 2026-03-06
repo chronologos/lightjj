@@ -10,7 +10,6 @@ Tabs shipped: TabManager mounts N Server instances at `/tab/{id}/` via StripPref
 - [ ] **Replace `spawnWorkspaceInstance` with in-process tab** (Small) — Workspace spawning forks a child process on a new port → new browser window. With TabManager, `handleWorkspaceOpen` can `AddTab(newTab(wsPath))` instead. Deletes ~80 LOC (`spawnLocked`, child tracking, port polling). Workspace dropdown's `↗` becomes a tab-open, not a window-open.
 - [ ] **Annotations repo-partitioning** (Trivial) — `annotations/{changeId}.json` — changeId is jj-random (~2^128 space), collision across repos is negligible but semantically wrong. Partition as `annotations/{repoRootHash}/{changeId}.json`. Fix when it matters.
 - [ ] **WelcomeModal re-show on tab switch** (Trivial) — `config.ready.then(...)` runs on every App remount. If user hasn't dismissed the modal yet, switching tabs re-opens it. Guard with a module-level `let welcomeShown` in App.svelte or hoist the check to AppShell.
-- [ ] **`--auto-shutdown` + multi-tab interaction** (Small) — Idle-shutdown tracks SSE subscribers per-Watcher. Switching to tab 1 closes tab 0's EventSource → tab 0's Watcher sees 0 subs → idle timer starts → process exits while user is on tab 1. Currently applied to startup tab only (works in single-tab use, the original design). Proper fix: TabManager tracks total subscriber count across all tabs; `idleTimer` moves there.
 
 ## jj 0.39 compat (2026-03-04)
 

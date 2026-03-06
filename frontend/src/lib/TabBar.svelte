@@ -46,6 +46,7 @@
       onclick={() => { if (tab.id !== activeId) onswitch(tab.id) }}
       title={tab.path}
     >
+      <span class="tab-glyph">▪</span>
       <span class="tab-name">{tab.name}</span>
       {#if tabs.length > 1}
         <span
@@ -63,7 +64,8 @@
       bind:this={inputEl}
       bind:value={pathInput}
       class="tab-path-input"
-      placeholder="/path/to/repo  or  ~/repo"
+      placeholder="~/path/to/repo"
+      spellcheck="false"
       onkeydown={handleKey}
       onblur={() => { opening = false }}
     />
@@ -73,16 +75,20 @@
 </div>
 
 <style>
+  /* Sits between toolbar (--crust) and workspace (--base). --mantle would be
+     the natural in-between but mantle==base in this theme, so use --base +
+     a bottom border to read as "content-adjacent". */
   .tab-bar {
     display: flex;
-    align-items: center;
-    gap: 1px;
-    background: var(--surface0);
+    align-items: stretch;
+    background: var(--base);
     border-bottom: 1px solid var(--surface1);
-    padding: 0 4px;
-    height: 28px;
+    padding-left: 10px;
+    height: 26px;
     flex-shrink: 0;
     user-select: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
 
   .tab {
@@ -90,24 +96,36 @@
     align-items: center;
     gap: 6px;
     padding: 0 10px;
-    height: 24px;
     background: transparent;
     border: none;
-    border-radius: 4px 4px 0 0;
-    color: var(--text-muted);
+    /* Active-tab indicator is a bottom border, not a background — matches the
+       amber accent on .toolbar-nav-active without competing with it (nav uses
+       text color, tabs use underline; both amber, different channels). */
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px; /* overlap the bar's border so the accent sits ON it */
+    color: var(--subtext0);
     font: inherit;
-    font-size: 12px;
     cursor: pointer;
-    max-width: 180px;
+    max-width: 200px;
   }
 
   .tab:hover:not(.active) {
-    background: var(--surface1);
+    background: var(--bg-hover);
+    color: var(--text);
   }
 
   .tab.active {
-    background: var(--surface1);
     color: var(--text);
+    border-bottom-color: var(--amber);
+  }
+
+  .tab-glyph {
+    font-size: 8px;
+    opacity: 0.5;
+  }
+  .tab.active .tab-glyph {
+    color: var(--amber);
+    opacity: 1;
   }
 
   .tab-name {
@@ -117,51 +135,56 @@
   }
 
   .tab-close {
-    opacity: 0.5;
-    font-size: 14px;
+    opacity: 0;
+    font-size: 13px;
     line-height: 1;
     padding: 0 2px;
-    border-radius: 2px;
+    border-radius: 3px;
+    margin-right: -4px;
+    transition: opacity var(--anim-duration) var(--anim-ease);
   }
-
+  .tab:hover .tab-close,
+  .tab.active .tab-close {
+    opacity: 0.5;
+  }
   .tab-close:hover {
     opacity: 1;
-    background: var(--surface2);
+    background: var(--surface1);
   }
 
   .tab-new {
-    width: 24px;
-    height: 24px;
+    width: 26px;
     padding: 0;
     background: transparent;
     border: none;
-    color: var(--text-muted);
+    color: var(--surface2);
     font: inherit;
-    font-size: 16px;
+    font-size: 14px;
     line-height: 1;
     cursor: pointer;
-    border-radius: 4px;
   }
-
   .tab-new:hover {
-    background: var(--surface1);
+    background: var(--bg-hover);
     color: var(--text);
   }
 
   .tab-path-input {
-    height: 20px;
+    align-self: center;
+    height: 18px;
+    margin-left: 4px;
     padding: 0 8px;
-    background: var(--surface1);
-    border: 1px solid var(--surface2);
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
     border-radius: 3px;
     color: var(--text);
     font: inherit;
-    font-size: 12px;
-    width: 280px;
+    width: 260px;
   }
-
   .tab-path-input:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--amber);
+  }
+  .tab-path-input::placeholder {
+    color: var(--surface2);
   }
 </style>

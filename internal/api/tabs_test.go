@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/chronologos/lightjj/internal/jj"
 	"github.com/chronologos/lightjj/testutil"
@@ -160,6 +161,102 @@ func TestTabClose_Unknown(t *testing.T) {
 	w := httptest.NewRecorder()
 	tm.Mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/tabs/99", nil))
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTabManager_IdleShutdown_CrossTab(t *testing.T) {
+	// The core fix: switching from tab 0 to tab 1 should NOT start the idle
+	// timer. totalSubs goes 1→2 (tab 1 connects) → 1 (tab 0 disconnects).
+	// Never hits 0 until the BROWSER closes (both tabs disconnect).
+	tm := NewTabManager(nil)
+	tm.SetIdleShutdown(10 * time.Millisecond)
+
+	// Two tabs, each with a Watcher (no fsnotify — just the subscribe hooks).
+	for i := 0; i < 2; i++ {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		s := NewServer(r, "")
+		s.Watcher = newWatcher(s) // bare watcher, no fsnotify/goroutines
+		tm.AddTab(s, "/r")
+	}
+
+	w0 := tm.tabs["0"].srv.Watcher
+	w1 := tm.tabs["1"].srv.Watcher
+
+	// Browser opens, connects to tab 0.
+	_, unsub0 := w0.subscribe()
+	assert.Equal(t, 1, tm.totalSubs)
+
+	// User switches to tab 1: new ES connects, then old ES closes ({#key}
+	// destroy-before-create runs old cleanup before new effect, but the
+	// new App's $effect fires in the same flush — net order depends on
+	// Svelte internals. Either order is safe: 1→2→1 or 1→0→1. Test both).
+	_, unsub1 := w1.subscribe()
+	unsub0()
+	assert.Equal(t, 1, tm.totalSubs)
+	assert.Nil(t, tm.idleTimer, "switching tabs must not start idle timer")
+
+	// Browser closes → tab 1's ES disconnects → totalSubs hits 0 → timer fires.
+	unsub1()
+	assert.Equal(t, 0, tm.totalSubs)
+	select {
+	case <-tm.ShutdownCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("ShutdownCh not closed after idle timeout")
+	}
+}
+
+func TestTabManager_IdleShutdown_ReconnectCancels(t *testing.T) {
+	tm := NewTabManager(nil)
+	tm.SetIdleShutdown(50 * time.Millisecond)
+	r := testutil.NewMockRunner(t)
+	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+	s := NewServer(r, "")
+	s.Watcher = newWatcher(s)
+	tm.AddTab(s, "/r")
+
+	_, unsub := s.Watcher.subscribe()
+	unsub() // timer starts
+	require.NotNil(t, tm.idleTimer)
+
+	// Reconnect before timer fires → cancelled.
+	_, unsub2 := s.Watcher.subscribe()
+	assert.Nil(t, tm.idleTimer)
+
+	select {
+	case <-tm.ShutdownCh:
+		t.Fatal("ShutdownCh closed despite reconnect")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unsub2()
+}
+
+func TestTabManager_IdleShutdown_CloseOrder(t *testing.T) {
+	// The other order: old tab disconnects BEFORE new tab connects (possible
+	// if {#key} cleanup runs before the new mount's effect). totalSubs dips
+	// to 0 momentarily → timer starts → incSub cancels it.
+	tm := NewTabManager(nil)
+	tm.SetIdleShutdown(50 * time.Millisecond)
+	for i := 0; i < 2; i++ {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		s := NewServer(r, "")
+		s.Watcher = newWatcher(s)
+		tm.AddTab(s, "/r")
+	}
+
+	_, unsub0 := tm.tabs["0"].srv.Watcher.subscribe()
+	unsub0() // totalSubs: 1→0, timer starts
+	require.NotNil(t, tm.idleTimer)
+
+	_, unsub1 := tm.tabs["1"].srv.Watcher.subscribe() // totalSubs: 0→1, timer cancelled
+	assert.Nil(t, tm.idleTimer)
+
+	select {
+	case <-tm.ShutdownCh:
+		t.Fatal("ShutdownCh closed — timer should have been cancelled")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unsub1()
 }
 
 func TestTabManager_ConfigAtTopLevel(t *testing.T) {

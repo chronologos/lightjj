@@ -1,5 +1,9 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+
+  let { tabBar }: { tabBar?: Snippet } = $props()
+
   import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, diffTargetKey, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -1478,6 +1482,8 @@
       </div>
     </div>
 
+    {@render tabBar?.()}
+
     {#if error}
       <div class="error-bar" role="alert">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -1677,10 +1683,7 @@
   .app {
     display: flex;
     flex-direction: column;
-    /* flex:1 inside AppShell's column — TabBar takes 28px above, App fills
-       the rest. 100vh here would push 28px below the viewport. */
-    flex: 1;
-    min-height: 0;
+    height: 100vh;
     overflow: hidden;
   }
 

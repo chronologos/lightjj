@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chronologos/lightjj/internal/runner"
 )
@@ -47,13 +49,29 @@ type TabManager struct {
 	next int
 
 	newTab TabFactory
+
+	// Cross-tab idle-shutdown. Counts SSE subscribers across ALL tabs — a
+	// per-Watcher count would fire when the user switches tabs (old tab's
+	// EventSource closes) even though the browser is still connected. Timer
+	// starts only when totalSubs DROPS to 0 (decSub), not at startup, so a
+	// slow-to-connect browser doesn't race the process to exit. ShutdownCh
+	// close is sync.Once-guarded: timer.Stop() returning false means fire
+	// already dequeued → a late incSub can't prevent it, but a second timer
+	// firing after that is structurally impossible (process is exiting).
+	ShutdownCh   chan struct{}
+	idleMu       sync.Mutex
+	idleShutdown time.Duration
+	idleTimer    *time.Timer
+	totalSubs    int
+	shutdownOnce sync.Once
 }
 
 func NewTabManager(newTab TabFactory) *TabManager {
 	m := &TabManager{
-		Mux:    http.NewServeMux(),
-		tabs:   make(map[string]*Tab),
-		newTab: newTab,
+		Mux:        http.NewServeMux(),
+		tabs:       make(map[string]*Tab),
+		newTab:     newTab,
+		ShutdownCh: make(chan struct{}),
 	}
 	m.Mux.HandleFunc("GET /tabs", m.handleList)
 	m.Mux.HandleFunc("POST /tabs", m.handleCreate)
@@ -88,7 +106,48 @@ func (m *TabManager) addLocked(srv *Server, path string) *Tab {
 		handler: http.StripPrefix("/tab/"+id, srv.Mux),
 	}
 	m.tabs[id] = t
+	// Wire this tab's SSE subscriber count into the cross-tab total. Nil-safe:
+	// --no-watch or NewWatcher failure means no SSE → this tab contributes
+	// nothing to idle detection (can't detect "browser closed" without SSE).
+	if srv.Watcher != nil {
+		srv.Watcher.onSub = m.incSub
+		srv.Watcher.onUnsub = m.decSub
+	}
 	return t
+}
+
+// SetIdleShutdown arms the idle timer. When the total SSE subscriber count
+// across all tabs drops to 0, a timer starts; if no browser reconnects before
+// it fires, ShutdownCh closes. Call before any tab can receive subscribers.
+func (m *TabManager) SetIdleShutdown(d time.Duration) {
+	m.idleMu.Lock()
+	m.idleShutdown = d
+	m.idleMu.Unlock()
+}
+
+func (m *TabManager) incSub() {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	m.totalSubs++
+	if m.idleTimer != nil {
+		m.idleTimer.Stop()
+		m.idleTimer = nil
+	}
+}
+
+func (m *TabManager) decSub() {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	m.totalSubs--
+	if m.totalSubs == 0 && m.idleShutdown > 0 {
+		d := m.idleShutdown
+		m.idleTimer = time.AfterFunc(d, func() {
+			m.shutdownOnce.Do(func() {
+				log.Printf("no browser connected for %v, shutting down", d)
+				close(m.ShutdownCh)
+			})
+		})
+	}
 }
 
 // Shutdown closes watchers and kills child processes across all tabs.

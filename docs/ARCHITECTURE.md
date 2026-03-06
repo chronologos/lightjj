@@ -71,6 +71,9 @@ flowchart TD
 | POST | `/api/alias` | Run a user-configured jj alias (validated against config) |
 | POST | `/api/workspace/open` | Spawn child lightjj instance for another workspace |
 | POST | `/api/file-write` | Write file directly to working copy (inline editor save). Local mode only — path validation rejects `..`, absolute paths, `.jj/`, `.git/`, null bytes, symlink escapes. |
+| GET | `/tabs` | List open tabs (host-level, no `/tab/{id}/` prefix) |
+| POST | `/tabs` | Open a repo in a new tab. Path validated with `jj workspace root` (400 if not a repo); canonical root deduped. Local mode only. |
+| DELETE | `/tabs/{id}` | Close a tab (shuts down its watcher). Refuses the last tab. |
 
 ## Layer Responsibilities
 
@@ -115,6 +118,8 @@ Two implementations:
 
 Thin HTTP handlers. Each handler: parses request → calls command builder → executes via runner → returns JSON. No business logic — just plumbing.
 
+**Multi-tab routing.** `TabManager` (`tabs.go`) owns the top-level mux; each tab is a complete `Server` mounted at `/tab/{id}/` via a pre-built `http.StripPrefix` handler. Opening a tab constructs a fresh `LocalRunner` + `Server` + `Watcher` for that repo. `Server` is unchanged — zero handler edits, it doesn't know tabs exist. Path validation runs `jj workspace root` (fails fast if not a repo, gives canonical path for dedup). The factory runs **outside** the write lock (construction opens fsnotify, ~20-50ms); double-check dedup under lock, shut down the orphan if a concurrent create won. Host-scoped routes — `/tabs`, `/api/config`, static files — live on `TabManager.Mux` directly. The `/api/` URL prefix is the frontend's per-tab discriminant: `tabScoped()` in `api.ts` prefixes `/api/*` with `/tab/{id}` and leaves `/tabs` unchanged. One constraint this imposes: **all `Server.routes()` paths must start with `/api/`** — anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
+
 The server includes an operation ID cache (`cachedOp`) that tracks jj's current operation. Every JSON response includes an `X-JJ-Op-Id` header. Mutation endpoints refresh the cache asynchronously via `runMutation()`, which centralizes the post-mutation pattern (run command → refresh op ID → return output).
 
 `refreshOpId()` reads `.jj/repo/op_heads/heads/` directly when `RepoDir` is set — the op-id IS the filename (128 hex chars, truncated to 12 for `short()`), and jj atomically swaps that file on every operation. `os.ReadDir` is <1ms vs ~15-20ms for a `jj op log` subprocess. Falls back to the subprocess for SSH mode (`RepoDir == ""`), divergent op heads (>1 file), or secondary workspaces where `.jj/repo` is a pointer file (ENOTDIR).
@@ -127,9 +132,11 @@ Parses `jj log` graph output (with `_PREFIX:` field markers and `\x1F` field del
 
 ### Frontend (`frontend/`)
 
-Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to `cmd/lightjj/frontend-dist/`. In production, files are embedded in the Go binary via `//go:embed`. In development, Vite's dev server proxies `/api` to the Go backend.
+Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to `cmd/lightjj/frontend-dist/`. In production, files are embedded in the Go binary via `//go:embed`. In development, Vite's dev server proxies `/api`, `/tab`, and `/tabs` to the Go backend.
 
 `src/lib/api.ts` is a typed client that mirrors the Go API endpoints 1:1. It tracks the `X-JJ-Op-Id` header from responses and fires stale callbacks when the operation ID changes, triggering automatic cache invalidation and log refresh.
+
+**Tab switching** is `{#key activeTabId}<App/>` in `AppShell.svelte` — a full remount. `setActiveTab()` sets the module-level `basePath` and clears per-repo memos (`_remotes`/`_aliases`/`_info`) + `lastOpId` before `activeTabId` changes, so the remounted App's top-level fetches hit the new prefix. The commit_id cache is **not** cleared: `commit_id` is a SHA-256 content hash (tree + parents + message), collision across repos is cryptographically negligible, so switching back to a tab serves cached diffs instantly. The Shiki/word-diff `derivedCache` in `DiffPanel` is also commit_id-keyed and survives for the same reason.
 
 ## Data Flow
 
@@ -294,9 +301,11 @@ defer runner.Verify()  // asserts all expectations called
 
 2. **Structured output with graph parsing** — The backend uses `jj log` with a custom `--template` that outputs `\x1F`-delimited fields. The graph parser (`internal/parser/`) parses both the graph gutter characters and the structured field data from each line. This gives us the full DAG visualization from jj's own graph renderer, combined with structured commit data.
 
-3. **Embed frontend in binary** — Single binary deployment via `//go:embed`. No Node runtime needed in production.
+3. **Embed frontend in binary** — Single binary deployment via `//go:embed`. No Node runtime needed in production. Static files registered at `"/"` (all-methods subtree), **not** `"GET /"` — Go 1.22 ServeMux rejects patterns where neither is strictly more specific, and `"GET /"` is method-narrower but path-wider than `/tab/{id}/`.
 
 4. **Two runner implementations, one interface** — Local and SSH execution are swappable at startup. The API layer doesn't know or care which is active.
+
+5. **Multi-tab = N Servers, one process** — A tab is a full `Server` mounted at a URL prefix. No per-request `repoDir` parameter, no map-of-runners in handlers — `Server` is untouched, tests stay byte-identical. The `TabFactory` closure in `main.go` captures flag values so the startup repo and dynamically-opened repos get identical config; `makeServer()` unifies the two construction paths. Dispatch overhead is ~363ns/608B per request (dominated by `http.StripPrefix`'s shallow `*http.Request` clone) — noise next to a 15ms `jj` subprocess.
 
 5. **`--tool :git` for diffs** — Users may have external diff tools configured (e.g., difftastic with `--color=always`). The web API forces jj's git-format diff output to get clean, parseable output.
 

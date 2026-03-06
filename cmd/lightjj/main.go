@@ -97,13 +97,6 @@ func main() {
 	if !*noWatch && sshRunner != nil {
 		srv.Watcher = api.NewSSHWatcher(srv, sshRunner.StreamRaw)
 	}
-	// Auto-shutdown tracks SSE subscribers on the STARTUP tab's Watcher only.
-	// Switching to a second tab closes tab 0's EventSource → 0 subs → timer
-	// starts. Known limitation (BACKLOG: cross-tab subscriber tracking).
-	// Works correctly in single-tab use (the original design).
-	if srv.Watcher != nil && *autoShutdown > 0 {
-		srv.Watcher.SetIdleShutdown(*autoShutdown)
-	}
 
 	// Tab factory for dynamically opening additional local repos. Nil in SSH
 	// mode — can't cheaply validate remote paths.
@@ -117,6 +110,9 @@ func main() {
 		}
 	}
 	tm := api.NewTabManager(newTab)
+	if *autoShutdown > 0 {
+		tm.SetIdleShutdown(*autoShutdown)
+	}
 	tm.AddTab(srv, displayPath)
 
 	// Serve embedded frontend static files
@@ -147,7 +143,7 @@ func main() {
 	go func() {
 		select {
 		case <-sigCh:
-		case <-srv.ShutdownCh:
+		case <-tm.ShutdownCh:
 		}
 		tm.Shutdown()
 		os.Exit(0)

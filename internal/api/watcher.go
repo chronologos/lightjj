@@ -33,11 +33,12 @@ type Watcher struct {
 	// many commits) can fire several in quick succession. Coalesce to one SSE.
 	debounce time.Duration
 
-	// IdleShutdown: when >0 and the last SSE subscriber disconnects, a timer
-	// starts. If no subscriber reconnects before it fires, srv.ShutdownCh is
-	// closed, signalling main.go to exit. Handles browser close → server exit.
-	idleShutdown time.Duration
-	idleTimer    *time.Timer // guarded by subsMu
+	// Optional hooks fired on SSE subscribe/unsubscribe. Set by TabManager
+	// for cross-tab idle-shutdown tracking — a per-Watcher count would start
+	// the idle timer when the user switches tabs (old tab's ES closes) even
+	// though the browser is still open. Called OUTSIDE subsMu so TabManager's
+	// lock can be taken without nesting.
+	onSub, onUnsub func()
 
 	stop chan struct{}
 }
@@ -107,23 +108,9 @@ func (w *Watcher) start(snapshotInterval time.Duration) error {
 	return nil
 }
 
-// SetIdleShutdown configures auto-shutdown after the given duration with no
-// SSE subscribers. Called by main.go after construction.
-func (w *Watcher) SetIdleShutdown(d time.Duration) {
-	w.subsMu.Lock()
-	defer w.subsMu.Unlock()
-	w.idleShutdown = d
-}
-
 // Close stops all background goroutines and closes the fsnotify watcher.
 func (w *Watcher) Close() {
 	close(w.stop)
-	w.subsMu.Lock()
-	if w.idleTimer != nil {
-		w.idleTimer.Stop()
-		w.idleTimer = nil
-	}
-	w.subsMu.Unlock()
 	if w.fsWatcher != nil {
 		w.fsWatcher.Close()
 	}
@@ -317,24 +304,18 @@ func (w *Watcher) hasSubscribers() bool {
 func (w *Watcher) subscribe() (ch chan string, unsubscribe func()) {
 	ch = make(chan string, 1) // buffered: writer drops if client is slow
 	w.subsMu.Lock()
-	// Cancel idle shutdown timer — a client just connected.
-	if w.idleTimer != nil {
-		w.idleTimer.Stop()
-		w.idleTimer = nil
-	}
 	w.subs[ch] = struct{}{}
 	w.subsMu.Unlock()
+	if w.onSub != nil {
+		w.onSub()
+	}
 	return ch, func() {
 		w.subsMu.Lock()
 		delete(w.subs, ch)
-		// Last subscriber gone — start idle shutdown timer if configured.
-		if len(w.subs) == 0 && w.idleShutdown > 0 {
-			w.idleTimer = time.AfterFunc(w.idleShutdown, func() {
-				log.Printf("no browser connected for %v, shutting down", w.idleShutdown)
-				close(w.srv.ShutdownCh)
-			})
-		}
 		w.subsMu.Unlock()
+		if w.onUnsub != nil {
+			w.onUnsub()
+		}
 	}
 }
 

@@ -29,6 +29,7 @@ lightjj
 - **Bookmarks & git** — set/move/advance/delete/track bookmarks, push/fetch with flag validation
 - **Multi-select** — batch abandon, squash, rebase across revisions
 - **Op log & evolog** — full operation history and per-revision evolution with inter-diffs
+- **Multi-repo tabs** — open additional repos in tabs (`+` button in the tab bar); diffs stay cached across tabs
 - **Workspaces** — detect and switch between jj workspaces; one-click spawn a new lightjj instance
 - **SSH remote** — proxy jj commands over SSH, or port-forward for local-quality performance
 - **Themes** — Catppuccin dark/light (`t` to toggle)
