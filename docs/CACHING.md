@@ -29,9 +29,9 @@ stay valid across arbitrary operations.
 | 1 | `cache` (response) | api.ts module | `diff:${cid}` · `files:${cid}` · `desc:${cid}` · `diff:${id}:${file}:ctx${n}` | commit_id | `MAX_CACHE_SIZE` | self-invalidating |
 | 2 | `_remotes`/`_aliases`/`_info` | api.ts module | promise memo | repo identity | single-slot | `clearSessionMemos()` on tab-switch / hard-refresh |
 | 3 | Browser HTTP disk cache | browser | `/api/revision?...&immutable=1` URL | commit_id | browser-managed | `Cache-Control: immutable` — never |
-| 4 | `derivedCache` | DiffPanel `<script module>` | `diffTargetKey(t)` = commit_id OR `connected(a\|b\|c)` | commit_id-embedding | `DERIVED_CACHE_SIZE` | self-invalidating |
-| 5 | `parsedDiffCache` | DiffPanel `<script module>` | raw diff string | content | `DERIVED_CACHE_SIZE` | self-invalidating (same content → same parse) |
-| 6 | `collapseStateCache` | DiffPanel `<script module>` | **change_id** | change_id | `COLLAPSE_CACHE_SIZE` | none — preferences intentionally survive rewrites |
+| 4 | `derivedCache` | diff-cache.ts | `diffTargetKey(t)` = commit_id OR `connected(a\|b\|c)` | commit_id-embedding | `DERIVED_CACHE_SIZE` | self-invalidating · `clearDiffCaches()` on hard-refresh |
+| 5 | `parsedDiffCache` | diff-cache.ts | raw diff string | content | `DERIVED_CACHE_SIZE` | self-invalidating (same content → same parse) · `clearDiffCaches()` |
+| 6 | `collapseStateCache` | diff-cache.ts | **change_id** | change_id | `COLLAPSE_CACHE_SIZE` | none — preferences intentionally survive rewrites · `clearDiffCaches()` |
 
 **Explicitly uncached:** `api.evolog()`, `api.divergence()`, `api.annotations()`,
 `api.log()` — see the code comment above each for why.
@@ -95,9 +95,10 @@ immutable`. Two backend-side invariants (both tested in `handlers_test.go`):
 
 ### 4. `derivedCache` (highlights + word-diffs)
 
-Module-scoped — survives DiffPanel unmount (DivergencePanel replaces it via
-`{#if}`). Key is `diffTargetKey(diffTarget)`: commit_id for single-rev, revset
-string for multi-check — both embed commit_ids, both self-invalidate.
+App-lifetime (lives in `diff-cache.ts`) — survives DiffPanel unmount
+(DivergencePanel replaces it via `{#if}`). Key is `diffTargetKey(diffTarget)`:
+commit_id for single-rev, revset string for multi-check — both embed commit_ids,
+both self-invalidate.
 
 Both derivations share one LRU bucket via `readMemo`/`writeMemo` accessors so
 they evict together. Memo writes store the local accumulator (`done`), not the

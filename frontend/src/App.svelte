@@ -5,6 +5,7 @@
   let { tabBar }: { tabBar?: Snippet } = $props()
 
   import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
+  import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -325,7 +326,7 @@
 
     // Revisions
     { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog, when: () => !inlineMode },
-    { label: 'Hard refresh (clear all caches)', category: 'Revisions', action: () => { clearAllCaches(); loadLog(true) }, when: () => !inlineMode },
+    { label: 'Hard refresh (clear all caches)', category: 'Revisions', action: () => { clearAllCaches(); clearDiffCaches(); loadLog(true) }, when: () => !inlineMode },
     { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))

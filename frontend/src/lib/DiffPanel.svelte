@@ -1,65 +1,20 @@
-<script module lang="ts">
-  import type { WordSpan } from './word-diff'
-  import { parseDiffContent, type DiffFile } from './diff-parser'
-  import { MAX_CACHE_SIZE } from './api'
-
-  // Module-scoped caches — survive component unmount. DiffPanel is replaced by
-  // DivergencePanel via {#if divergence.active} in App.svelte; without module
-  // scope, opening that panel destroys cached highlight/word-diff work and the
-  // user's collapse preferences.
-  type DerivedCacheEntry = {
-    highlights: Map<string, Map<string, string>>
-    wordDiffs: Map<string, Map<string, Map<number, WordSpan[]>>>
-  }
-  const derivedCache = new Map<string, DerivedCacheEntry>()
-  const collapseStateCache = new Map<string, Set<string>>()
-  const DERIVED_CACHE_SIZE = 30
-  const COLLAPSE_CACHE_SIZE = 50
-
-  // docs/CACHING.md §5 — catches accidental tuning in the wrong direction.
-  if (DERIVED_CACHE_SIZE > MAX_CACHE_SIZE) {
-    throw new Error(`DERIVED_CACHE_SIZE (${DERIVED_CACHE_SIZE}) > MAX_CACHE_SIZE (${MAX_CACHE_SIZE})`)
-  }
-
-  // parsedDiff cache — keyed by raw diff text. Returns identical DiffFile[]
-  // on revisit → DiffFileView's `file` prop is ref-equal → `file.hunks`
-  // unchanged → $derived chains stay quiet on A→B→A. Lifetime: docs/CACHING.md §5.
-  const parsedDiffCache = new Map<string, DiffFile[]>()
-
-  function parseDiffCached(raw: string): DiffFile[] {
-    if (!raw) return []
-    const hit = parsedDiffCache.get(raw)
-    if (hit) {
-      lruSet(parsedDiffCache, raw, hit, DERIVED_CACHE_SIZE)
-      return hit
-    }
-    const result = parseDiffContent(raw)
-    lruSet(parsedDiffCache, raw, result, DERIVED_CACHE_SIZE)
-    return result
-  }
-
-  function lruSet<K, V>(cache: Map<K, V>, key: K, value: V, max: number) {
-    // LRU bump: delete first so set() moves to end
-    cache.delete(key)
-    cache.set(key, value)
-    if (cache.size > max) cache.delete(cache.keys().next().value!)
-  }
-
-</script>
-
 <script lang="ts">
   import { tick } from 'svelte'
   import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { api, diffTargetKey, type FileChange, type DiffTarget } from './api'
-  import { type DiffLine } from './diff-parser'
-  // parseDiffContent + DiffFile imported in <script module> — module-scope
-  // exports are visible to the instance script in Svelte 5.
+  import { parseDiffContent, type DiffFile, type DiffLine } from './diff-parser'
+  import type { WordSpan } from './word-diff'
+  import {
+    derivedCache, collapseStateCache, parseDiffCached, lruSet,
+    DERIVED_CACHE_SIZE, COLLAPSE_CACHE_SIZE, type DerivedCacheEntry,
+  } from './diff-cache'
   import { groupByWithIndex } from './group-by'
   import { computeWordDiffs } from './word-diff'
   import { highlightLines, detectLanguage } from './highlighter'
   import { createDiffDerivation } from './diff-derivation.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
+  import FileSelectionPanel from './FileSelectionPanel.svelte'
   import ContextMenu, { type ContextMenuItem } from './ContextMenu.svelte'
   import AnnotationBubble from './AnnotationBubble.svelte'
   import { createAnnotationStore, exportMarkdown, exportJSON } from './annotations.svelte'
@@ -103,8 +58,6 @@
   let activeRevisionId = $derived(diffTarget && diffTargetKey(diffTarget))
 
   // --- Local state ---
-  let fileSelectIdx: number = $state(0)
-  let fileSelectionListEl: HTMLElement | undefined = $state(undefined)
   let panelContentEl: HTMLElement | undefined = $state(undefined)
   let activeFilePath: string | null = $state(null)
   let collapsedFiles = new SvelteSet<string>()
@@ -811,56 +764,6 @@
     })
   }
 
-  function scrollFileSelectIntoView() {
-    requestAnimationFrame(() => {
-      fileSelectionListEl?.querySelector('.file-select-active')?.scrollIntoView({ block: 'nearest' })
-    })
-  }
-
-  // Enter/Escape are intentionally NOT handled here — they bubble to
-  // App.svelte's global keydown handler which executes/cancels the inline mode.
-  function handleFileSelectionKeydown(e: KeyboardEvent) {
-    switch (e.key) {
-      case 'ArrowDown':
-      case 'j':
-        e.preventDefault()
-        if (fileSelectIdx < changedFiles.length - 1) { fileSelectIdx++; scrollFileSelectIntoView() }
-        break
-      case 'ArrowUp':
-      case 'k':
-        e.preventDefault()
-        if (fileSelectIdx > 0) { fileSelectIdx--; scrollFileSelectIntoView() }
-        break
-      case ' ':
-        e.preventDefault()
-        if (changedFiles[fileSelectIdx]) ontogglefile(changedFiles[fileSelectIdx].path)
-        break
-      case 'a':
-        e.preventDefault()
-        for (const f of changedFiles) {
-          if (!selectedFiles.has(f.path)) ontogglefile(f.path)
-        }
-        break
-      case 'n':
-        e.preventDefault()
-        for (const f of changedFiles) {
-          if (selectedFiles.has(f.path)) ontogglefile(f.path)
-        }
-        break
-    }
-  }
-
-  // Auto-focus file selection list when entering split/squash mode,
-  // blur when exiting to prevent j/k from being swallowed
-  $effect(() => {
-    if (fileSelectionMode && fileSelectionListEl) {
-      fileSelectIdx = 0
-      fileSelectionListEl.focus()
-    } else if (!fileSelectionMode) {
-      fileSelectionListEl?.blur()
-    }
-  })
-
   // Track visible file via IntersectionObserver on file headers.
   // Defers DOM query with rAF so Svelte can flush new elements first.
   $effect(() => {
@@ -914,53 +817,7 @@
     </div>
   {/if}
   {#if fileSelectionMode}
-    {@const selectionLabels = {
-      squash: { title: 'Squash', countSuffix: 'to move' },
-      split:  { title: 'Split',  countSuffix: 'stay' },
-      review: { title: 'Review', countSuffix: 'accepted' },
-    }[fileSelectionMode]}
-    <div class="file-selection-panel" class:split-selection={fileSelectionMode !== 'squash'}>
-      <div class="file-selection-header">
-        <span class="file-selection-title">{selectionLabels.title} — <kbd>Space</kbd> toggle · <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> apply</span>
-        <span class="file-selection-actions">
-          <button class="file-select-action" onclick={() => { for (const f of changedFiles) { if (!selectedFiles.has(f.path)) ontogglefile(f.path) } }}>All</button>
-          <button class="file-select-action" onclick={() => { for (const f of changedFiles) { if (selectedFiles.has(f.path)) ontogglefile(f.path) } }}>None</button>
-        </span>
-        <span class="file-selection-count">{selectedFiles.size}/{changedFiles.length} {selectionLabels.countSuffix}</span>
-      </div>
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="file-selection-list" tabindex="-1"
-        onkeydown={handleFileSelectionKeydown}
-        bind:this={fileSelectionListEl}>
-        {#each changedFiles as file, i (file.path)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div
-            class="file-select-row"
-            class:file-select-active={i === fileSelectIdx}
-            class:file-checked={selectedFiles.has(file.path)}
-            onclick={() => { fileSelectIdx = i; ontogglefile(file.path) }}
-            onmouseenter={() => { fileSelectIdx = i }}
-            role="option"
-            tabindex="-1"
-            aria-selected={selectedFiles.has(file.path)}
-          >
-            <span class="file-check-indicator">{selectedFiles.has(file.path) ? '✓' : ' '}</span>
-            {#if file.conflict}
-              <span class="file-dot dot-C"></span>
-            {:else}
-              <span class="file-dot" class:dot-A={file.type === 'A'} class:dot-D={file.type === 'D'} class:dot-M={file.type === 'M'}></span>
-            {/if}
-            <span class="file-select-path">{file.path}</span>
-            {#if file.additions > 0 || file.deletions > 0}
-              <span class="file-tab-stats">
-                {#if file.additions > 0}<span class="stat-add">+{file.additions}</span>{/if}
-                {#if file.deletions > 0}<span class="stat-del">-{file.deletions}</span>{/if}
-              </span>
-            {/if}
-          </div>
-        {/each}
-      </div>
-    </div>
+    <FileSelectionPanel mode={fileSelectionMode} files={changedFiles} selected={selectedFiles} ontoggle={ontogglefile} />
   {/if}
   {#if diffTarget && changedFiles.length > 0 && !fileSelectionMode}
     <div class="file-list-bar">
@@ -1213,127 +1070,6 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-  }
-
-  /* --- File selection panel (split/squash) --- */
-  .file-selection-panel {
-    border-bottom: 1px solid var(--amber);
-    flex-shrink: 0;
-    animation: slide-down var(--anim-duration) var(--anim-ease);
-  }
-
-  .file-selection-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 12px;
-    background: var(--bg-selected);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--amber);
-  }
-
-  .file-selection-title {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .file-selection-title kbd {
-    background: var(--surface0);
-    padding: 0 4px;
-    border-radius: 3px;
-    font-family: inherit;
-    font-size: 10px;
-    border: 1px solid var(--surface1);
-    color: var(--overlay0);
-    font-weight: 500;
-  }
-
-  .file-selection-actions {
-    display: flex;
-    gap: 6px;
-    margin-left: auto;
-    margin-right: 8px;
-  }
-
-  .file-select-action {
-    background: none;
-    border: none;
-    color: var(--subtext0);
-    font-family: inherit;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    padding: 0;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .file-select-action:hover {
-    color: var(--text);
-  }
-
-  .file-selection-count {
-    font-variant-numeric: tabular-nums;
-  }
-
-  .file-selection-list {
-    display: flex;
-    flex-direction: column;
-    max-height: 160px;
-    overflow-y: auto;
-    background: var(--mantle);
-    outline: none;
-  }
-
-  .file-select-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    color: var(--text);
-    font-size: 12px;
-    cursor: pointer;
-    user-select: none;
-    transition: background-color var(--anim-duration) var(--anim-ease);
-  }
-
-  .file-select-row:hover:not(.file-select-active) {
-    background: var(--bg-hover);
-  }
-
-  .file-select-row.file-select-active {
-    background: var(--surface0);
-  }
-
-  .file-check-indicator {
-    width: 14px;
-    flex-shrink: 0;
-    text-align: center;
-    font-size: 11px;
-    font-weight: 700;
-    transition: color var(--anim-duration) var(--anim-ease),
-                transform var(--anim-duration) var(--anim-ease);
-  }
-
-  .file-checked .file-check-indicator {
-    color: var(--amber);
-    transform: scale(1.15);
-  }
-
-  .file-select-path {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--subtext0);
-  }
-
-  .file-select-row.file-checked .file-select-path {
-    color: var(--text);
   }
 
   /* --- File list bar --- */
