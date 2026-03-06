@@ -23,7 +23,7 @@ lightjj
 ## Highlights
 
 - **Revision graph** — SVG DAG, working-copy indicator, immutable markers, bookmark badges
-- **Diff viewer** — unified/split modes, Shiki syntax highlighting, word-level diffs, context expansion, conflict A/B labels
+- **Diff viewer** — unified/split modes, Lezer syntax highlighting, word-level diffs, context expansion, conflict A/B labels
 - **Inline annotations** — per-line review comments keyed by `change_id`; auto-re-anchor when the agent rewrites; export as markdown or JSON
 - **Inline rebase** — pick source mode (`-r`/`-s`/`-b`), target mode (onto/after/before), cursor to destination, Enter
 - **Bookmarks & git** — set/move/advance/delete/track bookmarks, push/fetch with flag validation

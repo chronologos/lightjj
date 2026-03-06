@@ -23,7 +23,7 @@ flowchart TD
 
     subgraph browser["Browser"]
         components["Svelte Components<br/><small>RevisionGraph · DiffPanel · DiffFileView</small>"]:::blue
-        api["api.ts<br/><small>two-tier cache · op-id tracking</small>"]:::orange
+        api["api.ts<br/><small>commit_id LRU cache · op-id tracking</small>"]:::orange
         components --> api
     end
 
@@ -371,7 +371,7 @@ flowchart LR
 - `wordDiffsByFile: Map<filePath, Map<hunkIdx, Map<lineIdx, spans>>>` — same progressive pattern. LCS computation yields between files; single-file context expansion only recomputes that file's entry. Stable `EMPTY_WD` singleton.
 - `matchesByFile` — search matches pre-grouped by `filePath` via `groupByWithIndex()`, preserving global indices so `currentMatchIdx` comparison still works. Match-free files receive `EMPTY_MATCHES` (stable singleton), so their `lineMatchMap` `$derived` never reads `currentMatchIdx` → no dependency → no recompute on Enter/Shift+Enter.
 
-**commit_id-keyed cache** — `api.ts` maintains a single 500-entry LRU Map keyed by `diff:<commit_id>` / `files:<commit_id>` / `desc:<commit_id>`. A commit_id is a content hash of tree + parents + message — if it hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation, no concurrent-request staleness guard. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants — the rest stay warm. `clearAllCaches()` is reserved for explicit user-triggered hard refresh.
+**commit_id-keyed cache** — `api.ts` maintains a single 500-entry LRU Map keyed by `diff:<commit_id>` / `files:<commit_id>` / `desc:<commit_id>`. A commit_id is a content hash of tree + parents + message — if it hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation, no concurrent-request staleness guard. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants — the rest stay warm. `clearAllCaches()` is reserved for explicit user-triggered hard refresh. See [CACHING.md](CACHING.md) for the full cache inventory and the invariants each depends on.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {

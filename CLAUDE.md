@@ -83,6 +83,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     fuzzy.ts               — Fuzzy string matching
     group-by.ts            — groupByWithIndex utility for per-file match scoping
     loader.svelte.ts       — createLoader() async factory with generation counter
+    revision-navigator.svelte.ts — createRevisionNavigator(): diff/files/description loaders + revGen batch-fetch orchestration. shouldAbort callback re-checked post-await (e.g. checkedRevisions.size > 0)
     diff-derivation.svelte.ts — createDiffDerivation() factory for per-file progressive computation (highlights, word-diff)
     modes.svelte.ts        — Rebase/squash/split mode state factories. SplitMode.review distinguishes 'v' (review: accepted/rejected labels) from 's' (split: stays/moves labels) — same jj split underneath
     config.svelte.ts       — Reactive config singleton — primary storage os.UserConfigDir()/lightjj/config.json, localStorage as write-through cache
@@ -191,5 +192,5 @@ Patterns learned from profiling j/k keyboard navigation:
 - **Fire-and-forget async in effects is fine** when the async function has its own error handling and generation counter for cancellation.
 - **Skip word-diff for non-code files.** `shouldSkipWordDiff()` in DiffPanel skips LCS computation for SVG/XML/JSON/lock/map/minified files and any file with >1000 diff lines.
 - **Progressive word diffs.** The `wordDiffs` DiffDerivation yields between files and publishes per-file entries incrementally. Single-file context expansion calls `wordDiffs.update(file)` — only that file recomputes.
-- **Auto-collapse large files.** Files with >500 diff lines (`AUTO_COLLAPSE_LINE_LIMIT`) start collapsed to prevent DOM flooding. Collapse state is cached per revision; auto-collapse is suppressed when restoring from cache.
+- **Auto-collapse large diffs.** Two triggers: (1) any single file >500 lines (`AUTO_COLLAPSE_LINE_LIMIT`) starts collapsed; (2) total lines across all files >2000 (`AUTO_COLLAPSE_TOTAL_LINES`) collapses EVERYTHING — catches the "many moderate files" DOM-flooding case the per-file check misses. Collapsed files render header-only via `{#if !isCollapsed}` in DiffFileView. Collapse state is cached per change_id; auto-collapse is suppressed when restoring from cache. Expand-all is one toolbar click; Cmd+F search auto-expands matches.
 - **Diff parser uses `b/` (destination) path** from `diff --git a/source b/destination` headers. The `a/` path is the source and can appear in multiple entries for copies/renames, causing duplicate `{#each}` keys.

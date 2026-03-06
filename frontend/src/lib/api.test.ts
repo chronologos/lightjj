@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, setActiveTab, listTabs, _testInternals, type LogEntry } from './api'
+import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -215,7 +215,7 @@ describe('response cache', () => {
   })
 
   it('bounds cache size with LRU eviction — evicts oldest, not all', async () => {
-    const MAX = _testInternals.MAX_CACHE_SIZE
+    const MAX = MAX_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
 
     // Fill to MAX
@@ -242,7 +242,7 @@ describe('response cache', () => {
     //
     // Happens in practice when api.revision() seeds diff:X while diff:X is
     // already cached but files:X / desc:X aren't (partial cache state).
-    const MAX = _testInternals.MAX_CACHE_SIZE
+    const MAX = MAX_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
 
     // Fill to MAX - 2 (leave room for files: + desc: seeds)
@@ -273,7 +273,7 @@ describe('response cache', () => {
   })
 
   it('bumps accessed entries to end of eviction order (LRU)', async () => {
-    const MAX = _testInternals.MAX_CACHE_SIZE
+    const MAX = MAX_CACHE_SIZE
     mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
 
     for (let i = 0; i < MAX; i++) {
@@ -797,8 +797,9 @@ describe('multiRevset', () => {
   it('returns bare ID for single revision', () => {
     expect(multiRevset(['abc'])).toBe('abc')
   })
-  it('wraps multiple in connected()', () => {
+  it('wraps multiple in connected() — sorted for stable cache keys', () => {
     expect(multiRevset(['abc', 'def', 'ghi'])).toBe('connected(abc|def|ghi)')
+    expect(multiRevset(['ghi', 'abc', 'def'])).toBe('connected(abc|def|ghi)')
   })
   it('returns empty for empty input', () => {
     expect(multiRevset([])).toBe('')

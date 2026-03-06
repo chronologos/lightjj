@@ -119,7 +119,14 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
       firstYield = false
       linesProcessed += fileLineCount(file)
 
-      done.set(file.filePath, await compute(file, isStale))
+      // Branch on sync vs async compute — matches update() below. When
+      // compute has a sync body (Lezer highlightFile) AND immediateBudget
+      // is Infinity (no yields), run() is fully synchronous: zero awaits,
+      // zero microtask suspensions. The await-on-non-Promise in the old code
+      // forced a suspension per file — a 20-file diff lost ~20 microtask
+      // turns to scheduling overhead for work that was already sync.
+      const result = compute(file, isStale)
+      done.set(file.filePath, result instanceof Promise ? await result : result)
       if (isStale()) return
       byFile = new Map(done)
     }

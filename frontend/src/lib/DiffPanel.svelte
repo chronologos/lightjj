@@ -1,6 +1,7 @@
 <script module lang="ts">
   import type { WordSpan } from './word-diff'
   import { parseDiffContent, type DiffFile } from './diff-parser'
+  import { MAX_CACHE_SIZE } from './api'
 
   // Module-scoped caches — survive component unmount. DiffPanel is replaced by
   // DivergencePanel via {#if divergence.active} in App.svelte; without module
@@ -13,14 +14,16 @@
   const derivedCache = new Map<string, DerivedCacheEntry>()
   const collapseStateCache = new Map<string, Set<string>>()
   const DERIVED_CACHE_SIZE = 30
+  const COLLAPSE_CACHE_SIZE = 50
 
-  // parsedDiff cache — keyed by raw diff text (same string reference from
-  // api.ts cache, so Map key lookup is a pointer compare, not a content scan).
-  // Returns identical DiffFile[] on revisit → DiffFileView's `file` prop holds
-  // a stable reference → `file.hunks` unchanged → lineNumsByHunk/splitLines/
-  // parsedHunkHeaders $derived chains stay quiet on A→B→A navigation. The
-  // strings are already retained by api.ts's cache (500 entries), so keying on
-  // them here doesn't extend their lifetime.
+  // docs/CACHING.md §5 — catches accidental tuning in the wrong direction.
+  if (DERIVED_CACHE_SIZE > MAX_CACHE_SIZE) {
+    throw new Error(`DERIVED_CACHE_SIZE (${DERIVED_CACHE_SIZE}) > MAX_CACHE_SIZE (${MAX_CACHE_SIZE})`)
+  }
+
+  // parsedDiff cache — keyed by raw diff text. Returns identical DiffFile[]
+  // on revisit → DiffFileView's `file` prop is ref-equal → `file.hunks`
+  // unchanged → $derived chains stay quiet on A→B→A. Lifetime: docs/CACHING.md §5.
   const parsedDiffCache = new Map<string, DiffFile[]>()
 
   function parseDiffCached(raw: string): DiffFile[] {
@@ -418,6 +421,11 @@
   const WORD_DIFF_LINE_LIMIT = 1000
   // Auto-collapse files larger than this to prevent DOM flooding
   const AUTO_COLLAPSE_LINE_LIMIT = 500
+  // Auto-collapse ALL files when total lines exceed this. Catches the
+  // "many moderate files" case (e.g. 20 files × 100 lines) that per-file
+  // AUTO_COLLAPSE_LINE_LIMIT misses. Collapsed files render header-only
+  // (~1 DOM subtree vs ~lines×2 nodes each). Expand-all is one click.
+  const AUTO_COLLAPSE_TOTAL_LINES = 2000
 
   function fileLineCount(file: DiffFile): number {
     return file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
@@ -469,10 +477,9 @@
 
   const highlights = createDiffDerivation({
     compute: highlightFile,
-    // Sync body means yielding between files is pure overhead (setTimeout
-    // clamps to 4ms after nesting depth 5 → 60-76ms wasted on a 20-file diff
-    // vs ~40ms of actual Lezer work). The outer setTimeout(0) at the effect
-    // already provides paint-first; inner yields add nothing.
+    // Sync compute + immediateBudget:Infinity → run() never awaits → fully
+    // synchronous loop. The outer setTimeout(0) at the effect below provides
+    // paint-first; run() itself has zero scheduling overhead.
     immediateBudget: Infinity,
     readMemo: readDerived('highlights'),
     writeMemo: writeDerived('highlights'),
@@ -480,18 +487,17 @@
 
   let highlightTimer: number | undefined
 
-  // Highlight a single file's hunks → Map of line keys → HTML. Sync body
-  // (Lezer: 500 lines ≈ 9ms, no abort needed); async signature only because
-  // createDiffDerivation's compute contract is Promise<T>.
-  // TODO(backlog): add sync-compute variant to createDiffDerivation so this
-  // can drop the async wrapper and run() can skip microtask scheduling.
+  // Highlight a single file's hunks → Map of line keys → HTML. Sync — Lezer
+  // parse+highlight for 500 lines is ~9ms, no yield/abort needed. run()
+  // branches on Promise vs sync return (diff-derivation.svelte.ts) so a sync
+  // body here means zero microtask suspensions per file.
   //
   // All hunk lines (add/remove/context mixed) feed one parse call. Context
   // lines provide the syntax scaffolding that per-type grouping would discard:
   // ` type Foo struct {\n- X int\n+ X string\n}` as one block → `X` parses as
   // tok-propertyName, `int` as tok-typeName. Same lines grouped by type →
   // orphan `X int` → `X` is tok-variableName, `int` unstyled.
-  async function highlightFile(file: DiffFile): Promise<Map<string, string>> {
+  function highlightFile(file: DiffFile): Map<string, string> {
     const lang = detectLanguage(file.filePath)
     const fileMap = new Map<string, string>()
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
@@ -583,7 +589,7 @@
     // Save collapse state for the OUTGOING diff (single-rev only — multi-check
     // state is ephemeral). Must happen before collapsedFiles.clear().
     if (lastCollapseCacheKey && collapsedFiles.size > 0) {
-      lruSet(collapseStateCache, lastCollapseCacheKey, new Set(collapsedFiles), 50)
+      lruSet(collapseStateCache, lastCollapseCacheKey, new Set(collapsedFiles), COLLAPSE_CACHE_SIZE)
     }
 
     lastActiveRevId = activeRevisionId
@@ -620,8 +626,17 @@
   $effect(() => {
     if (!diffContent || diffContent === lastAutoCollapseDiff) return
     lastAutoCollapseDiff = diffContent
+    let total = 0
     for (const file of parsedDiff) {
-      if (fileLineCount(file) > AUTO_COLLAPSE_LINE_LIMIT) collapsedFiles.add(file.filePath)
+      const n = fileLineCount(file)
+      total += n
+      if (n > AUTO_COLLAPSE_LINE_LIMIT) collapsedFiles.add(file.filePath)
+    }
+    // Many-moderate-files flooding: collapse everything, let user expand.
+    // The per-file check above is now redundant when this fires, but it runs
+    // first so we don't compute total when a single early file already trips it.
+    if (total > AUTO_COLLAPSE_TOTAL_LINES) {
+      for (const file of parsedDiff) collapsedFiles.add(file.filePath)
     }
   })
 
