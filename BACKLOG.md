@@ -51,6 +51,10 @@ Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api
 - [ ] **No mutation timeout** (Low) — `request()` timeout is GET-only (api.ts:242). A hung `describe`/`abandon` blocks the UI indefinitely. `streamPost` (git push) also has none — correct there (minutes-long pushes are valid), but the others could use ~60s.
 - [ ] **Flat `api` object at 44 methods** (Deferred) — bookmark sub-family (7 methods) is the strongest namespace case. Pure helpers (`effectiveId`/`multiRevset`/`computeConnectedCommitIds`) are zero-I/O and don't belong in api.ts. Hold until next expansion.
 
+### UX consistency
+
+- [ ] **Right-click context menus inconsistent across panels** (Small) — RevisionGraph has it, DiffPanel has it (diff-line copy-reference), but BookmarksPanel / OplogPanel / EvologPanel don't. Should offer per-row actions (same set as keyboard shortcuts) for mouse-first users. `ContextMenu.svelte` is already reusable — just wire `oncontextmenu` per row + pass the action set. ~20 LOC per panel.
+
 ### Cross-cutting
 
 - [ ] **Watcher struct does 5 things** (Medium) — `internal/api/watcher.go`: fsnotify loop, SSE hub, snapshot ticker, SSH inotify, idle callbacks. `fsWatcher` is nil for SSH instances (dead weight). `snapshotLoop` inlines its own subscriber check (:268) instead of calling `hasSubscribers()`. Split: `Broadcaster` (pure subs map + SSE handler), `OpHeadsSource` interface (one fsnotify impl, one inotify-pipe impl), `SnapshotTicker`.

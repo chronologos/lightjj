@@ -60,6 +60,8 @@ export interface DivergenceEntry {
 export interface BookmarkRemote {
   remote: string
   commit_id: string
+  description: string  // first line
+  ago: string          // committer timestamp relative ("3 days ago")
   tracked: boolean
   // ahead = commits on remote not in local (pull needed)
   // behind = commits in local not on remote (push needed)

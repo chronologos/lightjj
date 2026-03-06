@@ -8,9 +8,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// bml joins template-output lines. Fields:
-// name, remote, tracked, conflict, commitId, addedTargets, ahead, behind, synced
-func bml(lines ...string) string { return strings.Join(lines, "\n") }
+// Template fields (11): name, remote, tracked, conflict, commitId,
+// addedTargets, ahead, behind, synced, description, ago
+//
+// bml pads 9-field legacy-test lines with empty desc+ago so tests don't
+// need updating every time a display-only field is added.
+func bml(lines ...string) string {
+	for i, l := range lines {
+		if n := strings.Count(l, "\x1f"); n == 8 {
+			lines[i] = l + "\x1f\x1f" // +desc +ago
+		} else if n == 9 {
+			lines[i] = l + "\x1f" // +ago
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 
 func TestParseBookmarkListOutput(t *testing.T) {
 	tests := []struct {
@@ -25,7 +38,7 @@ func TestParseBookmarkListOutput(t *testing.T) {
 		},
 		{
 			name:  "single local",
-			input: "feat-1\x1f.\x1ffalse\x1ffalse\x1f9\x1f9\x1f0\x1f0\x1ftrue",
+			input: bml("feat-1\x1f.\x1ffalse\x1ffalse\x1f9\x1f9\x1f0\x1f0\x1ftrue"),
 			want: []Bookmark{
 				{
 					Name:         "feat-1",
@@ -78,6 +91,24 @@ func TestParseBookmarkListOutput(t *testing.T) {
 	}
 }
 
+func TestParseBookmarkListOutput_DeletedLocal(t *testing.T) {
+	// Deleted local, origin still has it → jj emits a "." line with empty
+	// commitId AND empty added_targets. Parser must skip — bookmark is
+	// remote-only now (tracked: delete-staged). Local must be nil so
+	// classifyBookmark reports {kind: remote-only, tracked: true}.
+	input := bml(
+		"feat\x1f.\x1ffalse\x1ffalse\x1f\x1f\x1f0\x1f0\x1ffalse",
+		"feat\x1forigin\x1ftrue\x1ffalse\x1f5acb918b\x1f5acb918b\x1f2\x1f0\x1ffalse",
+	)
+	bms := ParseBookmarkListOutput(input, "origin")
+	assert.Len(t, bms, 1)
+	assert.Nil(t, bms[0].Local, "deleted-local must not populate Local")
+	assert.Equal(t, "5acb918b", bms[0].CommitId)
+	assert.Len(t, bms[0].Remotes, 1)
+	assert.True(t, bms[0].Remotes[0].Tracked)
+	assert.Equal(t, 2, bms[0].Remotes[0].Ahead)
+}
+
 func TestParseBookmarkListOutput_Conflict(t *testing.T) {
 	// Conflicted local: commitId empty (template if-guard), added_targets has
 	// multiple sides. @git filtered out.
@@ -114,13 +145,27 @@ func TestParseBookmarkListOutput_AheadBehind(t *testing.T) {
 func TestParseBookmarkListOutput_RemoteOnly(t *testing.T) {
 	// Untracked remote bookmark — no local line, Local nil, CommitId from
 	// the first line encountered (remote's).
-	input := "alpha\x1forigin\x1ffalse\x1ffalse\x1f2\x1f2\x1f0\x1f0\x1ffalse"
+	input := bml("alpha\x1forigin\x1ffalse\x1ffalse\x1f2\x1f2\x1f0\x1f0\x1ffalse")
 	bms := ParseBookmarkListOutput(input, "origin")
 	assert.Len(t, bms, 1)
 	assert.Nil(t, bms[0].Local)
 	assert.Equal(t, "2", bms[0].CommitId)
 	assert.Len(t, bms[0].Remotes, 1)
 	assert.False(t, bms[0].Remotes[0].Tracked)
+}
+
+func TestParseBookmarkListOutput_RemoteOnlyMultiRemote_PrefersDefault(t *testing.T) {
+	// jj may emit non-default remote first. CommitId should be overridden
+	// to defaultRemote's commit so jump-to-revision targets the right one.
+	input := bml(
+		"feat\x1fupstream\x1ffalse\x1ffalse\x1fupstreamcid\x1fupstreamcid\x1f0\x1f0\x1ffalse",
+		"feat\x1forigin\x1ffalse\x1ffalse\x1forigincid\x1forigincid\x1f0\x1f0\x1ffalse",
+	)
+	bms := ParseBookmarkListOutput(input, "origin")
+	assert.Len(t, bms, 1)
+	assert.Nil(t, bms[0].Local)
+	assert.Equal(t, "origincid", bms[0].CommitId)
+	assert.Equal(t, "origin", bms[0].Remotes[0].Remote)
 }
 
 func TestParseBookmarkListOutput_MultipleRemotes(t *testing.T) {

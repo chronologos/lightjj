@@ -70,7 +70,10 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K)
     ContextMenu.svelte     — Reusable right-click context menu (positioned at cursor)
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
-    BookmarkModal.svelte   — Bookmark modal: noun-first list, Enter=move, a=advance (forward-only, jj refuses backwards — no confirm), d/f/t action keys with double-press confirm for destructive ops (armed state + DESTRUCTIVE set). Modal (not input) holds focus on open — `tick().then(() => modalEl?.focus())` since `{#if open}` hasn't mounted when `$effect` fires.
+    BookmarkModal.svelte   — Bookmark modal: noun-first list, Enter=move, a=advance (forward-only, jj refuses backwards — no confirm), d/f/t action keys with double-press confirm (via confirm-gate). Modal (not input) holds focus on open — `tick().then(() => modalEl?.focus())` since `{#if open}` hasn't mounted when `$effect` fires.
+    BookmarksPanel.svelte  — Branches view (activeView='branches'): flat list sorted trouble-first (conflict→diverged→ahead→…→synced). Sync dot + PR badge + sync label + commit description + age. handleKeydown EXPORTED — App delegates via bind:this so panel owns d/f/t/r regardless of DOM focus (toolbar click → focus drift would otherwise make t=toggleTheme). Selection tracked by name across reloads (untrack on index reads to prevent j/k self-restore).
+    bookmark-sync.ts       — classifyBookmark() → 7 sync states, syncPriority() trouble-first sort, fmtCount() compact formatting (7.4k, 131k)
+    confirm-gate.svelte.ts — createConfirmGate<K>() double-press factory: first press arms, second of SAME key fires, any other key disarms. No timeout — nav disarms naturally. Shared by BookmarkModal + BookmarksPanel.
     BookmarkInput.svelte   — Bookmark name input with autocomplete
     GitModal.svelte        — Git push/fetch modal
     EvologPanel.svelte     — Evolution log: entry list with inline diffs (server emits rebase-safe inter_diff per entry), ArrowUp/Down navigation

@@ -108,6 +108,15 @@
           <kbd>/</kbd> filter
           <kbd>⌘F</kbd> search
         </span>
+      {:else if activeView === 'branches'}
+        <span class="key-hints">
+          <kbd>j</kbd>/<kbd>k</kbd> navigate
+          <kbd>⏎</kbd> jump
+          <kbd>d</kbd> delete
+          <kbd>f</kbd> forget
+          <kbd>t</kbd> track
+          <kbd>/</kbd> filter
+        </span>
       {:else if activeView === 'operations'}
         <span class="key-hints">
           <kbd>j</kbd>/<kbd>k</kbd> navigate

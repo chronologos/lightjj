@@ -240,10 +240,14 @@ func DiffRange(from, to string, files []string) CommandArgs {
 
 // Explicit concatenation, NOT separate() — separate() skips empty arguments,
 // so if(conflict, "", ...) would shift field positions. Empirically verified.
-// Guards: if(conflict, ...) because normal_target errors on conflicted refs;
+// Guards: if(normal_target, ...) because normal_target is absent for BOTH
+//         conflicted AND deleted-local refs (conflict=false in the latter,
+//         so if(conflict, ...) alone leaks "<Error: No Commit available>").
 //         if(tracked, ...) because self.tracking_*_count() errors on
 //         non-tracked refs. self. prefix is required on tracking_* methods.
-const bookmarkListTemplate = `name ++ "\x1F" ++ if(remote, remote, ".") ++ "\x1F" ++ stringify(tracked) ++ "\x1F" ++ stringify(conflict) ++ "\x1F" ++ if(conflict, "", normal_target.commit_id().short(12)) ++ "\x1F" ++ added_targets.map(|c| c.commit_id().short(12)).join(",") ++ "\x1F" ++ if(tracked, stringify(self.tracking_ahead_count().lower()), "0") ++ "\x1F" ++ if(tracked, stringify(self.tracking_behind_count().lower()), "0") ++ "\x1F" ++ stringify(synced) ++ "\n"`
+// .short() (no arg) matches the log template so commit_id strings compare
+// equal across endpoints (jumpToBookmark findIndex depends on this).
+const bookmarkListTemplate = `name ++ "\x1F" ++ if(remote, remote, ".") ++ "\x1F" ++ stringify(tracked) ++ "\x1F" ++ stringify(conflict) ++ "\x1F" ++ if(normal_target, normal_target.commit_id().short(), "") ++ "\x1F" ++ added_targets.map(|c| c.commit_id().short()).join(",") ++ "\x1F" ++ if(tracked, stringify(self.tracking_ahead_count().lower()), "0") ++ "\x1F" ++ if(tracked, stringify(self.tracking_behind_count().lower()), "0") ++ "\x1F" ++ stringify(synced) ++ "\x1F" ++ if(normal_target, normal_target.description().first_line(), "") ++ "\x1F" ++ if(normal_target, normal_target.committer().timestamp().ago(), "") ++ "\n"`
 
 func BookmarkList(revset string) CommandArgs {
 	return []string{"bookmark", "list", "-a", "-r", revset, "--template", bookmarkListTemplate, "--color", "never", "--ignore-working-copy"}

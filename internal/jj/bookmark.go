@@ -6,9 +6,11 @@ import (
 )
 
 type BookmarkRemote struct {
-	Remote   string `json:"remote"`
-	CommitId string `json:"commit_id"`
-	Tracked  bool   `json:"tracked"`
+	Remote      string `json:"remote"`
+	CommitId    string `json:"commit_id"`
+	Description string `json:"description"` // first line
+	Ago         string `json:"ago"`         // committer timestamp, relative ("3 days ago")
+	Tracked     bool   `json:"tracked"`
 	// Ahead = commits on remote not in local (pull needed).
 	// Behind = commits in local not on remote (push needed).
 	// Only meaningful when Tracked; zero otherwise.
@@ -47,7 +49,7 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 
 	for _, b := range lines {
 		parts := strings.Split(b, "\x1f")
-		if len(parts) < 9 {
+		if len(parts) < 11 {
 			continue
 		}
 
@@ -55,11 +57,13 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 		remoteName := parts[1]
 		tracked := parts[2] == "true"
 		conflict := parts[3] == "true"
-		commitId := parts[4] // empty when conflict (template guard)
+		commitId := parts[4] // empty when conflict or deleted-local (template guard)
 		addedTargets := splitNonEmpty(parts[5], ",")
 		ahead, _ := strconv.Atoi(parts[6])
 		behind, _ := strconv.Atoi(parts[7])
 		synced := parts[8] == "true"
+		description := parts[9]
+		ago := parts[10]
 
 		if remoteName == "git" {
 			continue
@@ -77,10 +81,19 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 		}
 
 		if remoteName == "." {
+			// Deleted-local: jj emits a "." line with no normal_target and
+			// no added_targets. Skip — the bookmark is remote-only now.
+			// (Conflict case: commitId is also empty but addedTargets has
+			// the "+" sides, so this correctly doesn't drop conflicts.)
+			if commitId == "" && len(addedTargets) == 0 {
+				continue
+			}
 			bookmark.Local = &BookmarkRemote{
-				Remote:   ".",
-				CommitId: commitId,
-				Tracked:  tracked,
+				Remote:      ".",
+				CommitId:    commitId,
+				Description: description,
+				Ago:         ago,
+				Tracked:     tracked,
 			}
 			bookmark.CommitId = commitId
 			bookmark.Conflict = conflict
@@ -88,14 +101,22 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 			bookmark.Synced = synced
 		} else {
 			remote := BookmarkRemote{
-				Remote:   remoteName,
-				Tracked:  tracked,
-				CommitId: commitId,
-				Ahead:    ahead,
-				Behind:   behind,
+				Remote:      remoteName,
+				Tracked:     tracked,
+				CommitId:    commitId,
+				Description: description,
+				Ago:         ago,
+				Ahead:       ahead,
+				Behind:      behind,
 			}
 			if remoteName == defaultRemote {
 				bookmark.Remotes = append([]BookmarkRemote{remote}, bookmark.Remotes...)
+				// Remote-only bookmark: prefer defaultRemote's commit for
+				// jump-to. The first line encountered (which set CommitId at
+				// construction) may have been a non-default remote.
+				if bookmark.Local == nil {
+					bookmark.CommitId = commitId
+				}
 			} else {
 				bookmark.Remotes = append(bookmark.Remotes, remote)
 			}

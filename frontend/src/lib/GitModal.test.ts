@@ -65,7 +65,7 @@ describe('GitModal', () => {
 
     it('local bookmark → shows per-bookmark push op', async () => {
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'aaa', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'aaa', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
       ])
       mockRemotes.mockResolvedValue(['origin'])
       const { container } = render(GitModal, { props: defaultProps() })

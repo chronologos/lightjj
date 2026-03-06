@@ -3,6 +3,7 @@
   import { api, type Bookmark } from './api'
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
+  import { createConfirmGate } from './confirm-gate.svelte'
 
   export interface BookmarkOp {
     action: 'move' | 'advance' | 'delete' | 'forget' | 'track' | 'untrack'
@@ -32,11 +33,8 @@
   let previousFocus: HTMLElement | null = null
   let fetchGen: number = 0
 
-  // Double-press confirmation for destructive ops. First press arms the key
-  // and flips the footer hint red; second press of the SAME key fires. Any
-  // other key (nav, Enter, Escape, mouse, different action) disarms. No
-  // timeout — moving to a different bookmark voids the confirmation naturally.
-  let armed: 'd' | 'f' | 't' | null = $state(null)
+  const confirm = createConfirmGate<'d' | 'f' | 't'>()
+  let armed = $derived(confirm.armed)
 
   // Frequency-sort by bookmark name (not by action) — if you've been touching
   // a bookmark you want it at the top regardless of which op you last used.
@@ -85,7 +83,7 @@
       previousFocus = document.activeElement as HTMLElement | null
       query = ''
       index = 0
-      armed = null
+      confirm.disarm()
       loading = true
       fetchError = null
       const gen = ++fetchGen
@@ -122,18 +120,7 @@
     onexecute(op)
   }
 
-  const DESTRUCTIVE = new Set<BookmarkOp['action']>(['delete', 'forget', 'untrack'])
-
-  // Returns true if the op was armed (caller should NOT fire), false if it
-  // was already armed or is non-destructive (caller fires).
-  function confirmGate(key: 'd' | 'f' | 't', action: BookmarkOp['action']): boolean {
-    if (!DESTRUCTIVE.has(action)) { armed = null; return false }
-    if (armed === key) { armed = null; return false }
-    armed = key
-    return true
-  }
-
-  function disarm() { armed = null }
+  function disarm() { confirm.disarm() }
 
   function moveSelected(bm: Bookmark | undefined) {
     disarm()
@@ -204,19 +191,19 @@
       case 'd':
         e.preventDefault()
         if (!can.del) { disarm(); return }
-        if (confirmGate('d', 'delete')) return
+        if (confirm.gate('d', true)) return
         fire({ action: 'delete', bookmark: bm.name })
         return
       case 'f':
         e.preventDefault()
-        if (confirmGate('f', 'forget')) return
+        if (confirm.gate('f', true)) return
         fire({ action: 'forget', bookmark: bm.name })
         return
       case 't': {
         e.preventDefault()
         const t = can.track
         if (!t) { disarm(); return }
-        if (confirmGate('t', t.action)) return // track is non-destructive → falls through
+        if (confirm.gate('t', t.action === 'untrack')) return
         fire({ action: t.action, bookmark: bm.name, remote: t.remote })
         return
       }

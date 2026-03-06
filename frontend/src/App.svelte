@@ -4,7 +4,7 @@
 
   let { tabBar }: { tabBar?: Snippet } = $props()
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark } from './lib/api'
   import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -15,6 +15,7 @@
   import EvologPanel from './lib/EvologPanel.svelte'
   import OplogPanel from './lib/OplogPanel.svelte'
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
+  import BookmarksPanel from './lib/BookmarksPanel.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
@@ -76,6 +77,7 @@
   const { diff, files, description, singleTarget } = nav
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
+  const bookmarksPanel = createLoader(() => api.bookmarks(), [] as Bookmark[])
 
   // Abort predicate for nav.loadDiffAndFiles — re-checked after its await.
   // User checking a revision during the fetch means the multi-check $effect
@@ -194,6 +196,7 @@
   // --- Refs ---
   let revisionGraphRef: ReturnType<typeof RevisionGraph> | undefined = $state(undefined)
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
+  let bookmarksPanelRef: ReturnType<typeof BookmarksPanel> | undefined = $state(undefined)
   let wsDropdownOpen: boolean = $state(false)
   let wsSelectorEl: HTMLElement | undefined = $state(undefined)
 
@@ -416,6 +419,11 @@
     } catch { /* static <title> fallback is fine */ }
   }
 
+  // api.remotes() is session-memoized; first element is the default remote
+  // (backend sorts it to front). Used by BookmarksPanel's track-action label.
+  let defaultRemote: string = $state('origin')
+  api.remotes().then(r => { if (r[0]) defaultRemote = r[0] }).catch(() => {})
+
   // Visually distinct, platform-stable glyphs. No flags/people/hands (vary
   // wildly across OS/font), no skin-tone modifiers. Contiguous string iterates
   // by codepoint via spread — simpler than an array literal.
@@ -484,6 +492,14 @@
     blurActiveInput()
     if (!ok) return // superseded or errored — don't post-process stale state
 
+    // pendingSelectCommitId: jumpToBookmark's deferred selection. Consume
+    // here; on hit suppress resetSelection (which handleRevsetSubmit passes).
+    let pending = pendingSelectCommitId
+    pendingSelectCommitId = null
+    if (pending) {
+      const idx = revisions.findIndex(r => r.commit.commit_id === pending)
+      if (idx >= 0) { selectedIndex = idx; resetSelection = false }
+    }
     if (resetSelection || selectedIndex < 0 || selectedIndex >= revisions.length) {
       selectedIndex = workingCopyIndex
     }
@@ -501,6 +517,7 @@
     // Refresh open panels — oplog always reflects new operations,
     // evolog may change if the selected revision was modified
     if (oplogOpen || activeView === 'operations') oplog.load()
+    if (activeView === 'branches') bookmarksPanel.load()
     if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
       evolog.load(effectiveId(revisions[selectedIndex].commit))
     }
@@ -591,6 +608,24 @@
   function selectByChangeId(changeId: string) {
     const idx = revisions.findIndex(r => effectiveId(r.commit) === changeId)
     if (idx >= 0) selectRevision(idx)
+  }
+
+  // BookmarksPanel jump: consumed by loadLog's post-load selection when the
+  // bookmark's commit isn't in the current revset. Set BEFORE revsetFilter
+  // write so the effect-triggered loadLog sees it.
+  let pendingSelectCommitId: string | null = null
+
+  function jumpToBookmark(bm: Bookmark) {
+    if (bm.conflict || !bm.commit_id) return
+    activeView = 'log'
+    const idx = revisions.findIndex(r => r.commit.commit_id === bm.commit_id)
+    if (idx >= 0) { selectRevision(idx); return }
+    // Not loaded: reload with bookmark revset. Bare name only works for
+    // local refs — remote-only needs name@remote. Use commit_id as fallback
+    // revset (always valid, resolves to a single commit).
+    pendingSelectCommitId = bm.commit_id
+    revsetFilter = bm.local ? bm.name : bm.commit_id
+    handleRevsetSubmit()
   }
 
   function openRevisionContextMenu(changeId: string, x: number, y: number) {
@@ -1106,6 +1141,19 @@
     if (e.metaKey || e.ctrlKey) return
     if (anyModalOpen) return
     if (inlineMode) return handleInlineNav(e)
+    // Branches panel is focus-independent: delegate directly via bind:this
+    // ref (not element onkeydown, which silently breaks when focus drifts
+    // to toolbar → d/f/t fall through to global → t=theme-toggle).
+    // defaultPrevented catches element-level dispatch if focus IS in-panel
+    // (avoids double-handling). handleEscapeStack is below this block so
+    // panel's own Escape tiering (disarm → clear filter → close) wins.
+    if (activeView === 'branches') {
+      if (e.defaultPrevented) return
+      bookmarksPanelRef?.handleKeydown(e)
+      if (e.defaultPrevented) return
+      handleGlobalKeys(e)
+      return
+    }
     if (e.key === 'Escape') return handleEscapeStack()
     if (handleGlobalKeys(e)) return
     if (activeView !== 'log') return
@@ -1264,7 +1312,15 @@
     return onStale(() => {
       if (!loading && !mutating && !anyModalOpen && !inlineMode) loadLog()
       else if (inlineMode) staleWhileInMode = true
+      // Panel's stale data is harmless during mutation (rows just look one op
+      // behind); no need for the loadLog guards. Fire-and-forget.
+      if (activeView === 'branches') bookmarksPanel.load()
     })
+  })
+  // Load on view entry. Covers key '2' + toolbar click + any future path.
+  // loadLog also refreshes if branches view is open (mutations via this tab).
+  $effect(() => {
+    if (activeView === 'branches') bookmarksPanel.load()
   })
   // Auto-refresh sources: SSE push (fsnotify/inotifywait) + tab-focus snapshot.
   // Both route through notifyOpId → onStale so the guards above apply. The
@@ -1560,10 +1616,19 @@
         />
       {/if}
     {:else if activeView === 'branches'}
-      <div class="empty-view">
-        <span class="empty-view-icon">⑂</span>
-        <span class="empty-view-title">Branches</span>
-        <span class="empty-view-hint">Coming soon — use <kbd>b</kbd> for bookmark operations</span>
+      <div class="fullwidth-panel">
+        <BookmarksPanel
+          bind:this={bookmarksPanelRef}
+          bookmarks={bookmarksPanel.value}
+          loading={bookmarksPanel.loading}
+          error={bookmarksPanel.error}
+          {defaultRemote}
+          {prByBookmark}
+          onjump={jumpToBookmark}
+          onexecute={handleBookmarkOp}
+          onrefresh={() => bookmarksPanel.load()}
+          onclose={() => { activeView = 'log' }}
+        />
       </div>
     {:else if activeView === 'operations'}
       <div class="fullwidth-panel">
@@ -1958,38 +2023,4 @@
     background: var(--bg-error-hover);
   }
 
-  .empty-view {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    color: var(--surface2);
-  }
-
-  .empty-view-icon {
-    font-size: 32px;
-    opacity: 0.4;
-  }
-
-  .empty-view-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--subtext0);
-  }
-
-  .empty-view-hint {
-    font-size: 12px;
-  }
-
-  .empty-view-hint kbd {
-    background: var(--surface0);
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-family: inherit;
-    font-size: 11px;
-    border: 1px solid var(--surface1);
-    color: var(--subtext0);
-  }
 </style>
