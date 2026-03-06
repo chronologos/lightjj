@@ -39,6 +39,10 @@ type Server struct {
 	// Watcher provides SSE auto-refresh. Nil in SSH mode (no local fs to watch).
 	// Set by main.go after NewServer; routes() tolerates it being nil.
 	Watcher *Watcher
+
+	// ShutdownCh is closed when the server should exit (e.g., idle timeout).
+	// main.go selects on this alongside SIGINT/SIGTERM.
+	ShutdownCh chan struct{}
 }
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {
@@ -47,6 +51,7 @@ func NewServer(r runner.CommandRunner, repoDir string) *Server {
 		Mux:           http.NewServeMux(),
 		RepoDir:       repoDir,
 		DefaultRemote: "origin",
+		ShutdownCh:    make(chan struct{}),
 	}
 	s.routes()
 	return s
