@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, _testInternals, type LogEntry } from './api'
+import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, setActiveTab, listTabs, _testInternals, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -23,6 +23,55 @@ beforeEach(() => {
   _testInternals.staleCallbacks.clear()
   _testInternals.refreshQueued = false
   _testInternals.resetSessionCaches()
+  _testInternals.basePath = '/tab/0'
+})
+
+describe('tab routing', () => {
+  it('/api/* URLs get basePath prefix; others do not', async () => {
+    mockFetch.mockResolvedValue(mockResponse({ diff: '' }))
+    await api.diff('abc')
+    expect(mockFetch).toHaveBeenCalledWith('/tab/0/api/diff?revision=abc', expect.anything())
+
+    mockFetch.mockResolvedValue(mockResponse([]))
+    await listTabs()
+    // /tabs is host-level — no prefix
+    expect(mockFetch).toHaveBeenLastCalledWith('/tabs', expect.anything())
+  })
+
+  it('setActiveTab changes prefix and clears per-repo memos but NOT commit_id cache', async () => {
+    mockFetch.mockResolvedValue(mockResponse({ diff: 'tab0-diff' }))
+    await api.diff('sha256abc')
+    expect(_testInternals.cache.has('diff:sha256abc')).toBe(true)
+
+    mockFetch.mockResolvedValue(mockResponse(['origin']))
+    await api.remotes()
+
+    setActiveTab('1')
+
+    // commit_id cache survives — SHA-256 is globally unique across repos
+    expect(_testInternals.cache.has('diff:sha256abc')).toBe(true)
+    // per-repo memo cleared
+    mockFetch.mockResolvedValue(mockResponse(['upstream']))
+    const r = await api.remotes()
+    expect(r).toEqual(['upstream']) // refetched, not the tab-0 memo
+    expect(mockFetch).toHaveBeenLastCalledWith('/tab/1/api/remotes', expect.anything())
+  })
+
+  it('setActiveTab resets lastOpId so first response from new tab does not fire onStale', async () => {
+    const cb = vi.fn()
+    onStale(cb)
+    _testInternals.lastOpId = 'tab0-op' // seeded by tab 0's last response
+
+    setActiveTab('1')
+    expect(_testInternals.lastOpId).toBeNull()
+
+    // Tab 1's first response sets lastOpId but changed=false (was null)
+    mockFetch.mockResolvedValue(mockResponse({ diff: '' }, 'tab1-op'))
+    await api.diff('x')
+    await Promise.resolve() // flush microtask
+    expect(cb).not.toHaveBeenCalled()
+    expect(_testInternals.lastOpId).toBe('tab1-op')
+  })
 })
 
 describe('response cache', () => {
@@ -472,7 +521,7 @@ describe('resolve request body', () => {
 
   it('sends revision, file, and tool', async () => {
     const { url, init, body } = await callResolve('abc', 'src/main.go', ':ours')
-    expect(url).toBe('/api/resolve')
+    expect(url).toBe('/tab/0/api/resolve')
     expect(init.method).toBe('POST')
     expect(body).toEqual({ revision: 'abc', file: 'src/main.go', tool: ':ours' })
   })
@@ -826,7 +875,7 @@ describe('request() empty-body handling', () => {
     mockFetch.mockResolvedValue(emptyBodyResponse())
     await expect(api.deleteAnnotation('abc', 'a1')).resolves.toBeUndefined()
     expect(mockFetch).toHaveBeenCalledWith(
-      '/api/annotations?changeId=abc&id=a1',
+      '/tab/0/api/annotations?changeId=abc&id=a1',
       expect.objectContaining({ method: 'DELETE' }),
     )
   })

@@ -27,10 +27,15 @@ func configPath() (string, error) {
 	return filepath.Join(dir, "lightjj", "config.json"), nil
 }
 
-func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
+// Config handlers are package-level (not Server methods) because config is
+// host-scoped, not repo-scoped. TabManager registers these at /api/config so
+// config.svelte.ts's raw fetch() works without a tab prefix. Server.routes()
+// also registers them so /tab/{id}/api/config works (harmlessly redundant —
+// both read the same file).
+func handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	path, err := configPath()
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "cannot resolve config dir")
+		writeJSONError(w, http.StatusInternalServerError, "cannot resolve config dir")
 		return
 	}
 	data, err := os.ReadFile(path)
@@ -46,10 +51,10 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
+func handleConfigSet(w http.ResponseWriter, r *http.Request) {
 	path, err := configPath()
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "cannot resolve config dir")
+		writeJSONError(w, http.StatusInternalServerError, "cannot resolve config dir")
 		return
 	}
 
@@ -59,7 +64,7 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 	// overlay request body, write back.
 	var incoming map[string]json.RawMessage
 	if err := decodeBody(w, r, &incoming); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -71,12 +76,12 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 
 	out, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "encode failed")
+		writeJSONError(w, http.StatusInternalServerError, "encode failed")
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "cannot create config dir")
+		writeJSONError(w, http.StatusInternalServerError, "cannot create config dir")
 		return
 	}
 
@@ -85,22 +90,22 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 	// panel-resize drag that triggered a debounced save).
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "cannot create temp file")
+		writeJSONError(w, http.StatusInternalServerError, "cannot create temp file")
 		return
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath) // no-op if rename succeeded
 	if _, err := tmp.Write(out); err != nil {
 		tmp.Close()
-		s.writeError(w, http.StatusInternalServerError, "write failed")
+		writeJSONError(w, http.StatusInternalServerError, "write failed")
 		return
 	}
 	if err := tmp.Close(); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "close failed")
+		writeJSONError(w, http.StatusInternalServerError, "close failed")
 		return
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "rename failed")
+		writeJSONError(w, http.StatusInternalServerError, "rename failed")
 		return
 	}
 

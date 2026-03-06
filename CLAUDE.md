@@ -165,7 +165,7 @@ func TestHandleAbandon(t *testing.T) {
 1. Add a command builder function in `internal/jj/commands.go`
 2. Add tests for it in `internal/jj/commands_test.go`
 3. Add a request struct + handler in `internal/api/handlers.go`
-4. Register the route in `internal/api/server.go` → `routes()`
+4. Register the route in `internal/api/server.go` → `routes()`. **Path must start with `/api/`** — `tabScoped()` in api.ts uses that prefix to route per-tab; anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
 5. Add handler tests in `internal/api/handlers_test.go`
 6. Add the API call to `frontend/src/lib/api.ts`
 7. Wire it into the Svelte UI

@@ -73,6 +73,10 @@ func (s *Server) Shutdown() {
 	s.children = nil
 }
 
+// routes registers all Server endpoints. ALL routes MUST be under /api/ —
+// the frontend's tabScoped() (api.ts) uses that prefix as the discriminant
+// for per-tab routing. A non-/api/ route would silently 404 in production
+// (tests hit srv.Mux directly and wouldn't catch it).
 func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/log", s.handleLog)
 	s.Mux.HandleFunc("GET /api/bookmarks", s.handleBookmarks)
@@ -117,8 +121,8 @@ func (s *Server) routes() {
 
 	s.Mux.HandleFunc("GET /api/pull-requests", s.handlePullRequests)
 
-	s.Mux.HandleFunc("GET /api/config", s.handleConfigGet)
-	s.Mux.HandleFunc("POST /api/config", s.handleConfigSet)
+	s.Mux.HandleFunc("GET /api/config", handleConfigGet)
+	s.Mux.HandleFunc("POST /api/config", handleConfigSet)
 
 	s.Mux.HandleFunc("GET /api/annotations", s.handleAnnotationsGet)
 	s.Mux.HandleFunc("POST /api/annotations", s.handleAnnotationsPost)
@@ -162,13 +166,20 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v
 	}
 }
 
-// writeError writes an error response without fetching op-id (errors should be cheap).
-func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
+// writeJSONError writes an error response without fetching op-id (errors should be cheap).
+// Package-level so TabManager and package-level handlers (config) can use it.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
-		log.Printf("writeError encode error: %v", err)
+		log.Printf("writeJSONError encode error: %v", err)
 	}
+}
+
+// writeError delegates to writeJSONError. Kept as a method for the 100+ call
+// sites in handlers.go; the receiver is unused.
+func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSONError(w, status, msg)
 }
 
 // refreshOpId fetches the current op-id, caches it, and returns it.

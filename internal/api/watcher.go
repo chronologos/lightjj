@@ -403,6 +403,11 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-w.stop:
+			// Watcher.Close() fired (tab close). Without this arm the handler
+			// lives until the client disconnects or a keepalive write fails.
+			// Pre-tabs this was process-exit-only; now it's a runtime path.
+			return
 		case opId := <-ch:
 			if err := writeOp(opId); err != nil {
 				return

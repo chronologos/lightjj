@@ -14,6 +14,8 @@ export default defineConfig({
     // Proxy API calls to the Go backend during development
     proxy: {
       '/api': 'http://localhost:3000',
+      '/tab': 'http://localhost:3000',
+      '/tabs': 'http://localhost:3000',
     },
   },
   build: {
