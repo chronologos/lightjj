@@ -54,7 +54,7 @@ internal/
 testutil/                  — Test infrastructure
   mock_runner.go           — MockRunner with Expect(args)/Verify() pattern
 frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
-  src/App.svelte           — Main app shell: layout, keyboard handling, state management
+  src/App.svelte           — Main app shell: layout, keyboard handling, state management. `handleKeydown` is a 12-line gate dispatcher (globalOverrides → inlineCommit → isInInput → modifier → modal → inlineNav → escape → global → logView); gate ORDER is load-bearing (Cmd+K before isInInput = works in text fields; inlineNav swallows everything = normal-mode keys don't leak into modes). Cmd+K uses `closeModals()` not `closeAllModals()` — palette opens without cancelling inline modes.
   src/lib/
     api.ts                 — Typed API client, op-id tracking, commit_id-keyed LRU cache, SSE auto-refresh
     api.test.ts            — API client tests
