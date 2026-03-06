@@ -1,8 +1,19 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { createVirtualizer } from '@tanstack/svelte-virtual'
   import { effectiveId, type LogEntry, type PullRequest } from './api'
   import { targetModeLabel, type RebaseMode, type SquashMode, type SplitMode } from './modes.svelte'
   import GraphSvg from './GraphSvg.svelte'
+
+  // All graph rows are height:18px (enforced below for graph pipe continuity —
+  // see CLAUDE.md). Fixed-size virtualization is the simplest case: no dynamic
+  // measurement, no ResizeObserver on items.
+  const ROW_HEIGHT = 18
+  // Virtualize only above this many lines (~50 commits depending on bookmarks/
+  // connectors). Below threshold, render eagerly — overhead is noise and jsdom
+  // tests (clientHeight=0) render nothing under virtualization.
+  const VIRTUALIZE_THRESHOLD = 150
 
   interface Props {
     revisions: LogEntry[]
@@ -52,14 +63,19 @@
   let isRefreshing = $derived((loading || mutating) && revisions.length > 0)
 
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
-  let listEl: HTMLDivElement | undefined = $state(undefined)
+  // The scroll container — .panel-content has overflow-y:auto. Virtualizer
+  // needs this (not .revision-list, which is the scrolled content). Also
+  // serves querySelector('.graph-row.selected') — it's an ancestor of listEl.
+  let scrollEl: HTMLDivElement | undefined = $state(undefined)
 
 
   interface FlatLine {
     gutter: string
     content?: string // text content for connector lines (e.g., "(elided revisions)")
     entryIndex: number
-    lineKey: string // semantic key within this entry (e.g., 'node', 'bm', 'desc', 'g0')
+    eid: string     // effectiveId(commit) — precomputed; the snippet would
+                    // otherwise re-call effectiveId() 4× per rendered row
+    lineKey: string // semantic key ('node', 'bm', 'desc', 'g0', ...)
     isNode: boolean
     isBookmarkLine: boolean
     isDescLine: boolean
@@ -132,16 +148,16 @@
   let flatLines = $derived.by(() => {
     const lines: FlatLine[] = []
     revisions.forEach((entry, i) => {
-      // Use semantic keys ('node', 'bm', 'desc', 'g0', 'g1', ...) so that
-      // adding/removing a bookmark line doesn't shift sibling keys and cause
-      // Svelte's keyed {#each} to mismap DOM nodes during reconciliation.
+      const eid = effectiveId(entry.commit)
+      // Semantic keys ('node', 'bm', 'desc', 'g0', ...) — adding/removing a
+      // bookmark line doesn't shift sibling keys → stable {#each} reconciliation.
       let graphIdx = 0
       entry.graph_lines.forEach((gl, j) => {
         const isNode = gl.is_node ?? (j === 0)
         lines.push({
           gutter: padGutter(gl.gutter),
           content: gl.content || undefined,
-          entryIndex: i,
+          entryIndex: i, eid,
           lineKey: isNode ? 'node' : `g${graphIdx++}`,
           isNode,
           isBookmarkLine: false,
@@ -158,8 +174,7 @@
           if (hasLabels) {
             lines.push({
               gutter: contGutter,
-              entryIndex: i,
-              lineKey: 'bm',
+              entryIndex: i, eid, lineKey: 'bm',
               isNode: false,
               isBookmarkLine: true,
               isDescLine: false,
@@ -169,8 +184,7 @@
           }
           lines.push({
             gutter: contGutter,
-            entryIndex: i,
-            lineKey: 'desc',
+            entryIndex: i, eid, lineKey: 'desc',
             isNode: false,
             isBookmarkLine: false,
             isDescLine: true,
@@ -181,6 +195,35 @@
       })
     })
     return lines
+  })
+
+  let shouldVirtualize = $derived(flatLines.length > VIRTUALIZE_THRESHOLD)
+
+  // Virtualizer is always created (observers are cheap) but only USED above
+  // threshold. getScrollElement closes over the bind:this ref — tanstack
+  // polls it and attaches once non-null. setOptions in the effect keeps
+  // count reactive to revisions changes.
+  const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: 0,
+    getScrollElement: () => scrollEl ?? null,
+    estimateSize: () => ROW_HEIGHT,
+    // Generous overscan — j/k navigation is the hot path, rendering a few
+    // extra rows is cheaper than mount/unmount churn on every keypress.
+    overscan: 10,
+  })
+
+  // flatLines.length is the ONLY intended dep. untrack covers both the store
+  // read (self-loop, see CLAUDE.md "untrack() Svelte-4-store reads") AND the
+  // setOptions call — its internal _willUpdate calls getScrollElement() which
+  // reads scrollEl (a $state). scrollEl is stable post-mount but keeping the
+  // dep graph explicit prevents surprises on refactors.
+  $effect(() => {
+    const count = flatLines.length
+    untrack(() => {
+      const v = $virtualizer
+      v.setOptions({ count })
+      v.measure()
+    })
   })
 
   export function focusRevsetInput() {
@@ -213,12 +256,23 @@
     hoveredIndex = -1
   }
 
-  // Scroll the selected node row into view when selectedIndex changes.
-  // Svelte 5 effects run after DOM updates, so no rAF needed.
+  // Scroll the selected node row into view. Deps: selectedIndex + flatLines
+  // (via shouldVirtualize and the findIndex scan) — the latter means post-
+  // loadLog reflow also scrolls-to-selection, which is intentional.
+  // Virtualized path uses scrollToIndex (selected row may not be in DOM);
+  // eager path queries DOM. untrack($virtualizer): scrollToIndex fires
+  // scroll observers → store notify → would re-fire this on every scroll.
   $effect(() => {
     if (selectedIndex < 0) return
-    const el = listEl?.querySelector('.graph-row.node-row.selected')
-    el?.scrollIntoView({ block: 'nearest' })
+    if (shouldVirtualize) {
+      // Selection is by entryIndex; virtualizer scrolls by flatLines index.
+      // findIndex is O(n) but n~1500 max = <2μs; cheaper than a $derived Map
+      // built unconditionally (including below threshold where it's unused).
+      const idx = flatLines.findIndex(l => l.isNode && l.entryIndex === selectedIndex)
+      if (idx >= 0) untrack(() => $virtualizer).scrollToIndex(idx, { align: 'auto' })
+    } else {
+      scrollEl?.querySelector('.graph-row.node-row.selected')?.scrollIntoView({ block: 'nearest' })
+    }
   })
 </script>
 
@@ -271,7 +325,7 @@
   {/if}
   <!-- Always mounted (height reserved) to avoid 2px layout shift on refresh start/end -->
   <div class="refresh-bar" class:active={isRefreshing} aria-hidden="true"></div>
-  <div class="panel-content">
+  <div class="panel-content" bind:this={scrollEl}>
     {#if loading && revisions.length === 0}
       <!-- Spinner only on INITIAL load. Refreshes keep showing stale content
            (dimmed + progress bar) so SSH-latency reloads don't blank the UI. -->
@@ -282,137 +336,168 @@
     {:else if revisions.length === 0}
       <div class="empty-state">No revisions found</div>
     {:else}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="revision-list" class:refreshing={isRefreshing} onmousemove={onListMouseMove} onmouseleave={onListMouseLeave} bind:this={listEl} role="listbox" tabindex="-1" aria-label="Revision list">
-        {#each flatLines as line, lineIdx (effectiveId(revisions[line.entryIndex].commit) + ':' + line.lineKey)}
-          {@const isChecked = checkedRevisions.has(effectiveId(revisions[line.entryIndex]?.commit))}
-          {@const isImplied = !isChecked && impliedCommitIds.has(revisions[line.entryIndex]?.commit.commit_id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div
-            class="graph-row"
-            data-entry={line.entryIndex}
-            class:node-row={line.isNode}
-            class:bookmark-row={line.isBookmarkLine}
-            class:desc-row={line.isDescLine}
-            class:selected={selectedIndex === line.entryIndex}
-            class:hovered={hoveredIndex === line.entryIndex}
-            class:checked={isChecked}
-            class:implied={isImplied}
-            class:wc={line.isWorkingCopy}
-            class:hidden-rev={line.isHidden}
-            class:immutable={line.isImmutable}
-            onclick={(e: MouseEvent) => {
-              if (e.shiftKey && line.isNode && lastCheckedIndex >= 0) {
-                e.preventDefault()
-                onrangecheck(lastCheckedIndex, line.entryIndex)
-              } else {
-                onselect(line.entryIndex)
-              }
-            }}
-            oncontextmenu={(e: MouseEvent) => {
+      <!-- Row snippet — shared by virtual and eager render paths below. -->
+      {#snippet graphRow(line: FlatLine)}
+        {@const isChecked = checkedRevisions.has(line.eid)}
+        {@const isImplied = !isChecked && impliedCommitIds.has(revisions[line.entryIndex]?.commit.commit_id)}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+          class="graph-row"
+          data-entry={line.entryIndex}
+          class:node-row={line.isNode}
+          class:bookmark-row={line.isBookmarkLine}
+          class:desc-row={line.isDescLine}
+          class:selected={selectedIndex === line.entryIndex}
+          class:hovered={hoveredIndex === line.entryIndex}
+          class:checked={isChecked}
+          class:implied={isImplied}
+          class:wc={line.isWorkingCopy}
+          class:hidden-rev={line.isHidden}
+          class:immutable={line.isImmutable}
+          onclick={(e: MouseEvent) => {
+            if (e.shiftKey && line.isNode && lastCheckedIndex >= 0) {
               e.preventDefault()
-              if (anyModeActive || isRefreshing) return
-              oncontextmenu(effectiveId(revisions[line.entryIndex].commit), e.clientX, e.clientY)
-            }}
-            role="option"
-            tabindex={line.isNode ? 0 : -1}
-            aria-selected={selectedIndex === line.entryIndex}
-          >
-            <span class="check-gutter" class:implied={isImplied} title={isImplied ? 'Included via gap-fill (connected)' : ''}>{#if line.isNode && isChecked}✓{:else if line.isNode && isImplied}◌{/if}</span>
-            <GraphSvg
-              gutter={line.gutter}
-              isNode={line.isNode}
-              isWorkingCopy={line.isWorkingCopy}
-              isImmutable={line.isImmutable ?? false}
-              isConflicted={line.isConflicted ?? false}
-              isDivergent={line.isDivergent ?? false}
-              isHidden={line.isHidden}
-              gutterWidth={maxGutterLen}
-              {isDark}
-            />
-            {#if line.isNode}
-              {@const entry = revisions[line.entryIndex]}
-              {@const eid = effectiveId(entry.commit)}
-              {@const isRebaseSource = rebase.active && rebase.sources.includes(eid)}
-              {@const isRebaseTarget = rebase.active && selectedIndex === line.entryIndex && !isRebaseSource}
-              {@const isSquashSource = squash.active && squash.sources.includes(eid)}
-              {@const isSquashTarget = squash.active && selectedIndex === line.entryIndex && !isSquashSource}
-              {@const isSplitSource = split.active && eid === split.revision}
-              {#if isRebaseSource}
-                <span class="mode-badge badge-source">&lt;&lt; {sourceModeLabel[rebase.sourceMode]} &gt;&gt;</span>
-              {/if}
-              {#if isRebaseTarget}
-                <span class="mode-badge badge-target">&lt;&lt; {targetModeLabel[rebase.targetMode]} &gt;&gt;</span>
-              {/if}
-              {#if isSquashSource}
-                <span class="mode-badge badge-source">&lt;&lt; from &gt;&gt;</span>
-              {/if}
-              {#if isSquashTarget}
-                <span class="mode-badge badge-target">&lt;&lt; into &gt;&gt;</span>
-              {/if}
-              {#if isSplitSource}
-                <span class="mode-badge badge-source">&lt;&lt; {split.review ? 'review' : 'split'} &gt;&gt;</span>
-              {/if}
-              {#if entry.commit.divergent}
-                <span class="divergent-badge">divergent</span>
-              {/if}
-              <span class="node-line-content">
-                {#if entry.commit.is_working_copy}
-                  <span class="wc-badge">@</span>
-                {/if}
-                <span class="description-text">{entry.description || '(no description)'}</span>
-              </span>
-            {:else if line.isBookmarkLine}
-              {@const entry = revisions[line.entryIndex]}
-              <span class="bookmark-line-content">
-                {#each entry.commit.working_copies ?? [] as ws}
-                  <span class="workspace-badge">◇ {ws}@</span>
-                {/each}
-                {#each entry.bookmarks ?? [] as bm}
-                  {@const pr = prByBookmark.get(bm)}
-                  {#if pr}
-                    <a class="pr-badge" class:is-draft={pr.is_draft}
-                       href={pr.url} target="_blank" rel="noopener"
-                       onclick={(e: MouseEvent) => e.stopPropagation()}
-                       title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
-                      <span class="pr-name">↗ {bm}</span>
-                      <span class="pr-number">#{pr.number}</span>
-                    </a>
-                  {:else}
-                    <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>⑂ {bm}</button>
-                  {/if}
-                {/each}
-              </span>
-            {:else if line.isDescLine}
-              {@const entry = revisions[line.entryIndex]}
-              {@const descEid = effectiveId(entry.commit)}
-              {@const isRebaseTarget = rebase.active && selectedIndex === line.entryIndex && !rebase.sources.includes(descEid)}
-              {@const isSquashTarget = squash.active && selectedIndex === line.entryIndex && !squash.sources.includes(descEid)}
-              {@const isSplitPreview = split.active && descEid === split.revision}
-              <span class="desc-line-content">
-                {#if isSplitPreview}
-                  <span class="rebase-preview">jj split -r {entry.commit.change_id.slice(0, 8)}{split.parallel ? ' --parallel' : ''}</span>
-                {:else if isRebaseTarget}
-                  <span class="rebase-preview">rebase {rebase.sourceMode} {rebase.sources.map(s => s.slice(0, 8)).join(' ')} {rebase.targetMode} {entry.commit.change_id.slice(0, 8)}</span>
-                {:else if isSquashTarget}
-                  <span class="rebase-preview">jj squash --from {squash.sources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squash.keepEmptied ? ' --keep-emptied' : ''}{squash.useDestMsg ? ' --use-destination-message' : ''}</span>
-                {:else}
-                  {@const divOffset = divergenceOffsets.get(entry.commit.commit_id)}
-                  <span class="meta-line">
-                    <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span>{#if divOffset}<span class="div-offset">{divOffset}</span>{/if}</span>
-                    <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}<span class="id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix, 12)}</span></span>
-                  </span>
-                {/if}
-              </span>
-            {:else if line.content}
-              <span class="elided-marker">
-                <span class="elided-dots" aria-hidden="true"></span>
-                <span class="elided-label">{line.content}</span>
-                <span class="elided-dots" aria-hidden="true"></span>
-              </span>
+              onrangecheck(lastCheckedIndex, line.entryIndex)
+            } else {
+              onselect(line.entryIndex)
+            }
+          }}
+          oncontextmenu={(e: MouseEvent) => {
+            e.preventDefault()
+            if (anyModeActive || isRefreshing) return
+            oncontextmenu(line.eid, e.clientX, e.clientY)
+          }}
+          role="option"
+          tabindex={line.isNode ? 0 : -1}
+          aria-selected={selectedIndex === line.entryIndex}
+        >
+          <span class="check-gutter" class:implied={isImplied} title={isImplied ? 'Included via gap-fill (connected)' : ''}>{#if line.isNode && isChecked}✓{:else if line.isNode && isImplied}◌{/if}</span>
+          <GraphSvg
+            gutter={line.gutter}
+            isNode={line.isNode}
+            isWorkingCopy={line.isWorkingCopy}
+            isImmutable={line.isImmutable ?? false}
+            isConflicted={line.isConflicted ?? false}
+            isDivergent={line.isDivergent ?? false}
+            isHidden={line.isHidden}
+            gutterWidth={maxGutterLen}
+            {isDark}
+          />
+          {#if line.isNode}
+            {@const entry = revisions[line.entryIndex]}
+            {@const isRebaseSource = rebase.active && rebase.sources.includes(line.eid)}
+            {@const isRebaseTarget = rebase.active && selectedIndex === line.entryIndex && !isRebaseSource}
+            {@const isSquashSource = squash.active && squash.sources.includes(line.eid)}
+            {@const isSquashTarget = squash.active && selectedIndex === line.entryIndex && !isSquashSource}
+            {@const isSplitSource = split.active && line.eid === split.revision}
+            {#if isRebaseSource}
+              <span class="mode-badge badge-source">&lt;&lt; {sourceModeLabel[rebase.sourceMode]} &gt;&gt;</span>
             {/if}
-          </div>
-        {/each}
+            {#if isRebaseTarget}
+              <span class="mode-badge badge-target">&lt;&lt; {targetModeLabel[rebase.targetMode]} &gt;&gt;</span>
+            {/if}
+            {#if isSquashSource}
+              <span class="mode-badge badge-source">&lt;&lt; from &gt;&gt;</span>
+            {/if}
+            {#if isSquashTarget}
+              <span class="mode-badge badge-target">&lt;&lt; into &gt;&gt;</span>
+            {/if}
+            {#if isSplitSource}
+              <span class="mode-badge badge-source">&lt;&lt; {split.review ? 'review' : 'split'} &gt;&gt;</span>
+            {/if}
+            {#if entry.commit.divergent}
+              <span class="divergent-badge">divergent</span>
+            {/if}
+            <span class="node-line-content">
+              {#if entry.commit.is_working_copy}
+                <span class="wc-badge">@</span>
+              {/if}
+              <span class="description-text">{entry.description || '(no description)'}</span>
+            </span>
+          {:else if line.isBookmarkLine}
+            {@const entry = revisions[line.entryIndex]}
+            <span class="bookmark-line-content">
+              {#each entry.commit.working_copies ?? [] as ws}
+                <span class="workspace-badge">◇ {ws}@</span>
+              {/each}
+              {#each entry.bookmarks ?? [] as bm}
+                {@const pr = prByBookmark.get(bm)}
+                {#if pr}
+                  <a class="pr-badge" class:is-draft={pr.is_draft}
+                     href={pr.url} target="_blank" rel="noopener"
+                     onclick={(e: MouseEvent) => e.stopPropagation()}
+                     title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
+                    <span class="pr-name">↗ {bm}</span>
+                    <span class="pr-number">#{pr.number}</span>
+                  </a>
+                {:else}
+                  <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>⑂ {bm}</button>
+                {/if}
+              {/each}
+            </span>
+          {:else if line.isDescLine}
+            {@const entry = revisions[line.entryIndex]}
+            {@const isRebaseTarget = rebase.active && selectedIndex === line.entryIndex && !rebase.sources.includes(line.eid)}
+            {@const isSquashTarget = squash.active && selectedIndex === line.entryIndex && !squash.sources.includes(line.eid)}
+            {@const isSplitPreview = split.active && line.eid === split.revision}
+            <span class="desc-line-content">
+              {#if isSplitPreview}
+                <span class="rebase-preview">jj split -r {entry.commit.change_id.slice(0, 8)}{split.parallel ? ' --parallel' : ''}</span>
+              {:else if isRebaseTarget}
+                <span class="rebase-preview">rebase {rebase.sourceMode} {rebase.sources.map(s => s.slice(0, 8)).join(' ')} {rebase.targetMode} {entry.commit.change_id.slice(0, 8)}</span>
+              {:else if isSquashTarget}
+                <span class="rebase-preview">jj squash --from {squash.sources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squash.keepEmptied ? ' --keep-emptied' : ''}{squash.useDestMsg ? ' --use-destination-message' : ''}</span>
+              {:else}
+                {@const divOffset = divergenceOffsets.get(entry.commit.commit_id)}
+                <span class="meta-line">
+                  <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span>{#if divOffset}<span class="div-offset">{divOffset}</span>{/if}</span>
+                  <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}<span class="id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix, 12)}</span></span>
+                </span>
+              {/if}
+            </span>
+          {:else if line.content}
+            <span class="elided-marker">
+              <span class="elided-dots" aria-hidden="true"></span>
+              <span class="elided-label">{line.content}</span>
+              <span class="elided-dots" aria-hidden="true"></span>
+            </span>
+          {/if}
+        </div>
+      {/snippet}
+
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="revision-list"
+        class:refreshing={isRefreshing}
+        class:virtual-list={shouldVirtualize}
+        style={shouldVirtualize ? `height:${$virtualizer.getTotalSize()}px` : undefined}
+        onmousemove={onListMouseMove}
+        onmouseleave={onListMouseLeave}
+        role="listbox"
+        tabindex="-1"
+        aria-label="Revision list"
+      >
+        {#if shouldVirtualize}
+          <!-- flatLines[item.index] can be undefined for one frame when
+               revisions shrinks: template renders BEFORE the setOptions
+               $effect fires (post-effect in Svelte 5), so virtual items hold
+               the OLD (larger) count while flatLines is already shorter.
+               Guard + skip stale items; next tick setOptions corrects. -->
+          {#each $virtualizer.getVirtualItems() as item (flatLines[item.index]
+            ? `${flatLines[item.index].eid}:${flatLines[item.index].lineKey}`
+            : item.key)}
+            {@const line = flatLines[item.index]}
+            {#if line}
+              <div class="virtual-row" style="transform:translateY({item.start}px)">
+                {@render graphRow(line)}
+              </div>
+            {/if}
+          {/each}
+        {:else}
+          {#each flatLines as line (`${line.eid}:${line.lineKey}`)}
+            {@render graphRow(line)}
+          {/each}
+        {/if}
       </div>
     {/if}
   </div>
@@ -643,6 +728,19 @@
 
   .revision-list ::selection {
     background: transparent;
+  }
+
+  /* Virtualized layout: container height = totalSize; each row absolutely
+     positioned via translateY(item.start). .graph-row CSS stays unchanged
+     (position:relative is fine inside an absolute parent). */
+  .virtual-list {
+    position: relative;
+  }
+  .virtual-row {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
   }
 
   .graph-row {

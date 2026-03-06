@@ -489,4 +489,65 @@ describe('RevisionGraph', () => {
       expect(nodeRows[1].querySelector('.graph-svg')).toBeInTheDocument()
     })
   })
+
+  describe('virtualization', () => {
+    // These tests verify the THRESHOLD branch — below, eager full-render;
+    // above, .virtual-list engages. Actual virtual-item rendering needs a
+    // real layout engine (ResizeObserver, getBoundingClientRect) that jsdom
+    // lacks; tanstack's observeElementRect never fires so getVirtualItems()
+    // returns []. Verified manually in browser.
+
+    it('below threshold: renders all rows eagerly (no .virtual-list)', () => {
+      const entries = Array.from({ length: 10 }, (_, i) =>
+        makeEntry({ change_id: `ch${i}`, commit_id: `co${i}` }))
+      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: entries }) })
+      expect(container.querySelector('.virtual-list')).toBeNull()
+      // 10 revs × (node + desc) = 20 rows, all in DOM
+      expect(container.querySelectorAll('.graph-row')).toHaveLength(20)
+    })
+
+    it('above threshold: virtual-list branch engages, container sized to totalSize', async () => {
+      // 200 revisions → 400 flatLines (node+desc) → above VIRTUALIZE_THRESHOLD(150)
+      const entries = Array.from({ length: 200 }, (_, i) =>
+        makeEntry({ change_id: `ch${i}`, commit_id: `co${i}` }))
+      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: entries }) })
+
+      const list = container.querySelector('.revision-list') as HTMLElement
+      expect(list.classList.contains('virtual-list')).toBe(true)
+
+      // Let the setOptions $effect + store update settle
+      await new Promise(r => setTimeout(r, 0))
+
+      // totalSize = 400 lines × 18px = 7200px. Proves the virtualizer computes
+      // correctly even though jsdom can't give it a viewport to render items.
+      expect(list.style.height).toBe('7200px')
+    })
+
+    it('shrink above threshold: no crash when virtual items outlast flatLines', async () => {
+      // Repro: flatLines shrinks but stays above threshold. Template re-renders
+      // BEFORE setOptions $effect (post-effect in Svelte 5), so virtual items
+      // hold the OLD count while flatLines is already shorter → item.index
+      // out of bounds. The {#if line} guard + ?.key fallback prevents the crash.
+      //
+      // jsdom can't fully simulate scrolling to a stale index, but rerender()
+      // with a smaller list exercises the transition path.
+      const mk = (n: number) => Array.from({ length: n }, (_, i) =>
+        makeEntry({ change_id: `ch${i}`, commit_id: `co${i}` }))
+
+      const { container, rerender } = render(RevisionGraph, {
+        props: defaultProps({ revisions: mk(200) }), // 400 lines, virtualized
+      })
+      await new Promise(r => setTimeout(r, 0))
+
+      // Shrink to 100 revs = 200 lines — still above threshold (150).
+      // Without the guard, this would throw TypeError on flatLines[item.index].eid
+      await rerender(defaultProps({ revisions: mk(100) }))
+      await new Promise(r => setTimeout(r, 0))
+
+      // No crash + container resized to new totalSize (200 × 18 = 3600px)
+      const list = container.querySelector('.revision-list') as HTMLElement
+      expect(list.classList.contains('virtual-list')).toBe(true)
+      expect(list.style.height).toBe('3600px')
+    })
+  })
 })
