@@ -81,7 +81,7 @@ let refreshQueued = false
 // commit_ids unchanged → zero cache invalidation. Only rewrites (describe,
 // rebase, squash) change commit_ids, and then only for the rewritten commit
 // and its descendants — the rest stay cached.
-const MAX_CACHE_SIZE = 500
+export const MAX_CACHE_SIZE = 500
 const cache = new Map<string, unknown>()
 
 // Default timeout for read-only requests (30s). Mutations get no timeout.
@@ -540,11 +540,12 @@ export function diffTargetKey(t: DiffTarget): string {
 
 /** Builds a diff-safe revset from multiple revision IDs.
  *  connected() fills gaps so jj's "Cannot diff revsets with gaps" error
- *  can't fire. No-op for contiguous/branched selections. */
+ *  can't fire. No-op for contiguous/branched selections.
+ *  Sorted for stable cache keys (docs/CACHING.md §4). */
 export function multiRevset(ids: string[]): string {
   if (ids.length === 0) return ''
   if (ids.length === 1) return ids[0]
-  return `connected(${ids.join('|')})`
+  return `connected(${ids.toSorted().join('|')})`
 }
 
 /** Computes the connected closure of a set of checked commit IDs over the
@@ -787,11 +788,10 @@ export const _testInternals = {
   get lastOpId() { return lastOpId },
   set lastOpId(v: string | null) { lastOpId = v },
   get cache() { return cache },
-  get MAX_CACHE_SIZE() { return MAX_CACHE_SIZE },
   get staleCallbacks() { return staleCallbacks },
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },
-  resetSessionCaches() { _remotes = undefined; _aliases = undefined },
+  resetSessionCaches: clearSessionMemos,
   get basePath() { return basePath },
   set basePath(v: string) { basePath = v },
 }

@@ -4,7 +4,7 @@
 
   let { tabBar }: { tabBar?: Snippet } = $props()
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, diffTargetKey, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget } from './lib/api'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -20,6 +20,7 @@
   import DivergencePanel, { type KeepPlan } from './lib/DivergencePanel.svelte'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
   import { createLoader } from './lib/loader.svelte'
+  import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config } from './lib/config.svelte'
   import { APP_VERSION, parseSemver, semverMinorGt } from './lib/version'
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
@@ -67,20 +68,18 @@
   // counter. See loader.svelte.ts for semantics. Aliases below preserve existing
   // names for backward-compatible reads throughout the component + templates.
   const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
-  // diff carries its DiffTarget — identity and content are one $state write,
-  // structurally in phase. loadedTarget (what's displayed) is derived from here,
-  // not from selectedRevision (the cursor). This closes the "activeRevisionId
-  // changes 50ms before diffContent" edge that every timing bug traces to.
-  type LoadedDiff = { target: DiffTarget | undefined; diff: string }
-  const diff = createLoader(
-    (t: DiffTarget) => api.diff(diffTargetKey(t)).then(r => ({ target: t, diff: r.diff })),
-    { target: undefined, diff: '' } as LoadedDiff,
-    showError,
-  )
-  const files = createLoader((id: string) => api.files(id), [] as FileChange[], showError)
-  const description = createLoader((id: string) => api.description(id).then(r => r.description), '')
+  // The diff/files/description triple + their batch-fetch orchestration (incl.
+  // the revGen await-gap guard) live in revision-navigator.svelte.ts. Local
+  // aliases preserve the existing references across the component.
+  const nav = createRevisionNavigator({ onError: showError })
+  const { diff, files, description, singleTarget } = nav
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
+
+  // Abort predicate for nav.loadDiffAndFiles — re-checked after its await.
+  // User checking a revision during the fetch means the multi-check $effect
+  // below already fired; don't clobber it.
+  const hasChecked = () => checkedRevisions.size > 0
 
   let revisions = $derived(log.value)
   let loading = $derived(log.loading)
@@ -281,7 +280,7 @@
 
   function clearChecksAndReload() {
     clearChecks()
-    if (selectedRevision) loadDiffAndFiles(selectedRevision.commit)
+    if (selectedRevision) nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
     else { diff.reset(); files.reset() }
   }
 
@@ -492,7 +491,7 @@
     lastCheckedIndex = -1
     if (selectedIndex >= 0 && checkedRevisions.size === 0) {
       const sel = revisions[selectedIndex]
-      loadDiffAndFiles(sel.commit)
+      nav.loadDiffAndFiles(sel.commit, hasChecked)
     }
     // Refresh open panels — oplog always reflects new operations,
     // evolog may change if the selected revision was modified
@@ -520,30 +519,6 @@
   const loadFilesForRevset = files.load
   const loadOplog = oplog.load
   const loadEvolog = evolog.load
-
-  // Batch-fetch orchestration: api.revision() seeds all three cache keys in
-  // one round-trip, then the individual loaders fire and hit cache.
-  //
-  // Race safety: diff.load(target) bumps loader.generation, so a prior
-  // loadDiffAndFiles suspended at `await api.revision()` will have its
-  // diff.load() discarded when it resumes and fires (its gen check fails).
-  // But the await-before-load gap still needs revGen — the suspended call's
-  // diff.load() would bump generation PAST any intervening diff.set()/load().
-  // checkedRevisions guard: user checked a revision during the fetch → the
-  // multi-check effect already fired; don't clobber.
-  //
-  // On batch failure, only diff.load fires — one error toast, not three.
-  let revGen = 0
-  async function loadDiffAndFiles(commit: LogEntry['commit']) {
-    const gen = ++revGen
-    let batchFailed = false
-    await api.revision(commit.commit_id).catch(() => { batchFailed = true })
-    if (gen !== revGen || checkedRevisions.size > 0) return
-    diff.load(singleTarget(commit))
-    if (batchFailed) return
-    files.load(commit.commit_id)
-    description.load(commit.commit_id)
-  }
 
   // Move cursor without loading diff/files — used in squash mode where
   // the diff is intentionally frozen on the source revision
@@ -574,18 +549,12 @@
     clearTimeout(navDebounceTimer)
     const hit = checkedRevisions.size === 0 ? getCached(entry.commit.commit_id) : null
     if (hit) {
-      // Invalidate any in-flight loadDiffAndFiles — a suspended call's
-      // diff.load() would bump generation past this set() and win.
-      revGen++
-      // target + diff land in one $state write → DiffPanel sees them together.
-      diff.set({ target: singleTarget(entry.commit), diff: hit.diff })
-      files.set(hit.files)
-      description.set(hit.description)
+      nav.applyCacheHit(entry.commit, hit)
     } else {
       navDebounceTimer = setTimeout(() => {
         const current = revisions[selectedIndex]
         if (!current) return
-        if (checkedRevisions.size === 0) loadDiffAndFiles(current.commit)
+        if (checkedRevisions.size === 0) nav.loadDiffAndFiles(current.commit, hasChecked)
       }, 50)
     }
     // Evolog is uncached — always debounce to avoid one network request per
@@ -650,10 +619,6 @@
     contextMenuX = x
     contextMenuY = y
     contextMenuOpen = true
-  }
-
-  function singleTarget(c: LogEntry['commit']): DiffTarget {
-    return { kind: 'single', commitId: c.commit_id, changeId: effectiveId(c), isWorkingCopy: c.is_working_copy, immutable: c.immutable }
   }
 
   // INTENT — what the diff panel should be showing, derived from cursor + checks.
@@ -1076,6 +1041,7 @@
 
   function handleRevsetSubmit() {
     clearTimeout(navDebounceTimer)
+    nav.cancel()
     diff.reset()
     files.reset()
     clearChecks()
@@ -1242,7 +1208,7 @@
       case 'Enter':
         if (selectedRevision) {
           e.preventDefault()
-          loadDiffAndFiles(selectedRevision.commit)
+          nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
         }
         break
       case 'r':

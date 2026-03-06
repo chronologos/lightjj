@@ -80,10 +80,41 @@ describe('createDiffDerivation', () => {
     expect(d.byFile.get('b')).toBe('second')
   })
 
+  it('sync compute + immediateBudget:Infinity → run() completes synchronously', () => {
+    // Lezer highlightFile case: sync body, no yields needed. run() branches
+    // on Promise vs sync (matches update()) so a sync compute never awaits.
+    // byFile is populated before run() returns — no settle() needed.
+    const d = createDiffDerivation({
+      compute: (f) => f.filePath.toUpperCase(),
+      immediateBudget: Infinity,
+    })
+    d.run([mkFile('a.ts'), mkFile('b.ts'), mkFile('c.ts')])
+    // No await — all three applied synchronously.
+    expect(d.byFile.get('a.ts')).toBe('A.TS')
+    expect(d.byFile.get('b.ts')).toBe('B.TS')
+    expect(d.byFile.get('c.ts')).toBe('C.TS')
+  })
+
+  it('sync compute with memo write — also synchronous', () => {
+    const written = new Map<string, Map<string, string>>()
+    const d = createDiffDerivation({
+      compute: (f) => f.filePath,
+      immediateBudget: Infinity,
+      writeMemo: (k, v) => written.set(k, v),
+    })
+    d.run([mkFile('a'), mkFile('b')], 'rev1')
+    expect(written.get('rev1')?.get('a')).toBe('a')
+    expect(written.get('rev1')?.get('b')).toBe('b')
+  })
+
   it('immediateBudget: does not yield until budget is spent', async () => {
     const order: string[] = []
+    // async compute — per-file microtask suspension gives the test body a
+    // chance to schedule its probe before run()'s budget-yield setTimeout.
+    // (Sync compute, tested above, runs straight through until that yield
+    // with no intervening suspension — nothing interleaves.)
     const d = createDiffDerivation({
-      compute: (f) => { order.push(`compute:${f.filePath}`); return f.filePath },
+      compute: async (f) => { order.push(`compute:${f.filePath}`); return f.filePath },
       immediateBudget: 25, // 2.5 files at 10 lines each
     })
     // Interleave a macrotask probe — it should fire after the yield.
