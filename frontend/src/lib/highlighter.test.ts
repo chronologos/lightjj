@@ -55,48 +55,92 @@ describe('detectLanguage', () => {
     // '.gitignore' → pop returns 'gitignore', not in map
     expect(detectLanguage('.gitignore')).toBe('text')
   })
+
+  // detectLanguage is imported by FileEditor for its own CM6 LanguageSupport
+  // mapping — it switches on the STRING, not the parser. The svelte→html
+  // fallback lives in the PARSERS registry, not here, so FileEditor still
+  // sees 'svelte' → switch default → null (correct: FileEditor has no svelte).
+  it('returns svelte (not html) for .svelte — fallback is in PARSERS', () => {
+    expect(detectLanguage('App.svelte')).toBe('svelte')
+  })
 })
 
-describe('highlightLines text path', () => {
-  it('returns empty array for empty input', async () => {
-    expect(await highlightLines([], 'text')).toEqual([])
+describe('highlightLines', () => {
+  it('returns empty array for empty input', () => {
+    expect(highlightLines([], 'text')).toEqual([])
+    expect(highlightLines([], 'go')).toEqual([])
   })
 
-  it('passes through plain text', async () => {
-    expect(await highlightLines(['hello world'], 'text')).toEqual(['hello world'])
-  })
-
-  it('escapes HTML characters', async () => {
-    expect(await highlightLines(['<div>&amp;</div>'], 'text'))
+  it('escapes HTML for unknown lang (no parser)', () => {
+    expect(highlightLines(['<div>&amp;</div>'], 'text'))
       .toEqual(['&lt;div&gt;&amp;amp;&lt;/div&gt;'])
   })
 
-  it('short-circuits before Shiki for empty lines with non-text lang', async () => {
-    // Empty array → returns [] immediately (lines.length === 0 check)
-    expect(await highlightLines([], 'go')).toEqual([])
+  it('escapes HTML inside token spans', () => {
+    // Lezer passes raw source text to the emit callback; we escape there.
+    // A Go string literal containing < > & must be escaped in the output.
+    const out = highlightLines(['x := "<a>&"'], 'go')
+    expect(out).toHaveLength(1)
+    expect(out[0]).toContain('&lt;a&gt;&amp;')
+    expect(out[0]).not.toContain('<a>') // no raw HTML leaked
+    expect(out[0]).toContain('tok-string')
   })
 
-  it('aborts between chunks when isStale returns true', async () => {
-    // For text lang this never reaches the chunk loop, but verify the isStale
-    // param is accepted without changing behavior when unused.
-    const result = await highlightLines(['a', 'b'], 'text', () => true)
-    expect(result).toEqual(['a', 'b'])
+  it('emits tok-* class names (theme-independent)', () => {
+    const out = highlightLines(['func main() {}'], 'go')
+    expect(out[0]).toContain('class="tok-keyword"')
+    expect(out[0]).not.toMatch(/style="/) // no inline styles
   })
 
-  it('isStale is optional — undefined callback does not throw', async () => {
-    const result = await highlightLines(['hello'], 'text')
-    expect(result).toEqual(['hello'])
+  it('preserves line boundaries via break callback', () => {
+    // highlightCode fires break on \n — joining 3 lines must yield exactly 3
+    // output strings, with no tokens leaking across the boundary.
+    const lines = ['func f() {', '\tx := 1', '}']
+    const out = highlightLines(lines, 'go')
+    expect(out).toHaveLength(3)
+    expect(out[0]).toContain('tok-keyword') // func
+    expect(out[1]).toContain('tok-number')  // 1
+    expect(out[1]).not.toContain('func')    // no cross-line leak
+    expect(out[2]).toContain('}')
   })
 
-  it('skips Shiki for inputs exceeding HIGHLIGHT_MAX_CHARS (minified guard)', async () => {
-    // A single 50KB line with a recognized lang would block the main thread
-    // for 200-500ms in codeToHtml with no chunking or isStale escape.
-    // The character-count guard should route it to plain escapeHtml.
-    const hugeLine = 'x'.repeat(25_000) // > 20KB limit
-    const result = await highlightLines([hugeLine], 'javascript')
-    // No Shiki tokens in output — just the escaped plain content.
-    expect(result).toHaveLength(1)
-    expect(result[0]).toBe(hugeLine) // 'x' needs no escaping
-    expect(result[0]).not.toContain('<span') // no Shiki markup
+  it('preserves empty lines', () => {
+    const out = highlightLines(['x := 1', '', 'y := 2'], 'go')
+    expect(out).toHaveLength(3)
+    expect(out[1]).toBe('')
+  })
+
+  it('svelte uses html parser (tags/attrs highlighted, interpolations plain)', () => {
+    const out = highlightLines(['<div class="x">{foo}</div>'], 'svelte')
+    expect(out[0]).toContain('tok-typeName')     // div
+    expect(out[0]).toContain('tok-propertyName') // class
+    expect(out[0]).toContain('tok-string')       // "x"
+    // {foo} is not in HTML grammar — passes through as plain escaped text
+    expect(out[0]).toContain('{foo}')
+  })
+
+  it('bash via StreamLanguage (legacy-mode wrapper emits Lezer tree)', () => {
+    const out = highlightLines(['echo "hello"'], 'bash')
+    expect(out[0]).toContain('tok-string')
+  })
+
+  it('toml via StreamLanguage', () => {
+    const out = highlightLines(['name = "foo"'], 'toml')
+    expect(out[0]).toContain('tok-string')
+  })
+
+  it('typescript dialect recognizes type annotations', () => {
+    const out = highlightLines(['const x: string = "hi"'], 'typescript')
+    expect(out[0]).toContain('tok-typeName') // string
+    expect(out[0]).toContain('tok-keyword')  // const
+  })
+
+  it('is synchronous — no await needed', () => {
+    // The old Shiki-based highlightLines was async. This one has a sync body
+    // (Lezer highlightCode returns void, no promises). Return type is
+    // string[], not Promise<string[]> — a Promise check catches regression.
+    const result = highlightLines(['x'], 'go')
+    expect(result).not.toBeInstanceOf(Promise)
+    expect(Array.isArray(result)).toBe(true)
   })
 })

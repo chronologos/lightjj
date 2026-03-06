@@ -141,6 +141,20 @@ body {
 
   --scrollbar-thumb: rgba(255,255,255,0.1);
   --scrollbar-track: transparent;
+
+  /* Syntax tokens (Lezer classHighlighter tok-*). Decorative like Tier 3
+     graph colors — muted, not semantic. One var per token kind; tok-* rules
+     below reference these so theme toggle is a pure var swap (cached
+     highlight HTML stays valid). */
+  --syn-keyword:  #c792ea;
+  --syn-string:   #a3be8c;
+  --syn-number:   #f78c6c;
+  --syn-comment:  #6c7086;
+  --syn-type:     #f9e2af;
+  --syn-property: #89b4fa;
+  --syn-operator: #9399b2;
+  --syn-punct:    #6c7086;
+  --syn-atom:     #f78c6c;
 }
 
 /* --- Light theme --- */
@@ -223,4 +237,30 @@ body {
 
   --scrollbar-thumb: rgba(0,0,0,0.12);
   --scrollbar-track: transparent;
+
+  --syn-keyword:  #8839ef;
+  --syn-string:   #40a02b;
+  --syn-number:   #fe640b;
+  --syn-comment:  #9ca0b0;
+  --syn-type:     #df8e1d;
+  --syn-property: #1e66f5;
+  --syn-operator: #6c6f85;
+  --syn-punct:    #9ca0b0;
+  --syn-atom:     #fe640b;
 }
+
+/* --- Syntax highlighting (Lezer classHighlighter) ---
+   DiffFileView renders these via {@html}. tok-variableName deliberately has
+   no rule — identifiers inherit --text (default), only semantic tokens pop. */
+.tok-keyword                    { color: var(--syn-keyword); }
+.tok-string, .tok-string2       { color: var(--syn-string); }
+.tok-number, .tok-integer       { color: var(--syn-number); }
+.tok-comment                    { color: var(--syn-comment); font-style: italic; }
+.tok-typeName, .tok-className   { color: var(--syn-type); }
+.tok-propertyName               { color: var(--syn-property); }
+.tok-operator                   { color: var(--syn-operator); }
+.tok-punctuation                { color: var(--syn-punct); }
+.tok-atom, .tok-bool, .tok-null,
+.tok-literal                    { color: var(--syn-atom); }
+.tok-definition                 { color: var(--syn-property); }
+.tok-meta                       { color: var(--syn-comment); }

@@ -136,7 +136,7 @@ Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to
 
 `src/lib/api.ts` is a typed client that mirrors the Go API endpoints 1:1. It tracks the `X-JJ-Op-Id` header from responses and fires stale callbacks when the operation ID changes, triggering automatic cache invalidation and log refresh.
 
-**Tab switching** is `{#key activeTabId}<App/>` in `AppShell.svelte` — a full remount. `setActiveTab()` sets the module-level `basePath` and clears per-repo memos (`_remotes`/`_aliases`/`_info`) + `lastOpId` before `activeTabId` changes, so the remounted App's top-level fetches hit the new prefix. The commit_id cache is **not** cleared: `commit_id` is a SHA-256 content hash (tree + parents + message), collision across repos is cryptographically negligible, so switching back to a tab serves cached diffs instantly. The Shiki/word-diff `derivedCache` in `DiffPanel` is also commit_id-keyed and survives for the same reason.
+**Tab switching** is `{#key activeTabId}<App/>` in `AppShell.svelte` — a full remount. `setActiveTab()` sets the module-level `basePath` and clears per-repo memos (`_remotes`/`_aliases`/`_info`) + `lastOpId` before `activeTabId` changes, so the remounted App's top-level fetches hit the new prefix. The commit_id cache is **not** cleared: `commit_id` is a SHA-256 content hash (tree + parents + message), collision across repos is cryptographically negligible, so switching back to a tab serves cached diffs instantly. The highlight/word-diff `derivedCache` in `DiffPanel` is also commit_id-keyed and survives for the same reason.
 
 ## Data Flow
 
@@ -345,11 +345,11 @@ flowchart LR
     end
 
     subgraph progressive["Progressive Async Workers"]
-        shiki["highlightDiff()<br/><small>setTimeout(0) yield/file</small>"]:::blue
-        word["computeAllWordDiffs()<br/><small>setTimeout(0) yield/file</small>"]:::blue
+        hl["highlights.run()<br/><small>Lezer, sync/file</small>"]:::blue
+        word["wordDiffs.run()<br/><small>LCS, yield/file</small>"]:::blue
     end
 
-    shiki -->|"publishes one file<br/>at a time"| hlMap
+    hl -->|"publishes one file<br/>at a time"| hlMap
     word -->|"publishes one file<br/>at a time"| wdMap
 
     subgraph views["DiffFileView instances"]
@@ -367,8 +367,8 @@ flowchart LR
     note["Only a.go re-renders.<br/>b.go and c.go get same Map reference<br/>→ Svelte skips them."]
 ```
 
-- `highlightsByFile: Map<filePath, Map<key, html>>` — progressive Shiki highlighting publishes per-file inner Maps. Already-highlighted files keep their inner Map reference, so only the newly-highlighted `DiffFileView` re-renders on each publish. Stable `EMPTY_HL` singleton for not-yet-highlighted files.
-- `wordDiffsByFile: Map<filePath, Map<hunkIdx, Map<lineIdx, spans>>>` — same progressive-async pattern as Shiki. LCS computation yields between files; single-file context expansion only recomputes that file's entry. Stable `EMPTY_WD` singleton.
+- `highlightsByFile: Map<filePath, Map<key, html>>` — per-file inner Maps published as each file finishes. Already-done files keep their inner Map reference, so only the newly-highlighted `DiffFileView` re-renders. Stable `EMPTY_HL` singleton for not-yet-highlighted files.
+- `wordDiffsByFile: Map<filePath, Map<hunkIdx, Map<lineIdx, spans>>>` — same progressive pattern. LCS computation yields between files; single-file context expansion only recomputes that file's entry. Stable `EMPTY_WD` singleton.
 - `matchesByFile` — search matches pre-grouped by `filePath` via `groupByWithIndex()`, preserving global indices so `currentMatchIdx` comparison still works. Match-free files receive `EMPTY_MATCHES` (stable singleton), so their `lineMatchMap` `$derived` never reads `currentMatchIdx` → no dependency → no recompute on Enter/Shift+Enter.
 
 **commit_id-keyed cache** — `api.ts` maintains a single 500-entry LRU Map keyed by `diff:<commit_id>` / `files:<commit_id>` / `desc:<commit_id>`. A commit_id is a content hash of tree + parents + message — if it hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation, no concurrent-request staleness guard. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants — the rest stay warm. `clearAllCaches()` is reserved for explicit user-triggered hard refresh.
@@ -401,7 +401,7 @@ flowchart TD
     opchange -.->|"no effect"| keep["cache untouched<br/><small>commit_id-keyed entries<br/>stay valid across ops</small>"]:::green
 ```
 
-**Derived-computation cache** — `DiffPanel`'s `<script module>` holds `derivedCache` (30-entry LRU) mapping `activeRevisionId → {highlightsByFile, wordDiffsByFile}`. Shiki + word-diff LCS cost ~500ms per diff; without this cache, revisiting a commit re-ran them even though the diff text was already cached in api.ts. Module scope survives DiffPanel unmount (DivergencePanel takes its slot via `{#if}`). `clearHighlightCache()` is exported so `toggleTheme()` can invalidate `.highlights` (word diffs are theme-agnostic) even when the component isn't mounted.
+**Derived-computation cache** — `DiffPanel`'s `<script module>` holds `derivedCache` (30-entry LRU) mapping `activeRevisionId → {highlightsByFile, wordDiffsByFile}`. Without this cache, revisiting a commit re-runs Lezer + word-diff LCS even though the diff text is already cached in api.ts. Module scope survives DiffPanel unmount (DivergencePanel takes its slot via `{#if}`). Highlight HTML uses `tok-*` CSS class names rather than inline styles, so the cache is theme-agnostic — theme toggle is a pure CSS var swap, no invalidation.
 
 **`createLoader()` factory** — `loader.svelte.ts` encapsulates the generation-counter async pattern. Each `load()` supersedes any in-flight call; only the latest-started result is applied. The `loading` flag is deferred via `setTimeout(0)` so microtask-fast cache hits never flip it, preventing reactive-update cascades during cached j/k navigation. Exposes `.error` (cleared on successful load/set/reset) for inline error display. App.svelte declares 6 loaders instead of 6 hand-rolled load functions + 6 generation counters + 11 `$state` vars.
 
@@ -419,22 +419,15 @@ flowchart TD
 
 **Serial mutations** — Concurrent jj mutations can produce divergent operation history (jj auto-reconciles, but avoidable). Multi-step flows (e.g., abandon N divergent versions → set N bookmarks) run serially. The perf cost is negligible for rare manual actions.
 
-## Syntax Highlighting: Dual Engine
+## Syntax Highlighting
 
-The frontend ships two independent syntax highlighting engines — Shiki for read-only diffs and CodeMirror 6 for the inline editor. This is intentional technical debt worth consolidating later.
+Both read-only diffs and the inline editor use Lezer grammars. `highlighter.ts` calls `@lezer/highlight`'s `highlightCode()` with `classHighlighter`, which walks a parsed `Tree` and emits `tok-*` CSS class names (`tok-keyword`, `tok-string`, …). Parse + highlight for 500 lines runs in ~9ms, so there is no chunking or abort machinery — `highlightLines()` has a synchronous body.
 
-| | Shiki (read-only diffs) | CodeMirror 6 (inline editor) |
-|---|---|---|
-| **Purpose** | Highlight diff lines in `DiffFileView` | Interactive editing in `FileEditor` |
-| **Rendering** | TextMate grammars → HTML strings via `{@html}` | Lezer incremental parser → CM6 decorations |
-| **Languages** | 12 (TS, JS, Go, Python, Rust, CSS, HTML, Svelte, JSON, YAML, Bash, TOML) | 4 (TS/JS, Python, Go, Rust) |
-| **Theme** | Catppuccin Mocha/Latte (TextMate theme JSON) | CSS variables matching catppuccin tokens |
-| **Bundle cost** | ~1,074 KB source (~180 KB gzip): langs 713 + themes 102 + core 78 + vscode-textmate 98 + oniguruma-to-es 59 + oniguruma-parser 25 | ~1,254 KB source (shared with editor): view 469 + state 142 + language 99 + commands 82 + autocomplete 87* + 4 lang grammars |
-| **Tree-shaking** | Yes — `shiki/core` + individual `shiki/langs/*.mjs` imports, JS regex engine (no WASM) | Yes — individual `@codemirror/*` imports. *`codemirror` meta-package pulls in unused `@codemirror/autocomplete` (~87 KB) — remove it. |
+**Theme-independent output.** `classHighlighter` emits class names, not inline styles. `theme.css` maps `tok-*` → `--syn-*` CSS vars, and each theme block (`:root` / `:root.light`) sets those vars. Theme toggle swaps the vars; cached HTML stays valid.
 
-**Future consolidation:** CM6's `highlightCode()` API can produce static tokens without an editor instance, which could replace Shiki for diff highlighting. This would eliminate ~1,074 KB of source (~180 KB gzip) from the bundle at the cost of adding ~8 Lezer grammar packages (CSS, HTML, Svelte, JSON, YAML, Bash, TOML — all small) and rewriting `highlighter.ts` to produce CM6 token spans instead of Shiki HTML strings.
+**Language coverage.** First-party `@lezer/*` grammars cover TS/JS, Go, Python, Rust, CSS, HTML, JSON, YAML. Bash and TOML wrap `@codemirror/legacy-modes` tokenizers via `StreamLanguage.define()` — the wrapper produces a Lezer `Parser` whose tree feeds `highlightCode` like any first-party grammar. Svelte has no Lezer grammar; `PARSERS['svelte']` maps to the HTML parser (tags/attrs/strings highlighted, `{interpolation}` and `<script>` bodies plain).
 
-**Known bundle issue:** The `codemirror` meta-package in `package.json` is never directly imported — all imports use `@codemirror/*` individually. However, it pulls `@codemirror/autocomplete` (~87 KB) into the bundle as a side effect. Removing it from `dependencies` is a free ~25-30 KB gzip reduction.
+`FileEditor` (the inline CM6 editor) shares the same `@lezer/*` grammars via `@codemirror/lang-*`'s `LanguageSupport`, but renders through CM6's `syntaxHighlighting(defaultHighlightStyle)` (style-module CSS, not `tok-*`). Unifying onto `classHighlighter` would make `FileEditor` honor the same `tok-*` CSS — deferred; `defaultHighlightStyle` is good enough for an occasional inline edit.
 
 ## Graph View
 

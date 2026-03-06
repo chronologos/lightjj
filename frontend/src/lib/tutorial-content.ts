@@ -16,4 +16,5 @@ export const FEATURES: TutorialFeature[] = [
   { version: '0.1.0', shortcut: null, title: 'Inline file editing', description: 'Click Edit in diff file headers to edit with CodeMirror in split view.' },
   { version: '0.1.0', shortcut: null, title: 'Right-click menus', description: 'Context menus on revisions and diff lines for quick actions.' },
   { version: '0.1.0', shortcut: 't', title: 'Toggle theme', description: 'Switch between dark and light mode.' },
+  { version: '0.4.0', shortcut: null, title: 'Multi-repo tabs', description: 'Open additional repos with the + button in the tab bar. Diffs stay cached across tabs.' },
 ]

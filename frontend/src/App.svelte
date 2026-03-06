@@ -9,7 +9,7 @@
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
   import RevisionGraph from './lib/RevisionGraph.svelte'
-  import DiffPanel, { clearHighlightCache } from './lib/DiffPanel.svelte'
+  import DiffPanel from './lib/DiffPanel.svelte'
   import RevisionHeader from './lib/RevisionHeader.svelte'
   import EvologPanel from './lib/EvologPanel.svelte'
   import OplogPanel from './lib/OplogPanel.svelte'
@@ -179,12 +179,10 @@
   let darkMode = $derived(config.theme === 'dark')
   const cmdKey = typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'
 
+  // Highlight HTML uses tok-* class names (not inline styles), so theme
+  // toggle is a pure CSS var swap — no cache invalidation, no re-render.
   function toggleTheme() {
     config.theme = darkMode ? 'light' : 'dark'
-    // Module-scoped cache outlives the component — clear it even if DiffPanel
-    // is unmounted (DivergencePanel showing). rehighlight() re-renders if mounted.
-    clearHighlightCache()
-    diffPanelRef?.rehighlight()
   }
 
   // Sync theme class + reduce-motion class to <html>

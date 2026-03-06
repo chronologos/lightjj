@@ -1,14 +1,14 @@
-// Factory for per-file progressive diff derivations (Shiki highlighting,
-// word-diff LCS). Replaces hand-rolled generation-counter + $state + memo-check
-// blocks in DiffPanel with a testable abstraction, same as createLoader did
-// for async fetches.
+// Factory for per-file progressive diff derivations (highlights, word-diff
+// LCS). Replaces hand-rolled generation-counter + $state + memo-check blocks
+// in DiffPanel with a testable abstraction, same as createLoader did for
+// async fetches.
 //
 // The pattern: process DiffFile[] → Map<filePath, R> one file at a time,
 // yielding between files so the UI stays responsive. Each run aborts any prior
 // run. Completed runs are memoized by cacheKey (commit_id) so revisits restore
-// instantly instead of re-running Shiki/LCS. Memoization is externalized so
-// multiple derivations (highlights + wordDiffs) can share one LRU bucket and
-// evict together.
+// instantly instead of recomputing. Memoization is externalized so multiple
+// derivations (highlights + wordDiffs) can share one LRU bucket and evict
+// together.
 
 import { untrack } from 'svelte'
 import type { DiffFile } from './diff-parser'
@@ -43,8 +43,8 @@ export interface DiffDerivation<R> {
 }
 
 export interface DerivationOptions<R> {
-  /** Compute one file's result. Receives isStale so async implementations
-   *  (Shiki chunking) can abort mid-file. */
+  /** Compute one file's result. isStale lets async implementations abort
+   *  mid-file (currently unused — both callers have sync bodies). */
   compute: (file: DiffFile, isStale: () => boolean) => MaybePromise<R>
   /** Skip predicate — return true to exclude a file from processing. */
   skip?: (file: DiffFile) => boolean
@@ -145,10 +145,9 @@ export function createDiffDerivation<R>(opts: DerivationOptions<R>): DiffDerivat
     const isStale = () => gen !== generation
     const result = compute(file, isStale)
     if (result instanceof Promise) {
-      // Async single-file update (Shiki on context expansion). isStale lets
-      // highlightLines' chunk loop abort mid-file if the user navigates away
-      // — without it, a 1000-line expanded file processes all 34 chunks even
-      // when superseded.
+      // Async compute: the post-await isStale check is the only abort point
+      // (compute bodies are currently sync, so isStale passed to compute is
+      // never actually read; kept for contract stability).
       result.then(r => {
         if (isStale()) return
         // Post-await: active_reaction is null, untrack is a no-op. But

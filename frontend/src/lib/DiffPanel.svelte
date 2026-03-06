@@ -4,8 +4,8 @@
 
   // Module-scoped caches — survive component unmount. DiffPanel is replaced by
   // DivergencePanel via {#if divergence.active} in App.svelte; without module
-  // scope, opening that panel destroys 30 entries of Shiki work (~15s of CPU
-  // on a busy session) and the user's collapse preferences for 50 revisions.
+  // scope, opening that panel destroys cached highlight/word-diff work and the
+  // user's collapse preferences.
   type DerivedCacheEntry = {
     highlights: Map<string, Map<string, string>>
     wordDiffs: Map<string, Map<string, Map<number, WordSpan[]>>>
@@ -42,14 +42,6 @@
     if (cache.size > max) cache.delete(cache.keys().next().value!)
   }
 
-  /** Invalidate theme-specific cached highlights. Word diffs are theme-agnostic.
-   *  Called by App.toggleTheme() — must be module-level because the cache now
-   *  outlives the component instance. The instance's rehighlight() (via
-   *  diffPanelRef?.rehighlight()) handles re-rendering if mounted, but that ref
-   *  is undefined when DivergencePanel is showing. */
-  export function clearHighlightCache(): void {
-    for (const entry of derivedCache.values()) entry.highlights = new Map()
-  }
 </script>
 
 <script lang="ts">
@@ -477,42 +469,40 @@
 
   const highlights = createDiffDerivation({
     compute: highlightFile,
-    // First ~100 lines process without yield to prevent plain-text flicker
-    // on navigation. Yields thereafter.
-    immediateBudget: 100,
+    // Sync body means yielding between files is pure overhead (setTimeout
+    // clamps to 4ms after nesting depth 5 → 60-76ms wasted on a 20-file diff
+    // vs ~40ms of actual Lezer work). The outer setTimeout(0) at the effect
+    // already provides paint-first; inner yields add nothing.
+    immediateBudget: Infinity,
     readMemo: readDerived('highlights'),
     writeMemo: writeDerived('highlights'),
   })
 
   let highlightTimer: number | undefined
 
-  // Highlight a single file's hunks and return a Map of line keys → HTML.
-  // isStale lets highlightLines abort between chunks when the user navigates
-  // mid-highlight — the previous revision's in-flight Shiki work shouldn't
-  // block the next j/k keypress's paint.
-  async function highlightFile(file: DiffFile, isStale: () => boolean): Promise<Map<string, string>> {
+  // Highlight a single file's hunks → Map of line keys → HTML. Sync body
+  // (Lezer: 500 lines ≈ 9ms, no abort needed); async signature only because
+  // createDiffDerivation's compute contract is Promise<T>.
+  // TODO(backlog): add sync-compute variant to createDiffDerivation so this
+  // can drop the async wrapper and run() can skip microtask scheduling.
+  //
+  // All hunk lines (add/remove/context mixed) feed one parse call. Context
+  // lines provide the syntax scaffolding that per-type grouping would discard:
+  // ` type Foo struct {\n- X int\n+ X string\n}` as one block → `X` parses as
+  // tok-propertyName, `int` as tok-typeName. Same lines grouped by type →
+  // orphan `X int` → `X` is tok-variableName, `int` unstyled.
+  async function highlightFile(file: DiffFile): Promise<Map<string, string>> {
     const lang = detectLanguage(file.filePath)
     const fileMap = new Map<string, string>()
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
-      if (isStale()) return fileMap
       const hunk = file.hunks[hunkIdx]
-      const groups = new Map<DiffLine['type'], { idx: number; content: string }[]>()
+      const highlighted = highlightLines(hunk.lines.map(l => l.content.slice(1)), lang)
       hunk.lines.forEach((line, i) => {
-        const list = groups.get(line.type) ?? []
-        list.push({ idx: i, content: line.content.slice(1) })
-        groups.set(line.type, list)
+        fileMap.set(
+          `${file.filePath}:${hunkIdx}:${i}`,
+          `<span class="diff-prefix">${line.content[0]}</span>${highlighted[i]}`,
+        )
       })
-      for (const [type, group] of groups) {
-        const highlighted = await highlightLines(group.map(g => g.content), lang, isStale)
-        if (isStale()) return fileMap
-        const prefix = type === 'add' ? '+' : type === 'remove' ? '-' : ' '
-        group.forEach((g, j) => {
-          fileMap.set(
-            `${file.filePath}:${hunkIdx}:${g.idx}`,
-            `<span class="diff-prefix">${prefix}</span>${highlighted[j]}`,
-          )
-        })
-      }
     }
     return fileMap
   }
@@ -533,7 +523,8 @@
   // and memo write — see diff-derivation.svelte.ts.
   //
   // Highlight start is deferred one macrotask so the browser paints the
-  // selection highlight before Shiki runs (~5-20ms for the immediate budget).
+  // selection highlight before any sync work runs. Less critical post-Lezer
+  // (~9ms vs Shiki's ~200ms) but still guarantees selection-first paint.
   // Word-diff isn't deferred — LCS is cheaper and has no immediate phase.
   // activeRevisionId is derived from diffTarget which is in phase with
   // diffContent (same $state write in App) — reading it here is safe.
@@ -890,17 +881,6 @@
     return () => { cancelAnimationFrame(raf); observer?.disconnect() }
   })
 
-  export function rehighlight() {
-    clearHighlightCache() // module-level — see <script module>
-    clearTimeout(highlightTimer)
-    highlights.clear() // abort in-flight + clear output
-    if (parsedDiff.length > 0) {
-      // effectiveFiles (not parsedDiff) — preserves expanded-context highlights.
-      // clearHighlightCache() emptied all .highlights entries → readMemo sees
-      // size===0 → miss → recompute → writeMemo persists new-theme results.
-      highlightTimer = setTimeout(() => highlights.run(effectiveFiles, activeRevisionId), 50)
-    }
-  }
 </script>
 
 <div class="panel diff-panel">

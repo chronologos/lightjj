@@ -60,7 +60,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     api.test.ts            — API client tests
     RevisionGraph.svelte   — Revision list with graph gutter rendering; JS-tracked hoveredIndex (mousemove-driven, not :hover)
     GraphSvg.svelte        — SVG renderer for graph gutter characters (pipes, curves, node dots)
-    DiffPanel.svelte       — Diff viewer: unified/split toggle, syntax highlighting, edit-state management. `<script module>` holds derivedCache (Shiki+word-diff LRU) + exports clearHighlightCache()
+    DiffPanel.svelte       — Diff viewer: unified/split toggle, syntax highlighting, edit-state management. `<script module>` holds derivedCache (highlight+word-diff LRU)
     RevisionHeader.svelte  — Header slot rendered by DiffPanel via `{@render header()}`: change_id, description expand, bookmark/PR badges, Describe/Divergence buttons, DescriptionEditor
     DiffFileView.svelte    — Individual file diff with collapsible sections, context expansion, conflict A/B badges
     FileEditor.svelte      — CodeMirror 6 wrapper for inline editing (split-view right column)
@@ -79,11 +79,11 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     conflict-parser.ts     — jj conflict marker parser; diff-side labels use \\\\\\\ "to:" value (what :ours keeps), not %%%%%%% "from:"
     split-view.ts          — Side-by-side diff alignment
     word-diff.ts           — Word-level inline diff computation
-    highlighter.ts         — Shiki syntax highlighting integration
+    highlighter.ts         — Lezer highlightCode → tok-* spans. Sync, theme-independent (class names not inline styles)
     fuzzy.ts               — Fuzzy string matching
     group-by.ts            — groupByWithIndex utility for per-file match scoping
     loader.svelte.ts       — createLoader() async factory with generation counter
-    diff-derivation.svelte.ts — createDiffDerivation() factory for per-file progressive computation (Shiki, word-diff)
+    diff-derivation.svelte.ts — createDiffDerivation() factory for per-file progressive computation (highlights, word-diff)
     modes.svelte.ts        — Rebase/squash/split mode state factories. SplitMode.review distinguishes 'v' (review: accepted/rejected labels) from 's' (split: stays/moves labels) — same jj split underneath
     config.svelte.ts       — Reactive config singleton — primary storage os.UserConfigDir()/lightjj/config.json, localStorage as write-through cache
     recent-actions.svelte.ts — localStorage-backed frequency counter for bookmarks
@@ -184,9 +184,8 @@ Patterns learned from profiling j/k keyboard navigation:
 - **Guard `$derived` in hidden components.** `CommandPalette`'s `availableCommands` uses `if (!open) return []` to avoid recomputing when the palette is closed but its `commands` prop changes.
 - **Split static and dynamic `$derived` arrays.** `commands` in App.svelte was rebuilding ~30 `PaletteCommand` objects on every check/uncheck (Space spam) because a few labels interpolate `checkedRevisions.size`. Now `staticCommands` (zero-dep `$derived.by` — thunk sidesteps TDZ for handlers declared below) + `dynamicCommands` (5 entries that actually need reactive labels) + `aliasCommands` → spread into final `commands`. Space-spam rebuilds 5 objects not 30.
 - **`createDiffDerivation()` factory** (`diff-derivation.svelte.ts`) for per-file progressive computation. `run(files, cacheKey)` yields between files, publishes per-file, aborts on supersede, memoizes complete runs by cacheKey. `update(file)` for single-file deltas (context expansion) — preserves all other entries, aborts in-flight `run()`. `tryRestore(cacheKey)` for synchronous memo check — call it before deferring `run()` via setTimeout so memo hits restore zero-frame. `immediateBudget` option processes first N lines without yield to prevent plain-text flicker. Memo externalized via `readMemo`/`writeMemo` so multiple derivations can share one LRU bucket. **Internal `byFile` reads go through `readByFile()` (untracks)** — methods are called from `$effect` bodies; a naked `new Map(byFile)` would register the Source as a dep → `schedule_possible_effect_self_invalidation` → `effect_update_depth_exceeded` (Svelte 5.44+ batching change). Writes don't need untrack.
-- **Defer Shiki `highlights.run()` via `setTimeout(0)` — but check `tryRestore` first.** The deferral lets the browser paint the selection highlight before Shiki runs. Memo hits don't need the deferral; checking `tryRestore` synchronously in the `$effect` gives zero-frame restoration on revisit.
-- **Cache derived computations by commit_id, not just the source data.** The diff text is cached in api.ts, but Shiki + word-diff LCS were being re-run on every revisit (~500ms) because `lastHighlightedDiff` tracked only the _most recent_ diff. `derivedCache` (30-entry LRU keyed by `activeRevisionId`, lives in `<script module>` so it survives DiffPanel unmount) persists `highlightsByFile`/`wordDiffsByFile` so revisits restore instantly. Commit_id keying means rewrites auto-invalidate. Theme toggle calls `clearHighlightCache()` (module export) before `diffPanelRef?.rehighlight()` — the module cache outlives the component ref, so clearing only via the instance would leave stale-theme entries when DivergencePanel is showing.
-- **Chunk Shiki to keep j/k responsive.** `codeToHtml()` is synchronous and blocks the main thread — a 200-line file takes ~100-200ms. `highlightLines()` chunks at 30 lines with `setTimeout(0)` yields + an `isStale()` callback so the previous revision's in-flight highlight can abort mid-file when the user navigates. Sacrifices cross-chunk grammar state (e.g., multi-line comment spanning a boundary may mis-color one line) — rare and subtle vs. frequent frozen UI.
+- **Defer `highlights.run()` via `setTimeout(0)` — but check `tryRestore` first.** The deferral lets the browser paint the selection highlight before any sync work runs. Memo hits skip the deferral: checking `tryRestore` synchronously in the `$effect` gives zero-frame restoration on revisit.
+- **Cache derived computations by commit_id, not just the source data.** `derivedCache` (30-entry LRU keyed by `activeRevisionId`, lives in `<script module>` so it survives DiffPanel unmount) persists `highlightsByFile`/`wordDiffsByFile` so revisits restore instantly. Commit_id keying means rewrites auto-invalidate. Highlight HTML uses `tok-*` class names (not inline styles) → theme-agnostic → theme toggle is a pure CSS var swap, no cache invalidation.
 - **`user-select: none`** on interactive lists prevents text selection artifacts during click/keyboard navigation.
 - **Svelte 5 effects run after DOM updates** — no need for `requestAnimationFrame` to query updated DOM in `$effect`.
 - **Fire-and-forget async in effects is fine** when the async function has its own error handling and generation counter for cancellation.
