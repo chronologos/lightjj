@@ -232,7 +232,9 @@
   })
 
   // Scoped so it only re-scans when revisions changes, not on every loading/mutating flip.
-  let workingCopyEntry = $derived(revisions.find(r => r.commit.is_working_copy))
+  // Index-based so the '@' key and post-load reset share the same scan.
+  let workingCopyIndex = $derived(revisions.findIndex(r => r.commit.is_working_copy))
+  let workingCopyEntry = $derived(workingCopyIndex >= 0 ? revisions[workingCopyIndex] : undefined)
 
   // Live progress line from streamMutation (git push/fetch). Takes precedence
   // over the generic "Working..." while a stream is feeding it.
@@ -323,6 +325,8 @@
     { label: 'Load diff', shortcut: 'Enter', category: 'Navigation', action: noop, infoOnly: true },
     { label: 'Focus revset filter', shortcut: '/', category: 'Navigation', action: () => revisionGraphRef?.focusRevsetInput() },
     { label: 'Clear revset filter', category: 'Navigation', action: clearRevsetFilter, when: () => revsetFilter !== '' },
+    { label: 'Jump to working copy (@)', shortcut: '@', category: 'Navigation', action: () => { if (workingCopyIndex >= 0) selectRevision(workingCopyIndex) }, when: () => workingCopyIndex >= 0 },
+    { label: 'Next file / Previous file', shortcut: '] / [', category: 'Navigation', action: noop, infoOnly: true },
 
     // Revisions
     { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog, when: () => !inlineMode },
@@ -351,8 +355,8 @@
 
     // View (non-dynamic)
     { label: 'Toggle split/unified diff', category: 'View', action: () => { config.splitView = !config.splitView } },
-    { label: 'Toggle operation log', category: 'View', action: toggleOplog },
-    { label: 'Toggle evolution log', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
+    { label: 'Toggle operation log', shortcut: 'O', category: 'View', action: toggleOplog },
+    { label: 'Toggle evolution log', shortcut: 'E', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
     { label: 'Show welcome / keyboard shortcuts', category: 'View', action: () => { welcomeTitle = `Welcome to lightjj v${APP_VERSION}`; welcomeFeatures = FEATURES; welcomeOpen = true } },
 
     // Actions
@@ -481,7 +485,7 @@
     if (!ok) return // superseded or errored — don't post-process stale state
 
     if (resetSelection || selectedIndex < 0 || selectedIndex >= revisions.length) {
-      selectedIndex = revisions.findIndex(r => r.commit.is_working_copy)
+      selectedIndex = workingCopyIndex
     }
     if (checkedRevisions.size > 0) {
       const validIds = new Set(revisions.map(r => effectiveId(r.commit)))
@@ -1230,6 +1234,11 @@
       case 'r': e.preventDefault(); loadLog(); break
       case 'b': e.preventDefault(); openBookmarkModal(); break
       case '/': e.preventDefault(); revisionGraphRef?.focusRevsetInput(); break
+      case ']': e.preventDefault(); diffPanelRef?.stepFile(1); break
+      case '[': e.preventDefault(); diffPanelRef?.stepFile(-1); break
+      case 'E': if (selectedRevision) { e.preventDefault(); toggleEvolog() } break
+      case 'O': e.preventDefault(); toggleOplog(); break
+      case '@': e.preventDefault(); if (workingCopyIndex >= 0) selectRevision(workingCopyIndex); break
       case 'n':
         e.preventDefault()
         if (checkedRevisions.size > 0) handleNewFromChecked()

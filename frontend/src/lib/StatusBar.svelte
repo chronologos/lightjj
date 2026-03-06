@@ -100,6 +100,7 @@
       {:else if activeView === 'log'}
         <span class="key-hints">
           <kbd>j</kbd>/<kbd>k</kbd> navigate
+          <kbd>[</kbd>/<kbd>]</kbd> file
           <kbd>Space</kbd> check
           <kbd>e</kbd> describe
           <kbd>R</kbd> rebase

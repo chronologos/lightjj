@@ -334,4 +334,50 @@ describe('DiffPanel', () => {
       expect(b().querySelector('.diff-line')).toBeNull() // manual collapse restored
     })
   })
+
+  describe('stepFile — keyboard [/] navigation', () => {
+    // activeFilePath is IntersectionObserver-driven; mock observer in
+    // vitest-setup is a no-op → stays null → tests exercise the null-start
+    // branch (forward→first, back→last). Clamp-at-end needs private state
+    // write, skipped.
+    const files3 = [mkFile('a.go'), mkFile('b.go'), mkFile('c.go')]
+    const diff3 = files3.map(f => tinyDiff(f.path)).join('')
+
+    // scrollToFile wraps the DOM query in requestAnimationFrame — must flush
+    // rAF explicitly since settle() only drains macrotasks.
+    const raf = () => new Promise(r => requestAnimationFrame(() => r(undefined)))
+
+    let scrolledPaths: string[]
+    beforeEach(() => {
+      scrolledPaths = []
+      Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+        const p = this.closest('[data-file-path]')?.getAttribute('data-file-path')
+        if (p) scrolledPaths.push(p)
+      })
+    })
+
+    it('forward from null start → first file', async () => {
+      const { component } = render(DiffPanel, { props: props({ changedFiles: files3, diffContent: diff3 }) })
+      await settle()
+      component.stepFile(1)
+      await raf()
+      expect(scrolledPaths).toEqual(['a.go'])
+    })
+
+    it('backward from null start → last file', async () => {
+      const { component } = render(DiffPanel, { props: props({ changedFiles: files3, diffContent: diff3 }) })
+      await settle()
+      component.stepFile(-1)
+      await raf()
+      expect(scrolledPaths).toEqual(['c.go'])
+    })
+
+    it('empty changedFiles → no-op', async () => {
+      const { component } = render(DiffPanel, { props: props({ changedFiles: [], diffContent: '' }) })
+      await settle()
+      component.stepFile(1)
+      await raf()
+      expect(scrolledPaths).toEqual([])
+    })
+  })
 })

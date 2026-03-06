@@ -641,6 +641,19 @@
     })
   }
 
+  // Keyboard [/] step. Uses changedFiles order (same as file-tab bar).
+  // activeFilePath is IntersectionObserver-driven → picks up from wherever
+  // manual scroll left off. Clamps at ends (no wrap) to match j/k on revisions.
+  // found<0 handles both null AND truthy-but-unmatched (parsedDiff path not in
+  // changedFiles — shouldn't happen but falls back gracefully).
+  export function stepFile(dir: 1 | -1) {
+    if (changedFiles.length === 0) return
+    const found = activeFilePath ? changedFiles.findIndex(f => f.path === activeFilePath) : -1
+    const curIdx = found >= 0 ? found : (dir > 0 ? -1 : changedFiles.length)
+    const next = Math.max(0, Math.min(changedFiles.length - 1, curIdx + dir))
+    scrollToFile(changedFiles[next].path)
+  }
+
   // Reset collapsed files when diff changes significantly (e.g., multi-select)
   export function resetCollapsed() {
     collapsedFiles.clear()
