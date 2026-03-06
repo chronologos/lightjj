@@ -35,6 +35,7 @@ func main() {
 	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj util snapshot` interval (0 to disable)")
 	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
 	defaultRemote := flag.String("default-remote", "origin", "Remote name to prefer in bookmark/remote lists")
+	autoShutdown := flag.Duration("auto-shutdown", 0, "Shut down after this `duration` with no browser tabs connected (0 to disable)")
 	flag.Parse()
 
 	if *showVersion {
@@ -89,6 +90,9 @@ func main() {
 		} else {
 			srv.Watcher = api.NewWatcher(srv, *snapshotInterval)
 		}
+		if srv.Watcher != nil && *autoShutdown > 0 {
+			srv.Watcher.SetIdleShutdown(*autoShutdown)
+		}
 	}
 
 	// Serve embedded frontend static files
@@ -114,7 +118,10 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
+		select {
+		case <-sigCh:
+		case <-srv.ShutdownCh:
+		}
 		srv.Shutdown()
 		os.Exit(0)
 	}()
