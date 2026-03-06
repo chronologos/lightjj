@@ -1,5 +1,17 @@
 # lightjj Backlog
 
+## Multi-tab follow-ups (2026-03-06)
+
+Tabs shipped: TabManager mounts N Server instances at `/tab/{id}/` via StripPrefix; frontend `{#key activeTabId}` remounts App per-tab; `basePath` in api.ts prefixes `/api/*`. commit_id cache is cross-tab safe (SHA-256 content hash). Deferred:
+
+- [ ] **State-preserving tab switch** (Medium) — `{#key}` remount discards selection/scroll. Extract App.svelte's `$state` into `createRepoView()` factory (like `createLoader`), one instance per tab. api.ts → `createApiClient(basePath)`. Drop-in upgrade; `{#key}` ships first.
+- [ ] **Tab persistence across restart** (Small) — Store open tab paths in `config.json` (`"openTabs": ["/path/a", "/path/b"]`). On startup, main.go iterates and `AddTab`s each. The startup `-R` tab is implicitly tab 0; restored tabs follow.
+- [ ] **SSH-mode multi-tab** (Small) — Same host, different remote paths. `SSHRunner` bakes in path like `LocalRunner`; factory closure becomes `func(p) { return runner.NewSSHRunner(host, p) }`. Validation needs `jj workspace root` over SSH (~440ms round trip) — acceptable for a manual open action.
+- [ ] **Replace `spawnWorkspaceInstance` with in-process tab** (Small) — Workspace spawning forks a child process on a new port → new browser window. With TabManager, `handleWorkspaceOpen` can `AddTab(newTab(wsPath))` instead. Deletes ~80 LOC (`spawnLocked`, child tracking, port polling). Workspace dropdown's `↗` becomes a tab-open, not a window-open.
+- [ ] **Annotations repo-partitioning** (Trivial) — `annotations/{changeId}.json` — changeId is jj-random (~2^128 space), collision across repos is negligible but semantically wrong. Partition as `annotations/{repoRootHash}/{changeId}.json`. Fix when it matters.
+- [ ] **WelcomeModal re-show on tab switch** (Trivial) — `config.ready.then(...)` runs on every App remount. If user hasn't dismissed the modal yet, switching tabs re-opens it. Guard with a module-level `let welcomeShown` in App.svelte or hoist the check to AppShell.
+- [ ] **`--auto-shutdown` + multi-tab interaction** (Small) — Idle-shutdown tracks SSE subscribers per-Watcher. Switching to tab 1 closes tab 0's EventSource → tab 0's Watcher sees 0 subs → idle timer starts → process exits while user is on tab 1. Currently applied to startup tab only (works in single-tab use, the original design). Proper fix: TabManager tracks total subscriber count across all tabs; `idleTimer` moves there.
+
 ## jj 0.39 compat (2026-03-04)
 
 - [x] **`debug snapshot` → `util snapshot`** (Trivial) — jj 0.39 deprecated `debug snapshot` (removed v0.45). Periodic loop fires every 5s → deprecation warning firehose. `DebugSnapshot()` args changed; function name kept (4 call sites, zero semantic delta). `README.md:73` bumped min jj to 0.39.

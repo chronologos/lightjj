@@ -77,30 +77,57 @@ func main() {
 		displayPath = resolvedRepoDir
 	}
 
-	srv := api.NewServer(cmdRunner, resolvedRepoDir)
-	srv.DefaultRemote = *defaultRemote
-	srv.Hostname = displayHost
-	srv.RepoPath = displayPath
-
-	// Filesystem watch + SSE auto-refresh. Local mode uses fsnotify; SSH mode
-	// pipes inotifywait over a persistent stream (Linux remotes only).
-	if !*noWatch {
-		if sshRunner != nil {
-			srv.Watcher = api.NewSSHWatcher(srv, sshRunner.StreamRaw)
-		} else {
-			srv.Watcher = api.NewWatcher(srv, *snapshotInterval)
+	// makeServer sets all per-repo Server fields. BOTH the startup tab and
+	// the dynamic-tab factory call this — adding a new Server field here
+	// (and only here) keeps the two paths in sync. The local-mode Watcher
+	// is also here; the SSH-mode Watcher is the one genuinely mode-specific
+	// piece and stays below.
+	makeServer := func(r runner.CommandRunner, repoDir, repoPath string) *api.Server {
+		s := api.NewServer(r, repoDir)
+		s.DefaultRemote = *defaultRemote
+		s.Hostname = displayHost
+		s.RepoPath = repoPath
+		if !*noWatch && sshRunner == nil {
+			s.Watcher = api.NewWatcher(s, *snapshotInterval)
 		}
-		if srv.Watcher != nil && *autoShutdown > 0 {
-			srv.Watcher.SetIdleShutdown(*autoShutdown)
+		return s
+	}
+
+	srv := makeServer(cmdRunner, resolvedRepoDir, displayPath)
+	if !*noWatch && sshRunner != nil {
+		srv.Watcher = api.NewSSHWatcher(srv, sshRunner.StreamRaw)
+	}
+	// Auto-shutdown tracks SSE subscribers on the STARTUP tab's Watcher only.
+	// Switching to a second tab closes tab 0's EventSource → 0 subs → timer
+	// starts. Known limitation (BACKLOG: cross-tab subscriber tracking).
+	// Works correctly in single-tab use (the original design).
+	if srv.Watcher != nil && *autoShutdown > 0 {
+		srv.Watcher.SetIdleShutdown(*autoShutdown)
+	}
+
+	// Tab factory for dynamically opening additional local repos. Nil in SSH
+	// mode — can't cheaply validate remote paths.
+	var newTab api.TabFactory
+	if sshRunner == nil {
+		newTab = func(root string) *api.Server {
+			// root is already resolved by handleCreate's ResolveWorkspaceRoot
+			// — construct LocalRunner directly instead of NewLocalRunner (which
+			// would resolve again, ~20ms subprocess).
+			return makeServer(&runner.LocalRunner{Binary: "jj", RepoDir: root}, root, root)
 		}
 	}
+	tm := api.NewTabManager(newTab)
+	tm.AddTab(srv, displayPath)
 
 	// Serve embedded frontend static files
 	feFS, err := fs.Sub(frontendFS, "frontend-dist")
 	if err != nil {
 		log.Fatalf("failed to load frontend: %v", err)
 	}
-	srv.Mux.Handle("GET /", http.FileServer(http.FS(feFS)))
+	// "/" (all-methods subtree), not "GET /" — Go 1.22 ServeMux rejects
+	// patterns where neither is strictly more specific, and "GET /" is
+	// method-narrower but path-wider than "/tab/{id}/" → register panic.
+	tm.Mux.Handle("/", http.FileServer(http.FS(feFS)))
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -114,7 +141,7 @@ func main() {
 		openBrowser(url)
 	}
 
-	// Clean up child workspace instances on shutdown
+	// Clean up watchers + child workspace instances across all tabs on shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -122,12 +149,12 @@ func main() {
 		case <-sigCh:
 		case <-srv.ShutdownCh:
 		}
-		srv.Shutdown()
+		tm.Shutdown()
 		os.Exit(0)
 	}()
 
 	httpServer := &http.Server{
-		Handler:           localhostOnly(api.Gzip(srv.Mux)),
+		Handler:           localhostOnly(api.Gzip(tm.Mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       60 * time.Second,

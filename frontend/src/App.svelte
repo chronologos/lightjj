@@ -1677,7 +1677,10 @@
   .app {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    /* flex:1 inside AppShell's column — TabBar takes 28px above, App fills
+       the rest. 100vh here would push 28px below the viewport. */
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 

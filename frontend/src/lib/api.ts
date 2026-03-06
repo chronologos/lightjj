@@ -92,13 +92,74 @@ export function onStale(callback: () => void): () => void {
   return () => { staleCallbacks.delete(callback) }
 }
 
-/** Hard refresh: clear the cache. Use for explicit user-triggered refresh. */
-export function clearAllCaches(): void {
-  cache.clear()
+// Per-repo session memos — cleared by both setActiveTab (different repo) and
+// clearAllCaches (hard refresh). Single function so adding a memo touches one place.
+function clearSessionMemos(): void {
   _remotes = undefined
   _aliases = undefined
   _info = undefined
 }
+
+/** Hard refresh: clear the cache. Use for explicit user-triggered refresh. */
+export function clearAllCaches(): void {
+  cache.clear()
+  clearSessionMemos()
+}
+
+// --- Multi-tab routing ---
+// Each tab is a full Server mounted at /tab/{id}/ on the backend. basePath
+// is prepended to every api.* request. The commit_id-keyed cache above is
+// GLOBAL — commit_id is a SHA-256 content hash, collision across repos is
+// cryptographically negligible, so switching back to a tab serves cached
+// diffs instantly. Only the per-repo session memos (remotes/aliases/info)
+// need clearing on switch.
+//
+// Default '/tab/0': the backend always mounts the startup repo as tab 0.
+// This must be set before any module-level fetch fires (config.svelte.ts
+// is exempt — it uses raw fetch('/api/config') which TabManager routes
+// at the top level, no prefix needed).
+let basePath = '/tab/0'
+
+export interface TabInfo {
+  id: string
+  kind: string
+  name: string
+  path: string
+}
+
+export function setActiveTab(id: string): void {
+  basePath = '/tab/' + id
+  // The commit_id cache is NOT cleared (globally safe, see above); only
+  // per-repo memos. lastOpId reset: tab B's first response sets it cleanly
+  // (changed=false when prior is null). Without this, B's op-id ≠ A's
+  // lastOpId → spurious onStale. One wrinkle: an in-flight request from A
+  // can arrive after this reset and seed A's op-id — B's next response then
+  // fires one redundant loadLog. Bounded, guarded by App.svelte's !loading
+  // check; not worth basePath-capture-at-request-entry.
+  clearSessionMemos()
+  lastOpId = null
+}
+
+// Per-tab routing: /api/* is the only namespace Server.Mux owns, so that
+// prefix is the discriminant. Host-level calls (/tabs) pass through.
+// config.svelte.ts's /api/config never reaches here — it uses raw fetch()
+// (TabManager routes /api/config at the top level for it); requests that DO
+// pass through here get prefixed, which also works (Server.Mux has the route
+// too). The prefix check is for /tabs, not /api/config.
+function tabScoped(url: string): string {
+  return url.startsWith('/api/') ? basePath + url : url
+}
+
+// Tab-management calls hit /tabs (no basePath — they're host-level).
+export const listTabs = () => request<TabInfo[]>('/tabs')
+export const openTab = (path: string) =>
+  request<TabInfo>('/tabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+export const closeTab = (id: string) =>
+  request<void>('/tabs/' + id, { method: 'DELETE' })
 
 // notifyOpId is the single op-id ingestion point. Called by both the HTTP
 // header path (trackOpId) and the SSE push path (wireAutoRefresh). The lastOpId
@@ -136,7 +197,7 @@ function trackOpId(res: Response) {
 // but the snapshot response's X-JJ-Op-Id header still carries refresh.
 // Returns a cleanup fn that tears down both.
 export function wireAutoRefresh(): () => void {
-  const es = new EventSource('/api/events')
+  const es = new EventSource(tabScoped('/api/events'))
 
   es.addEventListener('op', (ev) => {
     try {
@@ -175,6 +236,7 @@ export function wireAutoRefresh(): () => void {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const full = tabScoped(url)
   // Add timeout for GET requests (reads). Mutations (POST) have no timeout
   // since git push/fetch can take minutes.
   const isRead = !init?.method || init.method === 'GET'
@@ -187,7 +249,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   try {
-    const res = await fetch(url, signal ? { ...init, signal } : init)
+    const res = await fetch(full, signal ? { ...init, signal } : init)
     if (timeoutId !== undefined) clearTimeout(timeoutId) // disarm after headers arrive
     trackOpId(res)
     if (!res.ok) {
@@ -229,7 +291,7 @@ async function streamPost(
   body: unknown,
   onLine: (line: string) => void,
 ): Promise<{ output: string }> {
-  const res = await fetch(url, {
+  const res = await fetch(tabScoped(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -730,4 +792,6 @@ export const _testInternals = {
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },
   resetSessionCaches() { _remotes = undefined; _aliases = undefined },
+  get basePath() { return basePath },
+  set basePath(v: string) { basePath = v },
 }

@@ -24,12 +24,27 @@ type LocalRunner struct {
 
 func NewLocalRunner(repoDir string) *LocalRunner {
 	// Resolve jj workspace root so all commands produce consistent paths.
-	cmd := exec.Command("jj", "workspace", "root")
-	cmd.Dir = repoDir
-	if root, err := cmd.Output(); err == nil {
-		repoDir = strings.TrimSpace(string(root))
+	// Error swallowed: if dir isn't a repo, RepoDir stays as-is and the first
+	// jj command surfaces a clear error. Callers that need to fail fast (tab
+	// opening) should call ResolveWorkspaceRoot explicitly first.
+	if root, err := ResolveWorkspaceRoot(repoDir); err == nil {
+		repoDir = root
 	}
 	return &LocalRunner{Binary: "jj", RepoDir: repoDir}
+}
+
+// ResolveWorkspaceRoot returns the jj workspace root for dir, or an error if
+// dir is not inside a jj repository. Used for tab-open validation (fail fast
+// with a 400 instead of constructing a Server that errors on every request)
+// and canonical-path dedup (opening /repo/src/ and /repo/ should be one tab).
+func ResolveWorkspaceRoot(dir string) (string, error) {
+	cmd := exec.Command("jj", "workspace", "root")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("not a jj repository: %s", dir)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *LocalRunner) Run(ctx context.Context, args []string) ([]byte, error) {
