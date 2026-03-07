@@ -69,10 +69,9 @@ flowchart TD
 | POST | `/api/bookmark/{set,delete,move,advance,forget,track,untrack}` | Bookmark ops |
 | POST | `/api/git/{push,fetch}` | Git remote ops (flag-whitelisted) |
 | POST | `/api/alias` | Run a user-configured jj alias (validated against config) |
-| POST | `/api/workspace/open` | Spawn child lightjj instance for another workspace |
 | POST | `/api/file-write` | Write file directly to working copy (inline editor save). Local mode only — path validation rejects `..`, absolute paths, `.jj/`, `.git/`, null bytes, symlink escapes. |
 | GET | `/tabs` | List open tabs (host-level, no `/tab/{id}/` prefix) |
-| POST | `/tabs` | Open a repo in a new tab. Path validated with `jj workspace root` (400 if not a repo); canonical root deduped. Local mode only. |
+| POST | `/tabs` | Open a repo in a new tab. `TabResolve` closure validates path via `jj workspace root` (local or SSH round trip), returns canonical root for dedup. |
 | DELETE | `/tabs/{id}` | Close a tab (shuts down its watcher). Refuses the last tab. |
 
 ## Layer Responsibilities
@@ -118,7 +117,7 @@ Two implementations:
 
 Thin HTTP handlers. Each handler: parses request → calls command builder → executes via runner → returns JSON. No business logic — just plumbing.
 
-**Multi-tab routing.** `TabManager` (`tabs.go`) owns the top-level mux; each tab is a complete `Server` mounted at `/tab/{id}/` via a pre-built `http.StripPrefix` handler. Opening a tab constructs a fresh `LocalRunner` + `Server` + `Watcher` for that repo. `Server` is unchanged — zero handler edits, it doesn't know tabs exist. Path validation runs `jj workspace root` (fails fast if not a repo, gives canonical path for dedup). The factory runs **outside** the write lock (construction opens fsnotify, ~20-50ms); double-check dedup under lock, shut down the orphan if a concurrent create won. Host-scoped routes — `/tabs`, `/api/config`, static files — live on `TabManager.Mux` directly. The `/api/` URL prefix is the frontend's per-tab discriminant: `tabScoped()` in `api.ts` prefixes `/api/*` with `/tab/{id}` and leaves `/tabs` unchanged. One constraint this imposes: **all `Server.routes()` paths must start with `/api/`** — anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
+**Multi-tab routing.** `TabManager` (`tabs.go`) owns the top-level mux; each tab is a complete `Server` mounted at `/tab/{id}/` via a pre-built `http.StripPrefix` handler. `Server` is unchanged — zero handler edits, it doesn't know tabs exist. Tab construction is mode-agnostic via two injected closures: `TabResolve` (user path → canonical workspace root; `jj workspace root` locally or over SSH) and `TabFactory` (canonical root → `Server`; `LocalRunner`+fsnotify or `SSHRunner`+inotifywait pipe). The factory runs **outside** the write lock; double-check dedup under lock, shut down the orphan if a concurrent create won. Workspaces are just repo paths — the workspace dropdown opens a tab via `POST /tabs` with `ws.path`. Host-scoped routes — `/tabs`, `/api/config`, static files — live on `TabManager.Mux` directly. The `/api/` URL prefix is the frontend's per-tab discriminant: `tabScoped()` in `api.ts` prefixes `/api/*` with `/tab/{id}` and leaves `/tabs` unchanged. One constraint this imposes: **all `Server.routes()` paths must start with `/api/`** — anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
 
 The server includes an operation ID cache (`cachedOp`) that tracks jj's current operation. Every JSON response includes an `X-JJ-Op-Id` header. Mutation endpoints refresh the cache asynchronously via `runMutation()`, which centralizes the post-mutation pattern (run command → refresh op ID → return output).
 

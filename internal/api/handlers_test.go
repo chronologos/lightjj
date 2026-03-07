@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1415,8 +1416,8 @@ func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
 	// jj 0.39 writes paths relative to .jj/repo/. The default workspace at
 	// the repo root is "../../" (two levels up from .jj/repo/). A secondary
 	// workspace at ../sibling is "../../../sibling". Pre-0.39 wrote absolute.
-	// readWorkspaceStore must resolve both so spawnWorkspaceInstance's IsAbs
-	// check passes and the wsPath==RepoDir current-workspace match works.
+	// readWorkspaceStore must resolve both so TabResolve's IsAbs check passes
+	// and the wsPath==RepoDir current-workspace match works.
 	repoDir := t.TempDir()
 	storeDir := filepath.Join(repoDir, ".jj", "repo", "workspace_store")
 	require.NoError(t, os.MkdirAll(storeDir, 0o755))
@@ -1427,14 +1428,14 @@ func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(storeDir, "index"), store, 0o644))
 
 	srv := &Server{RepoDir: repoDir}
-	got, err := srv.readWorkspaceStore()
+	got, err := srv.readWorkspaceStore(context.Background())
 	require.NoError(t, err)
 
 	// ../../ from {repoDir}/.jj/repo/ → {repoDir}. filepath.Join cleans the dots.
 	assert.Equal(t, repoDir, got["default"])
 	// Absolute passes through (Clean'd — idempotent here).
 	assert.Equal(t, "/abs/legacy/path", got["legacy"])
-	// Both are now IsAbs — spawnWorkspaceInstance won't reject.
+	// Both are now IsAbs — TabResolve won't reject.
 	assert.True(t, filepath.IsAbs(got["default"]))
 	assert.True(t, filepath.IsAbs(got["legacy"]))
 }
@@ -1449,7 +1450,7 @@ func TestReadWorkspaceStore_CurrentWorkspaceMatch(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(storeDir, "index"), store, 0o644))
 
 	srv := &Server{RepoDir: repoDir}
-	got, _ := srv.readWorkspaceStore()
+	got, _ := srv.readWorkspaceStore(context.Background())
 
 	assert.Equal(t, srv.RepoDir, got["default"]) // the exact == check handlers.go does
 }

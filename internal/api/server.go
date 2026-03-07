@@ -8,10 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,10 +31,6 @@ type Server struct {
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
-	spawnedWorkspaces map[string]string // workspace name → URL of spawned instance
-	children          []*exec.Cmd       // spawned workspace instances
-	childrenMu        sync.Mutex
-
 	// Watcher provides SSE auto-refresh. Nil in SSH mode (no local fs to watch).
 	// Set by main.go after NewServer; routes() tolerates it being nil.
 	Watcher *Watcher
@@ -52,20 +47,11 @@ func NewServer(r runner.CommandRunner, repoDir string) *Server {
 	return s
 }
 
-// Shutdown kills any child lightjj processes spawned for other workspaces
-// and stops the filesystem watcher.
+// Shutdown stops the filesystem watcher.
 func (s *Server) Shutdown() {
 	if s.Watcher != nil {
 		s.Watcher.Close()
 	}
-	s.childrenMu.Lock()
-	defer s.childrenMu.Unlock()
-	for _, cmd := range s.children {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	}
-	s.children = nil
 }
 
 // routes registers all Server endpoints. ALL routes MUST be under /api/ —
@@ -88,7 +74,6 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/file-show", s.handleFileShow)
 	s.Mux.HandleFunc("GET /api/info", s.handleInfo)
 	s.Mux.HandleFunc("GET /api/workspaces", s.handleWorkspaces)
-	s.Mux.HandleFunc("POST /api/workspace/open", s.handleWorkspaceOpen)
 
 	s.Mux.HandleFunc("POST /api/new", s.handleNew)
 	s.Mux.HandleFunc("POST /api/edit", s.handleEdit)
@@ -315,114 +300,56 @@ func (s *Server) getOpId() string {
 	return s.cachedOp
 }
 
-// spawnWorkspaceInstance starts a new lightjj instance for a workspace at the given path.
-// Returns the URL of the new instance. The process is tracked for cleanup on shutdown.
-// If an instance was already spawned for this workspace name, returns its URL.
-func (s *Server) spawnWorkspaceInstance(name, workspacePath string) (string, error) {
-	// Validate path before spawning
-	workspacePath = filepath.Clean(workspacePath)
-	if !filepath.IsAbs(workspacePath) {
-		return "", fmt.Errorf("workspace path must be absolute: %s", workspacePath)
-	}
-	if info, err := os.Stat(workspacePath); err != nil || !info.IsDir() {
-		return "", fmt.Errorf("workspace path is not a directory: %s", workspacePath)
-	}
-
-	url, addr, err := s.spawnLocked(name, workspacePath)
-	if err != nil {
-		return "", err
-	}
-	if addr == "" {
-		return url, nil // already-spawned instance, no need to poll
-	}
-
-	// Wait briefly for the new server to accept connections
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return url, nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return url, nil // return URL even if poll timed out — server may just be slow
-}
-
-// spawnLocked holds childrenMu across dedup check, port allocation, and exec.Start
-// to prevent concurrent requests from spawning duplicate instances.
-// Lock duration is ~50ms — acceptable for a manual, infrequent action.
-func (s *Server) spawnLocked(name, workspacePath string) (url string, addr string, err error) {
-	s.childrenMu.Lock()
-	defer s.childrenMu.Unlock()
-
-	// Return existing instance if already spawned
-	if existing, ok := s.spawnedWorkspaces[name]; ok {
-		return existing, "", nil
-	}
-
-	// Find a free port
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		return "", "", fmt.Errorf("finding free port: %w", err)
-	}
-	addr = ln.Addr().String()
-	ln.Close()
-
-	// Find our own binary path
-	exe, err := os.Executable()
-	if err != nil {
-		return "", "", fmt.Errorf("finding executable: %w", err)
-	}
-
-	cmd := exec.Command(exe, "-R", workspacePath, "--addr", addr, "--no-browser")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return "", "", fmt.Errorf("starting lightjj: %w", err)
-	}
-
-	// Reap child process to prevent zombies
-	go cmd.Wait()
-
-	url = "http://" + addr
-	s.children = append(s.children, cmd)
-	if s.spawnedWorkspaces == nil {
-		s.spawnedWorkspaces = make(map[string]string)
-	}
-	s.spawnedWorkspaces[name] = url
-	return url, addr, nil
-}
-
 // readWorkspaceStore reads and parses the workspace store index file.
-// Returns nil map if RepoDir is empty (SSH mode) or if the file can't be read.
+// Returns nil map if the file can't be read (secondary workspace with .jj/repo
+// pointer file, SSH cat failure, etc.) — callers treat nil as "no paths".
 //
 // jj 0.39+ writes RELATIVE paths (anchored at .jj/repo/ — the shared store
 // all workspaces point back to). Pre-0.39 wrote absolute. We resolve here,
-// not in the parser, because resolution needs RepoDir (fs knowledge the pure
-// parser shouldn't have). Both callers need absolute: spawnWorkspaceInstance
-// rejects !IsAbs, and the current-workspace match (wsPath == s.RepoDir) would
-// compare "../../" to "/Users/...".
-func (s *Server) readWorkspaceStore() (map[string]string, error) {
-	if s.RepoDir == "" {
-		return nil, nil
+// not in the parser, because resolution needs the repo path (fs knowledge the
+// pure parser shouldn't have). Callers need absolute: TabResolve's IsAbs check
+// rejects relative, and the current-workspace match (wsPath == s.RepoDir)
+// would compare "../../" to "/Users/...".
+func (s *Server) readWorkspaceStore(ctx context.Context) (map[string]string, error) {
+	if s.RepoDir != "" {
+		// Local: direct fs read. filepath.* for host OS semantics (Windows
+		// absolute paths in pre-0.39 stores wouldn't survive path.IsAbs).
+		repoStore := filepath.Join(s.RepoDir, ".jj", "repo")
+		data, err := os.ReadFile(filepath.Join(repoStore, "workspace_store", "index"))
+		if err != nil {
+			return nil, fmt.Errorf("reading workspace store: %w", err)
+		}
+		return resolveWSPaths(data, repoStore, filepath.IsAbs, filepath.Clean, filepath.Join)
 	}
-	repoStore := filepath.Join(s.RepoDir, ".jj", "repo")
-	data, err := os.ReadFile(filepath.Join(repoStore, "workspace_store", "index"))
-	if err != nil {
-		return nil, fmt.Errorf("reading workspace store: %w", err)
+	if s.RepoPath != "" {
+		// SSH: cat via RunRaw (runs on remote host). path.* for POSIX —
+		// remote is Linux regardless of local OS. Fails with ENOTDIR on
+		// secondary workspaces (.jj/repo is a pointer file) → nil map,
+		// same as pre-enrichment behavior.
+		repoStore := path.Join(s.RepoPath, ".jj", "repo")
+		data, err := s.Runner.RunRaw(ctx, []string{"cat", path.Join(repoStore, "workspace_store", "index")})
+		if err != nil {
+			return nil, nil
+		}
+		return resolveWSPaths(data, repoStore, path.IsAbs, path.Clean, path.Join)
 	}
+	return nil, nil
+}
+
+// resolveWSPaths is the parse + relative-path-resolution shared by local and
+// SSH modes. Each takes its own isAbs/clean/join so local mode can use
+// filepath.* (Windows-aware) and SSH can use path.* (POSIX remote).
+func resolveWSPaths(data []byte, repoStore string, isAbs func(string) bool, clean func(string) string, join func(...string) string) (map[string]string, error) {
 	raw, err := jj.ParseWorkspaceStorePaths(data)
 	if err != nil {
 		return nil, err
 	}
 	resolved := make(map[string]string, len(raw))
 	for name, p := range raw {
-		if filepath.IsAbs(p) {
-			resolved[name] = filepath.Clean(p)
+		if isAbs(p) {
+			resolved[name] = clean(p)
 		} else {
-			// Join handles ".." traversal: Join("/r/.jj/repo", "../../") → "/r"
-			resolved[name] = filepath.Join(repoStore, p)
+			resolved[name] = join(repoStore, p)
 		}
 	}
 	return resolved, nil

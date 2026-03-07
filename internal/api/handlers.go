@@ -380,9 +380,14 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	workspaces := jj.ParseWorkspaceList(string(output))
 
 	// Enrich with paths from workspace store (best-effort)
-	pathMap, _ := s.readWorkspaceStore()
+	pathMap, _ := s.readWorkspaceStore(r.Context())
 
-	// Determine current workspace by matching RepoDir against paths
+	// Determine current workspace by matching this tab's repo path. RepoDir
+	// is set in local mode; RepoPath is always set (SSH mode: the remote dir).
+	self := s.RepoDir
+	if self == "" {
+		self = s.RepoPath
+	}
 	current := ""
 	resp := workspacesResponse{Workspaces: make([]workspaceWithPath, len(workspaces))}
 	for i, ws := range workspaces {
@@ -393,51 +398,12 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 			CommitId: ws.CommitId,
 			Path:     wsPath,
 		}
-		if s.RepoDir != "" && wsPath == s.RepoDir {
+		if self != "" && wsPath == self {
 			current = ws.Name
 		}
 	}
 	resp.Current = current
 	s.writeJSON(w, r, http.StatusOK, resp)
-}
-
-type workspaceOpenRequest struct {
-	Name string `json:"name"`
-}
-
-func (s *Server) handleWorkspaceOpen(w http.ResponseWriter, r *http.Request) {
-	var req workspaceOpenRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-
-	// Look up workspace path from store
-	pathMap, err := s.readWorkspaceStore()
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if pathMap == nil {
-		s.writeError(w, http.StatusBadRequest, "workspace paths unavailable (SSH mode)")
-		return
-	}
-	wsPath, ok := pathMap[req.Name]
-	if !ok {
-		s.writeError(w, http.StatusNotFound, fmt.Sprintf("workspace %q not found", req.Name))
-		return
-	}
-
-	url, err := s.spawnWorkspaceInstance(req.Name, wsPath)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"url": url})
 }
 
 // --- Write handlers ---

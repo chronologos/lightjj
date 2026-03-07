@@ -674,9 +674,6 @@ export const api = {
   // Plain request for now — promise-memoize later if load frequency warrants.
   workspaces: () => request<WorkspacesResponse>('/api/workspaces'),
 
-  workspaceOpen: (name: string) =>
-    post<{ url: string }>('/api/workspace/open', { name }),
-
   oplog: (limit?: number) => {
     const params = new URLSearchParams()
     if (limit) params.set('limit', String(limit))

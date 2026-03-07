@@ -20,4 +20,6 @@ export const FEATURES: TutorialFeature[] = [
   { version: '0.5.0', shortcut: '2', title: 'Bookmarks panel', description: 'Full sync-state view: ahead/behind/diverged/conflict at a glance with commit descriptions + staleness. Enter to jump. d/f/t for delete/forget/track.' },
   { version: '0.5.0', shortcut: '[ / ]', title: 'Diff file navigation', description: 'Jump to next/prev file in the diff. Picks up from wherever you scrolled.' },
   { version: '0.5.0', shortcut: '@', title: 'Jump to working copy', description: 'Return to @ from anywhere in the log.' },
+  { version: '0.6.0', shortcut: 'w', title: 'Workspaces as tabs', description: 'Workspace dropdown opens as an in-process tab \u2014 same origin, shared diff cache. No more child-process spawning.' },
+  { version: '0.6.0', shortcut: null, title: 'SSH multi-repo tabs', description: 'Open additional remote repos on the same host. One SSH round trip validates + canonicalizes the path.' },
 ]

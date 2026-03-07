@@ -58,7 +58,7 @@
 {/snippet}
 
 {#key activeTabId}
-  <App {tabBar} />
+  <App {tabBar} onOpenTab={handleOpen} />
 {/key}
 
 <style>

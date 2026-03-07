@@ -2,7 +2,7 @@
   import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 
-  let { tabBar }: { tabBar?: Snippet } = $props()
+  let { tabBar, onOpenTab }: { tabBar?: Snippet; onOpenTab?: (path: string) => void } = $props()
 
   import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark } from './lib/api'
   import { clearDiffCaches } from './lib/diff-cache'
@@ -479,14 +479,6 @@
     runMutation(() => api.runAlias(name), `Ran alias: ${name}`)
   }
 
-  async function handleWorkspaceOpen(name: string) {
-    try {
-      const result = await api.workspaceOpen(name)
-      window.open(result.url, '_blank')
-    } catch (e) {
-      showError(e)
-    }
-  }
 
   async function loadLog(resetSelection = false) {
     error = ''
@@ -1418,10 +1410,17 @@
                       <span>{ws.name}</span>
                     </div>
                   {:else}
-                    <button class="toolbar-ws-option" onclick={() => { handleWorkspaceOpen(ws.name); wsDropdownOpen = false }}>
+                    <!-- Workspaces are just repo paths — open as a tab. Path absent
+                         when SSH-mode path-enrichment fails (pointer-file etc). -->
+                    <button
+                      class="toolbar-ws-option"
+                      disabled={!ws.path}
+                      title={ws.path ?? 'path unavailable'}
+                      onclick={() => { onOpenTab?.(ws.path!); wsDropdownOpen = false }}
+                    >
                       <span class="toolbar-ws-glyph">◇</span>
                       <span>{ws.name}</span>
-                      <span class="toolbar-ws-open">↗</span>
+                      {#if ws.path}<span class="toolbar-ws-open">↗</span>{/if}
                     </button>
                   {/if}
                 {/each}

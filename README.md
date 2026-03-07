@@ -30,8 +30,8 @@ lightjj
 - **Bookmarks panel** (`2`) — sync state at a glance: ahead/behind/diverged/conflict, commit descriptions + staleness, PR badges. Enter to jump, d/f/t to delete/forget/track
 - **Multi-select** — batch abandon, squash, rebase across revisions
 - **Op log & evolog** — full operation history and per-revision evolution with inter-diffs
-- **Multi-repo tabs** — open additional repos in tabs (`+` button in the tab bar); diffs stay cached across tabs
-- **Workspaces** — detect and switch between jj workspaces; one-click spawn a new lightjj instance
+- **Multi-repo tabs** — open additional repos in tabs (`+` button in the tab bar); diffs stay cached across tabs. Works over SSH too.
+- **Workspaces** — detect and switch between jj workspaces; one-click opens as a tab (same origin, shared diff cache)
 - **SSH remote** — proxy jj commands over SSH, or port-forward for local-quality performance
 - **Themes** — Catppuccin dark/light (`t` to toggle)
 

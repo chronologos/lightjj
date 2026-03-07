@@ -61,7 +61,7 @@ If delta-adjusted line's content doesn't match the snapshot and no spanning hunk
 
 `$XDG_CONFIG_HOME/lightjj/annotations/{changeId}.json`
 
-**Why server-side, not localStorage:** `POST /api/workspace/open` spawns child lightjj on a different port → different origin → isolated localStorage. Annotations must be visible from both the agent's workspace tab and the user's.
+**Why server-side, not localStorage:** originally because workspace spawning ran child processes on different ports (isolated localStorage per origin). Workspaces are now in-process tabs (single origin), but server-side storage is still right — survives `localStorage.clear()`, works across browsers, and SSH-mode stores on the remote host where the agent is running.
 
 **Path safety:** `changeId` validated against `^[a-z0-9]{1,64}$` (jj's charset) before embedding in filesystem path. Blocks `../`, null bytes, etc.
 
