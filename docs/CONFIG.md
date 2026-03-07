@@ -25,7 +25,7 @@ Right-click a diff line → **Open in editor** spawns a process via `exec.Comman
 |---|---|---|---|
 | `lightjj` (local) | Your machine | `editorArgs` | Nothing extra |
 | `lightjj --remote user@host:/path` | Your machine (lightjj is local) | `editorArgsRemote` | An editor that accepts SSH URIs (Zed, Cursor) |
-| `ssh -L ... lightjj` (port-forward) | Remote machine | `editorArgs` | A CLI helper on the remote that reaches back to your local editor (VS Code Server's `code`, Zed's `zed`) |
+| `ssh -L ... lightjj` (port-forward) | Remote machine | `editorArgs` | A CLI helper on the remote that IPCs back to your local editor (e.g. VS Code Server's `code` binary) |
 
 The relevant config field being empty disables the feature — the menu item is greyed out.
 
@@ -54,8 +54,9 @@ If no template element contains `{file}` or `{relpath}`, `{file}` is appended as
 
 **Zed (`--remote` mode — SSH URI opens the remote file in your local Zed):**
 ```json
-{ "editorArgsRemote": ["zed", "zed://ssh/{host}{file}:{line}"] }
+{ "editorArgsRemote": ["zed", "zed://ssh/{host}{file}"] }
 ```
+Line navigation via `:line` suffix is not documented for Zed's SSH URI scheme; you'll land at the top of the file.
 
 **Neovim in a terminal (`--remote-silent` requires a running nvim server):**
 ```json

@@ -252,7 +252,7 @@
       { label: 'Copy path', action: () => navigator.clipboard.writeText(filePath) },
       canOpen
         ? { label: 'Open in editor', action: () => onopenfile!(filePath) }
-        : { label: 'Open in editor (local only)', disabled: true },
+        : { label: onopenfile ? 'Open in editor' : 'Open in editor (not configured)', disabled: true },
       { separator: true },
     ]
     if (!isExpanded) {
