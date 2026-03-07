@@ -379,15 +379,35 @@
   // AUTO_COLLAPSE_LINE_LIMIT misses. Collapsed files render header-only
   // (~1 DOM subtree vs ~lines×2 nodes each). Expand-all is one click.
   const AUTO_COLLAPSE_TOTAL_LINES = 2000
+  // Per-file char limit — catches huge one-liners (minified JS, lock files
+  // with one 800k-char line). Line-count triggers miss these entirely.
+  // ~100 screen-widths of content is the threshold.
+  const AUTO_COLLAPSE_CHAR_LIMIT = 20_000
 
   function fileLineCount(file: DiffFile): number {
     return file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
   }
 
+  function fileCharCount(file: DiffFile): number {
+    let n = 0
+    for (const h of file.hunks) for (const l of h.lines) n += l.content.length
+    return n
+  }
+
+  // Shared threshold for skipping both word-diff AND highlighting. These run
+  // synchronously over all files (highlights has immediateBudget:Infinity) —
+  // a single 800k-char line freezes the UI for Lezer parse + LCS both, even
+  // when the file is collapsed in the UI. Collapsed ≠ skipped compute.
+  function isOversize(file: DiffFile): boolean {
+    return fileCharCount(file) > AUTO_COLLAPSE_CHAR_LIMIT
+  }
+
   function shouldSkipWordDiff(file: DiffFile): boolean {
-    if (fileLineCount(file) > WORD_DIFF_LINE_LIMIT) return true
+    // Suffix check first — cheap, and most oversize files are .min.js anyway.
     const lower = file.filePath.toLowerCase()
-    return SKIP_WORD_DIFF_SUFFIXES.some(suffix => lower.endsWith(suffix))
+    if (SKIP_WORD_DIFF_SUFFIXES.some(suffix => lower.endsWith(suffix))) return true
+    if (fileLineCount(file) > WORD_DIFF_LINE_LIMIT) return true
+    return isOversize(file)
   }
 
   // Per-file word diff maps. Each file's entry is a Map from "hunkIdx" to
@@ -430,6 +450,10 @@
 
   const highlights = createDiffDerivation({
     compute: highlightFile,
+    // skip oversize files: Lezer parse of a single 800k-char line is ~sec;
+    // the file is auto-collapsed anyway (no visual benefit). If user expands,
+    // they see unhighlighted content — correct tradeoff.
+    skip: isOversize,
     // Sync compute + immediateBudget:Infinity → run() never awaits → fully
     // synchronous loop. The outer setTimeout(0) at the effect below provides
     // paint-first; run() itself has zero scheduling overhead.
@@ -583,7 +607,9 @@
     for (const file of parsedDiff) {
       const n = fileLineCount(file)
       total += n
-      if (n > AUTO_COLLAPSE_LINE_LIMIT) collapsedFiles.add(file.filePath)
+      if (n > AUTO_COLLAPSE_LINE_LIMIT || isOversize(file)) {
+        collapsedFiles.add(file.filePath)
+      }
     }
     // Many-moderate-files flooding: collapse everything, let user expand.
     // The per-file check above is now redundant when this fires, but it runs
@@ -633,8 +659,8 @@
     collapsedFiles.clear()
   }
 
-  function scrollToFile(path: string) {
-    collapsedFiles.delete(path)
+  function scrollToFile(path: string, expand = true) {
+    if (expand) collapsedFiles.delete(path)
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-file-path="${CSS.escape(path)}"]`)
       el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
@@ -646,12 +672,14 @@
   // manual scroll left off. Clamps at ends (no wrap) to match j/k on revisions.
   // found<0 handles both null AND truthy-but-unmatched (parsedDiff path not in
   // changedFiles — shouldn't happen but falls back gracefully).
+  // expand=false: auto-collapsed huge files stay collapsed during [/] spam;
+  // otherwise ] past a 800k-char minified file would expand it → DOM flood.
   export function stepFile(dir: 1 | -1) {
     if (changedFiles.length === 0) return
     const found = activeFilePath ? changedFiles.findIndex(f => f.path === activeFilePath) : -1
     const curIdx = found >= 0 ? found : (dir > 0 ? -1 : changedFiles.length)
     const next = Math.max(0, Math.min(changedFiles.length - 1, curIdx + dir))
-    scrollToFile(changedFiles[next].path)
+    scrollToFile(changedFiles[next].path, false)
   }
 
   // Reset collapsed files when diff changes significantly (e.g., multi-select)

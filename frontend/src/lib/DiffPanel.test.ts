@@ -288,6 +288,24 @@ describe('DiffPanel', () => {
     })
   })
 
+  describe('auto-collapse by char count', () => {
+    // Giant one-liner (minified JS, lockfile): 1 line but 20k+ chars.
+    // Line-count triggers miss these; char-count catches them.
+    it('single-line >20k chars triggers collapse (line-count would miss)', async () => {
+      const hugeLine = '+' + 'x'.repeat(21_000)
+      const hugeDiff = `diff --git a/bundle.min.js b/bundle.min.js\n--- a/bundle.min.js\n+++ b/bundle.min.js\n@@ -0,0 +1,1 @@\n${hugeLine}\n`
+      const { container } = render(DiffPanel, {
+        props: props({
+          diffContent: hugeDiff,
+          changedFiles: [mkFile('bundle.min.js', { additions: 1 })],
+        }),
+      })
+      await settle()
+      const file = container.querySelector('[data-file-path="bundle.min.js"]')!
+      expect(file.querySelector('.diff-line')).toBeNull() // collapsed (not rendered)
+    })
+  })
+
   describe('auto-collapse suppression on cache restore', () => {
     // Cache-restore path (reset effect :569-573) sets lastAutoCollapseDiff
     // → auto-collapse effect bails (diffContent === lastAutoCollapseDiff).
