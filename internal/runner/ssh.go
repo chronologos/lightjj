@@ -8,12 +8,20 @@ import (
 )
 
 // SSHRunner executes jj commands on a remote host via SSH.
-// Each command is wrapped as: ssh <host> "jj -R <repoPath> <args...>"
+// Each command is wrapped as: ssh -o LogLevel=ERROR <host> "jj -R <repoPath> <args...>"
 type SSHRunner struct {
 	Host     string
 	RepoPath string
 	local    *LocalRunner
 }
+
+// LogLevel=ERROR suppresses SSH's own Warning:/INFO stderr lines
+// ("Warning: Permanently added 'host' (ED25519) to the list of known hosts.")
+// which otherwise trip hasWarningLine() in server.go and surface as amber
+// MessageBar toasts for every SSH mutation. ERROR-level (auth failure,
+// connection refused) still passes through and becomes a proper Go error.
+// Not `ssh -q`: that silences errors too.
+var sshBaseOpts = []string{"-o", "LogLevel=ERROR"}
 
 func NewSSHRunner(host string, repoPath string) *SSHRunner {
 	return &SSHRunner{
@@ -23,9 +31,12 @@ func NewSSHRunner(host string, repoPath string) *SSHRunner {
 	}
 }
 
+func (r *SSHRunner) sshArgv(remoteCmd string) []string {
+	return append(append([]string(nil), sshBaseOpts...), r.Host, remoteCmd)
+}
+
 func (r *SSHRunner) wrapArgs(jjArgs []string) []string {
-	remoteCmd := fmt.Sprintf("jj -R %s %s", shellQuote(r.RepoPath), quoteAll(jjArgs))
-	return []string{r.Host, remoteCmd}
+	return r.sshArgv(fmt.Sprintf("jj -R %s %s", shellQuote(r.RepoPath), quoteAll(jjArgs)))
 }
 
 func (r *SSHRunner) Run(ctx context.Context, args []string) ([]byte, error) {
@@ -50,8 +61,7 @@ func (r *SSHRunner) StreamCombined(ctx context.Context, args []string) (io.ReadC
 // directory. gh has no -R equivalent; it infers the repo from cwd, so we
 // cd into RepoPath first.
 func (r *SSHRunner) wrapRaw(argv []string) []string {
-	remoteCmd := fmt.Sprintf("cd -- %s && %s", shellQuote(r.RepoPath), quoteAll(argv))
-	return []string{r.Host, remoteCmd}
+	return r.sshArgv(fmt.Sprintf("cd -- %s && %s", shellQuote(r.RepoPath), quoteAll(argv)))
 }
 
 func (r *SSHRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
@@ -63,8 +73,7 @@ func (r *SSHRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
 // is user input). -R lets jj do the upward .jj search, same as the local
 // `cmd.Dir = dir` approach.
 func (r *SSHRunner) ResolveWorkspaceRoot(ctx context.Context, path string) (string, error) {
-	remoteCmd := fmt.Sprintf("jj -R %s workspace root", quoteRemotePath(path))
-	out, err := r.local.Run(ctx, []string{r.Host, remoteCmd})
+	out, err := r.local.Run(ctx, r.sshArgv(fmt.Sprintf("jj -R %s workspace root", quoteRemotePath(path))))
 	if err != nil {
 		return "", fmt.Errorf("not a jj repository on %s: %s", r.Host, path)
 	}
