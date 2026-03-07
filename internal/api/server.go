@@ -304,12 +304,16 @@ func (s *Server) getOpId() string {
 // Returns nil map if the file can't be read (secondary workspace with .jj/repo
 // pointer file, SSH cat failure, etc.) — callers treat nil as "no paths".
 //
+// LIMITATION: the index is ADDITIVE-ONLY. Workspaces created before the user's
+// jj version started writing it (or before the index feature existed) won't be
+// there — jj doesn't backfill. Observed: a repo with 5 workspaces had only 3
+// in the index. WorkspaceRef has no .path() template method; this file is the
+// only path source. Missing entries → disabled dropdown row with tooltip.
+//
 // jj 0.39+ writes RELATIVE paths (anchored at .jj/repo/ — the shared store
 // all workspaces point back to). Pre-0.39 wrote absolute. We resolve here,
 // not in the parser, because resolution needs the repo path (fs knowledge the
-// pure parser shouldn't have). Callers need absolute: TabResolve's IsAbs check
-// rejects relative, and the current-workspace match (wsPath == s.RepoDir)
-// would compare "../../" to "/Users/...".
+// pure parser shouldn't have). Callers need absolute for TabResolve's IsAbs.
 func (s *Server) readWorkspaceStore(ctx context.Context) (map[string]string, error) {
 	if s.RepoDir != "" {
 		// Local: direct fs read. filepath.* for host OS semantics (Windows

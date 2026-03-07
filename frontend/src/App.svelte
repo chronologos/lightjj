@@ -1411,11 +1411,13 @@
                     </div>
                   {:else}
                     <!-- Workspaces are just repo paths — open as a tab. Path absent
-                         when SSH-mode path-enrichment fails (pointer-file etc). -->
+                         when the workspace predates jj's workspace_store index
+                         (additive-only; no backfill). Nothing we can do — jj has
+                         no WorkspaceRef.path() template method. -->
                     <button
                       class="toolbar-ws-option"
                       disabled={!ws.path}
-                      title={ws.path ?? 'path unavailable'}
+                      title={ws.path ?? "path unknown — workspace predates jj's workspace_store index; open with 'lightjj -R <path>' manually"}
                       onclick={() => { onOpenTab?.(ws.path!); wsDropdownOpen = false }}
                     >
                       <span class="toolbar-ws-glyph">◇</span>
