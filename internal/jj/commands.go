@@ -519,8 +519,14 @@ func Resolve(revision string, file string, tool string) CommandArgs {
 // WorkspaceRef.name() + .target() (Commit) — structured output, no parsing
 // of "default: skpssuxl a14ce848 desc" human format (which broke on
 // workspace names containing ": ").
+//
+// target.current_working_copy() identifies "this is the current workspace"
+// — true only when target IS the current workspace's @ commit. Path-matching
+// (wsPath == RepoDir) broke in SSH mode where the user-typed --remote path
+// isn't canonical. Edge case: two workspaces on the same commit both read
+// true — rare, cosmetic (wrong badge at worst).
 func WorkspaceList() CommandArgs {
-	tmpl := `name ++ "\x1F" ++ target.change_id().short() ++ "\x1F" ++ target.commit_id().short() ++ "\n"`
+	tmpl := `name ++ "\x1F" ++ target.change_id().short() ++ "\x1F" ++ target.commit_id().short() ++ "\x1F" ++ stringify(target.current_working_copy()) ++ "\n"`
 	return []string{"workspace", "list", "--color", "never", "--ignore-working-copy", "-T", tmpl}
 }
 
@@ -529,19 +535,20 @@ type Workspace struct {
 	Name     string `json:"name"`
 	ChangeId string `json:"change_id"`
 	CommitId string `json:"commit_id"`
+	Current  bool   `json:"current"`
 }
 
 // ParseWorkspaceList parses WorkspaceList template output.
-// Each line: name\x1Fchange_id\x1Fcommit_id
+// Each line: name\x1Fchange_id\x1Fcommit_id\x1Fcurrent
 func ParseWorkspaceList(output string) []Workspace {
 	workspaces := []Workspace{}
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-		parts := strings.SplitN(line, "\x1F", 3)
-		if len(parts) != 3 {
+		parts := strings.SplitN(line, "\x1F", 4)
+		if len(parts) != 4 {
 			continue
 		}
 		workspaces = append(workspaces, Workspace{
-			Name: parts[0], ChangeId: parts[1], CommitId: parts[2],
+			Name: parts[0], ChangeId: parts[1], CommitId: parts[2], Current: parts[3] == "true",
 		})
 	}
 	return workspaces
