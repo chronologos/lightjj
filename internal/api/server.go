@@ -209,7 +209,13 @@ func (s *Server) refreshOpId() string {
 // client sees old op-id → SSE arrives with new op-id → dedup fails → redundant
 // loadLog() fire. The ~15ms cost of one `jj op log --limit 1` call is acceptable.
 func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []string) {
-	output, err := s.Runner.Run(r.Context(), args)
+	s.runMutationWithInput(w, r, args, "")
+}
+
+// runMutationWithInput is runMutation for commands that need stdin (describe).
+// Empty stdin = plain Run (LocalRunner.run only sets cmd.Stdin when stdin != "").
+func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, args []string, stdin string) {
+	output, err := s.Runner.RunWithInput(r.Context(), args, stdin)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

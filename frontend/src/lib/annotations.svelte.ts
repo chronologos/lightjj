@@ -17,6 +17,7 @@ import { api, type Annotation, type AnnotationSeverity } from './api'
 import { parseDiffContent } from './diff-parser'
 
 const FUZZY_WINDOW = 5 // ±lines to search for content match
+const NO_ANN: readonly Annotation[] = [] // shared empty result for forLine misses
 
 // Hunk header format: @@ -oldStart,oldCount +newStart,newCount @@
 // For a hunk entirely ABOVE an annotation's line, the net effect on that
@@ -157,7 +158,7 @@ interface AnnotationStore {
   readonly busy: boolean
   /** Lookup annotations for a specific line (for gutter badge). Multiple
    *  annotations may share a line if the user annotated it twice. */
-  forLine(filePath: string, lineNum: number): Annotation[]
+  forLine(filePath: string, lineNum: number): readonly Annotation[]
   /** Load annotations for changeId. If commitId differs from any
    *  createdAtCommitId, re-anchors via diffRange. Pass the current revision's
    *  commitId so the store can detect agent iterations. */
@@ -291,7 +292,7 @@ export function createAnnotationStore(): AnnotationStore {
     get list() { return list },
     get loadedChangeId() { return loadedChangeId },
     get busy() { return busy },
-    forLine: (filePath, lineNum) => byLine.get(`${filePath}:${lineNum}`) ?? [],
+    forLine: (filePath, lineNum) => byLine.get(`${filePath}:${lineNum}`) ?? NO_ANN,
     load, add, update, remove, clear,
   }
 }

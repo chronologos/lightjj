@@ -5,7 +5,7 @@
   interface Props {
     open: boolean
     onsave: (name: string) => void
-    oncancel: () => void
+    oncancel?: () => void
   }
 
   let { open = $bindable(false), onsave, oncancel }: Props = $props()
@@ -44,7 +44,7 @@
 
   function close() {
     open = false
-    oncancel()
+    oncancel?.()
     previousFocus?.focus()
   }
 

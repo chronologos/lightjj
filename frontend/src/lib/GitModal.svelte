@@ -12,7 +12,7 @@
     open: boolean
     currentChangeId: string | null
     onexecute: (type: 'push' | 'fetch', flags: string[]) => void
-    onclose: () => void
+    onclose?: () => void
   }
 
   let { open = $bindable(false), currentChangeId, onexecute, onclose }: Props = $props()
@@ -123,7 +123,7 @@
   function close() {
     fetchError = null
     open = false
-    onclose()
+    onclose?.()
     previousFocus?.focus()
   }
 

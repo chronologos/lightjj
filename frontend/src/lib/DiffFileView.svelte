@@ -31,7 +31,7 @@
     /** Lookup annotations for a new-side line number. Called per-line during
      *  render — MUST be O(1) (backed by a Map, not a filter). Empty array =
      *  no badge. Returned severity drives badge color. */
-    annotationsForLine?: (lineNum: number) => Annotation[]
+    annotationsForLine?: (lineNum: number) => readonly Annotation[]
     /** Click handler for the annotation gutter badge. Receives the new-side
      *  line number, the line's raw content (without diff prefix), and the
      *  click event (for positioning the bubble). Also fires on left-click of

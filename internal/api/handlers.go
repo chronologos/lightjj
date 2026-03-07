@@ -498,13 +498,7 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args, stdin := jj.SetDescription(req.Revision, req.Description)
-	output, err := s.Runner.RunWithInput(r.Context(), args, stdin)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.refreshOpId()
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	s.runMutationWithInput(w, r, args, stdin)
 }
 
 type rebaseRequest struct {

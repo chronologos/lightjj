@@ -1,3 +1,10 @@
+<script module lang="ts">
+  // Module-scope: survives the {#key activeTabId} remount in AppShell.
+  // Without this guard, switching tabs re-runs the welcome check and re-opens
+  // the modal if tutorialVersion hasn't been persisted yet (user hasn't clicked).
+  let welcomeCheckDone = false
+</script>
+
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
@@ -155,12 +162,9 @@
   let pullRequests: PullRequest[] = $state([])
   let prByBookmark = $derived(new Map(pullRequests.map(pr => [pr.bookmark, pr])))
 
-  let contextMenuItems: ContextMenuItem[] = $state([])
-  let contextMenuX: number = $state(0)
-  let contextMenuY: number = $state(0)
-  let contextMenuOpen: boolean = $state(false)
+  let contextMenu: { items: ContextMenuItem[]; x: number; y: number } | null = $state(null)
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || contextMenuOpen || divergence.active || welcomeOpen)
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || !!contextMenu || divergence.active || welcomeOpen)
   let inlineMode = $derived(rebase.active || squash.active || split.active)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
@@ -650,10 +654,7 @@
       { separator: true },
       { label: 'Abandon', action: () => handleAbandon(changeId), danger: true },
     )
-    contextMenuItems = items
-    contextMenuX = x
-    contextMenuY = y
-    contextMenuOpen = true
+    contextMenu = { items, x, y }
   }
 
   // INTENT — what the diff panel should be showing, derived from cursor + checks.
@@ -1017,7 +1018,7 @@
     bookmarkModalOpen = false
     bookmarkInputOpen = false
     gitModalOpen = false
-    contextMenuOpen = false
+    contextMenu = null
     // dismissWelcome (not welcomeOpen=false) — persist tutorialVersion so it
     // doesn't re-show next launch. Guarded: Cmd+K path calls this frequently.
     if (welcomeOpen) dismissWelcome()
@@ -1337,7 +1338,11 @@
   // --- Tutorial / What's New ---
   // Must await config.ready so we read the disk-persisted tutorialVersion, not
   // the localStorage default (which is empty on a fresh origin/port).
-  config.ready.then(() => {
+  // Guard set BEFORE the async — two tab-switches before config.ready resolves
+  // would otherwise both see false and both queue .then() callbacks.
+  if (!welcomeCheckDone) {
+    welcomeCheckDone = true
+    config.ready.then(() => {
     const currentSemver = parseSemver(APP_VERSION)
     const storedVersion = config.tutorialVersion
     const storedSemver = parseSemver(storedVersion)
@@ -1361,7 +1366,8 @@
     } else if (storedVersion !== APP_VERSION) {
       config.tutorialVersion = APP_VERSION
     }
-  })
+    })
+  }
 
   function dismissWelcome() {
     welcomeOpen = false
@@ -1660,24 +1666,24 @@
 
   <CommandPalette bind:open={paletteOpen} {commands} />
 
-  <ContextMenu
-    items={contextMenuItems}
-    x={contextMenuX}
-    y={contextMenuY}
-    bind:open={contextMenuOpen}
-  />
+  {#if contextMenu}
+    <ContextMenu
+      items={contextMenu.items}
+      x={contextMenu.x}
+      y={contextMenu.y}
+      bind:open={() => true, (v) => { if (!v) contextMenu = null }}
+    />
+  {/if}
 
   <GitModal
     bind:open={gitModalOpen}
     currentChangeId={selectedRevision?.commit.change_id ?? null}
     onexecute={handleGitOp}
-    onclose={() => { gitModalOpen = false }}
   />
 
   <BookmarkInput
     bind:open={bookmarkInputOpen}
     onsave={handleBookmarkSet}
-    oncancel={() => { bookmarkInputOpen = false }}
   />
 
   <BookmarkModal
@@ -1685,7 +1691,6 @@
     currentCommitId={selectedRevision?.commit.commit_id ?? null}
     filterBookmark={bookmarkModalFilter}
     onexecute={handleBookmarkOp}
-    onclose={() => { bookmarkModalOpen = false }}
   />
 
   {#if welcomeOpen}

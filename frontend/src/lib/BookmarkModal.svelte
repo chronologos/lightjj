@@ -16,7 +16,7 @@
     currentCommitId: string | null
     filterBookmark: string
     onexecute: (op: BookmarkOp) => void
-    onclose: () => void
+    onclose?: () => void
   }
 
   let { open = $bindable(false), currentCommitId, filterBookmark, onexecute, onclose }: Props = $props()
@@ -110,7 +110,7 @@
 
   function close() {
     open = false
-    onclose()
+    onclose?.()
     previousFocus?.focus()
   }
 

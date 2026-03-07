@@ -190,6 +190,9 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 	const maxFastFails = 5
 	backoff := time.Second
 	everSawLine := false
+	// fastFails counts BOTH open-error and stream-dies-fast; both mean "can't
+	// establish a lasting pipe". Reset only when a stream lives >3s OR yields
+	// a line — a successful open that immediately dies is still a fast fail.
 	fastFails := 0
 
 	for ctx.Err() == nil {
@@ -198,6 +201,14 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 		if err != nil {
 			if !everSawLine {
 				log.Printf("watcher: ssh stream failed (%v); auto-refresh disabled", err)
+				return
+			}
+			// open() failing = fast-fail too. Without this, a dead SSH host
+			// (connection refused) retries forever while stream-closes-fast
+			// bails after 5 — asymmetric.
+			fastFails++
+			if fastFails >= maxFastFails {
+				log.Printf("watcher: ssh open failed %d times consecutively (%v); auto-refresh disabled", fastFails, err)
 				return
 			}
 			log.Printf("watcher: ssh stream dropped (%v), reconnecting in %v", err, backoff)

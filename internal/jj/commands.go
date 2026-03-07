@@ -86,10 +86,6 @@ func Edit(changeId string, ignoreImmutable bool) CommandArgs {
 	return args
 }
 
-func DiffEdit(changeId string) CommandArgs {
-	return []string{"diffedit", "-r", changeId}
-}
-
 func Split(revision string, files []string, parallel bool, interactive bool) CommandArgs {
 	args := []string{"split", "-r", revision}
 	if parallel {
@@ -156,10 +152,6 @@ func Restore(revision string, files []string) CommandArgs {
 
 func Undo() CommandArgs {
 	return []string{"undo"}
-}
-
-func Redo() CommandArgs {
-	return []string{"redo"}
 }
 
 func BookmarkSet(revision string, name string) CommandArgs {
@@ -286,19 +278,6 @@ func Rebase(from SelectedRevisions, to string, source string, target string, ski
 	return args
 }
 
-func Duplicate(from SelectedRevisions, to string, target string) CommandArgs {
-	args := []string{"duplicate"}
-	args = append(args, from.AsPrefixedArgs("-r")...)
-	args = append(args, target, to)
-	return args
-}
-
-func Absorb(changeId string, files ...string) CommandArgs {
-	args := []string{"absorb", "--from", changeId, "--color", "never"}
-	args = append(args, escapeFiles(files)...)
-	return args
-}
-
 // Evolog emits per-entry records including the rebase-safe inter_diff in git format.
 // inter_diff() diffs the patch each version contributes relative to its own parents
 // (like `jj evolog -p`) — a `diff --from pred --to cur` would instead show parent
@@ -395,34 +374,6 @@ func ParseOpLog(output string) []OpEntry {
 		})
 	}
 	return entries
-}
-
-func OpRestore(operationId string) CommandArgs {
-	return []string{"op", "restore", operationId}
-}
-
-func GetParents(revision string) CommandArgs {
-	return []string{"log", "-r", revision,
-		"--color", "never", "--no-graph", "--quiet", "--ignore-working-copy",
-		"--template", "parents.map(|x| x.commit_id().shortest())"}
-}
-
-func GetFirstChild(revision *Commit) CommandArgs {
-	return []string{"log", "-r", fmt.Sprintf("%s+", revision.CommitId),
-		"-n", "1", "--color", "never", "--no-graph", "--quiet", "--ignore-working-copy",
-		"--template", "commit_id.shortest()"}
-}
-
-func FilesInRevision(revision *Commit) CommandArgs {
-	return []string{
-		"file", "list", "-r", revision.CommitId,
-		"--color", "never", "--no-pager", "--quiet", "--ignore-working-copy",
-		"--template", "self.path() ++ \"\n\"",
-	}
-}
-
-func ConfigListAll() CommandArgs {
-	return []string{"config", "list", "--color", "never", "--include-defaults", "--ignore-working-copy"}
 }
 
 func ConfigListAliases() CommandArgs {

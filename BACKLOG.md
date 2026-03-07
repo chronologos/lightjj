@@ -12,11 +12,11 @@ Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api
 - [x] **`welcomeOpen` orphaned from `closeModals()`** — `if (welcomeOpen) dismissWelcome()` in `closeModals()`. NOT just `welcomeOpen = false` — that'd close without persisting `config.tutorialVersion`, re-showing welcome every launch until user clicks the modal's own close. Guarded (Cmd+K path calls closeModals frequently).
 - [x] **`openModal(name)` helper** — `closeAllModals(); xOpen = true` centralized. 6 call sites consolidated (palette actions :346/:350, `g`/`B` keys, toolbar Git button, context-menu :604). Palette is NOT in the union: Cmd+K uses `closeModals()` (not `closeAllModals()`) so inline modes survive palette open/close — the other modals don't want that.
 - [x] **`DivergenceMode.handleKey` dead** — divergence is in `anyModalOpen` not `inlineMode` → never reaches `handleInlineNav`'s `mode.handleKey()`. Dropped `extends ModeBase` + the method.
-- [ ] **Redundant `onclose`/`oncancel` + `bind:open`** (Trivial) — :1624, :1630, :1638. Child writes `false` via `bind:open`; `onclose` sets `false` again.
+- [x] **Redundant `onclose`/`oncancel` + `bind:open`** (Trivial) — Made `onclose`/`oncancel` optional in GitModal/BookmarkModal/BookmarkInput (`onclose?.()`), dropped the no-op callbacks in App.svelte. `bind:open` alone propagates `false` to the parent.
 - [ ] **`createDescribeMode()` factory** (Small) — 4 state vars (`descriptionEditing`/`descriptionDraft`/`commitMode`/`describeSaved`) + 4 handlers. `startDescriptionEdit` (:705) and `handleCommit` (:1022) are ~90% identical. RevisionHeader receives all 4 as individual props. Pattern matches existing mode factories.
 - [ ] **`selectedFiles`/`totalFileCount` shared scratchpad** (Small) — :144-145. Written by both `enterSquashMode` (:869) and `enterSplitMode` (:933), read by both executes. Works only because `cancelInlineModes()` zeroes them — any new entry point that forgets → state leaks between modes. Either push into each mode factory (duplicate) or extract `createFileSelection()` that both compose.
 - [ ] **Revset input ownership inversion** (Small) — 5 `onrevset*` callbacks on RevisionGraph (27 props total) exist because the input lives inside RevisionGraph but its state (`revsetFilter`) lives in App. Move ownership into RevisionGraph or extract; removes 5 callbacks.
-- [ ] **Context-menu state** (Trivial) — `contextMenuItems`/`contextMenuX`/`contextMenuY`/`contextMenuOpen` (:155-158) always written together. Single `$state<{items,x,y}|null>`.
+- [x] **Context-menu state** (Trivial) — 4 vars → single `contextMenu: {items,x,y}|null`. Render site `{#if contextMenu}` + function binding `bind:open={() => true, (v) => { if (!v) contextMenu = null }}` — child writes `false`, parent nulls.
 
 **Rejected:** Modal-union (see above). InputMode-enum dispatch table — `$derived inputMode` is impossible (`e.target.tagName` is event-scoped, not reactive); degrades to `computeInputMode(e)` at which point you've built the sub-handler extraction with a veneer. Keybind registry (PaletteCommand-shaped array with `when` predicates) — adding a new mode requires auditing every `when` to add `&& !newMode.active`; current early-return-and-swallow is structurally safer.
 
@@ -37,16 +37,16 @@ Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api
 
 ### Backend / API
 
-- [ ] **Dead command builders** (Trivial) — `commands.go` has ~9 zero-caller functions from the jjui port: `DiffEdit` (:89), `Redo` (:161), `Duplicate` (:280), `Absorb` (:287), `OpRestore` (:391), `GetParents` (:395), `GetFirstChild` (:401), `FilesInRevision` (:407), `ConfigListAll` (:415). ~80 LOC + test bloat. (MEMORY.md already flagged this pattern after `jj.Snapshot()`.)
+- [x] **Dead command builders** (Trivial) — Deleted 9 zero-caller functions + tests from the jjui port: `DiffEdit`, `Redo`, `Duplicate`, `Absorb`, `OpRestore`, `GetParents`, `GetFirstChild`, `FilesInRevision`, `ConfigListAll`. -45 LOC commands.go, -50 LOC tests.
 - [x] ~~**Extract `WorkspaceSpawner`**~~ — Moot; workspace-as-tab deleted `spawnWorkspaceInstance` entirely.
 - [ ] **7 near-identical bookmark handlers** (Low, taste-dependent) — handlers.go:734-823 (~130 LOC). Each is decode → validate-non-empty → runMutation. Go's lack of structural typing makes table-driven dispatch awkward; current form is greppable. Defer unless bookmark family grows.
-- [ ] **`handleDescribe` duplicates `runMutation` body** (Trivial) — handlers.go:542-548 repeats run+refreshOpId+writeJSON because it needs `RunWithInput`. A `runMutationWithInput(w, r, args, stdin)` sibling closes the gap.
+- [x] **`handleDescribe` duplicates `runMutation` body** (Trivial) — `runMutationWithInput(w, r, args, stdin)` sibling; `runMutation` delegates to it with `""` stdin (LocalRunner.run only sets cmd.Stdin when stdin != ""). handleDescribe is now a one-liner.
 - [ ] **`RepoDir == ""` overloaded sentinel** (Low) — Used as SSH-mode flag across 6+ sites (server.go:193,407; handlers.go:396,426,1005; watcher.go:59). Conflates "SSH mode" / "test mode" / "no local fs". The real bit is "local filesystem access available" — name is wrong, semantics are coherent. A `Capabilities` bitset (or just `hasLocalFS bool`) would clarify error messages ("file writing requires local fs" not "SSH mode") but is cosmetic.
 
 ### api.ts client
 
 - [ ] **Wire-type drift risk** (Small, test-only) — 17 TS interfaces hand-mirror Go structs. No generation, no schema check. Real vector: `json:"ignore_immutable"` tag typo or TS `ignoreImmutable` vs `ignore_immutable` → Go `json.Decode` silently ignores unknown field → zero-value. `handlers_test.go` marshals Go structs (correct tags by definition) so this is invisible. One integration test per mutation that POSTs raw JSON strings (the TS-side shape) would catch it. OpenAPI gen is overkill for 40 endpoints.
-- [ ] **`context=0` cache-key collision** (Trivial) — api.ts:630 `(context ? ':ctx' + context : '')` truthy check means `diff(rev, file, 0)` and `diff(rev, file)` share a cache key. Only bites if zero-context ever becomes a valid request. Use `context != null`.
+- [x] **`context=0` cache-key collision** (Trivial) — `context != null` check for both URLSearchParams and cache key.
 - [ ] **SSE gives up on CLOSED, never reconnects** (Small) — api.ts:212-216. Backend restart → auto-refresh dead until page reload. `visibilitychange`→snapshot is a weak fallback (fires only on tab-focus). Exponential reconnect (1s→30s) would cover it.
 - [ ] **No mutation timeout** (Low) — `request()` timeout is GET-only (api.ts:242). A hung `describe`/`abandon` blocks the UI indefinitely. `streamPost` (git push) also has none — correct there (minutes-long pushes are valid), but the others could use ~60s.
 - [ ] **Flat `api` object at 44 methods** (Deferred) — bookmark sub-family (7 methods) is the strongest namespace case. Pure helpers (`effectiveId`/`multiRevset`/`computeConnectedCommitIds`) are zero-I/O and don't belong in api.ts. Hold until next expansion.
@@ -59,13 +59,13 @@ Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api
 ### Cross-cutting
 
 - [ ] **Watcher struct does 5 things** (Medium) — `internal/api/watcher.go`: fsnotify loop, SSE hub, snapshot ticker, SSH inotify, idle callbacks. `fsWatcher` is nil for SSH instances (dead weight). `snapshotLoop` inlines its own subscriber check (:268) instead of calling `hasSubscribers()`. Split: `Broadcaster` (pure subs map + SSE handler), `OpHeadsSource` interface (one fsnotify impl, one inotify-pipe impl), `SnapshotTicker`.
-- [ ] **`sshWatchLoop` has zero tests** (Small) — the reconnect/backoff/tool-missing heuristic (watcher.go:163-240) is the most bug-prone code in the file and is integration-only. Table test with a fake `io.Pipe()` covering: first-line resets backoff, `<3s && !everSawLine` → degrade, backoff caps at 30s.
+- [ ] **`sshWatchLoop` has zero tests** (Small) — the reconnect/backoff/tool-missing heuristic is the most bug-prone code in the file and is integration-only. Table test with a fake `io.Pipe()` covering: first-line resets backoff, `<3s && !everSawLine` → degrade, backoff caps at 30s, **open-error-after-everSawLine bails at `maxFastFails` (symmetry with stream-closes-fast — previously retried forever)**.
 - [ ] **`handleConfigSet` / annotation upsert TOCTOU** (Trivial) — config.go:72-107 + annotations.go:132-151 do read-merge-write with no lock. Two workspace tabs (different ports, same config dir) can lose writes. `sync.Mutex` around both. Low severity (user prefs, rare concurrent edits).
 - [ ] **No `storage` event listener in config.svelte.ts** (Trivial) — two browser tabs on same port: A writes localStorage, B's `$state` never re-reads (`loadLocal()` runs once at module eval). Diverge until reload.
 
 ### Micro (file when bored)
 
-- [ ] **`annotations.forLine` allocates `[]` on every miss** (Trivial) — annotations.svelte.ts:294 `?? []`. 500-line file with zero annotations = 500 allocs/render. `const NO_ANN: Annotation[] = []` singleton.
+- [x] **`annotations.forLine` allocates `[]` on every miss** (Trivial) — `const NO_ANN: readonly Annotation[] = []` singleton. Propagated `readonly` to interface return type + DiffFileView `annotationsForLine` prop (callers never mutate).
 - [ ] **Double-slice per diff line** (Trivial) — DiffFileView.svelte:334 + :336 both slice `line.content`. One alloc.
 
 ## Multi-tab follow-ups (2026-03-06)
@@ -77,7 +77,7 @@ Tabs shipped: TabManager mounts N Server instances at `/tab/{id}/` via StripPref
 - [x] ~~**SSH-mode multi-tab**~~ — `TabResolve`+`TabFactory` injection; `quoteRemotePath` handles `~` expansion on remote.
 - [x] ~~**Replace `spawnWorkspaceInstance` with in-process tab**~~ — Workspace dropdown now calls `onOpenTab(ws.path)` → `POST /tabs`. `spawnLocked`/port-polling/child-tracking deleted (~130 LOC). SSH-mode paths via `RunRaw` cat of workspace_store/index.
 - [ ] **Annotations repo-partitioning** (Trivial) — `annotations/{changeId}.json` — changeId is jj-random (~2^128 space), collision across repos is negligible but semantically wrong. Partition as `annotations/{repoRootHash}/{changeId}.json`. Fix when it matters.
-- [ ] **WelcomeModal re-show on tab switch** (Trivial) — `config.ready.then(...)` runs on every App remount. If user hasn't dismissed the modal yet, switching tabs re-opens it. Guard with a module-level `let welcomeShown` in App.svelte or hoist the check to AppShell.
+- [x] **WelcomeModal re-show on tab switch** (Trivial) — `<script module>` block with `let welcomeCheckDone = false` — module-scope survives `{#key}` remount. `if (!welcomeCheckDone) config.ready.then(() => { welcomeCheckDone = true; ... })`.
 
 ## jj 0.39 compat (2026-03-04)
 
@@ -355,7 +355,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] ~~Lazy rendering for large diffs (IntersectionObserver)~~ — superseded by `AUTO_COLLAPSE_TOTAL_LINES`. Collapsed files render header-only; the existing `{#if !isCollapsed}` gate does what lazy-mount would. IntersectionObserver would save the header DOM too, but headers are ~3 nodes each — not worth the complexity.
 - [x] Draggable split view divider (resize ratio)
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
-- [ ] Workspace switching — click a workspace badge to switch the app's serving context to that workspace, or move a workspace's working copy head to a different revision (`jj workspace update-stale`, `jj edit` from another workspace)
+- [x] Workspace switching — v0.6.0's workspace-as-tab covers "switch serving context" (dropdown → `onOpenTab(ws.path)`). ~~"Move another workspace's working copy head" (`jj edit --workspace NAME`)~~ → not a thing in jj; `jj workspace update-stale` runs IN the target workspace. Opening that workspace as a tab and pressing `E` does it.
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
 - [x] Divergent commit resolution UI — `GET /api/divergence` + `classify()` (stack grouping via parent-change_id walk + `alignColumns` commit_id permutation, `alignable` bailout, tautology-guarded `liveVersion`). Panel renders columns (one per /N version, rows = stack levels). `KeepPlan` abandons losing columns + empty descendants, repoints bookmarks per-change_id (not tip). Non-empty descendants confirm. Cross-column-merge warning. `/N` = index emission order (NOT commit_id sort — that was the old bug). See docs/jj-divergence.md.
 - [x] Divergence: "Rebase onto keeper" in non-empty-descendant confirm — third button (green, leftmost). `rebaseSources` runs before abandon. Safe from `-s` flattening: `g.descendants` is roots-only by classifier construction. See commit `e4160a26`.

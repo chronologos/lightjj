@@ -1671,6 +1671,37 @@ func TestIntegrationDiffRange_WithFiles(t *testing.T) {
 	assert.NotContains(t, result["diff"], "b.txt", "filtered diff should not contain b.txt")
 }
 
+// TestIntegrationResolveLocalTabPath exercises the local-mode TabResolve
+// closure: ~ expansion, abs-path gate, jj-workspace-root canonicalization.
+// Lives here (not local_test.go) because ResolveWorkspaceRoot needs a real
+// jj repo; the shRunner() pattern can't cover the upward .jj search.
+func TestIntegrationResolveLocalTabPath(t *testing.T) {
+	r, _ := jjTestRepo(t)
+	t.Parallel()
+	root := r.RepoDir
+
+	// Canonical root passes through unchanged (jj normalizes nothing).
+	got, err := runner.ResolveLocalTabPath(root)
+	require.NoError(t, err)
+	assert.Equal(t, root, got)
+
+	// Subdir → canonicalized to root (the tab-dedup case: opening /repo/src
+	// and /repo returns the same tab because both resolve to /repo).
+	sub := filepath.Join(root, "sub", "dir")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	got, err = runner.ResolveLocalTabPath(sub)
+	require.NoError(t, err)
+	assert.Equal(t, root, got)
+
+	// Relative path rejected before jj even runs.
+	_, err = runner.ResolveLocalTabPath("relative/path")
+	assert.ErrorContains(t, err, "absolute")
+
+	// Absolute non-repo → jj errors → ResolveWorkspaceRoot wraps it.
+	_, err = runner.ResolveLocalTabPath(t.TempDir())
+	assert.ErrorContains(t, err, "not a jj repository")
+}
+
 func TestIntegrationDiffRange_MissingParams(t *testing.T) {
 	r, _ := jjTestRepo(t)
 	t.Parallel()

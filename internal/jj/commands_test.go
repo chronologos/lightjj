@@ -186,9 +186,8 @@ func TestSplit_InteractiveNoMessage(t *testing.T) {
 	assert.NotContains(t, got, "-m")
 }
 
-func TestUndoRedo(t *testing.T) {
+func TestUndo(t *testing.T) {
 	assert.Equal(t, []string{"undo"}, Undo())
-	assert.Equal(t, []string{"redo"}, Redo())
 }
 
 func TestCurrentOpId(t *testing.T) {
@@ -427,10 +426,6 @@ func TestCommitWorkingCopy(t *testing.T) {
 	assert.Equal(t, []string{"commit", "-m", "my message"}, CommitWorkingCopy("my message"))
 }
 
-func TestDiffEdit(t *testing.T) {
-	assert.Equal(t, []string{"diffedit", "-r", "abc"}, DiffEdit("abc"))
-}
-
 func TestRestore(t *testing.T) {
 	got := Restore("abc", []string{"main.go"})
 	assert.Equal(t, []string{"restore", "-c", "abc", `root-file:"main.go"`}, got)
@@ -439,56 +434,6 @@ func TestRestore(t *testing.T) {
 func TestRestore_MultipleFiles(t *testing.T) {
 	got := Restore("abc", []string{"a.go", "b/c.go"})
 	assert.Equal(t, []string{"restore", "-c", "abc", `root-file:"a.go"`, `root-file:"b/c.go"`}, got)
-}
-
-func TestDuplicate(t *testing.T) {
-	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Duplicate(from, "def", "-d")
-	assert.Equal(t, []string{"duplicate", "-r", "abc", "-d", "def"}, got)
-}
-
-func TestAbsorb(t *testing.T) {
-	got := Absorb("abc", "main.go", "test.go")
-	assert.Equal(t, []string{"absorb", "--from", "abc", "--color", "never", `root-file:"main.go"`, `root-file:"test.go"`}, got)
-}
-
-func TestAbsorb_NoFiles(t *testing.T) {
-	got := Absorb("abc")
-	assert.Equal(t, []string{"absorb", "--from", "abc", "--color", "never"}, got)
-}
-
-func TestOpRestore(t *testing.T) {
-	assert.Equal(t, []string{"op", "restore", "abc123"}, OpRestore("abc123"))
-}
-
-func TestGetParents(t *testing.T) {
-	got := GetParents("abc")
-	assert.Contains(t, got, "-r")
-	assert.Contains(t, got, "abc")
-	assert.Contains(t, got, "--template")
-}
-
-func TestGetFirstChild(t *testing.T) {
-	c := &Commit{CommitId: "abc123"}
-	got := GetFirstChild(c)
-	assert.Contains(t, got, "-r")
-	assert.Contains(t, got, "abc123+")
-}
-
-func TestFilesInRevision(t *testing.T) {
-	c := &Commit{CommitId: "abc123"}
-	got := FilesInRevision(c)
-	assert.Contains(t, got, "file")
-	assert.Contains(t, got, "list")
-	assert.Contains(t, got, "-r")
-	assert.Contains(t, got, "abc123")
-}
-
-func TestConfigListAll(t *testing.T) {
-	got := ConfigListAll()
-	assert.Contains(t, got, "config")
-	assert.Contains(t, got, "list")
-	assert.Contains(t, got, "--include-defaults")
 }
 
 func TestParseOpLog(t *testing.T) {

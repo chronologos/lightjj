@@ -643,8 +643,8 @@ export const api = {
   diff: (revision: string, file?: string, context?: number) => {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
-    if (context) params.set('context', String(context))
-    const cacheId = 'diff:' + revision + (file ? ':' + file : '') + (context ? ':ctx' + context : '')
+    if (context != null) params.set('context', String(context))
+    const cacheId = 'diff:' + revision + (file ? ':' + file : '') + (context != null ? ':ctx' + context : '')
     return cachedRequest<{ diff: string }>(cacheId, `/api/diff?${params}`)
   },
 
