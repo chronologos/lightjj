@@ -46,8 +46,9 @@ internal/
     integration_test.go    — Integration tests (build-tagged)
     watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic util snapshot. `sshWatchLoop` takes `fastClose`/`baseBackoff` as params (not struct fields) so tests use ~ms values; 7 scriptedOpen test cases cover tool-missing/open-error/fast-close bails + resets.
     watcher_test.go        — Broadcaster tests (subscribe/broadcast/drop) + sshWatchLoop table tests via io.Pipe()
-    config.go              — Server-side config storage (os.UserConfigDir()/lightjj/config.json)
+    config.go              — Server-side config storage (os.UserConfigDir()/lightjj/config.json); cross-origin write rejection via isLocalOrigin
     annotations.go         — CRUD for per-changeId review comments (annotations/{changeId}.json); changeId path-traversal validation via regex
+    open.go                — Open-in-$EDITOR: buildEditorArgv ({file}/{line} substitution, argv[0] validation), handleOpenFile. Setsid via build-tagged detachProcess (open_unix.go / open_windows.go)
     gzip.go                — Gzip response middleware (lazy-init writer, sync.Pool, Flush passthrough for SSE)
   parser/                  — Graph log parser
     graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[]
@@ -177,6 +178,15 @@ func TestHandleAbandon(t *testing.T) {
 5. Add handler tests in `internal/api/handlers_test.go`
 6. Add the API call to `frontend/src/lib/api.ts`
 7. Wire it into the Svelte UI
+
+### Adding a context-menu surface
+
+1. Build `ContextMenuItem[]` in the component — it owns the domain data and gate logic.
+2. Emit via `oncontextmenu?: (items: ContextMenuItem[], x: number, y: number) => void`.
+3. Wire in App: `oncontextmenu={showContextMenu}`.
+4. Actions that need App-level state (mutation handlers, mode transitions) go via separate `onX` callback props — the component calls them from inside item `action` closures.
+
+**Exception**: `RevisionGraph` and `BookmarksPanel` emit `(domain-object, x, y)` — building their items requires App-level handlers (`handleEdit`, `enterRebaseMode`, `handleBookmarkOp`) that those components can't see. `openRevisionContextMenu` / `showBookmarkContextMenu` stay in App.
 
 ## Svelte Frontend Performance
 

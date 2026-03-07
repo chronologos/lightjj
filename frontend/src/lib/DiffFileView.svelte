@@ -5,6 +5,7 @@
   import type { FileChange, Annotation } from './api'
   import { findConflicts } from './conflict-parser'
   import type { SearchMatch } from './DiffPanel.svelte'
+  import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
   import FileEditor from './FileEditor.svelte'
 
   interface Props {
@@ -28,6 +29,13 @@
     onsavefile?: (path: string, content: string) => void
     oncanceledit?: (path: string) => void
     onlinecontext?: (e: MouseEvent, info: DiffLineInfo) => void
+    /** File-header context menu. Items built here (component owns filePath/
+     *  isCollapsed/isExpanded/fileStats); parent supplies only the singleton
+     *  renderer. Distinct from onlinecontext (different signature — raw event
+     *  + domain data, parent builds items). */
+    oncontextmenu?: ContextMenuHandler
+    /** Open in $EDITOR. undefined = disabled (SSH mode). */
+    onopenfile?: (path: string, line?: number) => void
     /** Lookup annotations for a new-side line number. Called per-line during
      *  render — MUST be O(1) (backed by a Map, not a filter). Empty array =
      *  no badge. Returned severity drives badge color. */
@@ -44,7 +52,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, annotationsForLine, onannotationclick }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick }: Props = $props()
 
   let editorRef: FileEditor | undefined = $state(undefined)
 
@@ -231,6 +239,35 @@
     onlinecontext(e, { filePath, lines })
   }
 
+  function handleFileHeaderContextMenu(e: MouseEvent): void {
+    if (!oncontextmenu) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    // Require fileStats known — the conflict-only DiffFileView mount path in
+    // DiffPanel passes fileStats=cf (always present), but future callers might
+    // not. undefined !== 'D' is true, which would enable open on deleted files.
+    const canOpen = !!(onopenfile && fileStats && fileStats.type !== 'D')
+    const items: ContextMenuItem[] = [
+      { label: 'Copy path', action: () => navigator.clipboard.writeText(filePath) },
+      canOpen
+        ? { label: 'Open in editor', action: () => onopenfile!(filePath) }
+        : { label: 'Open in editor (local only)', disabled: true },
+      { separator: true },
+    ]
+    if (!isExpanded) {
+      items.push({ label: 'Expand full context', action: () => onexpand(filePath) })
+    }
+    items.push({ label: isCollapsed ? 'Expand' : 'Collapse', action: () => ontoggle(filePath) })
+    if (ondiscard) {
+      items.push(
+        { separator: true },
+        { label: 'Discard changes', danger: true, action: () => ondiscard!(filePath, file.sourcePath) },
+      )
+    }
+    oncontextmenu(items, e.clientX, e.clientY)
+  }
+
   function escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
@@ -386,6 +423,7 @@
   <div
     class="diff-file-header"
     onclick={() => ontoggle(filePath)}
+    oncontextmenu={handleFileHeaderContextMenu}
     role="button"
     tabindex="0"
     aria-expanded={!isCollapsed}

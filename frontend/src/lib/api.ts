@@ -522,6 +522,7 @@ let _info: Promise<InfoResponse> | undefined
 export interface InfoResponse {
   hostname: string
   repo_path: string
+  ssh_mode: boolean
 }
 
 export interface FileChange {
@@ -780,6 +781,16 @@ export const api = {
     }),
 
   undo: () => post<{ output: string }>('/api/undo', {}),
+
+  opUndo: (id: string) => post<{ output: string }>('/api/op/undo', { id }),
+
+  opRestore: (id: string) => post<{ output: string }>('/api/op/restore', { id }),
+
+  restoreFrom: (from: string, to: string) =>
+    post<{ output: string }>('/api/restore-from', { from, to }),
+
+  openFile: (path: string, line?: number) =>
+    post<{ ok: boolean }>('/api/open-file', { path, line }),
 
   snapshot: () => post<{ output: string }>('/api/snapshot', {}),
 

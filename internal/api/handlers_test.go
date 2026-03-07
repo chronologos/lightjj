@@ -773,10 +773,11 @@ func TestHandleInfo(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	var got map[string]string
+	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, "myhost", got["hostname"])
 	assert.Equal(t, "/home/user/repo", got["repo_path"])
+	assert.Equal(t, true, got["ssh_mode"]) // newTestServer passes RepoDir=""
 }
 
 func TestHandleRemotes(t *testing.T) {
@@ -2299,4 +2300,72 @@ func TestHandleFileWrite(t *testing.T) {
 
 		assert.Equal(t, http.StatusNotImplemented, w.Code)
 	})
+}
+
+func TestHandleOpUndo(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.OpUndo("abc123def456")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/op/undo", []byte(`{"id":"abc123def456"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleOpUndo_InvalidId(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+
+	for _, id := range []string{"", "short", "ABC123DEF456", "abc; rm -rf /", "abc123../xyz"} {
+		body, _ := json.Marshal(map[string]string{"id": id})
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/op/undo", body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, "id=%q", id)
+	}
+}
+
+func TestHandleOpRestore(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.OpRestore("abc123def456")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/op/restore", []byte(`{"id":"abc123def456"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleOpRestore_InvalidId(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/op/restore", []byte(`{"id":""}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleRestoreFrom(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.RestoreFromTo("abc", "def")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/restore-from", []byte(`{"from":"abc","to":"def"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleRestoreFrom_Empty(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+
+	for _, body := range []string{`{"from":"","to":"def"}`, `{"from":"abc","to":""}`} {
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/restore-from", []byte(body)))
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	}
 }

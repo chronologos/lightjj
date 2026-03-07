@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { OpEntry } from './api'
+  import type { ContextMenuHandler } from './ContextMenu.svelte'
 
   interface Props {
     entries: OpEntry[]
@@ -7,9 +8,25 @@
     error?: string
     onrefresh: () => void
     onclose: () => void
+    onopundo?: (opId: string) => void
+    onoprestore?: (opId: string) => void
+    oncontextmenu?: ContextMenuHandler
   }
 
-  let { entries, loading, error = '', onrefresh, onclose }: Props = $props()
+  let { entries, loading, error = '', onrefresh, onclose, onopundo, onoprestore, oncontextmenu }: Props = $props()
+
+  function handleEntryContextMenu(e: MouseEvent, op: OpEntry) {
+    if (!oncontextmenu) return
+    e.preventDefault()
+    oncontextmenu([
+      { label: `Copy op ID (${op.id})`, action: () => navigator.clipboard.writeText(op.id) },
+      { separator: true },
+      { label: 'Undo this operation', danger: true, disabled: op.is_current || !onopundo,
+        action: () => onopundo?.(op.id) },
+      { label: 'Restore to here', danger: true, disabled: op.is_current || !onoprestore,
+        action: () => onoprestore?.(op.id) },
+    ], e.clientX, e.clientY)
+  }
 </script>
 
 <div class="oplog-panel">
@@ -33,7 +50,7 @@
       </div>
     {:else}
       {#each entries as op (op.id)}
-        <div class="oplog-entry" class:oplog-current={op.is_current}>
+        <div class="oplog-entry" class:oplog-current={op.is_current} oncontextmenu={(e) => handleEntryContextMenu(e, op)} role="row" tabindex="-1">
           <span class="oplog-id">{op.id}</span>
           <span class="oplog-desc">{op.description}</span>
           <span class="oplog-time">{op.time}</span>

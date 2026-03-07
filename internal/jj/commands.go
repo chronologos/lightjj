@@ -154,6 +154,25 @@ func Undo() CommandArgs {
 	return []string{"undo"}
 }
 
+// OpUndo reverts a specific operation by id. Unlike Undo() (latest-op
+// shorthand), this targets an arbitrary op — the oplog right-click flow.
+func OpUndo(id string) CommandArgs {
+	return []string{"op", "undo", id}
+}
+
+// OpRestore resets the repo state to what it was at the given operation.
+// This is the "time-travel" restore — everything after `id` is discarded.
+func OpRestore(id string) CommandArgs {
+	return []string{"op", "restore", id}
+}
+
+// RestoreFromTo copies the full tree from `from` into `to` — the evolog
+// "restore this version" action. No file filter (full-tree by design);
+// file-scoped restore is Restore()'s job.
+func RestoreFromTo(from, to string) CommandArgs {
+	return []string{"restore", "--from", from, "--to", to}
+}
+
 func BookmarkSet(revision string, name string) CommandArgs {
 	return []string{"bookmark", "set", "-r", revision, name}
 }

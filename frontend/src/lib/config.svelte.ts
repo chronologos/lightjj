@@ -18,6 +18,11 @@ interface Config {
   revisionPanelWidth: number
   evologPanelHeight: number
   tutorialVersion: string
+  /** Pre-split argv for "open in editor". Placeholders: {file} (abs path),
+   *  {line} (1-based, "1" if unspecified). If no element contains {file},
+   *  the abs path is appended. e.g. ["code", "--goto", "{file}:{line}"].
+   *  Empty → open-in-editor disabled (backend 400s). */
+  editorArgs: string[]
 }
 
 const defaults: Config = {
@@ -27,6 +32,7 @@ const defaults: Config = {
   revisionPanelWidth: 420,
   evologPanelHeight: 360,
   tutorialVersion: '',
+  editorArgs: [],
 }
 
 function loadLocal(): Partial<Config> {
@@ -129,6 +135,9 @@ function createConfig() {
 
     get tutorialVersion() { return state.tutorialVersion },
     set tutorialVersion(v: string) { state.tutorialVersion = v },
+
+    get editorArgs() { return state.editorArgs },
+    set editorArgs(v: string[]) { state.editorArgs = v },
 
     /** Resolves when the remote config has been loaded and merged. Callers that
      *  need the "real" config (not just localStorage defaults) should await this

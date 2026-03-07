@@ -152,3 +152,43 @@ func TestHandleConfigSet_BadJSON(t *testing.T) {
 	srv.Mux.ServeHTTP(w, jsonPost("/api/config", []byte(`{not json`)))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestHandleConfigSet_CrossOriginRejected(t *testing.T) {
+	withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	// Cross-origin rejected
+	req := jsonPost("/api/config", []byte(`{"theme":"light"}`))
+	req.Header.Set("Origin", "https://evil.example.com")
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+
+	// Same-origin accepted
+	req = jsonPost("/api/config", []byte(`{"theme":"light"}`))
+	req.Header.Set("Origin", "http://localhost:3000")
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Missing Origin (curl, tests) accepted
+	req = jsonPost("/api/config", []byte(`{"theme":"dark"}`))
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestIsLocalOrigin(t *testing.T) {
+	assert.True(t, isLocalOrigin("http://localhost:3000"))
+	assert.True(t, isLocalOrigin("http://127.0.0.1:8080"))
+	assert.True(t, isLocalOrigin("http://[::1]:3000"))
+	assert.False(t, isLocalOrigin("https://evil.example.com"))
+	assert.False(t, isLocalOrigin("http://10.0.0.1"))
+	assert.False(t, isLocalOrigin("not a url"))
+	// Origin-spoof shapes — url.Parse.Hostname() extracts the real host.
+	assert.False(t, isLocalOrigin("http://localhost.evil.com"))
+	assert.False(t, isLocalOrigin("http://localhost@evil.com"))
+	assert.False(t, isLocalOrigin("null")) // iframe sandbox, file://
+}

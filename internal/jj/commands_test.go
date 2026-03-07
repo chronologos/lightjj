@@ -190,6 +190,18 @@ func TestUndo(t *testing.T) {
 	assert.Equal(t, []string{"undo"}, Undo())
 }
 
+func TestOpUndo(t *testing.T) {
+	assert.Equal(t, []string{"op", "undo", "abc123"}, OpUndo("abc123"))
+}
+
+func TestOpRestore(t *testing.T) {
+	assert.Equal(t, []string{"op", "restore", "abc123"}, OpRestore("abc123"))
+}
+
+func TestRestoreFromTo(t *testing.T) {
+	assert.Equal(t, []string{"restore", "--from", "abc", "--to", "def"}, RestoreFromTo("abc", "def"))
+}
+
 func TestCurrentOpId(t *testing.T) {
 	got := CurrentOpId()
 	assert.Contains(t, got, "op")
