@@ -659,27 +659,30 @@
     collapsedFiles.clear()
   }
 
-  function scrollToFile(path: string, expand = true) {
+  function scrollToFile(path: string, opts: { expand?: boolean; smooth?: boolean } = {}) {
+    const { expand = true, smooth = true } = opts
     if (expand) collapsedFiles.delete(path)
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-file-path="${CSS.escape(path)}"]`)
-      el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      el?.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' })
     })
   }
 
   // Keyboard [/] step. Uses changedFiles order (same as file-tab bar).
-  // activeFilePath is IntersectionObserver-driven → picks up from wherever
-  // manual scroll left off. Clamps at ends (no wrap) to match j/k on revisions.
-  // found<0 handles both null AND truthy-but-unmatched (parsedDiff path not in
-  // changedFiles — shouldn't happen but falls back gracefully).
-  // expand=false: auto-collapsed huge files stay collapsed during [/] spam;
-  // otherwise ] past a 800k-char minified file would expand it → DOM flood.
+  // Clamps at ends (no wrap). Writes activeFilePath DIRECTLY — the
+  // IntersectionObserver callback is async (fires after layout) so rapid ]
+  // spam would read a stale path and re-step to the same file. Manual scroll
+  // still works: observer overwrites activeFilePath when headers cross the
+  // top-20% zone. found<0 handles both null and truthy-but-unmatched.
+  // expand=false: auto-collapsed huge files stay collapsed during [/] spam.
   export function stepFile(dir: 1 | -1) {
     if (changedFiles.length === 0) return
     const found = activeFilePath ? changedFiles.findIndex(f => f.path === activeFilePath) : -1
     const curIdx = found >= 0 ? found : (dir > 0 ? -1 : changedFiles.length)
     const next = Math.max(0, Math.min(changedFiles.length - 1, curIdx + dir))
-    scrollToFile(changedFiles[next].path, false)
+    const path = changedFiles[next].path
+    activeFilePath = path // sync write — observer would set this async, too late for spam
+    scrollToFile(path, { expand: false, smooth: false })
   }
 
   // Reset collapsed files when diff changes significantly (e.g., multi-select)
