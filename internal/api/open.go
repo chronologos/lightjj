@@ -6,21 +6,30 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// buildEditorArgv substitutes {file} and {line} placeholders in the user's
-// editorArgs config. Per-element substitution (no splitting — the user has
-// pre-split the array). If no element contains {file}, absPath is appended
-// as the final arg. line=nil substitutes "1" so combined tokens like
-// "{file}:{line}" stay parseable by editors like code --goto.
+// editorSubst groups placeholder values for buildEditorArgv. See docs/CONFIG.md
+// for placeholder semantics.
+type editorSubst struct {
+	File    string // absolute path where the repo lives (local fs OR remote fs)
+	RelPath string // repo-relative path (always POSIX-separated, from jj)
+	Host    string // full user@host spec in --remote mode; empty in local
+	Line    *int   // 1-based; nil → "1"
+}
+
+// buildEditorArgv substitutes {file}/{relpath}/{host}/{line} placeholders in
+// the user's editorArgs config. Per-element substitution (no splitting — the
+// user has pre-split the array). If no element contains {file} or {relpath},
+// sub.File is appended as the final arg.
 //
 // argv[0] is validated BEFORE substitution: either absolute or resolvable
 // via exec.LookPath, never a relative path, and never a placeholder —
 // config-poisoning should not turn a repo file into the executed binary.
-func buildEditorArgv(argsTemplate []string, absPath string, line *int) ([]string, error) {
+func buildEditorArgv(argsTemplate []string, sub editorSubst) ([]string, error) {
 	if len(argsTemplate) == 0 {
 		return nil, fmt.Errorf("no editor configured — set editorArgs in config")
 	}
@@ -29,7 +38,7 @@ func buildEditorArgv(argsTemplate []string, absPath string, line *int) ([]string
 	// argsTemplate=["{file}"] → absPath (absolute, stat-able) passes below
 	// and we exec a repo-controlled file.
 	bin := argsTemplate[0]
-	if strings.Contains(bin, "{file}") || strings.Contains(bin, "{line}") {
+	if strings.ContainsRune(bin, '{') {
 		return nil, fmt.Errorf("editor binary cannot contain placeholders")
 	}
 	if filepath.IsAbs(bin) {
@@ -44,48 +53,75 @@ func buildEditorArgv(argsTemplate []string, absPath string, line *int) ([]string
 	}
 
 	lineStr := "1"
-	if line != nil {
-		lineStr = strconv.Itoa(*line)
+	if sub.Line != nil {
+		lineStr = strconv.Itoa(*sub.Line)
 	}
 
+	// Substitution order: all non-path placeholders first (they're either
+	// digits or a user@host spec — can't contain "{file}"/"{relpath}").
+	// Path placeholders last so a file named "{line}" doesn't double-sub.
+	replacer := strings.NewReplacer(
+		"{line}", lineStr,
+		"{host}", sub.Host,
+	)
+
 	argv := make([]string, len(argsTemplate))
-	sawFile := false
+	sawPath := false
 	for i, a := range argsTemplate {
-		if strings.Contains(a, "{file}") {
-			sawFile = true
+		if strings.Contains(a, "{file}") || strings.Contains(a, "{relpath}") {
+			sawPath = true
 		}
-		// {line} first — it's always a digit string, can't contain "{file}".
-		// {file} first would double-substitute on paths containing "{line}".
-		a = strings.ReplaceAll(a, "{line}", lineStr)
-		a = strings.ReplaceAll(a, "{file}", absPath)
+		a = replacer.Replace(a)
+		a = strings.ReplaceAll(a, "{file}", sub.File)
+		a = strings.ReplaceAll(a, "{relpath}", sub.RelPath)
 		argv[i] = a
 	}
-	if !sawFile {
-		argv = append(argv, absPath)
+	if !sawPath {
+		argv = append(argv, sub.File)
 	}
 
 	return argv, nil
 }
 
-// readConfigField reads a single top-level key from the on-disk config file.
-// DRY with handleConfigGet's read path but returns a typed slice for the
-// editorArgs use case.
-func readConfigEditorArgs() ([]string, error) {
-	path, err := configPath()
+type editorConfig struct {
+	EditorArgs       []string `json:"editorArgs"`
+	EditorArgsRemote []string `json:"editorArgsRemote"`
+}
+
+// readConfigEditor reads both editor fields from the on-disk config file.
+// DRY with handleConfigGet's read path but returns the typed struct.
+func readConfigEditor() (editorConfig, error) {
+	p, err := configPath()
 	if err != nil {
-		return nil, err
+		return editorConfig{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(p)
 	if err != nil {
-		return nil, nil // missing file → zero state
+		return editorConfig{}, nil // missing file → zero state
 	}
-	var cfg struct {
-		EditorArgs []string `json:"editorArgs"`
+	var cfg editorConfig
+	_ = json.Unmarshal(data, &cfg) // corrupt → zero state (same as handleConfigSet)
+	return cfg, nil
+}
+
+// editorTemplate picks the config field for this server's mode and computes
+// the substitution values for a given request path. Used by handleOpenFile
+// (to spawn) and handleInfo (to report editor_configured).
+func (s *Server) editorTemplate(relPath string, line *int) ([]string, editorSubst, error) {
+	cfg, err := readConfigEditor()
+	if err != nil {
+		return nil, editorSubst{}, err
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, nil // corrupt → zero state (same as handleConfigSet)
+	sub := editorSubst{RelPath: relPath, Host: s.SSHHost, Line: line}
+	if s.RepoDir != "" {
+		// Local mode (also port-forward: lightjj runs where the repo lives).
+		sub.File = filepath.Join(s.RepoDir, relPath)
+		return cfg.EditorArgs, sub, nil
 	}
-	return cfg.EditorArgs, nil
+	// --remote mode: no local fs. {file} = remote absolute (POSIX join —
+	// RepoPath is a canonical remote path, remote is always POSIX).
+	sub.File = path.Join(s.RepoPath, relPath)
+	return cfg.EditorArgsRemote, sub, nil
 }
 
 type openFileRequest struct {
@@ -102,10 +138,6 @@ func (s *Server) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "cross-origin open-file rejected")
 		return
 	}
-	if s.RepoDir == "" {
-		s.writeError(w, http.StatusNotImplemented, "open-in-editor requires local filesystem access")
-		return
-	}
 
 	var req openFileRequest
 	if err := decodeBody(w, r, &req); err != nil {
@@ -115,30 +147,32 @@ func (s *Server) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 
 	// Lexical path checks only — unlike file-write, opening a symlink target
 	// in the user's own editor is harmless (read-only disclosure of a file
-	// the user already has OS-level access to).
-	_, absPath, err := validateRepoRelativePath(s.RepoDir, req.Path)
-	if err != nil {
+	// the user already has OS-level access to). The returned abs is discarded:
+	// editorTemplate computes {file} itself (mode-aware: filepath vs POSIX).
+	if _, _, err := validateRepoRelativePath(s.RepoDir, req.Path); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	editorArgs, err := readConfigEditorArgs()
+	tmpl, sub, err := s.editorTemplate(req.Path, req.Line)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "cannot read config")
 		return
 	}
-	argv, err := buildEditorArgv(editorArgs, absPath, req.Line)
+	argv, err := buildEditorArgv(tmpl, sub)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// exec.Command, NOT Runner.RunRaw — the editor opens on the LOCAL
-	// machine for the user sitting at the browser. SSH mode is gated above.
-	// No fd inheritance, own session (Setsid) so Ctrl+C on lightjj doesn't
-	// kill the editor. Fire-and-forget: we don't wait for editor exit.
+	// exec.Command — the editor spawns on the machine where lightjj runs.
+	// This is the documented invariant (docs/CONFIG.md): local mode → local
+	// editor; port-forward → remote CLI helper (e.g. VS Code Server's `code`
+	// which IPCs back to the laptop); --remote → local editor with SSH URI
+	// (via editorArgsRemote + {host}/{file}). No fd inheritance, own session
+	// (Setsid) so Ctrl+C on lightjj doesn't kill the editor.
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = s.RepoDir
+	cmd.Dir = s.RepoDir // empty in --remote mode → inherit cwd; editor doesn't care
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	detachProcess(cmd)
 	if err := cmd.Start(); err != nil {
