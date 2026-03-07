@@ -59,9 +59,9 @@ func TestBuildEditorArgv(t *testing.T) {
 		},
 		{
 			name: "{host}+{file} for SSH-URI editors",
-			tmpl: []string{sh, "zed://ssh/{host}{file}:{line}"},
-			sub:  editorSubst{File: "/home/u/repo/x.go", Host: "u@devbox", Line: ptr(7)},
-			want: []string{sh, "zed://ssh/u@devbox/home/u/repo/x.go:7"},
+			tmpl: []string{sh, "zed://ssh/{host}{file}"},
+			sub:  editorSubst{File: "/home/u/repo/x.go", Host: "u@devbox"},
+			want: []string{sh, "zed://ssh/u@devbox/home/u/repo/x.go"},
 		},
 		{
 			name:    "empty template rejected",
@@ -173,10 +173,13 @@ func TestEditorTemplate_ModeSelection(t *testing.T) {
 		srv := NewServer(testutil.NewMockRunner(t), "")
 		srv.RepoPath = "/home/u/repo"
 		srv.SSHHost = "u@devbox"
-		tmpl, sub, err := srv.editorTemplate("src/x.go", nil)
+		// Input uses filepath separator (what validateRepoRelativePath returns);
+		// output must be POSIX regardless of host OS.
+		tmpl, sub, err := srv.editorTemplate(filepath.Join("src", "x.go"), nil)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"zed", "zed://ssh/{host}{file}:{line}"}, tmpl)
 		assert.Equal(t, "/home/u/repo/src/x.go", sub.File) // POSIX, not filepath
+		assert.Equal(t, "src/x.go", sub.RelPath)           // POSIX (ToSlash)
 		assert.Equal(t, "u@devbox", sub.Host)
 	}
 }

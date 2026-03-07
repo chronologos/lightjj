@@ -31,7 +31,7 @@ type editorSubst struct {
 // config-poisoning should not turn a repo file into the executed binary.
 func buildEditorArgv(argsTemplate []string, sub editorSubst) ([]string, error) {
 	if len(argsTemplate) == 0 {
-		return nil, fmt.Errorf("no editor configured — set editorArgs in config")
+		return nil, fmt.Errorf("no editor configured — see docs/CONFIG.md")
 	}
 
 	// Validate the TEMPLATE's binary, not the substituted result — otherwise
@@ -57,9 +57,10 @@ func buildEditorArgv(argsTemplate []string, sub editorSubst) ([]string, error) {
 		lineStr = strconv.Itoa(*sub.Line)
 	}
 
-	// Substitution order: all non-path placeholders first (they're either
-	// digits or a user@host spec — can't contain "{file}"/"{relpath}").
-	// Path placeholders last so a file named "{line}" doesn't double-sub.
+	// Substitution order: all non-path placeholders first (digits or a
+	// user@host spec — the --remote flag is the user's own input, so a
+	// hostile {file} in there is self-inflicted). Path placeholders last
+	// so a file named "{line}" doesn't double-sub.
 	replacer := strings.NewReplacer(
 		"{line}", lineStr,
 		"{host}", sub.Host,
@@ -112,16 +113,26 @@ func (s *Server) editorTemplate(relPath string, line *int) ([]string, editorSubs
 	if err != nil {
 		return nil, editorSubst{}, err
 	}
-	sub := editorSubst{RelPath: relPath, Host: s.SSHHost, Line: line}
 	if s.RepoDir != "" {
 		// Local mode (also port-forward: lightjj runs where the repo lives).
-		sub.File = filepath.Join(s.RepoDir, relPath)
-		return cfg.EditorArgs, sub, nil
+		return cfg.EditorArgs, editorSubst{
+			File:    filepath.Join(s.RepoDir, relPath),
+			RelPath: relPath,
+			Host:    s.SSHHost,
+			Line:    line,
+		}, nil
 	}
-	// --remote mode: no local fs. {file} = remote absolute (POSIX join —
-	// RepoPath is a canonical remote path, remote is always POSIX).
-	sub.File = path.Join(s.RepoPath, relPath)
-	return cfg.EditorArgsRemote, sub, nil
+	// --remote mode: no local fs. {file} = remote absolute (POSIX — RepoPath
+	// is a canonical remote path). relPath comes from validateRepoRelativePath
+	// which uses filepath.Clean (OS-native separators); convert to POSIX for
+	// the remote join AND the {relpath} substitution.
+	posixRel := filepath.ToSlash(relPath)
+	return cfg.EditorArgsRemote, editorSubst{
+		File:    path.Join(s.RepoPath, posixRel),
+		RelPath: posixRel,
+		Host:    s.SSHHost,
+		Line:    line,
+	}, nil
 }
 
 type openFileRequest struct {
@@ -147,14 +158,16 @@ func (s *Server) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 
 	// Lexical path checks only — unlike file-write, opening a symlink target
 	// in the user's own editor is harmless (read-only disclosure of a file
-	// the user already has OS-level access to). The returned abs is discarded:
-	// editorTemplate computes {file} itself (mode-aware: filepath vs POSIX).
-	if _, _, err := validateRepoRelativePath(s.RepoDir, req.Path); err != nil {
+	// the user already has OS-level access to). abs is discarded (mode-aware
+	// editorTemplate computes {file} itself); cleaned feeds {relpath} so the
+	// substituted value is canonical.
+	cleaned, _, err := validateRepoRelativePath(s.RepoDir, req.Path)
+	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	tmpl, sub, err := s.editorTemplate(req.Path, req.Line)
+	tmpl, sub, err := s.editorTemplate(cleaned, req.Line)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "cannot read config")
 		return
