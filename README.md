@@ -88,7 +88,7 @@ go test ./...              # Go
 cd frontend && pnpm test   # Vitest
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design and [docs/CONFIG.md](docs/CONFIG.md) for config fields and open-in-editor setup.
 
 ## Upstream
 

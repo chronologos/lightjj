@@ -25,83 +25,103 @@ func shellBin() string {
 
 func TestBuildEditorArgv(t *testing.T) {
 	sh := shellBin()
+	fileSub := func(f string, l *int) editorSubst { return editorSubst{File: f, Line: l} }
 	tests := []struct {
 		name    string
 		tmpl    []string
-		absPath string
-		line    *int
+		sub     editorSubst
 		want    []string
 		wantErr string
 	}{
 		{
-			name:    "placeholders substituted",
-			tmpl:    []string{sh, "--goto", "{file}:{line}"},
-			absPath: "/a b/c.go",
-			line:    ptr(42),
-			want:    []string{sh, "--goto", "/a b/c.go:42"},
+			name: "placeholders substituted",
+			tmpl: []string{sh, "--goto", "{file}:{line}"},
+			sub:  fileSub("/a b/c.go", ptr(42)),
+			want: []string{sh, "--goto", "/a b/c.go:42"},
 		},
 		{
-			name:    "no {file} appends path",
-			tmpl:    []string{sh},
-			absPath: "/x.go",
-			line:    nil,
-			want:    []string{sh, "/x.go"},
+			name: "no path placeholder appends {file}",
+			tmpl: []string{sh},
+			sub:  fileSub("/x.go", nil),
+			want: []string{sh, "/x.go"},
 		},
 		{
-			name:    "nil line substitutes 1",
-			tmpl:    []string{sh, "-n", "+{line}", "{file}"},
-			absPath: "/x.go",
-			line:    nil,
-			want:    []string{sh, "-n", "+1", "/x.go"},
+			name: "nil line substitutes 1",
+			tmpl: []string{sh, "-n", "+{line}", "{file}"},
+			sub:  fileSub("/x.go", nil),
+			want: []string{sh, "-n", "+1", "/x.go"},
+		},
+		{
+			name: "{relpath} counts as path placeholder (no auto-append)",
+			tmpl: []string{sh, "{relpath}"},
+			sub:  editorSubst{File: "/repo/x.go", RelPath: "x.go"},
+			want: []string{sh, "x.go"},
+		},
+		{
+			name: "{host}+{file} for SSH-URI editors",
+			tmpl: []string{sh, "zed://ssh/{host}{file}:{line}"},
+			sub:  editorSubst{File: "/home/u/repo/x.go", Host: "u@devbox", Line: ptr(7)},
+			want: []string{sh, "zed://ssh/u@devbox/home/u/repo/x.go:7"},
 		},
 		{
 			name:    "empty template rejected",
 			tmpl:    []string{},
-			absPath: "/x.go",
+			sub:     fileSub("/x.go", nil),
 			wantErr: "no editor configured",
 		},
 		{
 			name:    "relative argv0 rejected",
 			tmpl:    []string{"./foo", "{file}"},
-			absPath: "/x.go",
+			sub:     fileSub("/x.go", nil),
 			wantErr: "absolute path or bare command",
 		},
 		{
 			name:    "parent-relative argv0 rejected",
 			tmpl:    []string{"../foo", "{file}"},
-			absPath: "/x.go",
+			sub:     fileSub("/x.go", nil),
 			wantErr: "absolute path or bare command",
 		},
 		{
 			name:    "forward-slash relative argv0 rejected (Windows)",
 			tmpl:    []string{"subdir/foo", "{file}"},
-			absPath: "/x.go",
+			sub:     fileSub("/x.go", nil),
 			wantErr: "absolute path or bare command",
 		},
 		{
 			name:    "placeholder in argv0 rejected",
 			tmpl:    []string{"{file}"},
-			absPath: "/repo/evil.sh",
+			sub:     fileSub("/repo/evil.sh", nil),
 			wantErr: "cannot contain placeholders",
 		},
 		{
-			name:    "path containing {line} not double-substituted",
-			tmpl:    []string{sh, "{file}"},
-			absPath: "/repo/src/{line}.go",
-			line:    ptr(42),
-			want:    []string{sh, "/repo/src/{line}.go"},
+			name:    "{relpath} in argv0 rejected",
+			tmpl:    []string{"{relpath}"},
+			sub:     editorSubst{RelPath: "evil.sh"},
+			wantErr: "cannot contain placeholders",
+		},
+		{
+			name: "path containing {line} not double-substituted",
+			tmpl: []string{sh, "{file}"},
+			sub:  fileSub("/repo/src/{line}.go", ptr(42)),
+			want: []string{sh, "/repo/src/{line}.go"},
+		},
+		{
+			name: "path containing {host} not double-substituted",
+			tmpl: []string{sh, "{file}"},
+			sub:  editorSubst{File: "/repo/{host}/x.go", Host: "devbox"},
+			want: []string{sh, "/repo/{host}/x.go"},
 		},
 		{
 			name:    "missing binary on PATH rejected",
 			tmpl:    []string{"lightjj-definitely-not-a-real-binary-xyz", "{file}"},
-			absPath: "/x.go",
+			sub:     fileSub("/x.go", nil),
 			wantErr: "not found on PATH",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildEditorArgv(tt.tmpl, tt.absPath, tt.line)
+			got, err := buildEditorArgv(tt.tmpl, tt.sub)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -119,24 +139,46 @@ func TestBuildEditorArgv_AbsoluteBinary(t *testing.T) {
 	bin := filepath.Join(dir, "fake-editor")
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755))
 
-	got, err := buildEditorArgv([]string{bin, "{file}"}, "/x.go", nil)
+	got, err := buildEditorArgv([]string{bin, "{file}"}, editorSubst{File: "/x.go"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{bin, "/x.go"}, got)
 
 	// Missing absolute binary rejected
-	_, err = buildEditorArgv([]string{filepath.Join(dir, "missing"), "{file}"}, "/x.go", nil)
+	_, err = buildEditorArgv([]string{filepath.Join(dir, "missing"), "{file}"}, editorSubst{File: "/x.go"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestHandleOpenFile_SSHMode(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	defer runner.Verify()
-	srv := NewServer(runner, "") // RepoDir="" → SSH mode
+func TestEditorTemplate_ModeSelection(t *testing.T) {
+	path := withConfigDir(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(`{
+		"editorArgs": ["code", "--goto", "{file}:{line}"],
+		"editorArgsRemote": ["zed", "zed://ssh/{host}{file}:{line}"]
+	}`), 0o644))
 
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, jsonPost("/api/open-file", []byte(`{"path":"a.go"}`)))
-	assert.Equal(t, 501, w.Code)
+	// Local mode: RepoDir set → editorArgs, {file} = filepath.Join
+	{
+		srv := NewServer(testutil.NewMockRunner(t), "/repo")
+		tmpl, sub, err := srv.editorTemplate("src/x.go", ptr(7))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"code", "--goto", "{file}:{line}"}, tmpl)
+		assert.Equal(t, filepath.Join("/repo", "src/x.go"), sub.File)
+		assert.Equal(t, "src/x.go", sub.RelPath)
+		assert.Empty(t, sub.Host)
+	}
+
+	// --remote mode: RepoDir="" → editorArgsRemote, {file} = POSIX join of RepoPath
+	{
+		srv := NewServer(testutil.NewMockRunner(t), "")
+		srv.RepoPath = "/home/u/repo"
+		srv.SSHHost = "u@devbox"
+		tmpl, sub, err := srv.editorTemplate("src/x.go", nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"zed", "zed://ssh/{host}{file}:{line}"}, tmpl)
+		assert.Equal(t, "/home/u/repo/src/x.go", sub.File) // POSIX, not filepath
+		assert.Equal(t, "u@devbox", sub.Host)
+	}
 }
 
 func TestHandleOpenFile_PathValidation(t *testing.T) {
@@ -170,14 +212,29 @@ func TestHandleOpenFile_NoEditorConfigured(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "no editor configured")
 }
 
-func TestReadConfigEditorArgs(t *testing.T) {
+func TestHandleOpenFile_RemoteModeNoConfig(t *testing.T) {
+	// --remote mode with no editorArgsRemote → "no editor configured"
+	// (not a 501 — the feature is usable if configured).
+	withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, "")
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/open-file", []byte(`{"path":"a.go"}`)))
+	assert.Equal(t, 400, w.Code)
+	assert.Contains(t, w.Body.String(), "no editor configured")
+}
+
+func TestReadConfigEditor(t *testing.T) {
 	path := withConfigDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(`{"editorArgs":["code","--goto","{file}:{line}"],"theme":"dark"}`), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(`{"editorArgs":["code","--goto","{file}:{line}"],"editorArgsRemote":["zed","{host}{file}"],"theme":"dark"}`), 0o644))
 
-	got, err := readConfigEditorArgs()
+	got, err := readConfigEditor()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"code", "--goto", "{file}:{line}"}, got)
+	assert.Equal(t, []string{"code", "--goto", "{file}:{line}"}, got.EditorArgs)
+	assert.Equal(t, []string{"zed", "{host}{file}"}, got.EditorArgsRemote)
 }
 
 func TestValidateRepoRelativePath(t *testing.T) {

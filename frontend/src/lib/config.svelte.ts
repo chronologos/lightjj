@@ -18,11 +18,11 @@ interface Config {
   revisionPanelWidth: number
   evologPanelHeight: number
   tutorialVersion: string
-  /** Pre-split argv for "open in editor". Placeholders: {file} (abs path),
-   *  {line} (1-based, "1" if unspecified). If no element contains {file},
-   *  the abs path is appended. e.g. ["code", "--goto", "{file}:{line}"].
-   *  Empty → open-in-editor disabled (backend 400s). */
+  /** Pre-split argv for "open in editor". See docs/CONFIG.md for placeholders.
+   *  Empty → open-in-editor disabled. */
   editorArgs: string[]
+  /** Same, but used when lightjj is in --remote mode. */
+  editorArgsRemote: string[]
 }
 
 const defaults: Config = {
@@ -33,6 +33,7 @@ const defaults: Config = {
   evologPanelHeight: 360,
   tutorialVersion: '',
   editorArgs: [],
+  editorArgsRemote: [],
 }
 
 function loadLocal(): Partial<Config> {
@@ -138,6 +139,9 @@ function createConfig() {
 
     get editorArgs() { return state.editorArgs },
     set editorArgs(v: string[]) { state.editorArgs = v },
+
+    get editorArgsRemote() { return state.editorArgsRemote },
+    set editorArgsRemote(v: string[]) { state.editorArgsRemote = v },
 
     /** Resolves when the remote config has been loaded and merged. Callers that
      *  need the "real" config (not just localStorage defaults) should await this

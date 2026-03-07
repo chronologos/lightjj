@@ -219,9 +219,35 @@ func TestRunMutation_Warnings(t *testing.T) {
 	assert.Equal(t, "Warning: conflict in src/foo.go\nWarning: conflict in src/bar.go", resp["warnings"])
 }
 
-// TestRunMutation_NoWarnings verifies the "warnings" field is omitted (not
-// empty-string) when stderr is empty — frontend checks for presence.
-func TestRunMutation_NoWarnings(t *testing.T) {
+// TestRunMutation_InfoStderr verifies that jj's informational stderr output
+// (working-copy status, parent commit, etc. — no "Warning:" prefix) is merged
+// into "output" and does NOT produce a "warnings" field. This is the `jj commit`
+// case: stdout is empty, stderr is "Working copy (@) now at: ..." — must show
+// as success, not warning.
+func TestRunMutation_InfoStderr(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.New(jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"}))).
+		SetOutput([]byte("")).
+		SetStderr([]byte("Working copy  (@) now at: xyz 123abc (empty)\nParent commit (@-)      : def 456def foo"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(newRequest{Revisions: []string{"abc"}})
+	req := jsonPost("/api/new", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Working copy  (@) now at: xyz 123abc (empty)\nParent commit (@-)      : def 456def foo", resp["output"])
+	_, hasWarnings := resp["warnings"]
+	assert.False(t, hasWarnings, "warnings field should be absent when stderr has no Warning: lines")
+}
+
+// TestRunMutation_NoStderr verifies the "warnings" field is omitted when
+// stderr is empty.
+func TestRunMutation_NoStderr(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.New(jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"}))).
 		SetOutput([]byte("Working copy now at: xyz"))
@@ -238,7 +264,7 @@ func TestRunMutation_NoWarnings(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Working copy now at: xyz", resp["output"])
 	_, hasWarnings := resp["warnings"]
-	assert.False(t, hasWarnings, "warnings field should be absent when stderr is empty")
+	assert.False(t, hasWarnings)
 }
 
 func TestHandleRestore(t *testing.T) {
