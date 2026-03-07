@@ -412,6 +412,9 @@
               {#if entry.commit.is_working_copy}
                 <span class="wc-badge">@</span>
               {/if}
+              {#if entry.commit.empty}
+                <span class="empty-badge">(empty)</span>
+              {/if}
               <span class="description-text">{entry.description || '(no description)'}</span>
             </span>
           {:else if line.isBookmarkLine}
@@ -1009,6 +1012,12 @@
     background: var(--badge-danger-bg, rgba(235, 100, 100, 0.15));
     color: var(--red);
     border: 1px solid var(--red);
+  }
+
+  .empty-badge {
+    color: var(--overlay0);
+    font-style: italic;
+    margin-right: 4px;
   }
 
   .rebase-preview {

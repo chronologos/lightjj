@@ -29,6 +29,7 @@ function mkCommit(commitId: string): LogEntry['commit'] {
     immutable: false,
     conflicted: false,
     divergent: false,
+    empty: false,
   }
 }
 

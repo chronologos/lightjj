@@ -12,6 +12,7 @@ type Commit struct {
 	Immutable      bool     `json:"immutable"`
 	Conflicted     bool     `json:"conflicted"`
 	Divergent      bool     `json:"divergent"`
+	Empty          bool     `json:"empty"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
 	ParentIds      []string `json:"parent_ids,omitempty"`
 }

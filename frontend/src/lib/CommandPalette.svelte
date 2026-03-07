@@ -9,6 +9,8 @@
     action: () => void
     when?: () => boolean
     infoOnly?: boolean
+    // Show in the empty-query cheatsheet even without a shortcut (otherwise search-only)
+    showInCheatsheet?: boolean
   }
 
   interface Props {
@@ -32,10 +34,12 @@
     return availableCommands.filter(c => fuzzyMatch(query, c.label) || (c.hint && fuzzyMatch(query, c.hint)))
   })
 
+  const inCheatsheet = (c: PaletteCommand) => !!c.shortcut || !!c.showInCheatsheet
+
   let groupedCommands = $derived.by(() => {
     if (query) return []
     const groups = Map.groupBy(
-      availableCommands.filter(c => c.shortcut),
+      availableCommands.filter(inCheatsheet),
       c => c.category ?? 'Other'
     )
     return [...groups.entries()]
@@ -45,7 +49,7 @@
 
   let searchOnlyCount = $derived.by(() => {
     if (!isCheatsheet) return 0
-    return availableCommands.filter(c => !c.shortcut).length
+    return availableCommands.filter(c => !inCheatsheet(c)).length
   })
 
   // Focus input when palette opens
@@ -138,7 +142,11 @@
                 </div>
               {:else}
                 <button class="cheatsheet-item" onclick={() => execute(cmd)}>
-                  <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
+                  {#if cmd.shortcut}
+                    <kbd class="cheatsheet-key">{cmd.shortcut}</kbd>
+                  {:else}
+                    <span class="cheatsheet-key-placeholder"></span>
+                  {/if}
                   <span class="cheatsheet-label">{cmd.label}</span>
                   {#if cmd.hint}<span class="palette-hint">{cmd.hint}</span>{/if}
                 </button>
@@ -303,7 +311,8 @@
     cursor: default;
   }
 
-  .cheatsheet-key {
+  .cheatsheet-key,
+  .cheatsheet-key-placeholder {
     color: var(--amber);
     min-width: 36px;
     font-family: inherit;
