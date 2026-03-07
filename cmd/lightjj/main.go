@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -20,8 +21,20 @@ import (
 	"github.com/chronologos/lightjj/internal/runner"
 )
 
-// version is set at build time via -ldflags "-X main.version=$(cat version.txt)"
-var version = "dev"
+// version is set at build time via -ldflags "-X main.version=$(cat version.txt)".
+// If unset (e.g. `go install ...@latest`), resolvedVersion() falls back to the
+// module version embedded by the Go toolchain.
+var version string
+
+func resolvedVersion() string {
+	if version != "" {
+		return strings.TrimSpace(version)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return "dev"
+}
 
 //go:embed all:frontend-dist
 var frontendFS embed.FS
@@ -39,7 +52,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("lightjj v%s\n", strings.TrimSpace(version))
+		fmt.Printf("lightjj v%s\n", resolvedVersion())
 		return
 	}
 
@@ -131,7 +144,7 @@ func main() {
 	}
 
 	url := fmt.Sprintf("http://%s", listener.Addr().String())
-	fmt.Printf("lightjj v%s listening on %s\n", strings.TrimSpace(version), url)
+	fmt.Printf("lightjj v%s listening on %s\n", resolvedVersion(), url)
 
 	if !*noBrowser {
 		openBrowser(url)
