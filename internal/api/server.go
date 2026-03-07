@@ -31,8 +31,8 @@ type Server struct {
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
-	// Watcher provides SSE auto-refresh. Nil in SSH mode (no local fs to watch).
-	// Set by main.go after NewServer; routes() tolerates it being nil.
+	// Watcher provides SSE auto-refresh. Nil only on --no-watch or constructor
+	// failure. Set by main.go after NewServer; routes() tolerates nil.
 	Watcher *Watcher
 }
 

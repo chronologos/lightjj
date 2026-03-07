@@ -1440,6 +1440,36 @@ func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
 	assert.True(t, filepath.IsAbs(got["legacy"]))
 }
 
+func TestReadWorkspaceStore_SSH(t *testing.T) {
+	// SSH mode: no RepoDir, RepoPath set → RunRaw cat. path.* (POSIX)
+	// for join/clean regardless of host OS.
+	runner := testutil.NewMockRunner(t)
+	var store []byte
+	store = append(store, wsStoreEntry("default", "../../")...)       // relative → resolved
+	store = append(store, wsStoreEntry("other", "/remote/other")...) // absolute → passthrough
+	runner.Expect([]string{"cat", "/remote/repo/.jj/repo/workspace_store/index"}).SetOutput(store)
+	defer runner.Verify()
+
+	srv := &Server{Runner: runner, RepoPath: "/remote/repo"}
+	got, err := srv.readWorkspaceStore(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "/remote/repo", got["default"]) // path.Join cleans ../../
+	assert.Equal(t, "/remote/other", got["other"])
+}
+
+func TestReadWorkspaceStore_SSH_CatFails(t *testing.T) {
+	// cat failure (ENOTDIR pointer file, no such file, etc) → nil map,
+	// no error. Caller treats nil as "no paths available".
+	runner := testutil.NewMockRunner(t)
+	runner.Expect([]string{"cat", "/remote/repo/.jj/repo/workspace_store/index"}).SetError(errors.New("cat: not a directory"))
+	defer runner.Verify()
+
+	srv := &Server{Runner: runner, RepoPath: "/remote/repo"}
+	got, err := srv.readWorkspaceStore(context.Background())
+	assert.NoError(t, err)
+	assert.Nil(t, got)
+}
 
 func TestHandleWorkspaces_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)

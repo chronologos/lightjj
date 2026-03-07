@@ -63,18 +63,31 @@ func main() {
 	var displayHost, displayPath string
 
 	if *remote != "" {
-		host, path, err := parseRemoteSpec(*remote)
+		host, rawPath, err := parseRemoteSpec(*remote)
 		if err != nil {
 			log.Fatalf("invalid remote: %v", err)
 		}
-		sshRunner = runner.NewSSHRunner(host, path)
+		sshRunner = runner.NewSSHRunner(host, rawPath)
+		// Canonicalize: jj workspace root on the remote. One startup round trip.
+		// Makes tab-dedup work (findByPath compares canonical paths) and fixes
+		// ~/ in RepoPath breaking readWorkspaceStore's cat. Fallback to raw
+		// path if resolve fails (not a jj repo — first jj log will error).
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		canonical, err := sshRunner.ResolveWorkspaceRoot(ctx, rawPath)
+		cancel()
+		if err != nil {
+			canonical = rawPath
+		} else if canonical != rawPath {
+			// Rebuild runner with canonical path so all wrapArgs/wrapRaw use it.
+			sshRunner = runner.NewSSHRunner(host, canonical)
+		}
 		cmdRunner = sshRunner
 		// Strip user@ prefix for display
 		displayHost = host
 		if at := strings.LastIndex(host, "@"); at != -1 {
 			displayHost = host[at+1:]
 		}
-		displayPath = path
+		displayPath = canonical
 	} else {
 		dir := *repoDir
 		if dir == "" {
