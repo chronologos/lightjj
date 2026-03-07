@@ -24,7 +24,7 @@
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config } from './lib/config.svelte'
-  import { APP_VERSION, parseSemver, semverMinorGt } from './lib/version'
+  import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt } from './lib/version'
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
   import WelcomeModal from './lib/WelcomeModal.svelte'
 
@@ -361,6 +361,10 @@
     { label: 'Toggle operation log', shortcut: 'O', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', shortcut: 'E', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
     { label: 'Show welcome / keyboard shortcuts', category: 'View', action: () => { welcomeTitle = `Welcome to lightjj v${APP_VERSION}`; welcomeFeatures = FEATURES; welcomeOpen = true } },
+
+    // Help
+    { label: `Changelog for v${APP_VERSION}`, category: 'Help', action: () => window.open(CURRENT_RELEASE_URL, '_blank', 'noopener') },
+    { label: 'Full changelog (all releases)', category: 'Help', action: () => window.open(RELEASES_URL, '_blank', 'noopener') },
 
     // Actions
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },

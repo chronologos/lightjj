@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { TutorialFeature } from './tutorial-content'
+  import { CURRENT_RELEASE_URL, RELEASES_URL } from './version'
 
   interface Props {
     version: string
@@ -45,6 +46,11 @@
     {/each}
   </div>
   <div class="welcome-footer">
+    <div class="welcome-links">
+      <a href={CURRENT_RELEASE_URL} target="_blank" rel="noopener">Changelog for v{version}</a>
+      <span class="welcome-link-sep">·</span>
+      <a href={RELEASES_URL} target="_blank" rel="noopener">All releases</a>
+    </div>
     <button class="welcome-dismiss" onclick={onclose}>Got it</button>
   </div>
 </div>
@@ -133,6 +139,29 @@
 
   .welcome-footer {
     padding: 12px 24px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .welcome-links {
+    font-size: 11px;
+    text-align: center;
+    color: var(--subtext0);
+  }
+
+  .welcome-links a {
+    color: var(--subtext0);
+    text-decoration: none;
+  }
+
+  .welcome-links a:hover {
+    color: var(--text);
+    text-decoration: underline;
+  }
+
+  .welcome-link-sep {
+    margin: 0 6px;
   }
 
   .welcome-dismiss {
