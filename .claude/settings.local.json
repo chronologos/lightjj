@@ -1,8 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go test:*)",
-      "Skill(ship-it-jj-pushmain)"
+      "Bash(pnpm exec:*)"
     ]
   }
 }
