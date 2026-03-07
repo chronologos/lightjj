@@ -342,7 +342,7 @@ async function streamPost(
   url: string,
   body: unknown,
   onLine: (line: string) => void,
-): Promise<{ output: string }> {
+): Promise<MutationResult> {
   const res = await fetch(tabScoped(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -436,10 +436,11 @@ export function getCached(commitId: string): { diff: string; files: FileChange[]
   return { diff: d.diff, files: f, description: desc.description }
 }
 
-/** Boolean check — delegates to getCached. Used by prefetchRevision and
- *  api.revision to skip fetches when all three keys are already cached. */
+/** Boolean check — direct Map.has() lookups. Used by prefetchRevision and
+ *  api.revision to skip fetches. NOT getCached() — that does 3 LRU bumps
+ *  (delete+reinsert) which is waste when the caller only wants a boolean. */
 export function isCached(commitId: string): boolean {
-  return getCached(commitId) !== null
+  return cache.has(`diff:${commitId}`) && cache.has(`files:${commitId}`) && cache.has(`desc:${commitId}`)
 }
 
 interface RevisionResponse {
@@ -587,6 +588,10 @@ export function effectiveId(commit: LogEntry['commit']): string {
  *  `activeRevisionId` (which was sometimes a commit_id and sometimes a
  *  `connected(X|Y)` revset — every consumer had to re-derive which case
  *  by checking `checkedRevisions.size`). */
+/** Standard mutation response. `warnings` is jj's stderr on exit-0
+ *  (conflict notices, no-op messages). Present only when non-empty. */
+export type MutationResult = { output: string; warnings?: string }
+
 export type DiffTarget =
   | { kind: 'single'; commitId: string; changeId: string; isWorkingCopy: boolean; immutable: boolean }
   | { kind: 'multi'; revset: string; commitIds: string[] }
@@ -745,77 +750,77 @@ export const api = {
 
   // Mutations
   newRevision: (revisions: string[]) =>
-    post<{ output: string }>('/api/new', { revisions }),
+    post<MutationResult>('/api/new', { revisions }),
 
   edit: (revision: string, ignoreImmutable = false) =>
-    post<{ output: string }>('/api/edit', { revision, ignore_immutable: ignoreImmutable }),
+    post<MutationResult>('/api/edit', { revision, ignore_immutable: ignoreImmutable }),
 
   abandon: (revisions: string[], ignoreImmutable = false) =>
-    post<{ output: string }>('/api/abandon', { revisions, ignore_immutable: ignoreImmutable }),
+    post<MutationResult>('/api/abandon', { revisions, ignore_immutable: ignoreImmutable }),
 
   restore: (revision: string, files: string[]) =>
-    post<{ output: string }>('/api/restore', { revision, files }),
+    post<MutationResult>('/api/restore', { revision, files }),
 
   describe: (revision: string, description: string) =>
-    post<{ output: string }>('/api/describe', { revision, description }),
+    post<MutationResult>('/api/describe', { revision, description }),
 
   rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string, opts?: {
     skipEmptied?: boolean, ignoreImmutable?: boolean
   }) =>
-    post<{ output: string }>('/api/rebase', {
+    post<MutationResult>('/api/rebase', {
       revisions, destination, source_mode: sourceMode, target_mode: targetMode,
       skip_emptied: opts?.skipEmptied, ignore_immutable: opts?.ignoreImmutable,
     }),
 
   split: (revision: string, files: string[], parallel?: boolean) =>
-    post<{ output: string }>('/api/split', { revision, files, parallel }),
+    post<MutationResult>('/api/split', { revision, files, parallel }),
 
   squash: (revisions: string[], destination: string, opts?: {
     files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean, ignoreImmutable?: boolean
   }) =>
-    post<{ output: string }>('/api/squash', {
+    post<MutationResult>('/api/squash', {
       revisions, destination,
       files: opts?.files, keep_emptied: opts?.keepEmptied,
       use_destination_message: opts?.useDestinationMessage,
       ignore_immutable: opts?.ignoreImmutable,
     }),
 
-  undo: () => post<{ output: string }>('/api/undo', {}),
+  undo: () => post<MutationResult>('/api/undo', {}),
 
-  opUndo: (id: string) => post<{ output: string }>('/api/op/undo', { id }),
+  opUndo: (id: string) => post<MutationResult>('/api/op/undo', { id }),
 
-  opRestore: (id: string) => post<{ output: string }>('/api/op/restore', { id }),
+  opRestore: (id: string) => post<MutationResult>('/api/op/restore', { id }),
 
   restoreFrom: (from: string, to: string) =>
-    post<{ output: string }>('/api/restore-from', { from, to }),
+    post<MutationResult>('/api/restore-from', { from, to }),
 
   openFile: (path: string, line?: number) =>
     post<{ ok: boolean }>('/api/open-file', { path, line }),
 
-  snapshot: () => post<{ output: string }>('/api/snapshot', {}),
+  snapshot: () => post<MutationResult>('/api/snapshot', {}),
 
-  commit: (message: string = '') => post<{ output: string }>('/api/commit', { message }),
+  commit: (message: string = '') => post<MutationResult>('/api/commit', { message }),
 
   bookmarkSet: (revision: string, name: string) =>
-    post<{ output: string }>('/api/bookmark/set', { revision, name }),
+    post<MutationResult>('/api/bookmark/set', { revision, name }),
 
   bookmarkDelete: (name: string) =>
-    post<{ output: string }>('/api/bookmark/delete', { name }),
+    post<MutationResult>('/api/bookmark/delete', { name }),
 
   bookmarkMove: (name: string, revision: string) =>
-    post<{ output: string }>('/api/bookmark/move', { name, revision }),
+    post<MutationResult>('/api/bookmark/move', { name, revision }),
 
   bookmarkAdvance: (name: string, revision: string) =>
-    post<{ output: string }>('/api/bookmark/advance', { name, revision }),
+    post<MutationResult>('/api/bookmark/advance', { name, revision }),
 
   bookmarkForget: (name: string) =>
-    post<{ output: string }>('/api/bookmark/forget', { name }),
+    post<MutationResult>('/api/bookmark/forget', { name }),
 
   bookmarkTrack: (name: string, remote: string) =>
-    post<{ output: string }>('/api/bookmark/track', { name, remote }),
+    post<MutationResult>('/api/bookmark/track', { name, remote }),
 
   bookmarkUntrack: (name: string, remote: string) =>
-    post<{ output: string }>('/api/bookmark/untrack', { name, remote }),
+    post<MutationResult>('/api/bookmark/untrack', { name, remote }),
 
   gitPush: (flags: string[] | undefined, onLine: (line: string) => void) =>
     streamPost('/api/git/push', { flags }, onLine),
@@ -824,14 +829,14 @@ export const api = {
     streamPost('/api/git/fetch', { flags }, onLine),
 
   resolve: (revision: string, file: string, tool: ':ours' | ':theirs') =>
-    post<{ output: string }>('/api/resolve', { revision, file, tool }),
+    post<MutationResult>('/api/resolve', { revision, file, tool }),
 
   pullRequests: () => request<PullRequest[]>('/api/pull-requests'),
 
   aliases: () => _aliases ??= request<Alias[]>('/api/aliases').catch(e => { _aliases = undefined; throw e }),
 
   runAlias: (name: string) =>
-    post<{ output: string }>('/api/alias', { name }),
+    post<MutationResult>('/api/alias', { name }),
 
   // Annotations are uncached — they're review-state, not revision content.
   // The set changes when the user adds/removes/resolves, and when the agent

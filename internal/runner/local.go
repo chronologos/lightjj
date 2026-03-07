@@ -72,7 +72,10 @@ func (r *LocalRunner) RunWithInput(ctx context.Context, args []string, stdin str
 	return r.run(ctx, args, stdin)
 }
 
-func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]byte, error) {
+// runSeparate executes a jj command and returns stdout and stderr separately
+// on success. On non-zero exit, stderr is baked into the error message
+// (stdout/stderr are nil).
+func (r *LocalRunner) runSeparate(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
 	if stdin != "" {
@@ -91,27 +94,38 @@ func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]b
 		if errors.As(err, &exitErr) {
 			stderrStr := strings.TrimSpace(stderr.String())
 			if stderrStr != "" {
-				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stderrStr)
+				return nil, nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stderrStr)
 			}
 			// Empty stderr — include stdout (some jj errors print there)
 			stdout := strings.TrimSpace(string(output))
 			if stdout != "" {
-				return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stdout)
+				return nil, nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), stdout)
 			}
 			// Triple-empty: no stderr, no stdout. Include args so the user
 			// at least knows which operation failed silently.
-			return nil, fmt.Errorf("%s %s: exit code %d (no output)",
+			return nil, nil, fmt.Errorf("%s %s: exit code %d (no output)",
 				r.Binary, strings.Join(args, " "), exitErr.ExitCode())
 		}
+		return nil, nil, err
+	}
+	return bytes.TrimRight(output, "\n"), bytes.TrimRight(stderr.Bytes(), "\n"), nil
+}
+
+func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]byte, error) {
+	stdout, stderr, err := r.runSeparate(ctx, args, stdin)
+	if err != nil {
 		return nil, err
 	}
 	// Success path: if stdout is empty but stderr has content (advisory
 	// warnings), return stderr as the output so the user sees it.
-	output = bytes.TrimRight(output, "\n")
-	if len(output) == 0 && stderr.Len() > 0 {
-		return bytes.TrimRight(stderr.Bytes(), "\n"), nil
+	if len(stdout) == 0 && len(stderr) > 0 {
+		return stderr, nil
 	}
-	return output, nil
+	return stdout, nil
+}
+
+func (r *LocalRunner) RunForMutation(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
+	return r.runSeparate(ctx, args, stdin)
 }
 
 func (r *LocalRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {

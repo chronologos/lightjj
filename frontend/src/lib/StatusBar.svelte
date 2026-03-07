@@ -3,7 +3,6 @@
 
   interface Props {
     statusText: string
-    commandOutput: string
     rebase: RebaseMode
     squash: SquashMode
     squashFileCount: { selected: number, total: number } | null
@@ -12,7 +11,7 @@
     activeView: 'log' | 'branches' | 'operations'
   }
 
-  let { statusText, commandOutput, rebase, squash, squashFileCount, split, splitFileCount, activeView }: Props = $props()
+  let { statusText, rebase, squash, squashFileCount, split, splitFileCount, activeView }: Props = $props()
 
   const sourceKeys: { key: string; flag: string; label: string }[] = [
     { key: 'r', flag: '-r', label: 'revision' },
@@ -124,11 +123,6 @@
         </span>
       {/if}
     </div>
-    <div class="statusbar-right">
-      {#if commandOutput}
-        <span class="status-item output">{commandOutput.trim().split('\n').pop()}</span>
-      {/if}
-    </div>
   {/if}
 </footer>
 
@@ -160,19 +154,10 @@
     border-top-color: var(--amber);
   }
 
-  .statusbar-left,
-  .statusbar-right {
+  .statusbar-left {
     display: flex;
     align-items: center;
     gap: 12px;
-  }
-
-  .status-item.output {
-    color: var(--subtext0);
-    max-width: 500px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   /* --- Rebase mode --- */
