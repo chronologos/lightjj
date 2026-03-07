@@ -290,6 +290,12 @@
   function toggleCheck(changeId: string, index: number) {
     if (checkedRevisions.has(changeId)) {
       checkedRevisions.delete(changeId)
+      // Unchecking the last one: multi→single transition. The multi-check
+      // $effect returns early on kind !== 'multi', so nothing else reloads
+      // the single-rev diff — loadedTarget stays stale on multi content.
+      if (checkedRevisions.size === 0 && selectedRevision) {
+        nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
+      }
     } else {
       checkedRevisions.add(changeId)
     }
@@ -953,7 +959,7 @@
 
   function enterSquashMode() {
     const revs = effectiveRevisions
-    if (revs.length === 0) return
+    if (revs.length === 0 || files.loading) return
     cancelInlineModes()
     // Initialize with all current changed files (source's files) and snapshot the count
     for (const f of changedFiles) selectedFiles.add(f.path)
@@ -1018,7 +1024,7 @@
   }
 
   function enterSplitMode(asReview = false) {
-    if (!selectedRevision || checkedRevisions.size > 0) return
+    if (!selectedRevision || checkedRevisions.size > 0 || files.loading) return
     cancelInlineModes()
     for (const f of changedFiles) selectedFiles.add(f.path)
     totalFileCount = changedFiles.length

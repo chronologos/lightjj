@@ -256,7 +256,7 @@ describe('response cache', () => {
     expect(_testInternals.cache.size).toBe(MAX - 2)
 
     mockFetch.mockResolvedValueOnce(mockResponse({
-      diff: '+x', files: [], description: '',
+      diff: '+x', files: [], description: 'msg',
     }, 'op1'))
     await api.revision(target)
 

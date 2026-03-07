@@ -202,9 +202,12 @@ export function createAnnotationStore(): AnnotationStore {
     try { return await fn() } finally { busy = false }
   }
 
+  let loadGen = 0
   async function load(changeId: string, commitId: string) {
+    const gen = ++loadGen
     return withBusy(async () => {
       const raw = await api.annotations(changeId)
+      if (gen !== loadGen) return
       loadedChangeId = changeId
 
       // Re-anchor pass: for annotations whose createdAtCommitId ≠ current,
@@ -225,6 +228,7 @@ export function createAnnotationStore(): AnnotationStore {
         let hunksByFile: Map<string, ReturnType<typeof parseDiffContent>[number]['hunks']>
         try {
           const { diff } = await api.diffRange(fromCommit, commitId, files)
+          if (gen !== loadGen) return
           const parsed = parseDiffContent(diff)
           hunksByFile = new Map(parsed.map(f => [f.filePath, f.hunks]))
         } catch {
@@ -244,7 +248,10 @@ export function createAnnotationStore(): AnnotationStore {
 
       // Persist re-anchor results so the next load is a no-op (and so a
       // workspace tab opened later sees the anchored positions).
-      for (const u of updates) await api.saveAnnotation(u)
+      for (const u of updates) {
+        await api.saveAnnotation(u)
+        if (gen !== loadGen) return
+      }
 
       // Apply updates in-memory (saves returned the same objects).
       const byId = new Map(updates.map(u => [u.id, u]))
