@@ -189,6 +189,15 @@
   let prByBookmark = $derived(new Map(pullRequests.map(pr => [pr.bookmark, pr])))
 
   let contextMenu: { items: ContextMenuItem[]; x: number; y: number } | null = $state(null)
+  const showContextMenu = (items: ContextMenuItem[], x: number, y: number) => {
+    contextMenu = { items, x, y }
+  }
+
+  // SSH mode = no local fs → open-in-editor would spawn on the remote host
+  // where nobody's watching. Default true (fail-safe: hide the item) until
+  // loadInfo() confirms local mode — a brief info() failure would otherwise
+  // enable a feature that 501s on click.
+  let sshMode = $state(true)
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || !!contextMenu || divergence.active || welcomeOpen)
   let inlineMode = $derived(rebase.active || squash.active || split.active)
@@ -453,9 +462,10 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path } = await api.info()
+      const { hostname, repo_path, ssh_mode } = await api.info()
       document.title = formatTitle(hostname, repo_path)
-    } catch { /* static <title> fallback is fine */ }
+      sshMode = ssh_mode
+    } catch { /* static <title> fallback + sshMode stays true (fail-safe) */ }
   }
 
   // api.remotes() is session-memoized; first element is the default remote
@@ -685,16 +695,21 @@
   function openRevisionContextMenu(changeId: string, x: number, y: number) {
     const entry = revisions.find(r => effectiveId(r.commit) === changeId)
     const commitId = entry?.commit.commit_id ?? ''
+    // Mode-transition items (Rebase/Squash/Split/Describe/New/Edit) are gated
+    // on !inlineMode — clicking Split while already in squash mode would call
+    // cancelInlineModes() + split.enter() in one tick, leaving FileSelectionPanel
+    // mounted but unfocused (BACKLOG #30). Abandon stays enabled — it's a
+    // straight mutation, no mode entry.
     const items: ContextMenuItem[] = [
-      { label: 'Edit working copy', action: () => handleEdit(changeId) },
-      { label: 'New revision', shortcut: 'n', action: () => handleNew(changeId) },
-      { label: 'Describe', shortcut: 'e', action: () => { selectByChangeId(changeId); startDescriptionEdit() } },
+      { label: 'Edit working copy', disabled: inlineMode, action: () => handleEdit(changeId) },
+      { label: 'New revision', shortcut: 'n', disabled: inlineMode, action: () => handleNew(changeId) },
+      { label: 'Describe', shortcut: 'e', disabled: inlineMode, action: () => { selectByChangeId(changeId); startDescriptionEdit() } },
       { separator: true },
-      { label: 'Rebase...', shortcut: 'R', action: () => { selectByChangeId(changeId); enterRebaseMode() } },
-      { label: 'Squash...', shortcut: 'S', action: () => { selectByChangeId(changeId); enterSquashMode() } },
-      { label: 'Split...', shortcut: 's', action: () => { selectByChangeId(changeId); enterSplitMode() } },
+      { label: 'Rebase...', shortcut: 'R', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterRebaseMode() } },
+      { label: 'Squash...', shortcut: 'S', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSquashMode() } },
+      { label: 'Split...', shortcut: 's', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSplitMode() } },
       { separator: true },
-      { label: 'Set bookmark...', shortcut: 'B', action: () => { selectByChangeId(changeId); openModal('bookmarkInput') } },
+      { label: 'Set bookmark...', shortcut: 'B', disabled: inlineMode, action: () => { selectByChangeId(changeId); openModal('bookmarkInput') } },
     ]
     if (entry?.commit.divergent) {
       items.push(
@@ -759,6 +774,22 @@
 
   const handleUndo = () =>
     runMutation(() => api.undo(), 'Undo successful')
+
+  const handleOpUndo = (id: string) =>
+    runMutation(() => api.opUndo(id), `Undid operation ${id.slice(0, 8)}`)
+
+  const handleOpRestore = (id: string) =>
+    runMutation(() => api.opRestore(id), `Restored to operation ${id.slice(0, 8)}`)
+
+  function handleRestoreVersion(fromCommitId: string) {
+    if (!selectedRevision) return
+    const to = effectiveId(selectedRevision.commit)
+    runMutation(() => api.restoreFrom(fromCommitId, to), `Restored version ${fromCommitId.slice(0, 8)}`)
+  }
+
+  function handleOpenFile(path: string, line?: number) {
+    api.openFile(path, line).catch(showError)
+  }
 
   function handleAbandonChecked() {
     const revs = effectiveRevisions
@@ -1639,6 +1670,8 @@
             onresolve={inlineMode ? undefined : handleResolve}
             onfilesaved={() => withMutation(loadLog)}
             onjjmutation={withMutation}
+            oncontextmenu={showContextMenu}
+            onopenfile={sshMode ? undefined : handleOpenFile}
           >
             {#snippet header()}
               <!-- {#key} resets RevisionHeader local state (descExpanded) on nav.
@@ -1681,6 +1714,8 @@
             height={config.evologPanelHeight}
             onrefresh={() => { if (selectedRevision) loadEvolog(effectiveId(selectedRevision.commit)) }}
             onclose={() => { evologOpen = false }}
+            onrestoreversion={handleRestoreVersion}
+            oncontextmenu={showContextMenu}
           />
         {/key}
       {/if}
@@ -1692,6 +1727,9 @@
           error={oplog.error}
           onrefresh={loadOplog}
           onclose={() => { oplogOpen = false }}
+          onopundo={handleOpUndo}
+          onoprestore={handleOpRestore}
+          oncontextmenu={showContextMenu}
         />
       {/if}
     {:else if activeView === 'branches'}
@@ -1718,6 +1756,9 @@
           error={oplog.error}
           onrefresh={loadOplog}
           onclose={() => { activeView = 'log' }}
+          onopundo={handleOpUndo}
+          onoprestore={handleOpRestore}
+          oncontextmenu={showContextMenu}
         />
       </div>
     {/if}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -352,9 +353,10 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, r, http.StatusOK, map[string]string{
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"hostname":  s.Hostname,
 		"repo_path": s.RepoPath,
+		"ssh_mode":  s.RepoDir == "",
 	})
 }
 
@@ -586,6 +588,47 @@ func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runMutation(w, r, jj.Undo())
+}
+
+// opIdRe validates op-ids: hex, at least 12 chars (jj's short form).
+// Embedded in a jj arg, so charset restriction blocks flag injection.
+var opIdRe = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
+
+// opMutation returns a handler that decodes {id}, validates via opIdRe,
+// and runs the given command builder. Shared by /api/op/undo + /api/op/restore.
+func (s *Server) opMutation(build func(id string) jj.CommandArgs) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := decodeBody(w, r, &req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !opIdRe.MatchString(req.ID) {
+			s.writeError(w, http.StatusBadRequest, "invalid op id")
+			return
+		}
+		s.runMutation(w, r, build(req.ID))
+	}
+}
+
+type restoreFromRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+func (s *Server) handleRestoreFrom(w http.ResponseWriter, r *http.Request) {
+	var req restoreFromRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.From == "" || req.To == "" {
+		s.writeError(w, http.StatusBadRequest, "from and to are required")
+		return
+	}
+	s.runMutation(w, r, jj.RestoreFromTo(req.From, req.To))
 }
 
 // handleSnapshot asks jj to observe the working copy on demand. Called by the
@@ -954,6 +997,33 @@ type fileWriteRequest struct {
 	Content string `json:"content"`
 }
 
+// validateRepoRelativePath applies lexical security checks to a user-supplied
+// repo-relative path: rejects null bytes, absolute paths, traversal, and
+// .jj/.git. Returns the cleaned relative path and its absolute join with
+// repoDir. Caller decides whether to additionally EvalSymlinks (write
+// protection — see handleFileWrite; read/open callers skip it).
+func validateRepoRelativePath(repoDir, p string) (cleaned, abs string, err error) {
+	if p == "" {
+		return "", "", fmt.Errorf("path is required")
+	}
+	if strings.ContainsRune(p, 0) {
+		return "", "", fmt.Errorf("invalid path")
+	}
+	if filepath.IsAbs(p) {
+		return "", "", fmt.Errorf("absolute paths are not allowed")
+	}
+	cleaned = filepath.Clean(p)
+	if strings.HasPrefix(cleaned, "..") {
+		return "", "", fmt.Errorf("path traversal is not allowed")
+	}
+	sep := string(filepath.Separator)
+	if cleaned == ".jj" || strings.HasPrefix(cleaned, ".jj"+sep) ||
+		cleaned == ".git" || strings.HasPrefix(cleaned, ".git"+sep) {
+		return "", "", fmt.Errorf("internal directories are not allowed")
+	}
+	return cleaned, filepath.Join(repoDir, cleaned), nil
+}
+
 func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 	if s.RepoDir == "" {
 		s.writeError(w, http.StatusNotImplemented, "file writing is not supported in SSH mode")
@@ -965,33 +1035,12 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Path == "" {
-		s.writeError(w, http.StatusBadRequest, "path is required")
-		return
-	}
 
-	// Security: reject null bytes, path traversal, absolute paths, and internal dirs
-	if strings.ContainsRune(req.Path, 0) {
-		s.writeError(w, http.StatusBadRequest, "invalid path")
+	cleaned, target, err := validateRepoRelativePath(s.RepoDir, req.Path)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if filepath.IsAbs(req.Path) {
-		s.writeError(w, http.StatusBadRequest, "absolute paths are not allowed")
-		return
-	}
-	cleaned := filepath.Clean(req.Path)
-	if strings.HasPrefix(cleaned, "..") {
-		s.writeError(w, http.StatusBadRequest, "path traversal is not allowed")
-		return
-	}
-	sep := string(filepath.Separator)
-	if cleaned == ".jj" || strings.HasPrefix(cleaned, ".jj"+sep) ||
-		cleaned == ".git" || strings.HasPrefix(cleaned, ".git"+sep) {
-		s.writeError(w, http.StatusBadRequest, "writing to internal directories is not allowed")
-		return
-	}
-
-	target := filepath.Join(s.RepoDir, cleaned)
 
 	// Resolve symlinks in the parent directory to prevent symlink escape.
 	// A tracked symlink inside the repo (e.g. link -> /etc) would pass

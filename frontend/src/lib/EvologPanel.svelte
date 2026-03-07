@@ -2,6 +2,7 @@
   import type { LogEntry, EvologEntry } from './api'
   import { parseDiffContent } from './diff-parser'
   import DiffFileView from './DiffFileView.svelte'
+  import type { ContextMenuHandler } from './ContextMenu.svelte'
 
   interface Props {
     entries: EvologEntry[]
@@ -10,9 +11,11 @@
     height: number
     onrefresh: () => void
     onclose: () => void
+    onrestoreversion?: (fromCommitId: string) => void
+    oncontextmenu?: ContextMenuHandler
   }
 
-  let { entries, loading, selectedRevision, height, onrefresh, onclose }: Props = $props()
+  let { entries, loading, selectedRevision, height, onrefresh, onclose, onrestoreversion, oncontextmenu }: Props = $props()
 
   let selectedIdx: number = $state(-1)
   let entryListEl: HTMLDivElement | undefined = $state()
@@ -24,6 +27,22 @@
 
   function selectEntry(i: number) {
     selectedIdx = i
+  }
+
+  function handleEntryContextMenu(e: MouseEvent, entry: EvologEntry, i: number) {
+    if (!oncontextmenu) return
+    e.preventDefault()
+    selectedIdx = i
+    // Gate restore: i===0 is the current version (no-op); divergent change_id
+    // means restore --to change_id is ambiguous (which /N?). jj undo recovers
+    // from a fat-finger so no confirm gate — explicit wording is enough.
+    const canRestore = i > 0 && onrestoreversion && !selectedRevision?.commit.divergent
+    oncontextmenu([
+      { label: `Copy commit ID (${entry.commit_id})`, action: () => navigator.clipboard.writeText(entry.commit_id) },
+      { separator: true },
+      { label: canRestore ? 'Restore this version (overwrites current tree)' : 'Restore this version', danger: true,
+        disabled: !canRestore, action: () => onrestoreversion?.(entry.commit_id) },
+    ], e.clientX, e.clientY)
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -96,6 +115,7 @@
             class:current={i === 0}
             class:origin={entry.predecessor_ids.length === 0}
             onclick={() => selectEntry(i)}
+            oncontextmenu={(e) => handleEntryContextMenu(e, entry, i)}
           >
             <span class="entry-id">{entry.commit_id}</span>
             <span class="entry-op">
