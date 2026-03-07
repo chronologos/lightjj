@@ -62,6 +62,34 @@ func (r *SSHRunner) StreamRaw(ctx context.Context, argv []string) (io.ReadCloser
 	return r.local.Stream(ctx, r.wrapRaw(argv))
 }
 
+// ResolveWorkspaceRoot returns the jj workspace root for an arbitrary path on
+// the remote host (NOT r.RepoPath — used for tab-open validation where path
+// is user input). -R lets jj do the upward .jj search, same as the local
+// `cmd.Dir = dir` approach.
+func (r *SSHRunner) ResolveWorkspaceRoot(ctx context.Context, path string) (string, error) {
+	remoteCmd := fmt.Sprintf("jj -R %s workspace root", quoteRemotePath(path))
+	out, err := r.local.Run(ctx, []string{r.Host, remoteCmd})
+	if err != nil {
+		return "", fmt.Errorf("not a jj repository on %s: %s", r.Host, path)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// quoteRemotePath quotes a user-supplied remote path for safe shell use,
+// but allows a leading ~/ to expand to the remote user's home. shellQuote
+// (single-quotes) suppresses both ~ and $HOME; jj doesn't expand ~ itself.
+// So we emit a double-quoted "$HOME" prefix and single-quote the rest —
+// adjacent quoted strings concatenate in the shell.
+func quoteRemotePath(path string) string {
+	if path == "~" {
+		return `"$HOME"`
+	}
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return `"$HOME"/` + shellQuote(rest)
+	}
+	return shellQuote(path)
+}
+
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"

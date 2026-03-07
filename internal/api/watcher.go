@@ -157,9 +157,11 @@ func (w *Watcher) watchLoop() {
 
 // sshWatchLoop consumes a line-oriented event stream and broadcasts debounced
 // op-id changes. Reconnects with exponential backoff on stream close. Bails
-// permanently only if the stream dies in <3s without ever yielding a line
-// (inotifywait missing → immediate `command not found` exit); a long-idle
-// stream that later drops is a network blip on a quiet repo → reconnect.
+// permanently if the stream dies fast (<3s) before ever yielding a line
+// (inotifywait missing → `command not found`), OR if it dies fast N times
+// in a row (repo deleted after events were seen — everSawLine alone can't
+// catch this). A long-idle stream that later drops is a network blip on a
+// quiet repo → reconnect.
 func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, error)) {
 	// One context for the loop's lifetime, cancelled when Close() fires. All
 	// streams derive from it so exec.CommandContext kills the remote ssh process.
@@ -185,8 +187,10 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 		w.broadcast(w.srv.refreshOpId())
 	}
 
+	const maxFastFails = 5
 	backoff := time.Second
 	everSawLine := false
+	fastFails := 0
 
 	for ctx.Err() == nil {
 		opened := time.Now()
@@ -205,7 +209,9 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 		}
 
 		sc := bufio.NewScanner(stream)
+		sawLine := false
 		for sc.Scan() {
+			sawLine = true
 			if !everSawLine {
 				everSawLine = true
 				log.Printf("watcher: ssh inotify connected")
@@ -227,9 +233,18 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 		// Distinguish "tool missing" (remote shell exits immediately) from
 		// "tool present, idle repo, SSH dropped later" by stream lifetime.
 		// inotifywait with a valid dir holds the pipe open indefinitely.
-		if !everSawLine && time.Since(opened) < 3*time.Second {
-			log.Printf("watcher: ssh stream closed immediately without events; inotify-tools not installed on remote? auto-refresh disabled")
-			return
+		if time.Since(opened) < 3*time.Second && !sawLine {
+			fastFails++
+			if !everSawLine {
+				log.Printf("watcher: ssh stream closed immediately without events; inotify-tools not installed on remote? auto-refresh disabled")
+				return
+			}
+			if fastFails >= maxFastFails {
+				log.Printf("watcher: ssh stream died fast %d times consecutively (repo moved/deleted?); auto-refresh disabled", fastFails)
+				return
+			}
+		} else {
+			fastFails = 0
 		}
 		log.Printf("watcher: ssh stream closed, reconnecting in %v", backoff)
 		if !sleepCtx(ctx, backoff) {
@@ -403,9 +418,9 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleEventsDisabled is used when Watcher is nil (SSH mode). It returns a
-// 204 immediately so the frontend's EventSource sees a clean close and stops
-// retrying instead of hammering with reconnects.
+// handleEventsDisabled is used when Watcher is nil (--no-watch, or NewWatcher
+// failed). Returns 204 so the frontend's EventSource sees a clean close and
+// stops retrying instead of hammering with reconnects.
 func handleEventsDisabled(rw http.ResponseWriter, _ *http.Request) {
 	rw.WriteHeader(http.StatusNoContent)
 }

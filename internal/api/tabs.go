@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chronologos/lightjj/internal/runner"
 )
 
 // Tab is a slot in the UI. Only kind=="repo" exists today; the Kind field is
@@ -33,10 +30,15 @@ type Tab struct {
 	handler http.Handler
 }
 
-// TabFactory constructs a Server for a new local repo tab. Nil in SSH mode —
-// tab opening is local-only for now (can't validate remote paths cheaply).
-// Path is the resolved workspace root; the factory need not re-resolve.
+// TabFactory constructs a Server for a new repo tab. Path is the resolved
+// workspace root (output of TabResolve); the factory need not re-resolve.
 type TabFactory func(path string) *Server
+
+// TabResolve validates a user-supplied repo path and returns the canonical
+// workspace root (for dedup). Local mode: ~ expansion + filepath.IsAbs +
+// jj workspace root. SSH mode: one round trip to the remote. Nil when tab
+// creation is disabled.
+type TabResolve func(path string) (string, error)
 
 // TabManager owns the top-level mux. Each repo tab is a full Server mounted
 // at /tab/{id}/ via StripPrefix — Server struct stays untouched, zero handler
@@ -48,7 +50,8 @@ type TabManager struct {
 	tabs map[string]*Tab
 	next int
 
-	newTab TabFactory
+	newTab  TabFactory
+	resolve TabResolve
 
 	// Cross-tab idle-shutdown. Counts SSE subscribers across ALL tabs — a
 	// per-Watcher count would fire when the user switches tabs (old tab's
@@ -66,11 +69,12 @@ type TabManager struct {
 	shutdownOnce sync.Once
 }
 
-func NewTabManager(newTab TabFactory) *TabManager {
+func NewTabManager(newTab TabFactory, resolve TabResolve) *TabManager {
 	m := &TabManager{
 		Mux:        http.NewServeMux(),
 		tabs:       make(map[string]*Tab),
 		newTab:     newTab,
+		resolve:    resolve,
 		ShutdownCh: make(chan struct{}),
 	}
 	m.Mux.HandleFunc("GET /tabs", m.handleList)
@@ -86,8 +90,8 @@ func NewTabManager(newTab TabFactory) *TabManager {
 }
 
 // AddTab mounts a pre-constructed Server. Used by main.go for the startup
-// repo (which has mode-specific wiring — SSH watcher, etc. — that the factory
-// doesn't know about). Dynamic tab creation goes through handleCreate instead.
+// tab (constructed from CLI flags before the factory exists). Dynamic tab
+// creation goes through handleCreate instead.
 func (m *TabManager) AddTab(srv *Server, path string) *Tab {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -196,8 +200,9 @@ type createTabRequest struct {
 }
 
 func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if m.newTab == nil {
-		writeJSONError(w, http.StatusNotImplemented, "tab opening not supported in this mode")
+	if m.newTab == nil || m.resolve == nil {
+		writeJSONError(w, http.StatusNotImplemented,
+			"tab opening unavailable in this mode; use port-forward (see README) or a second 'lightjj --remote host:/other/path' instance")
 		return
 	}
 	var req createTabRequest
@@ -210,19 +215,16 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	// ~ expansion — shell convenience, Go doesn't do it natively.
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, path[1:]) // [1:] drops "~"; Join handles both "" and "/rest"
-		}
-	}
-	if !filepath.IsAbs(path) {
-		writeJSONError(w, http.StatusBadRequest, "path must be absolute")
+	// Defense-in-depth: shellQuote handles single-quotes correctly but a
+	// newline would split the remote command. No legitimate path contains one.
+	if strings.ContainsAny(path, "\n\x00") {
+		writeJSONError(w, http.StatusBadRequest, "path contains invalid characters")
 		return
 	}
-	// Resolve to the workspace root. Fails fast if not a jj repo; also gives
-	// us the canonical path for dedup (opening /repo/src then /repo → one tab).
-	root, err := runner.ResolveWorkspaceRoot(path)
+	// Resolve to the canonical workspace root — validation + dedup key in
+	// one call. Mode-specific (local ~ expansion vs SSH round trip) lives
+	// in the injected closure.
+	root, err := m.resolve(path)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -232,11 +234,11 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeTab(w, existing)
 		return
 	}
-	// Construct OUTSIDE the lock — the factory spawns a subprocess (via the
-	// jj binary check) and opens an fsnotify watcher, ~20-50ms during which
-	// every tab's handleDispatch would otherwise block on RLock. Double-check
-	// dedup under the lock; if a concurrent create won the race, shut down
-	// the orphan (its watcher goroutines haven't done anything yet).
+	// Construct OUTSIDE the lock — the factory opens a watcher (fsnotify or
+	// an SSH goroutine). Cheap (~1ms) but lock-free means future factory
+	// additions can't stall dispatch. Double-check dedup under the lock;
+	// if a concurrent create won, shut down the orphan (its watcher
+	// goroutine hasn't done anything yet).
 	srv := m.newTab(root)
 	m.mu.Lock()
 	if existing := m.findByPathLocked(root); existing != nil {

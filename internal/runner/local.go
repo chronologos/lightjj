@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -45,6 +47,21 @@ func ResolveWorkspaceRoot(dir string) (string, error) {
 		return "", fmt.Errorf("not a jj repository: %s", dir)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// ResolveLocalTabPath is the local-mode TabResolve: ~ expansion, abs check,
+// then ResolveWorkspaceRoot. Lives here (not main.go) so it's testable and
+// sits next to its sibling — both take user input → canonical root.
+func ResolveLocalTabPath(path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, path[1:])
+		}
+	}
+	if !filepath.IsAbs(path) {
+		return "", errors.New("path must be absolute")
+	}
+	return ResolveWorkspaceRoot(path)
 }
 
 func (r *LocalRunner) Run(ctx context.Context, args []string) ([]byte, error) {
