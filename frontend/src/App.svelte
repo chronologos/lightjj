@@ -1635,13 +1635,6 @@
 
     {@render tabBar?.()}
 
-    {#if message}
-      <MessageBar {message} expanded={messageExpanded}
-        onDismiss={dismissMessage}
-        onExpandToggle={() => messageExpanded = !messageExpanded}
-      />
-    {/if}
-
     {#if activeView === 'log'}
       <div class="workspace">
         <div class="revision-panel-wrapper" style="width: {config.revisionPanelWidth}px">
@@ -1808,6 +1801,13 @@
       {activeView}
     />
   </div>
+
+  {#if message}
+    <MessageBar {message} expanded={messageExpanded}
+      onDismiss={dismissMessage}
+      onExpandToggle={() => messageExpanded = !messageExpanded}
+    />
+  {/if}
 
   <CommandPalette bind:open={paletteOpen} {commands} />
 

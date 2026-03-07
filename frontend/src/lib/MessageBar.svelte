@@ -59,17 +59,23 @@
 
 <style>
   .message-bar {
+    /* Fixed overlay above StatusBar (24px) — no layout shift on mount/unmount.
+       column-reverse keeps .message-main anchored at bottom; expanded details
+       grow upward into workspace space. */
+    position: fixed;
+    bottom: 24px;
+    left: 0;
+    right: 0;
+    z-index: 50;
     display: flex;
-    flex-direction: column;
+    flex-direction: column-reverse;
     background: var(--msg-bg);
-    /* Left accent stripe: primary visual anchor — stays saturated even when
-       bg is subtle. Bottom border separates from workspace content. */
     border-left: 3px solid var(--msg-fg);
-    border-bottom: 1px solid color-mix(in srgb, var(--msg-fg) 30%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--msg-fg) 30%, transparent);
     color: var(--msg-fg);
     font-size: 12px;
-    flex-shrink: 0;
-    animation: slide-down var(--anim-duration) var(--anim-ease);
+    animation: slide-up var(--anim-duration) var(--anim-ease);
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
   }
 
   .kind-error   { --msg-fg: var(--red);   --msg-bg: var(--bg-error); }
@@ -129,7 +135,7 @@
   }
 
   .message-details {
-    border-top: 1px solid color-mix(in srgb, var(--msg-fg) 30%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--msg-fg) 30%, transparent);
     padding: 6px 12px;
     position: relative;
   }

@@ -66,11 +66,12 @@
      (tabs, path-input text) survives tab switches. App just positions it. -->
 {#snippet tabBar()}
   <TabBar {tabs} activeId={activeTabId} onswitch={switchTab} onopen={handleOpen} onclose={handleClose} />
-  {#if shellMessage}
-    <MessageBar message={shellMessage} onDismiss={() => shellMessage = null} />
-  {/if}
 {/snippet}
 
 {#key activeTabId}
   <App bind:this={appRef} {tabBar} onOpenTab={handleOpen} initialState={tabState.get(activeTabId)} />
 {/key}
+
+{#if shellMessage}
+  <MessageBar message={shellMessage} onDismiss={() => shellMessage = null} />
+{/if}
