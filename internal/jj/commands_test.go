@@ -576,25 +576,28 @@ func TestWorkspaceList(t *testing.T) {
 	assert.Contains(t, joined, "name")
 	assert.Contains(t, joined, "target.change_id()")
 	assert.Contains(t, joined, "target.commit_id()")
+	assert.Contains(t, joined, "target.current_working_copy()")
 	assert.Contains(t, joined, `\x1F`)
 }
 
 func TestParseWorkspaceList(t *testing.T) {
-	output := "base2\x1Fskpssuxl\x1Fa14ce848\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\n"
+	output := "base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\n"
 	ws := ParseWorkspaceList(output)
 	assert.Len(t, ws, 2)
 	assert.Equal(t, "base2", ws[0].Name)
 	assert.Equal(t, "skpssuxl", ws[0].ChangeId)
 	assert.Equal(t, "a14ce848", ws[0].CommitId)
+	assert.False(t, ws[0].Current)
 	assert.Equal(t, "default", ws[1].Name)
 	assert.Equal(t, "qqqqpqpq", ws[1].ChangeId)
 	assert.Equal(t, "bbbbbbbb", ws[1].CommitId)
+	assert.True(t, ws[1].Current)
 }
 
 func TestParseWorkspaceList_NameWithColon(t *testing.T) {
 	// Workspace names containing ": " broke the old human-output parser.
 	// Template output is \x1F-delimited so colons are safe.
-	output := "weird: name\x1Fabc\x1Fdef\n"
+	output := "weird: name\x1Fabc\x1Fdef\x1Ffalse\n"
 	ws := ParseWorkspaceList(output)
 	assert.Len(t, ws, 1)
 	assert.Equal(t, "weird: name", ws[0].Name)

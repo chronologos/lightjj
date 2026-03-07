@@ -1383,7 +1383,7 @@ func TestHandleOpLog_LimitClamped(t *testing.T) {
 
 func TestHandleWorkspaces(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList()).SetOutput([]byte("base2\x1Fskpssuxl\x1Fa14ce848\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\n"))
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte("base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\n"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1398,7 +1398,8 @@ func TestHandleWorkspaces(t *testing.T) {
 	assert.Equal(t, "base2", resp.Workspaces[0].Name)
 	assert.Equal(t, "skpssuxl", resp.Workspaces[0].ChangeId)
 	assert.Equal(t, "default", resp.Workspaces[1].Name)
-	assert.Equal(t, "", resp.Current) // no RepoDir set in test
+	// Current is template-derived, not path-matched — works regardless of RepoDir.
+	assert.Equal(t, "default", resp.Current)
 }
 
 // wsStoreEntry builds a protobuf workspace_store record (jj's on-disk format).
@@ -1416,8 +1417,7 @@ func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
 	// jj 0.39 writes paths relative to .jj/repo/. The default workspace at
 	// the repo root is "../../" (two levels up from .jj/repo/). A secondary
 	// workspace at ../sibling is "../../../sibling". Pre-0.39 wrote absolute.
-	// readWorkspaceStore must resolve both so TabResolve's IsAbs check passes
-	// and the wsPath==RepoDir current-workspace match works.
+	// readWorkspaceStore must resolve both so TabResolve's IsAbs check passes.
 	repoDir := t.TempDir()
 	storeDir := filepath.Join(repoDir, ".jj", "repo", "workspace_store")
 	require.NoError(t, os.MkdirAll(storeDir, 0o755))
@@ -1440,20 +1440,6 @@ func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
 	assert.True(t, filepath.IsAbs(got["legacy"]))
 }
 
-func TestReadWorkspaceStore_CurrentWorkspaceMatch(t *testing.T) {
-	// The second break: handlers.go:396 does wsPath == s.RepoDir to identify
-	// "current". With ../../ → repoDir resolution, the match works.
-	repoDir := t.TempDir()
-	storeDir := filepath.Join(repoDir, ".jj", "repo", "workspace_store")
-	require.NoError(t, os.MkdirAll(storeDir, 0o755))
-	store := wsStoreEntry("default", "../../")
-	require.NoError(t, os.WriteFile(filepath.Join(storeDir, "index"), store, 0o644))
-
-	srv := &Server{RepoDir: repoDir}
-	got, _ := srv.readWorkspaceStore(context.Background())
-
-	assert.Equal(t, srv.RepoDir, got["default"]) // the exact == check handlers.go does
-}
 
 func TestHandleWorkspaces_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)

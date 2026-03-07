@@ -379,26 +379,19 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	workspaces := jj.ParseWorkspaceList(string(output))
 
-	// Enrich with paths from workspace store (best-effort)
+	// Enrich with paths from workspace store (best-effort — for tab-open)
 	pathMap, _ := s.readWorkspaceStore(r.Context())
 
-	// Determine current workspace by matching this tab's repo path. RepoDir
-	// is set in local mode; RepoPath is always set (SSH mode: the remote dir).
-	self := s.RepoDir
-	if self == "" {
-		self = s.RepoPath
-	}
 	current := ""
 	resp := workspacesResponse{Workspaces: make([]workspaceWithPath, len(workspaces))}
 	for i, ws := range workspaces {
-		wsPath := pathMap[ws.Name]
 		resp.Workspaces[i] = workspaceWithPath{
 			Name:     ws.Name,
 			ChangeId: ws.ChangeId,
 			CommitId: ws.CommitId,
-			Path:     wsPath,
+			Path:     pathMap[ws.Name],
 		}
-		if self != "" && wsPath == self {
+		if ws.Current {
 			current = ws.Name
 		}
 	}
