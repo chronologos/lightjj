@@ -50,3 +50,16 @@ func TestShellQuote(t *testing.T) {
 	assert.Equal(t, "'it'\"'\"'s'", shellQuote("it's"))
 	assert.Equal(t, "'hello world'", shellQuote("hello world"))
 }
+
+func TestQuoteRemotePath(t *testing.T) {
+	// ~/ expands to "$HOME"/ (double-quoted so remote shell evaluates it);
+	// rest is single-quoted. Adjacent quoted strings concatenate.
+	assert.Equal(t, `"$HOME"`, quoteRemotePath("~"))
+	assert.Equal(t, `"$HOME"/'repo'`, quoteRemotePath("~/repo"))
+	assert.Equal(t, `"$HOME"/'repo/sub dir'`, quoteRemotePath("~/repo/sub dir"))
+	// Absolute paths: plain shellQuote, no expansion.
+	assert.Equal(t, `'/abs/path'`, quoteRemotePath("/abs/path"))
+	// ~user/ form is NOT expanded (bash-specific, not POSIX). Falls through
+	// to shellQuote — jj will error with a clear message, which is fine.
+	assert.Equal(t, `'~alice/repo'`, quoteRemotePath("~alice/repo"))
+}

@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ func newTestTab(t *testing.T) (*TabManager, *testutil.MockRunner) {
 	runner := testutil.NewMockRunner(t)
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
 	srv := NewServer(runner, "")
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	tm.AddTab(srv, "/test/repo")
 	return tm, runner
 }
@@ -62,7 +64,7 @@ func TestTabList(t *testing.T) {
 }
 
 func TestTabList_StableOrder(t *testing.T) {
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	// AddTab three times, then verify list order is 0,1,2 not map-random.
 	for i := 0; i < 3; i++ {
 		runner := testutil.NewMockRunner(t)
@@ -87,10 +89,17 @@ func TestTabCreate_NoFactory(t *testing.T) {
 }
 
 func TestTabCreate_Validation(t *testing.T) {
-	tm := NewTabManager(func(path string) *Server {
+	nopeFactory := func(path string) *Server {
 		t.Fatalf("factory should not be called for invalid input")
 		return nil
-	})
+	}
+	rejectRel := func(path string) (string, error) {
+		if !strings.HasPrefix(path, "/") {
+			return "", errors.New("path must be absolute")
+		}
+		return path, nil
+	}
+	tm := NewTabManager(nopeFactory, rejectRel)
 	runner := testutil.NewMockRunner(t)
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
 	tm.AddTab(NewServer(runner, ""), "/start")
@@ -99,8 +108,9 @@ func TestTabCreate_Validation(t *testing.T) {
 		body string
 		want int
 	}{
-		{`{}`, http.StatusBadRequest},                      // empty path
-		{`{"path":"relative/path"}`, http.StatusBadRequest}, // not absolute
+		{`{}`, http.StatusBadRequest},                       // empty path
+		{`{"path":"relative/path"}`, http.StatusBadRequest}, // resolver rejects
+		{`{"path":"/ok\npath"}`, http.StatusBadRequest},     // newline injection guard
 		{`{not json`, http.StatusBadRequest},                // malformed
 	}
 	for _, tc := range cases {
@@ -110,11 +120,44 @@ func TestTabCreate_Validation(t *testing.T) {
 	}
 }
 
+func TestTabCreate_DedupAndFactory(t *testing.T) {
+	// Now testable end-to-end: injected resolve means no real jj subprocess.
+	factoryCalls := 0
+	newTab := func(root string) *Server {
+		factoryCalls++
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		return NewServer(r, "")
+	}
+	// Resolve canonicalizes to the same root for both inputs.
+	resolve := func(path string) (string, error) { return "/canon", nil }
+	tm := NewTabManager(newTab, resolve)
+	r := testutil.NewMockRunner(t)
+	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+	tm.AddTab(NewServer(r, ""), "/start")
+
+	// First open: factory runs, tab created.
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/canon/sub"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+	var t1 Tab
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &t1))
+	assert.Equal(t, "/canon", t1.Path)
+	assert.Equal(t, 1, factoryCalls)
+
+	// Second open with different input, same canonical root: dedup returns
+	// existing tab, factory NOT called again.
+	w = httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/canon"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+	var t2 Tab
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &t2))
+	assert.Equal(t, t1.ID, t2.ID)
+	assert.Equal(t, 1, factoryCalls, "dedup should prevent second factory call")
+}
+
 func TestTabFindByPath(t *testing.T) {
-	// handleCreate's dedup goes through findByPath. We can't call
-	// handleCreate itself (ResolveWorkspaceRoot needs a real jj repo),
-	// but the dedup lookup is testable directly.
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	runner := testutil.NewMockRunner(t)
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
 	t0 := tm.AddTab(NewServer(runner, ""), "/canonical/root")
@@ -124,7 +167,7 @@ func TestTabFindByPath(t *testing.T) {
 }
 
 func TestTabClose(t *testing.T) {
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	for i := 0; i < 2; i++ {
 		runner := testutil.NewMockRunner(t)
 		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
@@ -167,7 +210,7 @@ func TestTabManager_IdleShutdown_CrossTab(t *testing.T) {
 	// The core fix: switching from tab 0 to tab 1 should NOT start the idle
 	// timer. totalSubs goes 1→2 (tab 1 connects) → 1 (tab 0 disconnects).
 	// Never hits 0 until the BROWSER closes (both tabs disconnect).
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	tm.SetIdleShutdown(10 * time.Millisecond)
 
 	// Two tabs, each with a Watcher (no fsnotify — just the subscribe hooks).
@@ -206,7 +249,7 @@ func TestTabManager_IdleShutdown_CrossTab(t *testing.T) {
 }
 
 func TestTabManager_IdleShutdown_ReconnectCancels(t *testing.T) {
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	tm.SetIdleShutdown(50 * time.Millisecond)
 	r := testutil.NewMockRunner(t)
 	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
@@ -234,7 +277,7 @@ func TestTabManager_IdleShutdown_CloseOrder(t *testing.T) {
 	// The other order: old tab disconnects BEFORE new tab connects (possible
 	// if {#key} cleanup runs before the new mount's effect). totalSubs dips
 	// to 0 momentarily → timer starts → incSub cancels it.
-	tm := NewTabManager(nil)
+	tm := NewTabManager(nil, nil)
 	tm.SetIdleShutdown(50 * time.Millisecond)
 	for i := 0; i < 2; i++ {
 		r := testutil.NewMockRunner(t)

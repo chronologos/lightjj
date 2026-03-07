@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -92,37 +93,51 @@ func main() {
 
 	// makeServer sets all per-repo Server fields. BOTH the startup tab and
 	// the dynamic-tab factory call this — adding a new Server field here
-	// (and only here) keeps the two paths in sync. The local-mode Watcher
-	// is also here; the SSH-mode Watcher is the one genuinely mode-specific
-	// piece and stays below.
-	makeServer := func(r runner.CommandRunner, repoDir, repoPath string) *api.Server {
+	// (and only here) keeps the two paths in sync. streamRaw selects watcher
+	// mode: nil = local fsnotify; non-nil = SSH inotifywait pipe.
+	makeServer := func(r runner.CommandRunner, repoDir, repoPath string, streamRaw api.StreamFunc) *api.Server {
 		s := api.NewServer(r, repoDir)
 		s.DefaultRemote = *defaultRemote
 		s.Hostname = displayHost
 		s.RepoPath = repoPath
-		if !*noWatch && sshRunner == nil {
-			s.Watcher = api.NewWatcher(s, *snapshotInterval)
+		if !*noWatch {
+			if streamRaw != nil {
+				s.Watcher = api.NewSSHWatcher(s, streamRaw)
+			} else {
+				s.Watcher = api.NewWatcher(s, *snapshotInterval)
+			}
 		}
 		return s
 	}
 
-	srv := makeServer(cmdRunner, resolvedRepoDir, displayPath)
-	if !*noWatch && sshRunner != nil {
-		srv.Watcher = api.NewSSHWatcher(srv, sshRunner.StreamRaw)
-	}
-
-	// Tab factory for dynamically opening additional local repos. Nil in SSH
-	// mode — can't cheaply validate remote paths.
+	// Tab factory + path resolver for dynamically opening additional repos.
+	// The resolver is one ~20ms local / ~440ms SSH round trip that does
+	// validation + canonicalization + dedup key in one call.
 	var newTab api.TabFactory
+	var resolve api.TabResolve
+	var startupStream api.StreamFunc
 	if sshRunner == nil {
 		newTab = func(root string) *api.Server {
-			// root is already resolved by handleCreate's ResolveWorkspaceRoot
-			// — construct LocalRunner directly instead of NewLocalRunner (which
-			// would resolve again, ~20ms subprocess).
-			return makeServer(&runner.LocalRunner{Binary: "jj", RepoDir: root}, root, root)
+			// root is already resolved — construct LocalRunner directly
+			// instead of NewLocalRunner (would resolve again, ~20ms).
+			return makeServer(&runner.LocalRunner{Binary: "jj", RepoDir: root}, root, root, nil)
+		}
+		resolve = runner.ResolveLocalTabPath
+	} else {
+		startupStream = sshRunner.StreamRaw
+		newTab = func(root string) *api.Server {
+			r := runner.NewSSHRunner(sshRunner.Host, root)
+			return makeServer(r, "", root, r.StreamRaw) // repoDir="" → SSH mode
+		}
+		resolve = func(path string) (string, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return sshRunner.ResolveWorkspaceRoot(ctx, path)
 		}
 	}
-	tm := api.NewTabManager(newTab)
+
+	srv := makeServer(cmdRunner, resolvedRepoDir, displayPath, startupStream)
+	tm := api.NewTabManager(newTab, resolve)
 	if *autoShutdown > 0 {
 		tm.SetIdleShutdown(*autoShutdown)
 	}
