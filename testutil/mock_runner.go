@@ -15,6 +15,7 @@ import (
 type ExpectedCommand struct {
 	args       []string
 	output     []byte
+	stderr     []byte
 	called     bool
 	err        error
 	wantStdin  string
@@ -29,6 +30,12 @@ func (e *ExpectedCommand) SetOutput(output []byte) *ExpectedCommand {
 
 func (e *ExpectedCommand) SetError(err error) *ExpectedCommand {
 	e.err = err
+	return e
+}
+
+// SetStderr sets mock stderr output for RunForMutation calls.
+func (e *ExpectedCommand) SetStderr(stderr []byte) *ExpectedCommand {
+	e.stderr = stderr
 	return e
 }
 
@@ -142,6 +149,14 @@ func (m *MockRunner) RunWithInput(_ context.Context, args []string, stdin string
 	e.gotStdin = stdin
 	m.mu.Unlock()
 	return e.output, e.err
+}
+
+func (m *MockRunner) RunForMutation(_ context.Context, args []string, stdin string) ([]byte, []byte, error) {
+	e := m.findExpectation(args)
+	m.mu.Lock()
+	e.gotStdin = stdin
+	m.mu.Unlock()
+	return e.output, e.stderr, e.err
 }
 
 // mockStream models real StreamCombined semantics: body drains first, error

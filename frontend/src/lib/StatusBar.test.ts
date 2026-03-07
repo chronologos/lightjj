@@ -28,7 +28,6 @@ function activeSplit(parallel = false, review = false) {
 function defaultProps(overrides: Record<string, unknown> = {}) {
   return {
     statusText: 'Ready',
-    commandOutput: '',
     rebase: createRebaseMode(),
     squash: createSquashMode(),
     squashFileCount: null,
@@ -45,14 +44,6 @@ describe('StatusBar', () => {
       const { container } = render(StatusBar, { props: defaultProps({ statusText: 'All good' }) })
       const item = container.querySelector('.status-item')
       expect(item?.textContent).toBe('All good')
-    })
-
-    it('shows last line of commandOutput', () => {
-      const { container } = render(StatusBar, {
-        props: defaultProps({ commandOutput: 'line1\nline2\nlast line' }),
-      })
-      const output = container.querySelector('.status-item.output')
-      expect(output?.textContent).toBe('last line')
     })
 
     it('shows key hints when no statusText', () => {

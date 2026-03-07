@@ -217,15 +217,21 @@ func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []stri
 }
 
 // runMutationWithInput is runMutation for commands that need stdin (describe).
-// Empty stdin = plain Run (LocalRunner.run only sets cmd.Stdin when stdin != "").
+// Empty stdin = plain Run (LocalRunner.runSeparate only sets cmd.Stdin when stdin != "").
+// Returns stdout as "output" and non-empty stderr as "warnings" — jj prints
+// advisory warnings (conflict notices, no-op messages) to stderr on exit-0.
 func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, args []string, stdin string) {
-	output, err := s.Runner.RunWithInput(r.Context(), args, stdin)
+	stdout, stderr, err := s.Runner.RunForMutation(r.Context(), args, stdin)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.refreshOpId()
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": string(output)})
+	resp := map[string]string{"output": string(stdout)}
+	if warn := strings.TrimSpace(string(stderr)); warn != "" {
+		resp["warnings"] = warn
+	}
+	s.writeJSON(w, r, http.StatusOK, resp)
 }
 
 // streamMutation is runMutation for slow network ops (git push/fetch). Streams
