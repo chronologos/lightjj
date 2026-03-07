@@ -28,6 +28,7 @@ type Server struct {
 	DefaultRemote string // preferred remote name for bookmark/remote sorting; main.go can override
 	Hostname      string // display hostname for tab title (local os.Hostname or SSH host); main.go sets
 	RepoPath      string // display repo path for tab title (RepoDir or SSH remote path); main.go sets
+	SSHHost       string // full user@host spec for --remote mode (empty in local mode); feeds {host} placeholder
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
