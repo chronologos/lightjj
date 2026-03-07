@@ -413,9 +413,13 @@
                 <span class="wc-badge">@</span>
               {/if}
               {#if entry.commit.empty}
-                <span class="empty-badge">(empty)</span>
+                <span class="desc-placeholder">(empty)</span>
               {/if}
-              <span class="description-text">{entry.description || '(no description)'}</span>
+              {#if entry.description}
+                <span class="description-text">{entry.description}</span>
+              {:else if !entry.commit.empty}
+                <span class="desc-placeholder">(no description)</span>
+              {/if}
             </span>
           {:else if line.isBookmarkLine}
             {@const entry = revisions[line.entryIndex]}
@@ -1014,10 +1018,15 @@
     border: 1px solid var(--red);
   }
 
-  .empty-badge {
+  /* Shared treatment for "(empty)" and "(no description)" — both annotate absence.
+   * No italic: the --font-ui stack's synthesized oblique reads heavier at 12px,
+   * inverting the hierarchy (meta-text should recede, not advance). */
+  .desc-placeholder {
     color: var(--overlay0);
-    font-style: italic;
-    margin-right: 4px;
+    font-size: 12px;
+  }
+  .desc-placeholder + .description-text {
+    margin-left: 6px;
   }
 
   .rebase-preview {

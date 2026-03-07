@@ -152,10 +152,26 @@ describe('RevisionGraph', () => {
       expect(hiddenRows.length).toBeGreaterThan(0)
     })
 
-    it('shows (no description) for empty description', () => {
-      const entry = makeEntry({ description: '' })
+    it('shows (no description) placeholder when not empty but undescribed', () => {
+      const entry = makeEntry({ description: '', empty: false })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
-      expect(container.querySelector('.description-text')?.textContent).toBe('(no description)')
+      expect(container.querySelector('.desc-placeholder')?.textContent).toBe('(no description)')
+      expect(container.querySelector('.description-text')).toBeNull()
+    })
+
+    it('shows (empty) only — not "(empty) (no description)" — for empty undescribed revisions', () => {
+      const entry = makeEntry({ description: '', empty: true })
+      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
+      const placeholders = container.querySelectorAll('.desc-placeholder')
+      expect(placeholders).toHaveLength(1)
+      expect(placeholders[0].textContent).toBe('(empty)')
+    })
+
+    it('shows (empty) before description when both present', () => {
+      const entry = makeEntry({ description: 'merge main', empty: true })
+      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
+      expect(container.querySelector('.desc-placeholder')?.textContent).toBe('(empty)')
+      expect(container.querySelector('.description-text')?.textContent).toBe('merge main')
     })
   })
 
