@@ -44,8 +44,8 @@ internal/
     handlers.go            — All endpoint implementations, flag validation
     handlers_test.go       — Handler tests with MockRunner
     integration_test.go    — Integration tests (build-tagged)
-    watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic util snapshot. `sshWatchLoop` takes `fastClose`/`baseBackoff` as params (not struct fields) so tests use ~ms values; 7 scriptedOpen test cases cover tool-missing/open-error/fast-close bails + resets.
-    watcher_test.go        — Broadcaster tests (subscribe/broadcast/drop) + sshWatchLoop table tests via io.Pipe()
+    watcher.go             — fsnotify on .jj/repo/op_heads/heads/ + SSE push, periodic util snapshot. SSH mode uses `sshPollLoop` (op-id poll every --snapshot-interval, no remote deps).
+    watcher_test.go        — Broadcaster tests (subscribe/broadcast/drop) + sshPollLoop tests via seqRunner
     config.go              — Server-side config storage (os.UserConfigDir()/lightjj/config.json); cross-origin write rejection via isLocalOrigin
     annotations.go         — CRUD for per-changeId review comments (annotations/{changeId}.json); changeId path-traversal validation via regex
     open.go                — Open-in-$EDITOR: buildEditorArgv ({file}/{line} substitution, argv[0] validation), handleOpenFile. Setsid via build-tagged detachProcess (open_unix.go / open_windows.go)

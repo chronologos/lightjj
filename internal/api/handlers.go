@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chronologos/lightjj/internal/jj"
 	"github.com/chronologos/lightjj/internal/parser"
@@ -949,22 +950,103 @@ type PullRequest struct {
 	IsDraft  bool   `json:"is_draft"`
 }
 
-// ghPRListArgv is the gh invocation for listing the current user's open PRs.
-// Passed to Runner.RunRaw so it executes where the repo lives (local or SSH).
-// STATIC — never append request-derived input; this flows to a remote shell
-// via SSHRunner.wrapRaw.
-var ghPRListArgv = []string{
-	"gh", "pr", "list",
-	"--state", "open",
-	"--author", "@me",
-	"--json", "headRefName,url,number,isDraft",
-	"--limit", "100",
+// ghPRListArgs builds the gh invocation for listing the current user's open
+// PRs. --repo lets gh skip git-dir discovery, so this works from secondary
+// workspaces (no .git/) and any cwd. repo is "owner/name" — STATIC server
+// value from resolveGHRepo, never request-derived (flows to a remote shell
+// via SSHRunner.wrapRaw).
+func ghPRListArgs(repo string) []string {
+	return []string{
+		"gh", "pr", "list",
+		"--repo", repo,
+		"--state", "open",
+		"--author", "@me",
+		"--json", "headRefName,url,number,isDraft",
+		"--limit", "100",
+	}
+}
+
+// githubRepoFromURL extracts "owner/repo" from a GitHub remote URL.
+// Handles https, ssh (git@github.com:...), ssh with host alias
+// (git@github.com-personal:...), and ssh:// scheme. Returns "" if the URL
+// isn't a recognizable GitHub remote — caller treats that as "no PR badges".
+func githubRepoFromURL(url string) string {
+	const host = "github.com"
+	idx := strings.Index(url, host)
+	if idx < 0 {
+		return ""
+	}
+	// Boundary check: "github.com" must start the URL or follow '@' (ssh)
+	// or '/' (https). Prevents matching "notgithub.com".
+	if idx > 0 && url[idx-1] != '@' && url[idx-1] != '/' {
+		return ""
+	}
+	rest := url[idx+len(host):]
+	// SSH host alias: github.com-foo — skip -foo to reach the ':' or '/'.
+	if after, ok := strings.CutPrefix(rest, "-"); ok {
+		i := strings.IndexAny(after, ":/")
+		if i < 0 {
+			return ""
+		}
+		rest = after[i:]
+	}
+	if len(rest) == 0 || (rest[0] != ':' && rest[0] != '/') {
+		return ""
+	}
+	// Reject port-like suffix (github.com:443/...). SSH paths always
+	// start with a letter (owner name); ports always start with a digit.
+	if rest[0] == ':' && len(rest) > 1 && rest[1] >= '0' && rest[1] <= '9' {
+		return ""
+	}
+	rest = strings.TrimSuffix(rest[1:], ".git")
+	rest = strings.TrimSuffix(rest, "/")
+	// Must be exactly "owner/repo" — anything else is ambiguous.
+	if rest == "" || strings.Count(rest, "/") != 1 {
+		return ""
+	}
+	return rest
+}
+
+// resolveGHRepo derives "owner/repo" from the default remote's URL. Lazy-init
+// via sync.Once — the `jj git remote list` call happens once per Server
+// lifetime, on the first PR-badge fetch. Empty result ("") is a valid cached
+// answer meaning "not a GitHub repo" — the Once ensures we don't re-query.
+//
+// Uses its own timeout (not the request ctx): the remote URL is server-lifetime
+// state. A cancelled first request would otherwise permanently cache "" (Once
+// has no retry) — every subsequent PR-badge fetch would silently return empty.
+func (s *Server) resolveGHRepo() string {
+	s.ghRepoOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := s.Runner.Run(ctx, jj.GitRemoteList())
+		if err != nil {
+			return
+		}
+		// Format: "<name> <url>\n..." — pick the default remote's URL.
+		for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+			name, url, ok := strings.Cut(line, " ")
+			if ok && name == s.DefaultRemote {
+				s.ghRepo = githubRepoFromURL(strings.TrimSpace(url))
+				return
+			}
+		}
+	})
+	return s.ghRepo
 }
 
 func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 	empty := []PullRequest{}
 
-	out, err := s.Runner.RunRaw(r.Context(), ghPRListArgv)
+	repo := s.resolveGHRepo()
+	if repo == "" {
+		// No GitHub remote → no PR badges. Silent — non-GitHub repos and
+		// remotes-without-a-default are normal, not an error worth logging.
+		s.writeJSON(w, r, http.StatusOK, empty)
+		return
+	}
+
+	out, err := s.Runner.RunRaw(r.Context(), ghPRListArgs(repo))
 	if err != nil {
 		log.Printf("pull-requests: gh failed (badges disabled): %v", err)
 		s.writeJSON(w, r, http.StatusOK, empty)

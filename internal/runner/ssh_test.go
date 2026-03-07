@@ -27,16 +27,6 @@ func TestSSHRunner_wrapRaw(t *testing.T) {
 	assert.Equal(t, "cd -- '/home/user/repo' && 'gh' 'pr' 'list' '--author' '@me'", got[1])
 }
 
-func TestSSHRunner_StreamRaw_UsesWrapRaw(t *testing.T) {
-	// StreamRaw delegates to wrapRaw → local.Stream; we can only test the
-	// arg building without spawning ssh. The watcher passes a relative heads
-	// path — wrapRaw's `cd` makes it resolve against the remote repo root.
-	r := NewSSHRunner("user@host", "/repo")
-	got := r.wrapRaw([]string{"inotifywait", "-m", "-q", "-e", "create", ".jj/repo/op_heads/heads"})
-	assert.Equal(t, "user@host", got[0])
-	assert.Equal(t, "cd -- '/repo' && 'inotifywait' '-m' '-q' '-e' 'create' '.jj/repo/op_heads/heads'", got[1])
-}
-
 func TestSSHRunner_wrapRaw_QuotesRepoPath(t *testing.T) {
 	r := NewSSHRunner("user@host", "/home/user/it's mine")
 	got := r.wrapRaw([]string{"gh", "pr", "list"})

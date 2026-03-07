@@ -58,14 +58,6 @@ func (r *SSHRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
 	return r.local.Run(ctx, r.wrapRaw(argv))
 }
 
-// StreamRaw opens a persistent pipe to argv running in the remote repo
-// directory. Used by the SSH watcher to pipe `inotifywait -m` — each stdout
-// line is an fs event, consumed line-by-line until the SSH connection drops
-// or ctx is cancelled.
-func (r *SSHRunner) StreamRaw(ctx context.Context, argv []string) (io.ReadCloser, error) {
-	return r.local.Stream(ctx, r.wrapRaw(argv))
-}
-
 // ResolveWorkspaceRoot returns the jj workspace root for an arbitrary path on
 // the remote host (NOT r.RepoPath — used for tab-open validation where path
 // is user input). -R lets jj do the upward .jj search, same as the local

@@ -32,6 +32,11 @@ type Server struct {
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
+	// ghRepo is "owner/name" derived from DefaultRemote's URL. Lazy-resolved
+	// on first handlePullRequests; "" is a valid cached answer (not GitHub).
+	ghRepo     string
+	ghRepoOnce sync.Once
+
 	// Watcher provides SSE auto-refresh. Nil only on --no-watch or constructor
 	// failure. Set by main.go after NewServer; routes() tolerates nil.
 	Watcher *Watcher
