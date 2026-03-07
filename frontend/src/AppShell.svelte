@@ -1,11 +1,12 @@
 <script lang="ts">
   import App, { type TabState } from './App.svelte'
   import TabBar from './lib/TabBar.svelte'
+  import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { setActiveTab, listTabs, openTab, closeTab, type TabInfo } from './lib/api'
 
   let tabs: TabInfo[] = $state([])
   let activeTabId: string = $state('0')
-  let error: string = $state('')
+  let shellMessage: Message | null = $state(null)
   let appRef: ReturnType<typeof App> | undefined = $state(undefined)
 
   // Per-tab UI state snapshots. Captured before {#key} destroys the old App
@@ -28,20 +29,22 @@
     activeTabId = id
   }
 
+  const showShellError = (e: unknown) => shellMessage = errorMessage(e)
+
   async function handleOpen(path: string) {
-    error = ''
+    shellMessage = null
     try {
       const tab = await openTab(path)
       // Dedup: backend returns existing tab if path resolves to a known root.
       if (!tabs.find(t => t.id === tab.id)) tabs = [...tabs, tab]
       switchTab(tab.id)
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
+      showShellError(e)
     }
   }
 
   async function handleClose(id: string) {
-    error = ''
+    shellMessage = null
     // Switch away first so App unmounts cleanly (its wireAutoRefresh cleanup
     // closes the EventSource) before the backend tears down that tab's Server.
     if (id === activeTabId) {
@@ -53,7 +56,7 @@
       tabs = tabs.filter(t => t.id !== id)
       tabState.delete(id)
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
+      showShellError(e)
     }
   }
 </script>
@@ -63,32 +66,11 @@
      (tabs, path-input text) survives tab switches. App just positions it. -->
 {#snippet tabBar()}
   <TabBar {tabs} activeId={activeTabId} onswitch={switchTab} onopen={handleOpen} onclose={handleClose} />
-  {#if error}
-    <div class="shell-error">{error} <button onclick={() => error = ''}>×</button></div>
+  {#if shellMessage}
+    <MessageBar message={shellMessage} onDismiss={() => shellMessage = null} />
   {/if}
 {/snippet}
 
 {#key activeTabId}
   <App bind:this={appRef} {tabBar} onOpenTab={handleOpen} initialState={tabState.get(activeTabId)} />
 {/key}
-
-<style>
-  .shell-error {
-    padding: 4px 12px;
-    background: var(--red-bg);
-    color: var(--red);
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .shell-error button {
-    background: transparent;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    font-size: 14px;
-    padding: 0 4px;
-  }
-</style>
