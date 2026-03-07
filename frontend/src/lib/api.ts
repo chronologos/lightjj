@@ -17,6 +17,7 @@ export interface LogEntry {
     immutable: boolean
     conflicted: boolean
     divergent: boolean
+    empty: boolean
     working_copies?: string[]
     parent_ids?: string[]
   }

@@ -27,6 +27,7 @@ lightjj
 - **Inline annotations** — per-line review comments keyed by `change_id`; auto-re-anchor when the agent rewrites; export as markdown or JSON
 - **Inline rebase** — pick source mode (`-r`/`-s`/`-b`), target mode (onto/after/before), cursor to destination, Enter
 - **Bookmarks & git** — set/move/advance/delete/track bookmarks, push/fetch with flag validation
+- **Bookmarks panel** (`2`) — sync state at a glance: ahead/behind/diverged/conflict, commit descriptions + staleness, PR badges. Enter to jump, d/f/t to delete/forget/track
 - **Multi-select** — batch abandon, squash, rebase across revisions
 - **Op log & evolog** — full operation history and per-revision evolution with inter-diffs
 - **Multi-repo tabs** — open additional repos in tabs (`+` button in the tab bar); diffs stay cached across tabs

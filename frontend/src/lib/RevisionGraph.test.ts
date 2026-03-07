@@ -29,6 +29,7 @@ function makeEntry(overrides: Partial<{
   immutable: boolean
   conflicted: boolean
   divergent: boolean
+  empty: boolean
   working_copies: string[]
   parent_ids: string[]
   bookmarks: string[]
@@ -46,6 +47,7 @@ function makeEntry(overrides: Partial<{
       immutable: overrides.immutable ?? false,
       conflicted: overrides.conflicted ?? false,
       divergent: overrides.divergent ?? false,
+      empty: overrides.empty ?? false,
       working_copies: overrides.working_copies,
       parent_ids: overrides.parent_ids ?? [],
     },

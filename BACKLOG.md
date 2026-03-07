@@ -54,6 +54,7 @@ Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api
 ### UX consistency
 
 - [ ] **Right-click context menus inconsistent across panels** (Small) — RevisionGraph has it, DiffPanel has it (diff-line copy-reference), but BookmarksPanel / OplogPanel / EvologPanel don't. Should offer per-row actions (same set as keyboard shortcuts) for mouse-first users. `ContextMenu.svelte` is already reusable — just wire `oncontextmenu` per row + pass the action set. ~20 LOC per panel.
+- [ ] **Right-click → copy filename(s)** (Small) — DiffPanel file headers and FileSelectionPanel rows should offer "Copy path" / "Copy all paths" on right-click. Currently copy-reference only works on selected diff *lines*, not file headers. FileSelectionPanel has no context menu at all. Same `ContextMenu.svelte` wiring.
 
 ### Cross-cutting
 

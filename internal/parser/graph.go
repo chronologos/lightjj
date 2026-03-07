@@ -104,7 +104,7 @@ func parseNodeLine(line string) GraphRow {
 	parts := strings.SplitN(rest, "\x1f", 7)
 	prefixBlock := parts[0]
 
-	// Parse the prefix block: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent
+	// Parse the prefix block: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent_PREFIX:empty
 	prefixParts := strings.Split(prefixBlock, jj.JJUIPrefix)
 	var divergent bool
 	if len(prefixParts) >= 4 {
@@ -113,6 +113,9 @@ func parseNodeLine(line string) GraphRow {
 		row.Commit.ChangeId = prefixParts[1]
 		row.Commit.CommitId = prefixParts[2]
 		divergent, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[3]))
+	}
+	if len(prefixParts) >= 5 {
+		row.Commit.Empty, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[4]))
 	}
 
 	// Full IDs and content fields override the shortest prefix fallbacks
