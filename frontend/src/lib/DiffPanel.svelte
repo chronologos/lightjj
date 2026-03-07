@@ -101,7 +101,7 @@
       { label: 'Copy file path', action: () => navigator.clipboard.writeText(info.filePath) },
       onopenfile
         ? { label: 'Open in editor', action: () => onopenfile(info.filePath, start ?? undefined) }
-        : { label: 'Open in editor (local only)', disabled: true },
+        : { label: 'Open in editor (not configured)', disabled: true },
       { separator: true },
       { label: 'Copy reference', action: () => navigator.clipboard.writeText(fullRef) },
     ]

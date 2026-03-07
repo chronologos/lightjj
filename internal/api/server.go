@@ -245,12 +245,7 @@ func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, ar
 }
 
 func hasWarningLine(s string) bool {
-	for line := range strings.SplitSeq(s, "\n") {
-		if strings.HasPrefix(line, "Warning:") {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(s, "Warning:") || strings.Contains(s, "\nWarning:")
 }
 
 // streamMutation is runMutation for slow network ops (git push/fetch). Streams
