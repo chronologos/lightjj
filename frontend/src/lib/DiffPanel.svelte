@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import type { Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { api, diffTargetKey, type FileChange, type DiffTarget } from './api'
@@ -286,9 +286,9 @@
     editBusy.add(path)
     editError = ''
     try {
-      // Guard: display target may have changed since the editor was opened
-      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
       await api.fileWrite(path, content)
+      // Guard: display target may have changed during the await (navigation)
+      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
       clearEditState(path)
       // Reload to show updated diff. Scroll position is preserved by the
       // stale-while-revalidate pattern in the panel-content {#if} — it keeps
@@ -338,8 +338,11 @@
   $effect(() => {
     const gen = ++conflictFetchGen
     const files = conflictOnlyFiles
+    // untrack: .size/.has() reads would register conflictFileDiffs as a dep;
+    // the async .then() write would then re-trigger this effect → O(n²) fetches
+    // (each response bumps gen, invalidating all sibling in-flight requests).
     if (files.length === 0) {
-      if (conflictFileDiffs.size > 0) conflictFileDiffs = new Map()
+      if (untrack(() => conflictFileDiffs.size) > 0) conflictFileDiffs = new Map()
       return
     }
     // `jj file show -r 'connected(a|b)' path` is undefined — gate on single.
@@ -347,8 +350,9 @@
     // usually includes them anyway).
     if (diffTarget?.kind !== 'single') return
     const revId = diffTarget.commitId
+    const already = untrack(() => conflictFileDiffs)
     for (const f of files) {
-      if (conflictFileDiffs.has(f.path)) continue
+      if (already.has(f.path)) continue
       api.fileShow(revId, f.path).then(result => {
         if (gen !== conflictFetchGen) return // discard stale responses
         const lines: DiffLine[] = result.content.split('\n').map(line => ({

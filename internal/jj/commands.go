@@ -262,7 +262,7 @@ func GitPush(flags ...string) CommandArgs {
 }
 
 func GitRemoteList() CommandArgs {
-	return []string{"git", "remote", "list"}
+	return []string{"git", "remote", "list", "--color", "never", "--ignore-working-copy"}
 }
 
 func Rebase(from SelectedRevisions, to string, source string, target string, skipEmptied bool, ignoreImmutable bool) CommandArgs {

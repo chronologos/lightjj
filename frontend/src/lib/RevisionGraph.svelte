@@ -125,10 +125,11 @@
   }
 
   // Compute divergence offsets: for divergent commits sharing a change_id,
-  // assign /0, /1, ... sorted by commit_id (matching jj's convention).
+  // assign /0, /1, ... in jj's emission order (GlobalCommitPosition — NOT
+  // commit_id sort; see divergence.go:65-68). `revisions` is already in that
+  // order, so encounter order during iteration is correct.
   let divergenceOffsets = $derived.by(() => {
     const map = new Map<string, string>() // commit_id → "/N"
-    // Group divergent commits by change_id
     const groups = new Map<string, string[]>() // change_id → [commit_id, ...]
     for (const entry of revisions) {
       if (!entry.commit.divergent) continue
@@ -137,7 +138,6 @@
       groups.get(cid)!.push(entry.commit.commit_id)
     }
     for (const commitIds of groups.values()) {
-      commitIds.sort() // lexicographic, matches jj's offset assignment
       for (let i = 0; i < commitIds.length; i++) {
         map.set(commitIds[i], `/${i}`)
       }

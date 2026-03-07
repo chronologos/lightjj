@@ -224,15 +224,19 @@ export function wireAutoRefresh(): () => void {
   let backoff = 1000
   let stopped = false
   let everSawEvent = false
+  let closesWithoutEvent = 0
 
   function connect() {
     if (stopped) return
+    let sawEventThisConn = false
     es = new EventSource(tabScoped('/api/events'))
 
     es.addEventListener('open', () => { backoff = 1000 })
 
     es.addEventListener('op', (ev) => {
       everSawEvent = true
+      sawEventThisConn = true
+      closesWithoutEvent = 0
       try {
         const { op_id } = JSON.parse(ev.data) as { op_id: string }
         notifyOpId(op_id)
@@ -247,9 +251,11 @@ export function wireAutoRefresh(): () => void {
       es.close()
       es = null
       if (stopped) return
-      if (!everSawEvent) {
-        // handleEvents sends op-id immediately on connect. Never seeing one
-        // means the watcher isn't wired. visibilitychange fallback still works.
+      if (!sawEventThisConn) closesWithoutEvent++
+      // handleEvents sends op-id immediately on connect. Never seeing one means
+      // the watcher isn't wired. `everSawEvent` covers first-connect; the counter
+      // covers backend-restarted-with-watcher-disabled (3 consecutive 204s).
+      if (!everSawEvent || closesWithoutEvent >= 3) {
         console.warn('lightjj: SSE auto-refresh unavailable (watcher disabled)')
         return
       }
@@ -453,7 +459,14 @@ async function fetchRevision(commitId: string): Promise<RevisionResponse> {
   const result = await request<RevisionResponse>(`/api/revision?revision=${encodeURIComponent(commitId)}&immutable=1`)
   storeInCache(`diff:${commitId}`, { diff: result.diff })
   storeInCache(`files:${commitId}`, result.files)
-  storeInCache(`desc:${commitId}`, { description: result.description })
+  // Backend returns description:"" when GetDescription fails (degraded mode,
+  // no Cache-Control:immutable header). Don't poison the in-memory LRU with
+  // a blank — let the next navigation retry. Empty-description revisions are
+  // real (jj new), but the backend includes the header in that case, so the
+  // browser HTTP cache catches the duplicate fetch.
+  if (result.description !== '') {
+    storeInCache(`desc:${commitId}`, { description: result.description })
+  }
   return result
 }
 
