@@ -135,10 +135,6 @@ func (r *LocalRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error)
 	return sub.run(ctx, argv[1:], "")
 }
 
-func (r *LocalRunner) Stream(ctx context.Context, args []string) (io.ReadCloser, error) {
-	return r.stream(ctx, args, false)
-}
-
 func (r *LocalRunner) StreamCombined(ctx context.Context, args []string) (io.ReadCloser, error) {
 	return r.stream(ctx, args, true)
 }

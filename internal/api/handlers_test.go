@@ -1973,13 +1973,50 @@ func TestValidateFlags_EqualsFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "flag not allowed: --force=true")
 }
 
+func TestGithubRepoFromURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want string
+	}{
+		{"https://github.com/owner/repo.git", "owner/repo"},
+		{"https://github.com/owner/repo", "owner/repo"},
+		{"https://github.com/owner/repo/", "owner/repo"},
+		{"git@github.com:owner/repo.git", "owner/repo"},
+		{"git@github.com-personal:chronologos/lightjj.git", "chronologos/lightjj"},
+		{"ssh://git@github.com/owner/repo.git", "owner/repo"},
+		{"git@github.com-work:owner/repo", "owner/repo"},
+		// non-GitHub / unparseable
+		{"git@gitlab.com:owner/repo.git", ""},
+		{"https://bitbucket.org/owner/repo", ""},
+		{"", ""},
+		{"github.com", ""},           // no path
+		{"github.com/owner", ""},     // one component
+		{"github.com/a/b/c", ""},     // too deep
+		{"notgithub.com/owner/repo", ""},
+		{"https://github.com:443/owner/repo", ""}, // port — not an SSH path
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			assert.Equal(t, tt.want, githubRepoFromURL(tt.url))
+		})
+	}
+}
+
+// prTestServer wires the `jj git remote list` → `gh pr list --repo X` chain
+// that handlePullRequests depends on. Tests that want to exercise the gh-call
+// path pass a GitHub remote URL; tests for the short-circuit pass "".
+func prTestServer(t *testing.T, runner *testutil.MockRunner, remoteURL string) *Server {
+	runner.Expect(jj.GitRemoteList()).SetOutput([]byte("origin " + remoteURL))
+	return newTestServer(runner)
+}
+
 func TestHandlePullRequests(t *testing.T) {
 	ghJSON := `[{"headRefName":"alice/feature-x","url":"https://github.com/org/repo/pull/123","number":123,"isDraft":false},{"headRefName":"alice/wip","url":"https://github.com/org/repo/pull/42","number":42,"isDraft":true}]`
 
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(ghPRListArgv).SetOutput([]byte(ghJSON))
+	runner.Expect(ghPRListArgs("org/repo")).SetOutput([]byte(ghJSON))
 	defer runner.Verify()
-	srv := newTestServer(runner)
+	srv := prTestServer(t, runner, "git@github.com:org/repo.git")
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -2000,9 +2037,9 @@ func TestHandlePullRequests(t *testing.T) {
 func TestHandlePullRequests_GhError(t *testing.T) {
 	// gh not installed / not authed / wrong repo → empty list, no 500.
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(ghPRListArgv).SetError(fmt.Errorf("gh: not authenticated"))
+	runner.Expect(ghPRListArgs("org/repo")).SetError(fmt.Errorf("gh: not authenticated"))
 	defer runner.Verify()
-	srv := newTestServer(runner)
+	srv := prTestServer(t, runner, "https://github.com/org/repo")
 
 	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
 	w := httptest.NewRecorder()
@@ -2016,7 +2053,41 @@ func TestHandlePullRequests_GhError(t *testing.T) {
 
 func TestHandlePullRequests_InvalidJSON(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(ghPRListArgv).SetOutput([]byte("not json"))
+	runner.Expect(ghPRListArgs("org/repo")).SetOutput([]byte("not json"))
+	defer runner.Verify()
+	srv := prTestServer(t, runner, "git@github.com:org/repo.git")
+
+	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var prs []PullRequest
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
+	assert.Empty(t, prs)
+}
+
+func TestHandlePullRequests_NonGitHubRemote(t *testing.T) {
+	// GitLab/Bitbucket/etc → silent empty response, no gh call attempted.
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify() // Verify catches unexpected gh call
+	srv := prTestServer(t, runner, "git@gitlab.com:org/repo.git")
+
+	req := httptest.NewRequest("GET", "/api/pull-requests", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var prs []PullRequest
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
+	assert.Empty(t, prs)
+}
+
+func TestHandlePullRequests_RemoteListFails(t *testing.T) {
+	// `jj git remote list` itself fails → cached as "" (no re-query) →
+	// silent empty response.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("not a jj repo"))
 	defer runner.Verify()
 	srv := newTestServer(runner)
 
@@ -2028,6 +2099,11 @@ func TestHandlePullRequests_InvalidJSON(t *testing.T) {
 	var prs []PullRequest
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
 	assert.Empty(t, prs)
+
+	// Second request should NOT re-query (sync.Once cached "").
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/pull-requests", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // --- Runner error tests for read handlers ---

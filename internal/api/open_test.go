@@ -112,6 +112,12 @@ func TestBuildEditorArgv(t *testing.T) {
 			want: []string{sh, "/repo/{host}/x.go"},
 		},
 		{
+			name: "path containing {relpath} not double-substituted",
+			tmpl: []string{sh, "{file}"},
+			sub:  editorSubst{File: "/repo/{relpath}/x.go", RelPath: "EVIL"},
+			want: []string{sh, "/repo/{relpath}/x.go"},
+		},
+		{
 			name:    "missing binary on PATH rejected",
 			tmpl:    []string{"lightjj-definitely-not-a-real-binary-xyz", "{file}"},
 			sub:     fileSub("/x.go", nil),
