@@ -757,12 +757,15 @@
   // kind to 'warning' and surface as first-line suffix; full warning text +
   // jj's stdout land in details for [+N] expansion.
   function mutationMessage(successMsg: string, result: MutationResult): Message {
-    // server.go:231 already TrimSpace's stderr → warnings is pre-trimmed
+    // server.go: runMutationWithInput only populates warnings when hasWarningLine()
+    // found a "Warning:"-prefixed line — but stderr may have informational preamble
+    // before it (e.g. "Rebased 3 commits\nWarning: conflict in foo.go"). Show the
+    // first Warning: line in the toast, not the informational one.
     const warn = result.warnings
     const details = [warn, result.output].filter(Boolean).join('\n') || undefined
-    return warn
-      ? { kind: 'warning', text: `${successMsg} — ${warn.split('\n')[0]}`, details }
-      : { kind: 'success', text: successMsg, details }
+    if (!warn) return { kind: 'success', text: successMsg, details }
+    const firstWarn = warn.split('\n').find(l => l.startsWith('Warning:')) ?? warn.split('\n')[0]
+    return { kind: 'warning', text: `${successMsg} — ${firstWarn}`, details }
   }
 
   async function runMutation(
