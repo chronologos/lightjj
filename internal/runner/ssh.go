@@ -36,6 +36,10 @@ func (r *SSHRunner) RunWithInput(ctx context.Context, args []string, stdin strin
 	return r.local.RunWithInput(ctx, r.wrapArgs(args), stdin)
 }
 
+func (r *SSHRunner) RunForMutation(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
+	return r.local.RunForMutation(ctx, r.wrapArgs(args), stdin)
+}
+
 func (r *SSHRunner) StreamCombined(ctx context.Context, args []string) (io.ReadCloser, error) {
 	// Merging the local ssh process's stderr→stdout also merges the remote's:
 	// ssh routes remote stderr → local stderr, remote stdout → local stdout.

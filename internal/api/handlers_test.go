@@ -194,6 +194,53 @@ func TestHandleAbandon(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+// TestRunMutation_Warnings verifies that exit-0 commands with stderr content
+// surface that content as a "warnings" field in the response. This is the
+// path that catches `jj rebase` printing rebased commits to stdout +
+// "Warning: conflicts created" to stderr.
+func TestRunMutation_Warnings(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", false, false)).
+		SetOutput([]byte("Rebased 3 commits")).
+		SetStderr([]byte("Warning: conflict in src/foo.go\nWarning: conflict in src/bar.go"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destination: "def"})
+	req := jsonPost("/api/rebase", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Rebased 3 commits", resp["output"])
+	assert.Equal(t, "Warning: conflict in src/foo.go\nWarning: conflict in src/bar.go", resp["warnings"])
+}
+
+// TestRunMutation_NoWarnings verifies the "warnings" field is omitted (not
+// empty-string) when stderr is empty — frontend checks for presence.
+func TestRunMutation_NoWarnings(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.New(jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"}))).
+		SetOutput([]byte("Working copy now at: xyz"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(newRequest{Revisions: []string{"abc"}})
+	req := jsonPost("/api/new", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Working copy now at: xyz", resp["output"])
+	_, hasWarnings := resp["warnings"]
+	assert.False(t, hasWarnings, "warnings field should be absent when stderr is empty")
+}
+
 func TestHandleRestore(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.Restore("abc", []string{"main.go"})).SetOutput([]byte(""))

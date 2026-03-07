@@ -5,7 +5,6 @@
   interface Props {
     revision: LogEntry
     fullDescription: string
-    describeSaved: boolean
     descriptionEditing: boolean
     descriptionDraft: string
     commitMode: boolean
@@ -19,7 +18,7 @@
   }
 
   let {
-    revision, fullDescription, describeSaved, descriptionEditing, descriptionDraft,
+    revision, fullDescription, descriptionEditing, descriptionDraft,
     commitMode, prByBookmark, onstartdescribe, ondescribe, oncanceldescribe,
     ondraftchange, onbookmarkclick, onresolveDivergence,
   }: Props = $props()
@@ -42,9 +41,6 @@
       >{descText}</span>
     </div>
     <div class="panel-actions">
-      {#if describeSaved}
-        <span class="describe-saved">Saved</span>
-      {/if}
       {#if descIsMultiline}
         <button class="header-btn desc-expand-btn" onclick={() => descExpanded = !descExpanded} title={descExpanded ? 'Collapse description' : 'Expand description'}>
           <svg class="desc-expand-icon" class:desc-expand-open={descExpanded} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,4.5 6,7.5 9,4.5"/></svg>
@@ -243,16 +239,4 @@
     font-weight: 400;
   }
 
-  .describe-saved {
-    color: var(--green);
-    font-size: 11px;
-    font-weight: 600;
-    animation: save-flash 1.5s ease-out forwards;
-  }
-
-  @keyframes save-flash {
-    0% { opacity: 1; }
-    70% { opacity: 1; }
-    100% { opacity: 0; }
-  }
 </style>

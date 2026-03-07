@@ -19,7 +19,7 @@
 
 <script lang="ts">
   import type { Snippet } from 'svelte'
-  import { untrack } from 'svelte'
+  import { untrack, onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 
   let { tabBar, onOpenTab, initialState }: {
@@ -33,7 +33,8 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult } from './lib/api'
+  import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -64,12 +65,14 @@
   let revsetFilter: string = $state(init?.revsetFilter ?? '')
   let pendingScrollRestore: number | null = init?.diffScrollTop ?? null
 
-  let error: string = $state('')
-  let lastAction: string = $state('')
+  // Single user-facing message surface. Replaces error/lastAction/commandOutput.
+  let message: Message | null = $state(null)
+  let messageExpanded: boolean = $state(false)
+  let messageClearTimer: number | undefined
+
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
   let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
-  let commandOutput: string = $state('')
   const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
   // viewMode is a discretization of revsetFilter, not independent state — the
   // toggle just writes a preset string into the textbox. Typing anything else
@@ -79,7 +82,6 @@
     : revsetFilter === TRACKED_REVSET ? 'tracked'
     : 'custom'
   )
-  let describeSaved: boolean = $state(false)
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
   let navDebounceTimer: number | undefined
@@ -90,13 +92,19 @@
   let welcomeFeatures: TutorialFeature[] = $state([])
   let welcomeTitle: string = $state('')
 
-  // --- Error helpers (defined early — loaders need showError) ---
-  function showError(e: unknown) {
-    error = e instanceof Error ? e.message : String(e)
+  // --- Message helpers (defined early — loaders need showError) ---
+  // Single message at a time; next mutation clears via withMutation.
+  // Success auto-clears after 3s unless expanded (user is reading details).
+  function setMessage(m: Message | null) {
+    clearTimeout(messageClearTimer)
+    message = m
+    messageExpanded = false
+    if (m?.kind === 'success') {
+      messageClearTimer = setTimeout(() => { if (!messageExpanded) message = null }, 3000)
+    }
   }
-  function dismissError() {
-    error = ''
-  }
+  const showError = (e: unknown) => setMessage(errorMessage(e))
+  const dismissMessage = () => setMessage(null)
 
   // --- Data loaders ---
   // Each loader owns its value, loading flag, and race-condition-safe generation
@@ -212,6 +220,7 @@
   async function withMutation<T>(fn: () => Promise<T>): Promise<T | undefined> {
     if (mutating) return
     mutating = true
+    setMessage(null)
     try { return await fn() }
     finally { mutating = false }
   }
@@ -287,7 +296,6 @@
     if (mutating) return mutationProgress || 'Working...'
     if (loading) return revisions.length > 0 ? 'Refreshing...' : 'Loading revisions...'
     if (diffLoading) return 'Loading diff...'
-    if (lastAction) return lastAction
     const count = revisions.length
     const wc = workingCopyEntry
     const checked = checkedRevisions.size > 0 ? `${checkedRevisions.size} checked | ` : ''
@@ -420,7 +428,7 @@
       action: () => {
         const md = diffPanelRef?.exportAnnotationsMarkdown() ?? ''
         navigator.clipboard.writeText(md)
-        lastAction = md ? 'Annotations copied' : 'No annotations to export'
+        setMessage(md ? { kind: 'success', text: 'Annotations copied' } : { kind: 'warning', text: 'No annotations to export' })
       },
       when: () => !inlineMode && !!diffPanelRef?.hasAnnotations(),
     },
@@ -428,7 +436,7 @@
       action: () => {
         const json = diffPanelRef?.exportAnnotationsJSON() ?? ''
         navigator.clipboard.writeText(json)
-        lastAction = json ? 'Annotations JSON copied' : 'No annotations to export'
+        setMessage(json ? { kind: 'success', text: 'Annotations JSON copied' } : { kind: 'warning', text: 'No annotations to export' })
       },
       when: () => !inlineMode && !!diffPanelRef?.hasAnnotations(),
     },
@@ -527,7 +535,6 @@
 
 
   async function loadLog(resetSelection = false) {
-    error = ''
     const revset = revsetFilter || undefined
     const ok = await log.load(revset)
     blurActiveInput()
@@ -746,8 +753,20 @@
     loadFilesForRevset(intendedTarget.revset)
   })
 
+  // Builds the unified Message for a successful mutation. Warnings demote
+  // kind to 'warning' and surface as first-line suffix; full warning text +
+  // jj's stdout land in details for [+N] expansion.
+  function mutationMessage(successMsg: string, result: MutationResult): Message {
+    // server.go:231 already TrimSpace's stderr → warnings is pre-trimmed
+    const warn = result.warnings
+    const details = [warn, result.output].filter(Boolean).join('\n') || undefined
+    return warn
+      ? { kind: 'warning', text: `${successMsg} — ${warn.split('\n')[0]}`, details }
+      : { kind: 'success', text: successMsg, details }
+  }
+
   async function runMutation(
-    fn: () => Promise<{ output: string }>,
+    fn: () => Promise<MutationResult>,
     successMsg: string,
     opts?: { before?: () => void, after?: () => void },
   ) {
@@ -755,8 +774,7 @@
       try {
         opts?.before?.()
         const result = await fn()
-        lastAction = successMsg
-        commandOutput = result.output
+        setMessage(mutationMessage(successMsg, result))
         opts?.after?.()
         await loadLog()
       } catch (e) { showError(e) }
@@ -811,12 +829,9 @@
     return withMutation(async () => {
       try {
         const result = await api.describe(eid, descriptionDraft)
-        lastAction = `Updated description for ${eid.slice(0, 8)}`
-        commandOutput = result.output
+        setMessage(mutationMessage(`Updated description for ${eid.slice(0, 8)}`, result))
         description.set(descriptionDraft)
         descriptionEditing = false
-        describeSaved = true
-        setTimeout(() => { describeSaved = false }, 1500)
         await loadLog()
       } catch (e) {
         showError(e)
@@ -854,8 +869,7 @@
     return withMutation(async () => {
       try {
         const result = await api.commit(descriptionDraft)
-        lastAction = 'Committed working copy'
-        commandOutput = result.output
+        setMessage(mutationMessage('Committed working copy', result))
         descriptionEditing = false
         commitMode = false
         description.reset()
@@ -894,7 +908,7 @@
   function handleBookmarkOp(op: BookmarkOp) {
     if ((op.action === 'move' || op.action === 'advance') && !selectedRevision) return
     const changeId = selectedRevision ? effectiveId(selectedRevision.commit) : ''
-    const actions: Record<BookmarkOp['action'], () => Promise<{ output: string }>> = {
+    const actions: Record<BookmarkOp['action'], () => Promise<MutationResult>> = {
       move: () => api.bookmarkMove(op.bookmark, changeId),
       advance: () => api.bookmarkAdvance(op.bookmark, changeId),
       delete: () => api.bookmarkDelete(op.bookmark),
@@ -930,19 +944,25 @@
         //      has no children pinning it visible.
         //   3. Bookmarks — per-change_id repoint, not stack tip.
         // Serial throughout: concurrent jj mutations → divergent op history.
+        // Accumulate warnings from each step — divergence rebase is MORE
+        // likely than average to conflict (moving commits between stacks).
+        const results: MutationResult[] = []
         if (plan.rebaseSources.length > 0) {
-          await api.rebase(plan.rebaseSources, plan.keeperCommitId, '-s', '-d')
+          results.push(await api.rebase(plan.rebaseSources, plan.keeperCommitId, '-s', '-d'))
         }
-        await api.abandon(plan.abandonCommitIds)
+        results.push(await api.abandon(plan.abandonCommitIds))
         for (const { name, targetCommitId } of plan.bookmarkRepoints) {
-          await api.bookmarkSet(targetCommitId, name)
+          results.push(await api.bookmarkSet(targetCommitId, name))
         }
 
         divergence.cancel()
         const parts = [`kept ${plan.keeperCommitId.slice(0, 8)}`]
         if (plan.rebaseSources.length > 0) parts.push(`rebased ${plan.rebaseSources.length}`)
         if (plan.abandonCommitIds.length > 1) parts.push(`abandoned ${plan.abandonCommitIds.length}`)
-        lastAction = `Resolved divergence — ${parts.join(', ')}`
+        const text = `Resolved divergence — ${parts.join(', ')}`
+        const warnings = results.map(r => r.warnings).filter(Boolean).join('\n')
+        const outputs = results.map(r => r.output).filter(Boolean).join('\n')
+        setMessage(mutationMessage(text, { output: outputs, warnings: warnings || undefined }))
         await loadLog()
       } catch (e: any) {
         // Don't close panel on error — let user see state and retry
@@ -963,7 +983,7 @@
     if (!selectedRevision || rebase.sources.length === 0) return
     const destination = effectiveId(selectedRevision.commit)
     if (rebase.sources.includes(destination)) {
-      lastAction = 'Cannot rebase onto source revision'
+      setMessage({ kind: 'warning', text: 'Cannot rebase onto source revision' })
       return
     }
     // Capture mode state before cancelling
@@ -976,10 +996,10 @@
           skipEmptied: skipEmptied || undefined,
           ignoreImmutable: ignoreImmutable || undefined,
         })
-        lastAction = sources.length > 1
+        const msg = sources.length > 1
           ? `Rebased ${sources.length} revisions ${modeLabel} ${destination.slice(0, 8)}`
           : `Rebased ${sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
-        commandOutput = result.output
+        setMessage(mutationMessage(msg, result))
         clearChecks()
         await loadLog()
       } catch (e) {
@@ -1009,13 +1029,13 @@
     // C2: exit mode before guard so user isn't stuck
     if (squash.sources.includes(destination)) {
       cancelInlineModes()
-      lastAction = 'Cannot squash into source revision'
+      setMessage({ kind: 'warning', text: 'Cannot squash into source revision' })
       return
     }
     // C1: block execution when no files selected (empty array would squash ALL files).
     // Exception: empty commits have 0 total files — squash is still valid (moves metadata).
     if (selectedFiles.size === 0 && totalFileCount > 0) {
-      lastAction = 'Select at least one file to squash'
+      setMessage({ kind: 'warning', text: 'Select at least one file to squash' })
       return
     }
     return withMutation(async () => {
@@ -1033,10 +1053,10 @@
         })
         // W1: only exit mode after successful API call
         cancelInlineModes()
-        lastAction = sources.length > 1
+        const msg = sources.length > 1
           ? `Squashed ${sources.length} revisions into ${destination.slice(0, 8)}`
           : `Squashed ${sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
-        commandOutput = result.output
+        setMessage(mutationMessage(msg, result))
         clearChecks()
         await loadLog()
       } catch (e) {
@@ -1068,11 +1088,11 @@
     const reviewing = split.review
     // Validate: at least one file must stay (checked) and one must move (unchecked)
     if (selectedFiles.size === totalFileCount) {
-      error = reviewing ? 'Uncheck at least one file to reject' : 'Uncheck at least one file to split out'
+      setMessage({ kind: 'warning', text: reviewing ? 'Uncheck at least one file to reject' : 'Uncheck at least one file to split out' })
       return
     }
     if (selectedFiles.size === 0) {
-      error = reviewing ? 'Accept at least one file' : 'Select at least one file to keep'
+      setMessage({ kind: 'warning', text: reviewing ? 'Accept at least one file' : 'Select at least one file to keep' })
       return
     }
     return withMutation(async () => {
@@ -1081,10 +1101,10 @@
         const revision = split.revision
         const result = await api.split(revision, files, split.parallel || undefined)
         cancelInlineModes()
-        lastAction = reviewing
+        const msg = reviewing
           ? `Reviewed ${revision.slice(0, 8)} (${files.length} accepted)`
           : `Split ${revision.slice(0, 8)} (${files.length} files stay)`
-        commandOutput = result.output
+        setMessage(mutationMessage(msg, result))
         clearChecks()
         await loadLog()
       } catch (e) {
@@ -1300,11 +1320,12 @@
 
   // Escape backs out of the most-nested thing. Priority stack:
   // inline modes (handled in handleInlineCommit) > description editor >
-  // checked revisions > error toast > nothing.
+  // checked revisions > message-expand > message > nothing.
   function handleEscapeStack(): void {
     if (descriptionEditing) { descriptionEditing = false; commitMode = false }
     else if (checkedRevisions.size > 0) clearChecksAndReload()
-    else if (error) dismissError()
+    else if (messageExpanded) messageExpanded = false
+    else if (message) dismissMessage()
   }
 
   // View-independent keys. `false` = not ours, fall through to log-view.
@@ -1400,6 +1421,14 @@
   // Both route through notifyOpId → onStale so the guards above apply. The
   // body reads no reactive state → runs once on mount, cleanup on unmount.
   $effect(() => wireAutoRefresh())
+
+  // Raw setTimeout escapes {#key} remount — clear on tab-switch unmount so
+  // stale closures don't keep the old instance's signals alive.
+  onDestroy(() => {
+    clearTimeout(messageClearTimer)
+    clearTimeout(navDebounceTimer)
+    clearTimeout(evologDebounceTimer)
+  })
   $effect(() => {
     if (!inlineMode && staleWhileInMode) {
       staleWhileInMode = false
@@ -1518,13 +1547,23 @@
                   {:else}
                     <!-- Workspaces are just repo paths — open as a tab. Path absent
                          when the workspace predates jj's workspace_store index
-                         (additive-only; no backfill). Nothing we can do — jj has
-                         no WorkspaceRef.path() template method. -->
+                         (additive-only; no backfill). Click-to-warn instead of
+                         disabled+title — title is keyboard-inaccessible. -->
                     <button
                       class="toolbar-ws-option"
-                      disabled={!ws.path}
-                      title={ws.path ?? "path unknown — workspace predates jj's workspace_store index; open with 'lightjj -R <path>' manually"}
-                      onclick={() => { onOpenTab?.(ws.path!); wsDropdownOpen = false }}
+                      class:toolbar-ws-unavailable={!ws.path}
+                      onclick={() => {
+                        wsDropdownOpen = false
+                        if (ws.path) {
+                          onOpenTab?.(ws.path)
+                        } else {
+                          setMessage({
+                            kind: 'warning',
+                            text: `Workspace '${ws.name}' path unknown — predates jj's workspace_store index`,
+                            details: 'Open manually with: lightjj -R <path>',
+                          })
+                        }
+                      }}
                     >
                       <span class="toolbar-ws-glyph">◇</span>
                       <span>{ws.name}</span>
@@ -1596,14 +1635,11 @@
 
     {@render tabBar?.()}
 
-    {#if error}
-      <div class="error-bar" role="alert">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 10.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5zM8.75 4.5v4a.75.75 0 0 1-1.5 0v-4a.75.75 0 0 1 1.5 0z"/>
-        </svg>
-        <span class="error-text">{error}</span>
-        <button class="error-dismiss" onclick={dismissError}>Dismiss</button>
-      </div>
+    {#if message}
+      <MessageBar {message} expanded={messageExpanded}
+        onDismiss={dismissMessage}
+        onExpandToggle={() => messageExpanded = !messageExpanded}
+      />
     {/if}
 
     {#if activeView === 'log'}
@@ -1681,7 +1717,6 @@
               <RevisionHeader
                 revision={selectedRevision!}
                 {fullDescription}
-                {describeSaved}
                 {descriptionEditing}
                 {descriptionDraft}
                 {commitMode}
@@ -1765,7 +1800,6 @@
 
     <StatusBar
       {statusText}
-      {commandOutput}
       {rebase}
       {squash}
       {squashFileCount}
@@ -2025,6 +2059,10 @@
     opacity: 1;
   }
 
+  .toolbar-ws-unavailable {
+    opacity: 0.5;
+  }
+
   .toolbar-btn {
     padding: 3px 10px;
     background: transparent;
@@ -2108,39 +2146,6 @@
     border: 1px solid var(--surface1);
     padding: 0 4px;
     border-radius: 3px;
-  }
-
-  /* --- Error bar --- */
-  .error-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    background: var(--bg-error);
-    border-bottom: 1px solid var(--red);
-    color: var(--red);
-    font-size: 12px;
-    flex-shrink: 0;
-    animation: slide-down var(--anim-duration) var(--anim-ease);
-  }
-
-  .error-text {
-    flex: 1;
-  }
-
-  .error-dismiss {
-    background: transparent;
-    border: 1px solid var(--red);
-    color: var(--red);
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 11px;
-  }
-
-  .error-dismiss:hover {
-    background: var(--bg-error-hover);
   }
 
 </style>

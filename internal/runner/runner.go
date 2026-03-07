@@ -17,6 +17,12 @@ type CommandRunner interface {
 	// RunWithInput executes a jj command with stdin input.
 	RunWithInput(ctx context.Context, args []string, stdin string) ([]byte, error)
 
+	// RunForMutation is RunWithInput but returns stdout and stderr separately.
+	// Only server.runMutation uses this — `jj rebase` prints rebased commits
+	// to stdout AND "Warning: conflicts created" to stderr on exit-0. Run()
+	// drops stderr when stdout is non-empty; mutations need both.
+	RunForMutation(ctx context.Context, args []string, stdin string) (stdout, stderr []byte, err error)
+
 	// StreamCombined executes a jj command and returns a streaming reader for
 	// combined stdout+stderr. `jj git push`/`fetch` write all progress to
 	// stderr (stdout is empty). Close() returns the process exit error and
