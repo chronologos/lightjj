@@ -22,4 +22,7 @@ export const FEATURES: TutorialFeature[] = [
   { version: '0.5.0', shortcut: '@', title: 'Jump to working copy', description: 'Return to @ from anywhere in the log.' },
   { version: '0.6.0', shortcut: 'w', title: 'Workspaces as tabs', description: 'Workspace dropdown opens as an in-process tab \u2014 same origin, shared diff cache. No more child-process spawning.' },
   { version: '0.6.0', shortcut: null, title: 'SSH multi-repo tabs', description: 'Open additional remote repos on the same host. One SSH round trip validates + canonicalizes the path.' },
+  { version: '0.7.0', shortcut: null, title: 'Unified message bar', description: 'Mutation results, warnings, and errors in one place \u2014 expandable to see full jj output. Success auto-clears; warnings persist.' },
+  { version: '0.7.0', shortcut: null, title: 'Open in editor (everywhere)', description: 'Right-click \u2192 Open in editor now works in --remote mode (via editorArgsRemote + {host}/{relpath} placeholders for SSH-URI editors like Zed). See docs/CONFIG.md.' },
+  { version: '0.7.0', shortcut: null, title: 'Op undo / restore', description: 'Right-click any op-log entry to undo or restore repo state to that point.' },
 ]

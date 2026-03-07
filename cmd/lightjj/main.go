@@ -107,17 +107,17 @@ func main() {
 
 	// makeServer sets all per-repo Server fields. BOTH the startup tab and
 	// the dynamic-tab factory call this — adding a new Server field here
-	// (and only here) keeps the two paths in sync. streamRaw selects watcher
-	// mode: nil = local fsnotify; non-nil = SSH inotifywait pipe.
-	makeServer := func(r runner.CommandRunner, repoDir, repoPath string, streamRaw api.StreamFunc) *api.Server {
+	// (and only here) keeps the two paths in sync. isSSH selects watcher
+	// mode: local fsnotify vs SSH op-id polling.
+	makeServer := func(r runner.CommandRunner, repoDir, repoPath string, isSSH bool) *api.Server {
 		s := api.NewServer(r, repoDir)
 		s.DefaultRemote = *defaultRemote
 		s.Hostname = displayHost
 		s.RepoPath = repoPath
 		s.SSHHost = sshHost
 		if !*noWatch {
-			if streamRaw != nil {
-				s.Watcher = api.NewSSHWatcher(s, streamRaw)
+			if isSSH {
+				s.Watcher = api.NewSSHWatcher(s, *snapshotInterval)
 			} else {
 				s.Watcher = api.NewWatcher(s, *snapshotInterval)
 			}
@@ -130,19 +130,17 @@ func main() {
 	// validation + canonicalization + dedup key in one call.
 	var newTab api.TabFactory
 	var resolve api.TabResolve
-	var startupStream api.StreamFunc
 	if sshRunner == nil {
 		newTab = func(root string) *api.Server {
 			// root is already resolved — construct LocalRunner directly
 			// instead of NewLocalRunner (would resolve again, ~20ms).
-			return makeServer(&runner.LocalRunner{Binary: "jj", RepoDir: root}, root, root, nil)
+			return makeServer(&runner.LocalRunner{Binary: "jj", RepoDir: root}, root, root, false)
 		}
 		resolve = runner.ResolveLocalTabPath
 	} else {
-		startupStream = sshRunner.StreamRaw
 		newTab = func(root string) *api.Server {
 			r := runner.NewSSHRunner(sshRunner.Host, root)
-			return makeServer(r, "", root, r.StreamRaw) // repoDir="" → SSH mode
+			return makeServer(r, "", root, true) // repoDir="" → SSH mode
 		}
 		resolve = func(path string) (string, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -151,7 +149,7 @@ func main() {
 		}
 	}
 
-	srv := makeServer(cmdRunner, resolvedRepoDir, displayPath, startupStream)
+	srv := makeServer(cmdRunner, resolvedRepoDir, displayPath, sshRunner != nil)
 	tm := api.NewTabManager(newTab, resolve)
 	if *autoShutdown > 0 {
 		tm.SetIdleShutdown(*autoShutdown)

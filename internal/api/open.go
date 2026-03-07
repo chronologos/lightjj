@@ -57,13 +57,14 @@ func buildEditorArgv(argsTemplate []string, sub editorSubst) ([]string, error) {
 		lineStr = strconv.Itoa(*sub.Line)
 	}
 
-	// Substitution order: all non-path placeholders first (digits or a
-	// user@host spec — the --remote flag is the user's own input, so a
-	// hostile {file} in there is self-inflicted). Path placeholders last
-	// so a file named "{line}" doesn't double-sub.
+	// Single Replacer: single-pass left-to-right, never rescans output.
+	// A file literally named "{line}.go" can't double-sub because that
+	// string was never in the scanned INPUT — it's a substitution OUTPUT.
 	replacer := strings.NewReplacer(
 		"{line}", lineStr,
 		"{host}", sub.Host,
+		"{file}", sub.File,
+		"{relpath}", sub.RelPath,
 	)
 
 	argv := make([]string, len(argsTemplate))
@@ -72,10 +73,7 @@ func buildEditorArgv(argsTemplate []string, sub editorSubst) ([]string, error) {
 		if strings.Contains(a, "{file}") || strings.Contains(a, "{relpath}") {
 			sawPath = true
 		}
-		a = replacer.Replace(a)
-		a = strings.ReplaceAll(a, "{file}", sub.File)
-		a = strings.ReplaceAll(a, "{relpath}", sub.RelPath)
-		argv[i] = a
+		argv[i] = replacer.Replace(a)
 	}
 	if !sawPath {
 		argv = append(argv, sub.File)
