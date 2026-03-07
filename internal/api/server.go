@@ -219,8 +219,12 @@ func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []stri
 
 // runMutationWithInput is runMutation for commands that need stdin (describe).
 // Empty stdin = plain Run (LocalRunner.runSeparate only sets cmd.Stdin when stdin != "").
-// Returns stdout as "output" and non-empty stderr as "warnings" — jj prints
-// advisory warnings (conflict notices, no-op messages) to stderr on exit-0.
+//
+// jj writes ALL informational output to stderr (working-copy status, rebase
+// summaries, etc.) — stdout is reserved for machine-parseable data. Real
+// warnings are prefixed "Warning:" (with follow-up "Hint:" lines). Only stderr
+// containing a "Warning:" line is returned as "warnings"; otherwise it's merged
+// into "output" so the MessageBar shows success but details are still expandable.
 func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, args []string, stdin string) {
 	stdout, stderr, err := s.Runner.RunForMutation(r.Context(), args, stdin)
 	if err != nil {
@@ -228,11 +232,25 @@ func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, ar
 		return
 	}
 	s.refreshOpId()
-	resp := map[string]string{"output": string(stdout)}
-	if warn := strings.TrimSpace(string(stderr)); warn != "" {
-		resp["warnings"] = warn
+	out := strings.TrimSpace(string(stdout))
+	errOut := strings.TrimSpace(string(stderr))
+	resp := map[string]string{}
+	if hasWarningLine(errOut) {
+		resp["output"] = out
+		resp["warnings"] = errOut
+	} else {
+		resp["output"] = strings.TrimSpace(out + "\n" + errOut)
 	}
 	s.writeJSON(w, r, http.StatusOK, resp)
+}
+
+func hasWarningLine(s string) bool {
+	for line := range strings.SplitSeq(s, "\n") {
+		if strings.HasPrefix(line, "Warning:") {
+			return true
+		}
+	}
+	return false
 }
 
 // streamMutation is runMutation for slow network ops (git push/fetch). Streams

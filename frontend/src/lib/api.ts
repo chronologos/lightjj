@@ -524,6 +524,7 @@ export interface InfoResponse {
   hostname: string
   repo_path: string
   ssh_mode: boolean
+  editor_configured: boolean
 }
 
 export interface FileChange {

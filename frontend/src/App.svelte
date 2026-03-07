@@ -201,11 +201,11 @@
     contextMenu = { items, x, y }
   }
 
-  // SSH mode = no local fs → open-in-editor would spawn on the remote host
-  // where nobody's watching. Default true (fail-safe: hide the item) until
-  // loadInfo() confirms local mode — a brief info() failure would otherwise
-  // enable a feature that 501s on click.
-  let sshMode = $state(true)
+  // Open-in-editor is enabled iff the mode-appropriate editorArgs config field
+  // is set (backend reports this). Default false = hide the menu item until
+  // loadInfo() confirms — a brief info() failure would otherwise enable a
+  // feature that 400s on click. See docs/CONFIG.md for the invariant.
+  let editorConfigured = $state(false)
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || !!contextMenu || divergence.active || welcomeOpen)
   let inlineMode = $derived(rebase.active || squash.active || split.active)
@@ -470,10 +470,10 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path, ssh_mode } = await api.info()
+      const { hostname, repo_path, editor_configured } = await api.info()
       document.title = formatTitle(hostname, repo_path)
-      sshMode = ssh_mode
-    } catch { /* static <title> fallback + sshMode stays true (fail-safe) */ }
+      editorConfigured = editor_configured
+    } catch { /* static <title> fallback + editorConfigured stays false (fail-safe) */ }
   }
 
   // api.remotes() is session-memoized; first element is the default remote
@@ -1707,7 +1707,7 @@
             onfilesaved={() => withMutation(loadLog)}
             onjjmutation={withMutation}
             oncontextmenu={showContextMenu}
-            onopenfile={sshMode ? undefined : handleOpenFile}
+            onopenfile={editorConfigured ? handleOpenFile : undefined}
           >
             {#snippet header()}
               <!-- {#key} resets RevisionHeader local state (descExpanded) on nav.

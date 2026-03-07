@@ -60,13 +60,14 @@ func main() {
 	var cmdRunner runner.CommandRunner
 	var sshRunner *runner.SSHRunner // non-nil only in --remote mode; used for the SSH watcher
 	var resolvedRepoDir string      // absolute path for local mode, empty for SSH
-	var displayHost, displayPath string
+	var displayHost, displayPath, sshHost string
 
 	if *remote != "" {
 		host, rawPath, err := parseRemoteSpec(*remote)
 		if err != nil {
 			log.Fatalf("invalid remote: %v", err)
 		}
+		sshHost = host // full user@host spec → Server.SSHHost → {host} placeholder
 		sshRunner = runner.NewSSHRunner(host, rawPath)
 		// Canonicalize: jj workspace root on the remote. One startup round trip.
 		// Makes tab-dedup work (findByPath compares canonical paths) and fixes
@@ -113,6 +114,7 @@ func main() {
 		s.DefaultRemote = *defaultRemote
 		s.Hostname = displayHost
 		s.RepoPath = repoPath
+		s.SSHHost = sshHost
 		if !*noWatch {
 			if streamRaw != nil {
 				s.Watcher = api.NewSSHWatcher(s, streamRaw)
