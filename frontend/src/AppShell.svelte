@@ -1,17 +1,27 @@
 <script lang="ts">
-  import App from './App.svelte'
+  import App, { type TabState } from './App.svelte'
   import TabBar from './lib/TabBar.svelte'
   import { setActiveTab, listTabs, openTab, closeTab, type TabInfo } from './lib/api'
 
   let tabs: TabInfo[] = $state([])
   let activeTabId: string = $state('0')
   let error: string = $state('')
+  let appRef: ReturnType<typeof App> | undefined = $state(undefined)
+
+  // Per-tab UI state snapshots. Captured before {#key} destroys the old App
+  // instance; fed into the new one as initialState. The {#key} remount is
+  // load-bearing (SSE lifecycle, onStale wiring) — this just threads cursor
+  // position + scroll through it.
+  const tabState = new Map<string, TabState>()
 
   // basePath defaults to '/tab/0' in api.ts, so App can mount immediately
   // without waiting for listTabs. The tab list populates asynchronously.
   listTabs().then(t => { tabs = t }).catch(() => {})
 
   function switchTab(id: string) {
+    // Snapshot the outgoing App's state before remount destroys it. appRef is
+    // undefined on first paint (no App mounted yet) — that's the only skip.
+    if (appRef) tabState.set(activeTabId, appRef.getState())
     // Order matters: basePath must be set BEFORE the {#key} remount fires
     // App's top-level fetches (loadLog, loadWorkspaces, etc.).
     setActiveTab(id)
@@ -41,6 +51,7 @@
     try {
       await closeTab(id)
       tabs = tabs.filter(t => t.id !== id)
+      tabState.delete(id)
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
@@ -58,7 +69,7 @@
 {/snippet}
 
 {#key activeTabId}
-  <App {tabBar} onOpenTab={handleOpen} />
+  <App bind:this={appRef} {tabBar} onOpenTab={handleOpen} initialState={tabState.get(activeTabId)} />
 {/key}
 
 <style>

@@ -86,7 +86,7 @@ func NewSSHWatcher(srv *Server, streamRaw StreamFunc) *Watcher {
 	argv := []string{"inotifywait", "-m", "-q", "-e", "create", ".jj/repo/op_heads/heads"}
 	go w.sshWatchLoop(func(ctx context.Context) (io.ReadCloser, error) {
 		return streamRaw(ctx, argv)
-	})
+	}, 3*time.Second, time.Second)
 	return w
 }
 
@@ -157,12 +157,15 @@ func (w *Watcher) watchLoop() {
 
 // sshWatchLoop consumes a line-oriented event stream and broadcasts debounced
 // op-id changes. Reconnects with exponential backoff on stream close. Bails
-// permanently if the stream dies fast (<3s) before ever yielding a line
+// permanently if the stream dies fast (<fastClose) before ever yielding a line
 // (inotifywait missing → `command not found`), OR if it dies fast N times
 // in a row (repo deleted after events were seen — everSawLine alone can't
 // catch this). A long-idle stream that later drops is a network blip on a
 // quiet repo → reconnect.
-func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, error)) {
+//
+// fastClose/baseBackoff are parameters (not struct fields) so tests can use
+// ~10ms values without sleep-heavy tests or clock injection.
+func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, error), fastClose, baseBackoff time.Duration) {
 	// One context for the loop's lifetime, cancelled when Close() fires. All
 	// streams derive from it so exec.CommandContext kills the remote ssh process.
 	// The select on ctx.Done() lets this watchdog exit if sshWatchLoop returns
@@ -178,6 +181,13 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 	}()
 
 	var timer *time.Timer
+	// Kill any pending debounce fire when the loop exits (bail or ctx cancel).
+	// Without this, time.AfterFunc could broadcast post-Close().
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	fire := func() {
 		// refreshOpId in SSH mode is a ~440ms round trip. Skip if no one's
 		// listening — mirrors snapshotLoop's gate.
@@ -188,11 +198,11 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 	}
 
 	const maxFastFails = 5
-	backoff := time.Second
+	backoff := baseBackoff
 	everSawLine := false
 	// fastFails counts BOTH open-error and stream-dies-fast; both mean "can't
-	// establish a lasting pipe". Reset only when a stream lives >3s OR yields
-	// a line — a successful open that immediately dies is still a fast fail.
+	// establish a lasting pipe". Reset only when a stream lives >fastClose OR
+	// yields a line — a successful open that immediately dies is still a fast fail.
 	fastFails := 0
 
 	for ctx.Err() == nil {
@@ -227,7 +237,7 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 				everSawLine = true
 				log.Printf("watcher: ssh inotify connected")
 			}
-			backoff = time.Second
+			backoff = baseBackoff
 			if timer != nil {
 				timer.Stop()
 			}
@@ -244,7 +254,7 @@ func (w *Watcher) sshWatchLoop(open func(ctx context.Context) (io.ReadCloser, er
 		// Distinguish "tool missing" (remote shell exits immediately) from
 		// "tool present, idle repo, SSH dropped later" by stream lifetime.
 		// inotifywait with a valid dir holds the pipe open indefinitely.
-		if time.Since(opened) < 3*time.Second && !sawLine {
+		if time.Since(opened) < fastClose && !sawLine {
 			fastFails++
 			if !everSawLine {
 				log.Printf("watcher: ssh stream closed immediately without events; inotify-tools not installed on remote? auto-refresh disabled")

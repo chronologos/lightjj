@@ -213,25 +213,52 @@ function trackOpId(res: Response) {
 // Both feed notifyOpId → onStale. Works in SSH mode: SSE may close (no watcher)
 // but the snapshot response's X-JJ-Op-Id header still carries refresh.
 // Returns a cleanup fn that tears down both.
+//
+// SSE reconnects on backend restart using the same everSawEvent heuristic as
+// watcher.go's sshWatchLoop: handleEvents sends the current op-id immediately
+// on connect, so if we NEVER got one → watcher is absent (--no-watch or 204).
+// CLOSED-after-events → transient (backend restart), reconnect with backoff.
 export function wireAutoRefresh(): () => void {
-  const es = new EventSource(tabScoped('/api/events'))
+  let es: EventSource | null = null
+  let reconnectTimer: number | undefined
+  let backoff = 1000
+  let stopped = false
+  let everSawEvent = false
 
-  es.addEventListener('op', (ev) => {
-    try {
-      const { op_id } = JSON.parse(ev.data) as { op_id: string }
-      notifyOpId(op_id)
-    } catch { /* malformed event — ignore */ }
-  })
+  function connect() {
+    if (stopped) return
+    es = new EventSource(tabScoped('/api/events'))
 
-  // Network drop → readyState CONNECTING (browser retries automatically).
-  // Non-200 response → readyState CLOSED. close() on an already-CLOSED
-  // source is a spec no-op, so no guard needed for the cleanup-fn path.
-  es.addEventListener('error', () => {
-    if (es.readyState === EventSource.CLOSED) {
-      console.warn('lightjj: SSE auto-refresh disabled (server returned non-200 or watch unavailable)')
+    es.addEventListener('open', () => { backoff = 1000 })
+
+    es.addEventListener('op', (ev) => {
+      everSawEvent = true
+      try {
+        const { op_id } = JSON.parse(ev.data) as { op_id: string }
+        notifyOpId(op_id)
+      } catch { /* malformed event — ignore */ }
+    })
+
+    // Network drop → readyState CONNECTING (browser retries automatically).
+    // Non-200 response (including 204 from handleEventsDisabled — spec is
+    // exact-match "status is not 200") → readyState CLOSED.
+    es.addEventListener('error', () => {
+      if (es?.readyState !== EventSource.CLOSED) return
       es.close()
-    }
-  })
+      es = null
+      if (stopped) return
+      if (!everSawEvent) {
+        // handleEvents sends op-id immediately on connect. Never seeing one
+        // means the watcher isn't wired. visibilitychange fallback still works.
+        console.warn('lightjj: SSE auto-refresh unavailable (watcher disabled)')
+        return
+      }
+      reconnectTimer = window.setTimeout(connect, backoff)
+      backoff = Math.min(backoff * 2, 30_000)
+    })
+  }
+
+  connect()
 
   // In-flight flag: rapid alt-tabbing shouldn't stack requests. In SSH mode
   // each snapshot is two round trips (util snapshot + op log ≈ 880ms) — N
@@ -247,7 +274,9 @@ export function wireAutoRefresh(): () => void {
   document.addEventListener('visibilitychange', onVisible)
 
   return () => {
-    es.close()
+    stopped = true
+    clearTimeout(reconnectTimer)
+    es?.close()
     document.removeEventListener('visibilitychange', onVisible)
   }
 }

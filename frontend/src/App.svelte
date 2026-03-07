@@ -3,13 +3,35 @@
   // Without this guard, switching tabs re-runs the welcome check and re-opens
   // the modal if tutorialVersion hasn't been persisted yet (user hasn't clicked).
   let welcomeCheckDone = false
+
+  /** Snapshot of App's UI state, captured on tab-switch-away and rehydrated
+   *  into a fresh mount. The {#key} remount still fires (SSE/lifecycle stay
+   *  correct); this just restores cursor position + scroll. Inline modes
+   *  (rebase/squash/split/describe) are intentionally NOT preserved — a
+   *  half-complete operation across tabs is a footgun. */
+  export interface TabState {
+    selectedIndex: number
+    revsetFilter: string
+    activeView: 'log' | 'branches' | 'operations'
+    diffScrollTop: number
+  }
 </script>
 
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import { untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 
-  let { tabBar, onOpenTab }: { tabBar?: Snippet; onOpenTab?: (path: string) => void } = $props()
+  let { tabBar, onOpenTab, initialState }: {
+    tabBar?: Snippet
+    onOpenTab?: (path: string) => void
+    initialState?: TabState
+  } = $props()
+
+  // initialState is passed inside {#key activeTabId} — it never changes
+  // mid-lifetime (key change = remount). untrack() silences Svelte's
+  // state_referenced_locally warning; we DO want the mount-time snapshot.
+  const init = untrack(() => initialState)
 
   import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark } from './lib/api'
   import { clearDiffCaches } from './lib/diff-cache'
@@ -22,7 +44,7 @@
   import EvologPanel from './lib/EvologPanel.svelte'
   import OplogPanel from './lib/OplogPanel.svelte'
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
-  import BookmarksPanel from './lib/BookmarksPanel.svelte'
+  import BookmarksPanel, { type BookmarkRowActions } from './lib/BookmarksPanel.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
@@ -36,14 +58,18 @@
   import WelcomeModal from './lib/WelcomeModal.svelte'
 
   // --- Global state ---
-  let selectedIndex: number = $state(-1)
+  // initialState-hydrated vars: restored on tab-switch-back via AppShell's
+  // snapshot. Everything else starts fresh on mount.
+  let selectedIndex: number = $state(init?.selectedIndex ?? -1)
+  let revsetFilter: string = $state(init?.revsetFilter ?? '')
+  let pendingScrollRestore: number | null = init?.diffScrollTop ?? null
+
   let error: string = $state('')
   let lastAction: string = $state('')
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
   let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
   let commandOutput: string = $state('')
-  let revsetFilter: string = $state('')
   const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
   // viewMode is a discretization of revsetFilter, not independent state — the
   // toggle just writes a preset string into the textbox. Typing anything else
@@ -154,7 +180,7 @@
   let selectedFiles = new SvelteSet<string>()
   let totalFileCount: number = $state(0) // snapshot of file count at entry time
 
-  let activeView: 'log' | 'branches' | 'operations' = $state('log')
+  let activeView: 'log' | 'branches' | 'operations' = $state(init?.activeView ?? 'log')
 
   let currentWorkspace: string = $state('')
   let workspaceList: Workspace[] = $state([])
@@ -614,6 +640,29 @@
   // write so the effect-triggered loadLog sees it.
   let pendingSelectCommitId: string | null = null
 
+  function showBookmarkContextMenu(bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) {
+    const items: ContextMenuItem[] = [
+      { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump,
+        action: () => jumpToBookmark(bm) },
+      { separator: true },
+      { label: 'Delete', shortcut: 'd', danger: true, disabled: !actions.del,
+        action: () => handleBookmarkOp({ action: 'delete', bookmark: bm.name }) },
+      { label: 'Forget', shortcut: 'f', danger: true,
+        action: () => handleBookmarkOp({ action: 'forget', bookmark: bm.name }) },
+    ]
+    if (actions.track) {
+      const t = actions.track
+      items.push({ label: t.action === 'track' ? `Track @${t.remote}` : `Untrack @${t.remote}`,
+        shortcut: 't',
+        action: () => handleBookmarkOp({ action: t.action, bookmark: bm.name, remote: t.remote }) })
+    }
+    items.push(
+      { separator: true },
+      { label: `Copy name (${bm.name})`, action: () => navigator.clipboard.writeText(bm.name) },
+    )
+    contextMenu = { items, x, y }
+  }
+
   function jumpToBookmark(bm: Bookmark) {
     if (bm.conflict || !bm.commit_id) return
     activeView = 'log'
@@ -738,25 +787,30 @@
     })
   }
 
+  // Shared by handleCommit + startDescriptionEdit: prefer the already-loaded
+  // fullDescription, fall back to a fetch, fall back to the graph-row stub.
+  async function fetchPrefillDescription(): Promise<string> {
+    if (fullDescription) return fullDescription
+    if (!selectedRevision) return ''
+    try {
+      return (await api.description(selectedRevision.commit.commit_id)).description
+    } catch {
+      return selectedRevision.description
+    }
+  }
+
+  function focusDescEditor() {
+    requestAnimationFrame(() => {
+      (document.querySelector('.desc-editor textarea') as HTMLTextAreaElement | null)?.focus()
+    })
+  }
+
   async function handleCommit() {
-    // Open description editor in commit mode — pre-fill with current WC description
     if (!selectedRevision) return
     commitMode = true
-    if (fullDescription) {
-      descriptionDraft = fullDescription
-    } else {
-      try {
-        const result = await api.description(selectedRevision.commit.commit_id)
-        descriptionDraft = result.description
-      } catch {
-        descriptionDraft = selectedRevision.description
-      }
-    }
+    descriptionDraft = await fetchPrefillDescription()
     descriptionEditing = true
-    requestAnimationFrame(() => {
-      const el = document.querySelector('.desc-editor textarea') as HTMLTextAreaElement
-      el?.focus()
-    })
+    focusDescEditor()
   }
 
   async function executeCommit() {
@@ -1075,22 +1129,9 @@
 
   async function startDescriptionEdit() {
     if (!selectedRevision) return
-    if (fullDescription) {
-      descriptionDraft = fullDescription
-    } else {
-      try {
-        const result = await api.description(selectedRevision.commit.commit_id)
-        descriptionDraft = result.description
-      } catch {
-        descriptionDraft = selectedRevision.description
-        lastAction = 'Using cached description (could not fetch latest)'
-      }
-    }
+    descriptionDraft = await fetchPrefillDescription()
     descriptionEditing = true
-    requestAnimationFrame(() => {
-      const el = document.querySelector('.desc-editor textarea') as HTMLTextAreaElement
-      el?.focus()
-    })
+    focusDescEditor()
   }
 
   function handleRevsetSubmit() {
@@ -1334,6 +1375,28 @@
   loadWorkspaces()
   loadAliases()
   loadPullRequests()
+
+  // --- Tab-switch state preservation ---
+  // AppShell calls getState() before the {#key} remount destroys this instance.
+  export function getState(): TabState {
+    return {
+      selectedIndex,
+      revsetFilter,
+      activeView,
+      diffScrollTop: diffPanelRef?.getScrollTop() ?? 0,
+    }
+  }
+
+  // One-shot scroll restore: after the first diff finishes loading post-mount,
+  // apply the saved position. pendingScrollRestore nulls itself so subsequent
+  // diffLoading cycles (nav to another revision) don't re-apply a stale scroll.
+  $effect(() => {
+    if (pendingScrollRestore == null || diffLoading || !diffPanelRef) return
+    const v = pendingScrollRestore
+    pendingScrollRestore = null
+    // rAF so the diff content DOM is painted before we scroll.
+    requestAnimationFrame(() => diffPanelRef?.setScrollTop(v))
+  })
 
   // --- Tutorial / What's New ---
   // Must await config.ready so we read the disk-persisted tutorialVersion, not
@@ -1638,6 +1701,7 @@
           onexecute={handleBookmarkOp}
           onrefresh={() => bookmarksPanel.load()}
           onclose={() => { activeView = 'log' }}
+          oncontextmenu={showBookmarkContextMenu}
         />
       </div>
     {:else if activeView === 'operations'}

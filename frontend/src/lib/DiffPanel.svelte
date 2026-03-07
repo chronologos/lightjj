@@ -691,6 +691,15 @@
     if (lastCollapseCacheKey) collapseStateCache.delete(lastCollapseCacheKey)
   }
 
+  // Scroll position capture/restore for tab-switch state preservation.
+  // AppShell snapshots on switch-away, App restores after next mount's diff loads.
+  export function getScrollTop(): number {
+    return panelContentEl?.scrollTop ?? 0
+  }
+  export function setScrollTop(v: number) {
+    if (panelContentEl) panelContentEl.scrollTop = v
+  }
+
   // --- Diff search ---
   let searchOpen = $state(false)
   let searchQuery = $state('')

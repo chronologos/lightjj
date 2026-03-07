@@ -6,6 +6,15 @@
   import { createConfirmGate } from './confirm-gate.svelte'
   import type { BookmarkOp } from './BookmarkModal.svelte'
 
+  /** Gates for context-menu items — same source of truth as the d/f/t keys.
+   *  Precomputed here so App's menu builder doesn't duplicate the logic. */
+  export interface BookmarkRowActions {
+    jump: boolean
+    del: boolean
+    /** Non-null when track/untrack is possible; carries the resolved remote. */
+    track: { action: 'track' | 'untrack'; remote: string } | null
+  }
+
   interface Props {
     bookmarks: Bookmark[]
     loading: boolean
@@ -16,9 +25,10 @@
     onexecute: (op: BookmarkOp) => void
     onrefresh: () => void
     onclose: () => void
+    oncontextmenu?: (bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) => void
   }
 
-  let { bookmarks, loading, error, defaultRemote, prByBookmark, onjump, onexecute, onrefresh, onclose }: Props = $props()
+  let { bookmarks, loading, error, defaultRemote, prByBookmark, onjump, onexecute, onrefresh, onclose, oncontextmenu }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -45,18 +55,24 @@
 
   let selected = $derived(rows[index] as Row | undefined)
 
-  // Track/untrack availability for the selected row. Prefer an existing
-  // remote entry (toggle its state); fall back to defaultRemote for
-  // local-only bookmarks.
-  interface TrackInfo { action: 'track' | 'untrack'; remote: string }
-  let trackInfo = $derived.by((): TrackInfo | null => {
-    const bm = selected?.bm
-    if (!bm) return null
+  // Per-bookmark action gates. Factored out of the keyboard-selection
+  // $derived so context-menu can compute them for the RIGHT-CLICKED row
+  // (not the keyboard-selected one).
+  function computeActions(bm: Bookmark): BookmarkRowActions {
+    // Track/untrack: prefer an existing remote entry (toggle its state);
+    // fall back to defaultRemote for local-only bookmarks.
     const r = bm.remotes?.[0]
-    if (r) return { action: r.tracked ? 'untrack' : 'track', remote: r.remote }
-    if (bm.local && defaultRemote) return { action: 'track', remote: defaultRemote }
-    return null
-  })
+    const track = r ? { action: r.tracked ? 'untrack' as const : 'track' as const, remote: r.remote }
+      : bm.local && defaultRemote ? { action: 'track' as const, remote: defaultRemote }
+      : null
+    return {
+      jump: !bm.conflict && !!bm.commit_id,
+      del: !!bm.local,
+      track,
+    }
+  }
+
+  let trackInfo = $derived(selected ? computeActions(selected.bm).track : null)
 
   let can = $derived({
     jump: !!selected && !selected.bm.conflict && !!selected.bm.commit_id,
@@ -257,6 +273,12 @@
           class:bp-row-active={i === index}
           onmousemove={() => { if (index !== i) index = i }}
           onclick={() => { if (!row.bm.conflict && row.bm.commit_id) onjump(row.bm) }}
+          oncontextmenu={oncontextmenu ? (e: MouseEvent) => {
+            e.preventDefault()
+            confirm.disarm() // right-click cancels any pending double-press confirm
+            index = i        // sync keyboard selection to right-clicked row
+            oncontextmenu!(row.bm, computeActions(row.bm), e.clientX, e.clientY)
+          } : undefined}
           role="option"
           tabindex="-1"
           aria-selected={i === index}
