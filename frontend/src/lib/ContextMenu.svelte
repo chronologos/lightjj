@@ -10,6 +10,10 @@
     shortcut?: string
   }
 
+  /** The uniform context-menu prop shape: component builds items locally,
+   *  App wires every surface to a single `showContextMenu`. See CLAUDE.md. */
+  export type ContextMenuHandler = (items: ContextMenuItem[], x: number, y: number) => void
+
   interface Props {
     items: ContextMenuItem[]
     x: number

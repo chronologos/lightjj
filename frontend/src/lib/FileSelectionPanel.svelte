@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SvelteSet } from 'svelte/reactivity'
   import type { FileChange } from './api'
+  import type { ContextMenuHandler } from './ContextMenu.svelte'
 
   interface Props {
     /** Drives title + count-suffix labels. All three modes use identical
@@ -10,9 +11,10 @@
     files: FileChange[]
     selected: SvelteSet<string>
     ontoggle: (path: string) => void
+    oncontextmenu?: ContextMenuHandler
   }
 
-  let { mode, files, selected, ontoggle }: Props = $props()
+  let { mode, files, selected, ontoggle, oncontextmenu }: Props = $props()
 
   let cursorIdx: number = $state(0)
   let listEl: HTMLElement | undefined = $state(undefined)
@@ -35,6 +37,20 @@
 
   function selectNone() {
     for (const f of files) { if (selected.has(f.path)) ontoggle(f.path) }
+  }
+
+  function handleRowContextMenu(e: MouseEvent, i: number, path: string) {
+    if (!oncontextmenu) return
+    e.preventDefault()
+    cursorIdx = i
+    oncontextmenu([
+      { label: 'Copy path', action: () => navigator.clipboard.writeText(path) },
+      { label: 'Copy all paths', action: () => navigator.clipboard.writeText(files.map(f => f.path).join('\n')) },
+      { separator: true },
+      { label: selected.has(path) ? 'Uncheck' : 'Check', shortcut: 'Space', action: () => ontoggle(path) },
+      { label: 'Check all', shortcut: 'a', action: selectAll },
+      { label: 'Uncheck all', shortcut: 'n', action: selectNone },
+    ], e.clientX, e.clientY)
   }
 
   // Enter/Escape NOT handled — they bubble to App.svelte's global keydown
@@ -94,6 +110,7 @@
         class:file-select-active={i === cursorIdx}
         class:file-checked={selected.has(file.path)}
         onclick={() => { cursorIdx = i; ontoggle(file.path) }}
+        oncontextmenu={(e) => handleRowContextMenu(e, i, file.path)}
         onmouseenter={() => { cursorIdx = i }}
         role="option"
         tabindex="-1"

@@ -15,7 +15,7 @@
   import { createDiffDerivation } from './diff-derivation.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
   import FileSelectionPanel from './FileSelectionPanel.svelte'
-  import ContextMenu, { type ContextMenuItem } from './ContextMenu.svelte'
+  import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
   import AnnotationBubble from './AnnotationBubble.svelte'
   import { createAnnotationStore, exportMarkdown, exportJSON } from './annotations.svelte'
   import type { Annotation, AnnotationSeverity } from './api'
@@ -44,13 +44,19 @@
     /** App's withMutation wrapper — serializes jj mutations across the app.
      *  Returns undefined if blocked (another mutation in flight). */
     onjjmutation?: <T>(fn: () => Promise<T>) => Promise<T | undefined>
+    /** Singleton context-menu dispatcher — items built here (component owns
+     *  domain data), rendered by App's single <ContextMenu>. */
+    oncontextmenu?: ContextMenuHandler
+    /** Open a repo-relative path in the user's $EDITOR. undefined = disabled
+     *  (SSH mode, no local fs). Used by file-header + diff-line menus. */
+    onopenfile?: (path: string, line?: number) => void
   }
 
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, splitView = $bindable(false), header,
     fileSelectionMode, selectedFiles, ontogglefile, onresolve,
-    onfilesaved, onjjmutation,
+    onfilesaved, onjjmutation, oncontextmenu, onopenfile,
   }: Props = $props()
 
   // Stable string key for derivedCache + lastActiveRevId tracking.
@@ -72,11 +78,8 @@
   let editError = $state('')  // last error message (shown in status bar area)
 
   // --- Diff line context menu ---
-  let diffCtx: { items: ContextMenuItem[]; x: number; y: number; open: boolean } = $state({
-    items: [], x: 0, y: 0, open: false,
-  })
-
   function openDiffLineContextMenu(e: MouseEvent, info: DiffLineInfo): void {
+    if (!oncontextmenu) return
     const nums = info.lines.map(l => l.lineNum).filter((n): n is number => n !== null)
     const start = nums.length > 0 ? Math.min(...nums) : null
     const end = nums.length > 0 ? Math.max(...nums) : null
@@ -95,7 +98,12 @@
     const fullRef = `${ref}\n${content}`
 
     const items: ContextMenuItem[] = [
-      { label: `Copy reference`, action: () => navigator.clipboard.writeText(fullRef) },
+      { label: 'Copy file path', action: () => navigator.clipboard.writeText(info.filePath) },
+      onopenfile
+        ? { label: 'Open in editor', action: () => onopenfile(info.filePath, start ?? undefined) }
+        : { label: 'Open in editor (local only)', disabled: true },
+      { separator: true },
+      { label: 'Copy reference', action: () => navigator.clipboard.writeText(fullRef) },
     ]
     // Annotate only makes sense in single-rev mode (needs a stable changeId)
     // and when selection is a single line (annotations are per-line).
@@ -107,7 +115,7 @@
       })
     }
 
-    diffCtx = { items, x: e.clientX, y: e.clientY, open: true }
+    oncontextmenu(items, e.clientX, e.clientY)
   }
 
   // --- Annotations ---
@@ -874,7 +882,7 @@
     </div>
   {/if}
   {#if fileSelectionMode}
-    <FileSelectionPanel mode={fileSelectionMode} files={changedFiles} selected={selectedFiles} ontoggle={ontogglefile} />
+    <FileSelectionPanel mode={fileSelectionMode} files={changedFiles} selected={selectedFiles} ontoggle={ontogglefile} {oncontextmenu} />
   {/if}
   {#if diffTarget && changedFiles.length > 0 && !fileSelectionMode}
     <div class="file-list-bar">
@@ -1023,6 +1031,8 @@
             onsavefile={saveFile}
             oncanceledit={cancelEdit}
             onlinecontext={openDiffLineContextMenu}
+            {oncontextmenu}
+            {onopenfile}
             annotationsForLine={diffTarget?.kind === 'single' ? annotationsForFile(filePath) : undefined}
             onannotationclick={(ln, content, e) => handleAnnotationClick(filePath, ln, content, e)}
           />
@@ -1044,6 +1054,8 @@
               searchMatches={matchesByFile.get(cf.path) ?? EMPTY_MATCHES}
               {currentMatchIdx}
               onlinecontext={openDiffLineContextMenu}
+              {oncontextmenu}
+              {onopenfile}
             />
           {:else}
             <div class="diff-file" data-file-path={cf.path}>
@@ -1064,8 +1076,6 @@
   </div>
 </div>
 
-<ContextMenu items={diffCtx.items} x={diffCtx.x} y={diffCtx.y} bind:open={diffCtx.open} />
-
 <AnnotationBubble
   bind:open={annBubble.open}
   x={annBubble.x}
@@ -1078,6 +1088,8 @@
 />
 
 <style>
+  /* NO transform/filter/will-change/contain on .panel — would trap the
+     fixed-position AnnotationBubble (creates a new containing block). */
   .panel {
     display: flex;
     flex-direction: column;
