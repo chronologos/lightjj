@@ -1,7 +1,5 @@
 package jj
 
-const RootChangeId = "zzzzzzzz"
-
 type Commit struct {
 	ChangeId       string   `json:"change_id"`
 	CommitId       string   `json:"commit_id"`
@@ -15,10 +13,6 @@ type Commit struct {
 	Empty          bool     `json:"empty"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
 	ParentIds      []string `json:"parent_ids,omitempty"`
-}
-
-func (c Commit) IsRoot() bool {
-	return c.ChangeId == RootChangeId
 }
 
 // GetChangeId returns the best identifier for this commit.

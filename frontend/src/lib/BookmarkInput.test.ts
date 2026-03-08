@@ -26,7 +26,6 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
   return {
     open: true,
     onsave: vi.fn(),
-    oncancel: vi.fn(),
     ...overrides,
   }
 }
@@ -153,15 +152,14 @@ describe('BookmarkInput', () => {
       expect(onsave).toHaveBeenCalledWith('new-branch')
     })
 
-    it('Escape calls oncancel', async () => {
-      const oncancel = vi.fn()
+    it('Escape closes', async () => {
       mockBookmarks.mockResolvedValue([])
-      const { container } = render(BookmarkInput, { props: defaultProps({ oncancel }) })
+      const { container } = render(BookmarkInput, { props: defaultProps() })
 
       const input = container.querySelector('.bm-set-input') as HTMLInputElement
       await fireEvent.keyDown(input, { key: 'Escape' })
 
-      expect(oncancel).toHaveBeenCalledTimes(1)
+      expect(container.querySelector('.bm-set-input')).toBeNull()
     })
 
     it('ArrowDown selects next suggestion', async () => {

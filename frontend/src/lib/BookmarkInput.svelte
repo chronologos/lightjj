@@ -5,10 +5,9 @@
   interface Props {
     open: boolean
     onsave: (name: string) => void
-    oncancel?: () => void
   }
 
-  let { open = $bindable(false), onsave, oncancel }: Props = $props()
+  let { open = $bindable(false), onsave }: Props = $props()
 
   let value: string = $state('')
   let inputEl: HTMLInputElement | undefined = $state(undefined)
@@ -44,7 +43,6 @@
 
   function close() {
     open = false
-    oncancel?.()
     previousFocus?.focus()
   }
 

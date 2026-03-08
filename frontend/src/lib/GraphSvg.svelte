@@ -39,24 +39,12 @@
 
   interface Props {
     gutter: string
-    isNode: boolean
-    isWorkingCopy: boolean
-    isImmutable: boolean
-    isConflicted: boolean
     isDivergent: boolean
-    isHidden: boolean
     gutterWidth: number
     isDark: boolean
   }
 
-  let {
-    gutter, isDivergent, gutterWidth, isDark,
-    // Remaining props are passed by the parent but unused here — the gutter
-    // character itself encodes node type (@, ◆, ×, ◌, ○). Kept in the
-    // interface for API completeness; destructured to suppress Svelte warnings.
-    isNode: _isNode, isWorkingCopy: _isWorkingCopy, isImmutable: _isImmutable,
-    isConflicted: _isConflicted, isHidden: _isHidden,
-  }: Props = $props()
+  let { gutter, isDivergent, gutterWidth, isDark }: Props = $props()
 
   // Must use $effect (not $derived): the .light class toggle happens in an
   // $effect in App.svelte — $derived would read stale CSS vars. refreshPalette

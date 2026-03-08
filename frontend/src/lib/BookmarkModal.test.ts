@@ -33,7 +33,6 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     currentCommitId: 'bbb222',
     filterBookmark: '',
     onexecute: vi.fn(),
-    onclose: vi.fn(),
     ...overrides,
   }
 }
@@ -199,17 +198,16 @@ describe('BookmarkModal', () => {
     })
 
     it('Escape disarms without closing', async () => {
-      const onclose = vi.fn()
       mockBookmarks.mockResolvedValue([
         makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
       ])
-      await renderSettled(defaultProps({ onclose }))
+      await renderSettled(defaultProps())
 
       await fireEvent.keyDown(modal(), { key: 'd' })
       expect(footer()).toContain('again to delete')
 
       await fireEvent.keyDown(modal(), { key: 'Escape' })
-      expect(onclose).not.toHaveBeenCalled()
+      expect(modal()).not.toBeNull() // still open
       expect(footer()).not.toContain('again')
     })
 
@@ -459,9 +457,8 @@ describe('BookmarkModal', () => {
     it('Escape with non-empty query clears it — regardless of input focus', async () => {
       // Regression guard: old code checked `inInput && query`, so typing
       // then ArrowDown then Escape closed immediately with filter lost.
-      const onclose = vi.fn()
       mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat' })])
-      await renderSettled(defaultProps({ onclose }))
+      await renderSettled(defaultProps())
 
       const input = screen.getByPlaceholderText('Filter...') as HTMLInputElement
       await fireEvent.focus(input)
@@ -470,16 +467,15 @@ describe('BookmarkModal', () => {
       await fireEvent.keyDown(modal(), { key: 'Escape' })
 
       expect(input.value).toBe('')
-      expect(onclose).not.toHaveBeenCalled()
+      expect(modal()).not.toBeNull() // still open
     })
 
     it('Escape with empty query and no armed key closes', async () => {
-      const onclose = vi.fn()
       mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat' })])
-      await renderSettled(defaultProps({ onclose }))
+      await renderSettled(defaultProps())
 
       await fireEvent.keyDown(modal(), { key: 'Escape' })
-      expect(onclose).toHaveBeenCalled()
+      expect(modal()).toBeNull()
     })
   })
 

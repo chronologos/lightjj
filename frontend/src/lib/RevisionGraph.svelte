@@ -82,7 +82,6 @@
     isWorkingCopy: boolean
     isHidden: boolean
     isImmutable?: boolean
-    isConflicted?: boolean
     isDivergent?: boolean
   }
 
@@ -165,7 +164,6 @@
           isWorkingCopy: entry.commit.is_working_copy,
           isHidden: entry.commit.hidden,
           isImmutable: entry.commit.immutable,
-          isConflicted: isNode && entry.commit.conflicted,
           isDivergent: isNode && entry.commit.divergent,
         })
         if (isNode) {
@@ -374,12 +372,7 @@
           <span class="check-gutter" class:implied={isImplied} title={isImplied ? 'Included via gap-fill (connected)' : ''}>{#if line.isNode && isChecked}✓{:else if line.isNode && isImplied}◌{/if}</span>
           <GraphSvg
             gutter={line.gutter}
-            isNode={line.isNode}
-            isWorkingCopy={line.isWorkingCopy}
-            isImmutable={line.isImmutable ?? false}
-            isConflicted={line.isConflicted ?? false}
             isDivergent={line.isDivergent ?? false}
-            isHidden={line.isHidden}
             gutterWidth={maxGutterLen}
             {isDark}
           />

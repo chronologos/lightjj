@@ -6,11 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCommit_IsRoot(t *testing.T) {
-	assert.True(t, Commit{ChangeId: RootChangeId}.IsRoot())
-	assert.False(t, Commit{ChangeId: "abc"}.IsRoot())
-}
-
 func TestCommit_GetChangeId(t *testing.T) {
 	// Normal: returns change ID
 	c := Commit{ChangeId: "abc", CommitId: "xyz"}
