@@ -39,7 +39,8 @@ type Watcher struct {
 	// lock can be taken without nesting.
 	onSub, onUnsub func()
 
-	stop chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 func newWatcher(srv *Server) *Watcher {
@@ -97,11 +98,14 @@ func (w *Watcher) start(snapshotInterval time.Duration) error {
 }
 
 // Close stops all background goroutines and closes the fsnotify watcher.
+// Idempotent — signal handler racing handleClose, or double-signal, won't panic.
 func (w *Watcher) Close() {
-	close(w.stop)
-	if w.fsWatcher != nil {
-		w.fsWatcher.Close()
-	}
+	w.stopOnce.Do(func() {
+		close(w.stop)
+		if w.fsWatcher != nil {
+			w.fsWatcher.Close()
+		}
+	})
 }
 
 // watchLoop consumes fsnotify events and broadcasts debounced op-id changes.

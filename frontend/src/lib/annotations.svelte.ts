@@ -197,14 +197,21 @@ export function createAnnotationStore(): AnnotationStore {
     return m
   })
 
+  let inFlight = 0
   async function withBusy<T>(fn: () => Promise<T>): Promise<T> {
-    busy = true
-    try { return await fn() } finally { busy = false }
+    inFlight++; busy = true
+    try { return await fn() } finally { busy = --inFlight > 0 }
   }
 
+  // Generation counter invalidates in-flight load() when navigation or a
+  // write (add/update/remove/clear) makes its pending final `list = ...`
+  // assignment stale. Without the write-side bump, add() completing mid-
+  // reanchor gets overwritten by load's final map(): annotation saved on
+  // backend but invisible in UI until next nav.
   let loadGen = 0
+  const bumpGen = () => ++loadGen
   async function load(changeId: string, commitId: string) {
-    const gen = ++loadGen
+    const gen = bumpGen()
     return withBusy(async () => {
       const raw = await api.annotations(changeId)
       if (gen !== loadGen) return
@@ -267,6 +274,7 @@ export function createAnnotationStore(): AnnotationStore {
       status: 'open',
     }
     return withBusy(async () => {
+      bumpGen()
       await api.saveAnnotation(ann)
       list = [...list, ann]
     })
@@ -274,6 +282,7 @@ export function createAnnotationStore(): AnnotationStore {
 
   async function update(ann: Annotation) {
     return withBusy(async () => {
+      bumpGen()
       await api.saveAnnotation(ann)
       list = list.map(a => a.id === ann.id ? ann : a)
     })
@@ -282,6 +291,7 @@ export function createAnnotationStore(): AnnotationStore {
   async function remove(id: string) {
     if (!loadedChangeId) return
     return withBusy(async () => {
+      bumpGen()
       await api.deleteAnnotation(loadedChangeId!, id)
       list = list.filter(a => a.id !== id)
     })
@@ -290,6 +300,7 @@ export function createAnnotationStore(): AnnotationStore {
   async function clear() {
     if (!loadedChangeId) return
     return withBusy(async () => {
+      bumpGen()
       await api.clearAnnotations(loadedChangeId!)
       list = []
     })

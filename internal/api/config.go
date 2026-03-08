@@ -8,7 +8,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// Serializes read-merge-write. Two tabs writing simultaneously (panel resize +
+// theme toggle) each read disk state, merge their delta, rename — last writer
+// wins, other's key dropped. maps.Copy preserves unknown keys across versions
+// but not across concurrent same-version writes.
+var configMu sync.Mutex
 
 // User config is stored at $XDG_CONFIG_HOME/lightjj/config.json (or platform
 // equivalent via os.UserConfigDir). Unlike localStorage this survives port
@@ -46,10 +53,12 @@ func handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		// over defaults. Don't 404: that would log as an error in the browser
 		// console on first run.
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte("{}"))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Write(data)
 }
 
@@ -96,6 +105,9 @@ func handleConfigSet(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	configMu.Lock()
+	defer configMu.Unlock()
 
 	merged := map[string]json.RawMessage{}
 	if existing, err := os.ReadFile(path); err == nil {

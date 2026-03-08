@@ -1,3 +1,37 @@
+<script module lang="ts">
+  // --- Module-level constants & shared palette ---
+  // Palette is identical across all instances (depends only on theme).
+  // Per-instance $effect would call getComputedStyle + 8× getPropertyValue
+  // on every mount — virtualized scroll through 1500 flatLines = 12k style
+  // reads. Hoisted to module scope so it computes once per theme toggle.
+  const CELL_W = 10   // width per character cell
+  const ROW_H = 18    // matches fixed row height
+  const NODE_R = 4    // node circle radius
+  const WC_R = 5      // working copy node radius (larger)
+  const LINE_W = 1.5  // lane line stroke width
+  const GRAPH_COLORS = 8  // number of --graph-N vars in theme.css
+
+  // Opacity tiers per design language (Tier 3: muted, decorative)
+  const LINE_OPACITY = 0.45
+  const NODE_OPACITY = 0.8
+  const ELIDED_OPACITY = 0.3
+  const BG_OPACITY = 0.2
+
+  const NODE_CHARS = new Set(['@', '○', '◆', '×', '◌'])
+
+  let palette: string[] = $state(Array(GRAPH_COLORS).fill('#888'))
+  let paletteDark: boolean | undefined // sentinel: undefined = never read
+
+  function refreshPalette(isDark: boolean) {
+    if (paletteDark === isDark) return
+    paletteDark = isDark
+    const style = getComputedStyle(document.documentElement)
+    palette = Array.from({ length: GRAPH_COLORS }, (_, i) =>
+      style.getPropertyValue(`--graph-${i}`).trim()
+    )
+  }
+</script>
+
 <script lang="ts">
   /** SVG renderer for a single graph row's gutter string.
    *  Maps jj's ASCII graph characters to SVG elements at grid positions.
@@ -24,33 +58,11 @@
     isConflicted: _isConflicted, isHidden: _isHidden,
   }: Props = $props()
 
-  // --- Constants ---
-  const CELL_W = 10   // width per character cell
-  const ROW_H = 18    // matches fixed row height
-  const NODE_R = 4    // node circle radius
-  const WC_R = 5      // working copy node radius (larger)
-  const LINE_W = 1.5  // lane line stroke width
-  const GRAPH_COLORS = 8  // number of --graph-N vars in theme.css
-
-  // Opacity tiers per design language (Tier 3: muted, decorative)
-  const LINE_OPACITY = 0.45
-  const NODE_OPACITY = 0.8
-  const ELIDED_OPACITY = 0.3
-  const BG_OPACITY = 0.2
-
-  const NODE_CHARS = new Set(['@', '○', '◆', '×', '◌'])
-
-  // Read --graph-N CSS vars from theme.css after DOM updates.
-  // Must use $effect (not $derived) because the .light class toggle
-  // happens in an $effect in App.svelte — $derived would read stale vars.
-  let palette: string[] = $state(Array(GRAPH_COLORS).fill('#888'))
-  $effect(() => {
-    void isDark // dependency: re-read after theme class toggle
-    const style = getComputedStyle(document.documentElement)
-    palette = Array.from({ length: GRAPH_COLORS }, (_, i) =>
-      style.getPropertyValue(`--graph-${i}`).trim()
-    )
-  })
+  // Must use $effect (not $derived): the .light class toggle happens in an
+  // $effect in App.svelte — $derived would read stale CSS vars. refreshPalette
+  // no-ops if paletteDark === isDark, so only the first instance mounted
+  // after a theme change does actual work.
+  $effect(() => refreshPalette(isDark))
 
   function laneColor(lane: number): string {
     return palette[lane % GRAPH_COLORS]

@@ -7,7 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 )
+
+// annMu serializes read-modify-write across POST/DELETE handlers. Without it,
+// two concurrent writes (cross-tab, same changeId) both read [a,b], one appends
+// c, the other appends d; whichever renames last wins, the other is lost.
+// atomicWriteJSON prevents torn writes but not lost updates. Global (not
+// per-changeId) is fine — contention is rare, handlers are fast.
+var annMu sync.Mutex
 
 // Annotations are per-change_id review comments for agent-iteration workflows.
 // Stored at $XDG_CONFIG_HOME/lightjj/annotations/{changeId}.json so spawned
@@ -129,6 +137,9 @@ func (s *Server) handleAnnotationsPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	annMu.Lock()
+	defer annMu.Unlock()
+
 	anns, err := readAnnotations(ann.ChangeId)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
@@ -169,6 +180,9 @@ func (s *Server) handleAnnotationsDelete(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	annMu.Lock()
+	defer annMu.Unlock()
 
 	if id == "" {
 		// Clear all — best-effort; missing file is success.
