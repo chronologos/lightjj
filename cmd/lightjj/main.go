@@ -154,7 +154,35 @@ func main() {
 	if *autoShutdown > 0 {
 		tm.SetIdleShutdown(*autoShutdown)
 	}
+	if sshRunner != nil {
+		tm.Mode = "ssh"
+		tm.Host = sshHost // filter: two --remote sessions on different hosts share one config
+	} else {
+		tm.Mode = "local"
+	}
 	tm.AddTab(srv, displayPath)
+
+	// Restore tabs persisted from the last session. Best-effort: a moved or
+	// deleted repo logs and is skipped. Each restore goes through resolve()
+	// which re-validates and re-canonicalizes (handles symlink changes).
+	// Mode+Host filter ensures a local session doesn't try to open ssh
+	// paths, and an ssh session on hostA doesn't try to open hostB's paths
+	// (both would either fail or, worse, silently open the wrong repo if
+	// the path happens to exist).
+	for _, pt := range api.ReadPersistedTabs() {
+		if pt.Mode != tm.Mode || pt.Host != tm.Host {
+			continue
+		}
+		root, err := resolve(pt.Path)
+		if err != nil {
+			log.Printf("skipping persisted tab %s: %v", pt.Path, err)
+			continue
+		}
+		if tm.FindByPath(root) != nil {
+			continue // already open (is the -R startup tab)
+		}
+		tm.AddTab(newTab(root), root)
+	}
 
 	// Serve embedded frontend static files
 	feFS, err := fs.Sub(frontendFS, "frontend-dist")

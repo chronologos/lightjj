@@ -603,16 +603,35 @@ describe('timeout', () => {
     }
   })
 
-  it('POST request has no timeout', async () => {
-    // POST requests should not create an AbortController
-    _testInternals.lastOpId = 'op1'
-    mockFetch.mockResolvedValue(mockResponse({ output: 'done' }, 'op1'))
+  it('POST mutation times out at 60s (not 30s)', async () => {
+    vi.useFakeTimers()
+    try {
+      mockFetch.mockImplementation((_url: string, init?: RequestInit) => {
+        return new Promise((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted', 'AbortError'))
+          })
+        })
+      })
 
-    await api.abandon(['abc'])
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    // Verify no signal was added by the internal timeout logic
-    const [, init] = mockFetch.mock.calls[0]
-    expect(init?.signal).toBeUndefined()
+      const promise = api.abandon(['abc']).catch((e: Error) => e)
+      // 31s: past READ_TIMEOUT but under MUTATION_TIMEOUT. Without this
+      // mid-point liveness check, the test would pass even if POST timed out
+      // at 1s — the final await would just see an already-resolved promise.
+      await vi.advanceTimersByTimeAsync(31_000)
+      const midpoint = await Promise.race([promise, Promise.resolve('pending')])
+      expect(midpoint).toBe('pending')
+      // Advance past 60s → abort fires.
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      const error = await promise
+      expect(error).toBeInstanceOf(Error)
+      // POST timeout gets the "may have completed" suffix — SSH stall on
+      // response delivery doesn't mean the jj command failed.
+      expect((error as Error).message).toContain('may have completed')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

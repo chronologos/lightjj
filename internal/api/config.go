@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -106,6 +109,19 @@ func handleConfigSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := mergeAndWriteConfig(path, incoming); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// mergeAndWriteConfig reads the existing config (best-effort), overlays
+// incoming keys, atomic-writes back. Holds configMu for the whole cycle.
+// Used by handleConfigSet; writePersistedTabs needs INTRA-key filtering
+// (not whole-key overlay) so it builds its own merged map and calls
+// writeConfigLocked directly.
+func mergeAndWriteConfig(path string, incoming map[string]json.RawMessage) error {
 	configMu.Lock()
 	defer configMu.Unlock()
 
@@ -114,41 +130,121 @@ func handleConfigSet(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(existing, &merged) // best-effort; corrupt file → treat as empty
 	}
 	maps.Copy(merged, incoming)
+	return writeConfigLocked(path, merged)
+}
 
+// writeConfigLocked atomic-writes the given config map. Caller must hold
+// configMu. Separate from mergeAndWriteConfig so writePersistedTabs can do
+// its own intra-key filter-merge under the same lock.
+func writeConfigLocked(path string, merged map[string]json.RawMessage) error {
 	out, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "encode failed")
-		return
+		return err
 	}
-
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "cannot create config dir")
-		return
+		return err
 	}
-
 	// Atomic write: temp file in same dir + rename. Prevents a half-written
 	// config if lightjj is killed mid-write (e.g., user Ctrl+C during a
 	// panel-resize drag that triggered a debounced save).
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "cannot create temp file")
-		return
+		return err
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath) // no-op if rename succeeded
 	if _, err := tmp.Write(out); err != nil {
 		tmp.Close()
-		writeJSONError(w, http.StatusInternalServerError, "write failed")
-		return
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "close failed")
-		return
+		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "rename failed")
-		return
+	return os.Rename(tmpPath, path)
+}
+
+// PersistedTab is an openTabs entry. Mode + Host together tag the session
+// that created it. Two concurrent `lightjj --remote` sessions on different
+// hosts share one config.json — without Host, session B's write stomps A's
+// persisted tabs, and A's next restart would try to open B's path on A's
+// host (path-collision possible; silent wrong-repo).
+type PersistedTab struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`           // "local" | "ssh"
+	Host string `json:"host,omitempty"` // full user@host for ssh; empty for local
+}
+
+// ReadPersistedTabs returns the openTabs array from config.json, or an empty
+// slice on any error (missing file, corrupt JSON, field absent). Startup
+// restoration is best-effort — a bad tab shouldn't block launch.
+func ReadPersistedTabs() []PersistedTab {
+	path, err := configPath()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// ErrNotExist is the normal first-run state; anything else (EACCES,
+		// EIO) means the user won't know why tabs never persist — log it.
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("warning: cannot read persisted tabs: %v", err)
+		}
+		return nil
+	}
+	var cfg struct {
+		OpenTabs []PersistedTab `json:"openTabs"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("warning: corrupt config, skipping tab restore: %v", err)
+		return nil
+	}
+	return cfg.OpenTabs
+}
+
+// writePersistedTabs updates config.json with this session's current tab list
+// WITHOUT stomping other sessions' entries. A filter-merge: entries matching
+// (mode, host) are replaced with `tabs`; entries for other sessions pass
+// through untouched. Two `lightjj --remote` processes on hostA/hostB share
+// one config — a whole-array overwrite would lose the other's state on every
+// tab open.
+//
+// Cross-process races (two lightjj instances writing simultaneously) are NOT
+// fully serialized — configMu is per-process. The filter-merge at least
+// confines lost-write damage: each process only rewrites its own (mode,host)
+// entries, so a collision loses at most one process's DELTA since its last
+// write, not the other process's entire state. Acceptable for user prefs.
+func writePersistedTabs(mode, host string, tabs []PersistedTab) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	// Read existing config (RawMessage → preserves theme/editorArgs/etc).
+	merged := map[string]json.RawMessage{}
+	if data, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(data, &merged)
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Decode existing openTabs, filter out this session's entries, append fresh.
+	var existing []PersistedTab
+	if raw, ok := merged["openTabs"]; ok {
+		json.Unmarshal(raw, &existing)
+	}
+	kept := existing[:0]
+	for _, pt := range existing {
+		if pt.Mode == mode && pt.Host == host {
+			continue // this session's old entry; replaced below
+		}
+		kept = append(kept, pt)
+	}
+	kept = append(kept, tabs...)
+
+	raw, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	merged["openTabs"] = raw
+	return writeConfigLocked(path, merged)
 }

@@ -2518,3 +2518,70 @@ func TestHandleRestoreFrom_Empty(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	}
 }
+
+// TestWireTypes posts RAW JSON bodies — the exact field names api.ts sends —
+// and asserts the decoded struct makes it into the jj command. This catches
+// the TS `skip_emptied` ↔ Go `json:"skip-emptied"` typo class: json.Decode
+// silently ignores unknown fields, so a tag mismatch means the bool defaults
+// to false and the feature breaks without any error.
+//
+// Every other handler test in this file marshals Go structs (json.Marshal on
+// rebaseRequest{...}) — that's blind to tag typos because the struct round-trips
+// correctly regardless of what the tag string says. Only a raw-string body
+// exercises the same decode path the frontend hits.
+//
+// Covers the fields that silently zero-value: bools and mode-strings that
+// defaultAndValidate gives a fallback. Fields like revision/destination are
+// NOT here — empty → 400, already tested.
+func TestWireTypes(t *testing.T) {
+	abc := jj.FromIDs([]string{"abc"})
+	cases := []struct {
+		name   string
+		route  string
+		body   string // RAW json — the frontend wire shape
+		expect []string
+	}{
+		{
+			name:  "rebase: source_mode + target_mode + skip_emptied + ignore_immutable",
+			route: "/api/rebase",
+			body:  `{"revisions":["abc"],"destination":"def","source_mode":"-s","target_mode":"--insert-after","skip_emptied":true,"ignore_immutable":true}`,
+			// If any of these 4 field names mismatch: -s→-r, --insert-after→-d,
+			// true→false — MockRunner.Expect fails.
+			expect: jj.Rebase(abc, "def", "-s", "--insert-after", true, true),
+		},
+		{
+			name:  "squash: files + keep_emptied + use_destination_message + ignore_immutable",
+			route: "/api/squash",
+			body:  `{"revisions":["abc"],"destination":"def","files":["x.go"],"keep_emptied":true,"use_destination_message":true,"ignore_immutable":true}`,
+			// use_destination_message is always true in non-interactive mode
+			// regardless of the wire value, so this case only PARTIALLY covers
+			// it (a typo wouldn't change args). keep_emptied/ignore_immutable
+			// are the real signal here; files[] also checks the string-array
+			// wire shape.
+			expect: jj.Squash(abc, "def", []string{"x.go"}, true, true, false, true),
+		},
+		{
+			name:   "edit: ignore_immutable",
+			route:  "/api/edit",
+			body:   `{"revision":"abc","ignore_immutable":true}`,
+			expect: jj.Edit("abc", true),
+		},
+		{
+			name:   "abandon: ignore_immutable",
+			route:  "/api/abandon",
+			body:   `{"revisions":["abc"],"ignore_immutable":true}`,
+			expect: jj.Abandon(abc, true),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testutil.NewMockRunner(t)
+			r.Expect(tc.expect).SetOutput(nil)
+			defer r.Verify()
+			srv := newTestServer(r)
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, jsonPost(tc.route, []byte(tc.body)))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		})
+	}
+}

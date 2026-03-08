@@ -101,8 +101,12 @@ let refreshQueued = false
 export const MAX_CACHE_SIZE = 500
 const cache = new Map<string, unknown>()
 
-// Default timeout for read-only requests (30s). Mutations get no timeout.
+// Timeouts for non-streaming requests. Reads: 30s. Mutations: 60s — actual
+// jj mutations finish in <1s even on large repos; the timeout catches hangs
+// (SSH stall, jj deadlock, stuck WC lock). Streaming mutations (git push/fetch)
+// go through streamPost, NOT request(), and are unbounded by design.
 const READ_TIMEOUT_MS = 30_000
+const MUTATION_TIMEOUT_MS = 60_000
 
 export function onStale(callback: () => void): () => void {
   staleCallbacks.add(callback)
@@ -289,15 +293,18 @@ export function wireAutoRefresh(): () => void {
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const full = tabScoped(url)
-  // Add timeout for GET requests (reads). Mutations (POST) have no timeout
-  // since git push/fetch can take minutes.
+  // All non-streaming requests get a timeout. Streaming (gitPush/gitFetch)
+  // bypasses this function entirely so "push can take minutes" is handled
+  // structurally, not by special-casing POST here. DELETE counts as a
+  // mutation (60s) — closeTab/deleteAnnotation previously had NO timeout;
+  // now they have the same hang-protection as POST.
   const isRead = !init?.method || init.method === 'GET'
   let signal = init?.signal
   let timeoutId: ReturnType<typeof setTimeout> | undefined
-  if (isRead && !signal) {
+  if (!signal) {
     const controller = new AbortController()
     signal = controller.signal
-    timeoutId = setTimeout(() => controller.abort(), READ_TIMEOUT_MS)
+    timeoutId = setTimeout(() => controller.abort(), isRead ? READ_TIMEOUT_MS : MUTATION_TIMEOUT_MS)
   }
 
   try {
@@ -320,7 +327,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   } catch (e) {
     if (timeoutId !== undefined) clearTimeout(timeoutId)
     if (e instanceof DOMException && e.name === 'AbortError') {
-      throw new Error('Request timed out')
+      // Mutation timeout: the jj command may have completed server-side
+      // before response delivery stalled (esp. SSH). The SSE watcher will
+      // still fire the op-id update → log refresh picks it up. Tell the
+      // user to check rather than assume the operation failed.
+      throw new Error(isRead
+        ? 'Request timed out'
+        : 'Request timed out — the operation may have completed (check the log)')
     }
     throw e
   }

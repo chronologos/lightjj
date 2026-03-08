@@ -53,6 +53,15 @@ type TabManager struct {
 	newTab  TabFactory
 	resolve TabResolve
 
+	// Mode+Host tag tabs persisted to config.json. All tabs in one session
+	// share one mode+host so these live on the manager, not per-Tab. Set by
+	// main.go; Mode="" means tabs won't round-trip (tests, or future modes
+	// that don't want persistence). Host is the full user@host spec for ssh
+	// mode, empty for local — two `lightjj --remote` sessions on different
+	// hosts share one config.json, so the restore loop must filter by host.
+	Mode string
+	Host string
+
 	// Cross-tab idle-shutdown. Counts SSE subscribers across ALL tabs — a
 	// per-Watcher count would fire when the user switches tabs (old tab's
 	// EventSource closes) even though the browser is still connected. Timer
@@ -177,20 +186,26 @@ func (m *TabManager) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	t.handler.ServeHTTP(w, r)
 }
 
-func (m *TabManager) handleList(w http.ResponseWriter, r *http.Request) {
-	m.mu.RLock()
+// sortedTabs returns all tabs in numeric ID order (= open order — IDs are
+// monotonic via m.next++). Map iteration is random. Called under m.mu RLock.
+func (m *TabManager) sortedTabs() []*Tab {
 	out := make([]*Tab, 0, len(m.tabs))
 	for _, t := range m.tabs {
 		out = append(out, t)
 	}
-	m.mu.RUnlock()
-	// Stable order by numeric ID (map iteration is random). Atoi ignores
-	// errors: IDs are strconv.Itoa output, round-trip is exact.
+	// Atoi ignores errors: IDs are strconv.Itoa output, round-trip is exact.
 	slices.SortFunc(out, func(a, b *Tab) int {
 		ai, _ := strconv.Atoi(a.ID)
 		bi, _ := strconv.Atoi(b.ID)
 		return ai - bi
 	})
+	return out
+}
+
+func (m *TabManager) handleList(w http.ResponseWriter, r *http.Request) {
+	m.mu.RLock()
+	out := m.sortedTabs()
+	m.mu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }
@@ -230,7 +245,7 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if existing := m.findByPath(root); existing != nil {
+	if existing := m.FindByPath(root); existing != nil {
 		m.writeTab(w, existing)
 		return
 	}
@@ -250,10 +265,38 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	t := m.addLocked(srv, root)
 	m.mu.Unlock()
 	m.writeTab(w, t)
+	m.persistTabs()
 }
 
-// findByPath checks for an existing tab with the given canonical path.
-func (m *TabManager) findByPath(root string) *Tab {
+// persistTabs snapshots the current non-startup tabs to config.json. Tab 0
+// (the -R flag tab) is excluded: it's implicit from CLI flags, persisting it
+// would conflict when the user launches with a different -R path. Best-effort:
+// logs on failure, never blocks the HTTP response (callers invoke this AFTER
+// writing their response). Mode=="" (tests) → skip entirely.
+func (m *TabManager) persistTabs() {
+	if m.Mode == "" {
+		return
+	}
+	m.mu.RLock()
+	tabs := m.sortedTabs()
+	m.mu.RUnlock()
+	// Skip tab 0 (the -R CLI flag, implicit on every launch). sortedTabs
+	// returns in ID order so tab 0 is always first if present.
+	if len(tabs) > 0 && tabs[0].ID == "0" {
+		tabs = tabs[1:]
+	}
+	out := make([]PersistedTab, len(tabs))
+	for i, t := range tabs {
+		out[i] = PersistedTab{Path: t.Path, Mode: m.Mode, Host: m.Host}
+	}
+	if err := writePersistedTabs(m.Mode, m.Host, out); err != nil {
+		log.Printf("failed to persist tabs: %v", err)
+	}
+}
+
+// FindByPath checks for an existing tab with the given canonical path.
+// Exported for main.go's startup-restore loop (dedup against the -R tab).
+func (m *TabManager) FindByPath(root string) *Tab {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.findByPathLocked(root)
@@ -275,14 +318,22 @@ func (m *TabManager) writeTab(w http.ResponseWriter, t *Tab) {
 
 func (m *TabManager) handleClose(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Tab 0 is the -R startup tab — always present, never closeable.
+	// persistTabs() excludes it from config; closing it would break the
+	// "startup anchor" invariant and leave restored tabs with no primary.
+	if id == "0" {
+		writeJSONError(w, http.StatusBadRequest, "cannot close the startup tab")
+		return
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	t := m.tabs[id]
 	if t == nil {
+		m.mu.Unlock()
 		http.NotFound(w, r)
 		return
 	}
 	if len(m.tabs) == 1 {
+		m.mu.Unlock()
 		writeJSONError(w, http.StatusBadRequest, "cannot close the last tab")
 		return
 	}
@@ -290,5 +341,10 @@ func (m *TabManager) handleClose(w http.ResponseWriter, r *http.Request) {
 		t.srv.Shutdown()
 	}
 	delete(m.tabs, id)
+	m.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
+	// Persist after response written — config I/O shouldn't delay the UI,
+	// and holding m.mu across mergeAndWriteConfig would nest it with configMu
+	// (harmless today but a lock-ordering smell).
+	m.persistTabs()
 }

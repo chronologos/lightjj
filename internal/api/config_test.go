@@ -25,6 +25,14 @@ func withConfigDir(t *testing.T) string {
 	return filepath.Join(dir, "lightjj", "config.json")
 }
 
+// seedConfig writes raw content to the config path. Saves the MkdirAll +
+// WriteFile pair that 6+ tests repeat when pre-seeding config state.
+func seedConfig(t *testing.T, path, content string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
 func TestHandleConfig_SSHMode(t *testing.T) {
 	// Config uses os.UserConfigDir (local), not RepoDir, so SSH mode
 	// (RepoDir="") should still read/write config normally.
@@ -96,8 +104,7 @@ func TestHandleConfigSet_MergePreservesUnknownKeys(t *testing.T) {
 	// instance (which only knows about "theme") saves its config — the
 	// merge must preserve futureKey.
 	path := withConfigDir(t)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(`{"theme":"dark","futureKey":42}`), 0o644))
+	seedConfig(t, path, `{"theme":"dark","futureKey":42}`)
 
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
@@ -119,8 +126,7 @@ func TestHandleConfigSet_AtomicWrite(t *testing.T) {
 	// Corrupt existing file → merge treats it as empty, but write still
 	// succeeds (atomic rename replaces the corrupt file).
 	path := withConfigDir(t)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(`{not valid json`), 0o644))
+	seedConfig(t, path, `{not valid json`)
 
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
@@ -191,4 +197,86 @@ func TestIsLocalOrigin(t *testing.T) {
 	assert.False(t, isLocalOrigin("http://localhost.evil.com"))
 	assert.False(t, isLocalOrigin("http://localhost@evil.com"))
 	assert.False(t, isLocalOrigin("null")) // iframe sandbox, file://
+}
+
+func TestReadPersistedTabs(t *testing.T) {
+	t.Run("missing file → empty", func(t *testing.T) {
+		withConfigDir(t)
+		assert.Empty(t, ReadPersistedTabs())
+	})
+
+	t.Run("field absent → empty", func(t *testing.T) {
+		path := withConfigDir(t)
+		seedConfig(t, path, `{"theme":"dark"}`)
+		assert.Empty(t, ReadPersistedTabs())
+	})
+
+	t.Run("corrupt json → empty", func(t *testing.T) {
+		path := withConfigDir(t)
+		seedConfig(t, path, `{not json`)
+		assert.Empty(t, ReadPersistedTabs())
+	})
+
+	t.Run("wrong type → empty", func(t *testing.T) {
+		path := withConfigDir(t)
+		// openTabs is a string, not an array — Unmarshal fails, return nil
+		seedConfig(t, path, `{"openTabs":"oops"}`)
+		assert.Empty(t, ReadPersistedTabs())
+	})
+
+	t.Run("round trip", func(t *testing.T) {
+		withConfigDir(t)
+		want := []PersistedTab{
+			{Path: "/repo/a", Mode: "local"},
+			{Path: "/repo/b", Mode: "local"},
+		}
+		require.NoError(t, writePersistedTabs("local", "", want))
+		assert.Equal(t, want, ReadPersistedTabs())
+	})
+
+	t.Run("write preserves other keys", func(t *testing.T) {
+		// Persisting tabs must NOT stomp theme/editorArgs/etc — whole-config
+		// RawMessage read → overlay → write.
+		path := withConfigDir(t)
+		seedConfig(t, path, `{"theme":"light","editorArgs":["zed"]}`)
+
+		require.NoError(t, writePersistedTabs("ssh", "u@h", []PersistedTab{{Path: "/x", Mode: "ssh", Host: "u@h"}}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(data, &got))
+		assert.Equal(t, "light", got["theme"])
+		assert.Equal(t, []any{"zed"}, got["editorArgs"])
+		assert.Len(t, got["openTabs"], 1)
+	})
+
+	t.Run("filter-merge preserves other sessions", func(t *testing.T) {
+		// The multi-host scenario: session A (hostA) has a tab, session B
+		// (hostB) opens/closes a tab. A whole-array overwrite would erase
+		// A's entry. The filter-merge only touches (mode,host)-matching
+		// entries — A's entry must survive B's write.
+		withConfigDir(t)
+
+		// Session A writes.
+		a := []PersistedTab{{Path: "/work", Mode: "ssh", Host: "u@hostA"}}
+		require.NoError(t, writePersistedTabs("ssh", "u@hostA", a))
+
+		// Session B writes (different host).
+		b := []PersistedTab{{Path: "/proj", Mode: "ssh", Host: "u@hostB"}}
+		require.NoError(t, writePersistedTabs("ssh", "u@hostB", b))
+
+		got := ReadPersistedTabs()
+		require.Len(t, got, 2)
+		// Order: A's kept entry first (filter preserves order), B's appended.
+		assert.Equal(t, "u@hostA", got[0].Host)
+		assert.Equal(t, "u@hostB", got[1].Host)
+
+		// Session A closes its last tab → writes empty slice for its session.
+		require.NoError(t, writePersistedTabs("ssh", "u@hostA", nil))
+
+		got = ReadPersistedTabs()
+		require.Len(t, got, 1)
+		assert.Equal(t, "u@hostB", got[0].Host) // B untouched
+	})
 }

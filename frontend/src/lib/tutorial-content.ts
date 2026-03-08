@@ -25,4 +25,6 @@ export const FEATURES: TutorialFeature[] = [
   { version: '0.7.0', shortcut: null, title: 'Unified message bar', description: 'Mutation results, warnings, and errors in one place \u2014 expandable to see full jj output. Success auto-clears; warnings persist.' },
   { version: '0.7.0', shortcut: null, title: 'Open in editor (everywhere)', description: 'Right-click \u2192 Open in editor now works in --remote mode (via editorArgsRemote + {host}/{relpath} placeholders for SSH-URI editors like Zed). See docs/CONFIG.md.' },
   { version: '0.7.0', shortcut: null, title: 'Op undo / restore', description: 'Right-click any op-log entry to undo or restore repo state to that point.' },
+  { version: '0.8.0', shortcut: null, title: 'Tabs survive restart', description: 'Open tabs persist to config.json \u2014 they come back on next launch. Multi-host aware: two --remote sessions don\u2019t stomp each other.' },
+  { version: '0.8.0', shortcut: null, title: 'Mutation hang protection', description: 'Non-streaming mutations now time out at 60s instead of hanging forever. If the server stalls mid-response, you\u2019ll see "may have completed \u2014 check the log".' },
 ]

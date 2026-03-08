@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -162,8 +163,8 @@ func TestTabFindByPath(t *testing.T) {
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
 	t0 := tm.AddTab(NewServer(runner, ""), "/canonical/root")
 
-	assert.Same(t, t0, tm.findByPath("/canonical/root"))
-	assert.Nil(t, tm.findByPath("/other"))
+	assert.Same(t, t0, tm.FindByPath("/canonical/root"))
+	assert.Nil(t, tm.FindByPath("/other"))
 }
 
 func TestTabClose(t *testing.T) {
@@ -189,15 +190,32 @@ func TestTabClose(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestTabClose_Last(t *testing.T) {
-	tm, _ := newTestTab(t)
+func TestTabClose_StartupTab(t *testing.T) {
+	// Tab 0 (the -R startup tab) is never closeable — it's the anchor.
+	// This is checked BEFORE the last-tab guard, so even with 2+ tabs
+	// open, closing tab 0 is rejected.
+	tm := NewTabManager(nil, nil)
+	for i := 0; i < 2; i++ {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		tm.AddTab(NewServer(r, ""), "/r")
+	}
 	w := httptest.NewRecorder()
 	tm.Mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/tabs/0", nil))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "startup tab")
+	// Tab 0 still present.
 	tm.mu.RLock()
-	assert.Len(t, tm.tabs, 1)
+	_, exists := tm.tabs["0"]
 	tm.mu.RUnlock()
+	assert.True(t, exists)
 }
+
+// The len==1 guard in handleClose is technically unreachable now: tab 0 is
+// always present (AddTab'd at startup, never closeable), so len>=1 always,
+// and DELETE /tabs/0 hits the id=="0" guard first. Kept for defense-in-depth
+// — if a future bug lets tab 0 slip out of the map, the len==1 check is the
+// last line. No test for unreachable code.
 
 func TestTabClose_Unknown(t *testing.T) {
 	tm, _ := newTestTab(t)
@@ -310,4 +328,75 @@ func TestTabManager_ConfigAtTopLevel(t *testing.T) {
 	tm.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "{}", w.Body.String())
+}
+
+// TestTabPersistence exercises the create → config.json → close cycle.
+// persistTabs() skips tab 0 (it's the CLI -R flag, implicit on every launch)
+// and preserves unrelated config keys via mergeAndWriteConfig.
+func TestTabPersistence(t *testing.T) {
+	withConfigDir(t)
+
+	newTab := func(root string) *Server {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		return NewServer(r, "")
+	}
+	resolve := func(p string) (string, error) { return p, nil }
+	tm := NewTabManager(newTab, resolve)
+	tm.Mode = "local" // empty → persistTabs no-ops
+	r := testutil.NewMockRunner(t)
+	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+	tm.AddTab(NewServer(r, ""), "/startup-repo") // tab 0
+
+	// Open two more tabs.
+	for _, p := range []string{"/repo-a", "/repo-b"} {
+		w := httptest.NewRecorder()
+		tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"`+p+`"}`)))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	}
+
+	got := ReadPersistedTabs()
+	require.Len(t, got, 2)
+	assert.Equal(t, "/repo-a", got[0].Path)
+	assert.Equal(t, "/repo-b", got[1].Path)
+	assert.Equal(t, "local", got[0].Mode)
+	// Tab 0 excluded — it's the -R flag, persisting it would fight with
+	// a different -R on next launch.
+	for _, pt := range got {
+		assert.NotEqual(t, "/startup-repo", pt.Path)
+	}
+
+	// Close /repo-a (tab 1) → only /repo-b left in config.
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/tabs/1", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	got = ReadPersistedTabs()
+	require.Len(t, got, 1)
+	assert.Equal(t, "/repo-b", got[0].Path)
+}
+
+func TestTabPersistence_ModeEmptySkips(t *testing.T) {
+	// Tests leave Mode="" — persistTabs should no-op. Otherwise every existing
+	// tabs_test.go case would suddenly require a withConfigDir(t) call.
+	path := withConfigDir(t)
+
+	newTab := func(root string) *Server {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		return NewServer(r, "")
+	}
+	tm := NewTabManager(newTab, func(p string) (string, error) { return p, nil })
+	// Mode deliberately left empty.
+	r := testutil.NewMockRunner(t)
+	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+	tm.AddTab(NewServer(r, ""), "/start")
+
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/x"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Config file should not exist — persistTabs() returned early.
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err), "Mode=\"\" should skip config write, got file at %s", path)
 }
