@@ -87,7 +87,12 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows := parser.ParseGraphLog(string(output))
-	s.refreshOpId() // seed/refresh cache on log fetch
+	// Seed op-id cache on first log fetch only. Subsequent refreshes come
+	// from the watcher (local) or sshPollLoop (remote) — a sync refreshOpId
+	// here adds ~440ms to every /api/log in SSH mode for no benefit.
+	if s.getOpId() == "" {
+		s.refreshOpId()
+	}
 	s.writeJSON(w, r, http.StatusOK, rows)
 }
 
@@ -1016,22 +1021,26 @@ func githubRepoFromURL(url string) string {
 // state. A cancelled first request would otherwise permanently cache "" (Once
 // has no retry) — every subsequent PR-badge fetch would silently return empty.
 func (s *Server) resolveGHRepo() string {
-	s.ghRepoOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		out, err := s.Runner.Run(ctx, jj.GitRemoteList())
-		if err != nil {
-			return
+	s.ghRepoMu.Lock()
+	defer s.ghRepoMu.Unlock()
+	if s.ghRepoResolved {
+		return s.ghRepo
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := s.Runner.Run(ctx, jj.GitRemoteList())
+	if err != nil {
+		return "" // transient — next call retries
+	}
+	// Format: "<name> <url>\n..." — pick the default remote's URL.
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		name, url, ok := strings.Cut(line, " ")
+		if ok && name == s.DefaultRemote {
+			s.ghRepo = githubRepoFromURL(strings.TrimSpace(url))
+			break
 		}
-		// Format: "<name> <url>\n..." — pick the default remote's URL.
-		for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-			name, url, ok := strings.Cut(line, " ")
-			if ok && name == s.DefaultRemote {
-				s.ghRepo = githubRepoFromURL(strings.TrimSpace(url))
-				return
-			}
-		}
-	})
+	}
+	s.ghRepoResolved = true // success (even if not-GitHub → ""): don't re-query
 	return s.ghRepo
 }
 

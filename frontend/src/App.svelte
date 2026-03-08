@@ -385,8 +385,8 @@
     { label: 'Next file / Previous file', shortcut: '] / [', category: 'Navigation', action: noop, infoOnly: true },
 
     // Revisions
-    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: loadLog, when: () => !inlineMode },
-    { label: 'Hard refresh (clear all caches)', category: 'Revisions', action: () => { clearAllCaches(); clearDiffCaches(); loadLog(true) }, when: () => !inlineMode },
+    { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: userRefresh, when: () => !inlineMode },
+    { label: 'Hard refresh (clear all caches)', category: 'Revisions', action: () => { clearAllCaches(); clearDiffCaches(); userRefresh(true) }, when: () => !inlineMode },
     { label: 'New revision', shortcut: 'n', category: 'Revisions', action: () => {
       if (checkedRevisions.size > 0) handleNewFromChecked()
       else if (selectedRevision) handleNew(effectiveId(selectedRevision.commit))
@@ -862,8 +862,14 @@
 
   async function handleCommit() {
     if (!selectedRevision) return
+    const cid = selectedRevision.commit.commit_id
     commitMode = true
-    descriptionDraft = await fetchPrefillDescription()
+    const prefill = await fetchPrefillDescription()
+    // j/k during fetch → selectRevision() set descriptionEditing=false and
+    // commitMode=false (via oncanceldescribe if editor was up, or just moved
+    // cursor). Bail so we don't re-open the editor over the NEW revision.
+    if (selectedRevision?.commit.commit_id !== cid) return
+    descriptionDraft = prefill
     descriptionEditing = true
     focusDescEditor()
   }
@@ -1189,9 +1195,20 @@
 
   async function startDescriptionEdit() {
     if (!selectedRevision) return
-    descriptionDraft = await fetchPrefillDescription()
+    const cid = selectedRevision.commit.commit_id
+    const prefill = await fetchPrefillDescription()
+    if (selectedRevision?.commit.commit_id !== cid) return
+    descriptionDraft = prefill
     descriptionEditing = true
     focusDescEditor()
+  }
+
+  // User-intent refresh — dismisses any stale error/warning. Background
+  // refreshes (runMutation's post-mutation loadLog, SSE onStale, mode-exit
+  // effect) call loadLog() directly and preserve the message they just set.
+  function userRefresh(resetSelection = false) {
+    setMessage(null)
+    return loadLog(resetSelection)
   }
 
   function handleRevsetSubmit() {
@@ -1200,7 +1217,7 @@
     diff.reset()
     files.reset()
     clearChecks()
-    loadLog(true)
+    userRefresh(true)
   }
 
   function clearRevsetFilter() {
@@ -1377,7 +1394,7 @@
           nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
         }
         break
-      case 'r': e.preventDefault(); loadLog(); break
+      case 'r': e.preventDefault(); userRefresh(); break
       case 'b': e.preventDefault(); openBookmarkModal(); break
       case '/': e.preventDefault(); revisionGraphRef?.focusRevsetInput(); break
       case ']': e.preventDefault(); diffPanelRef?.stepFile(1); break
@@ -1700,7 +1717,7 @@
             {selectedFiles}
             ontogglefile={toggleFileSelection}
             onresolve={inlineMode ? undefined : handleResolve}
-            onfilesaved={() => withMutation(loadLog)}
+            onfilesaved={loadLog}
             onjjmutation={withMutation}
             oncontextmenu={showContextMenu}
             onopenfile={editorConfigured ? handleOpenFile : undefined}
@@ -1708,10 +1725,16 @@
             {#snippet header()}
               <!-- {#key} resets RevisionHeader local state (descExpanded) on nav.
                    Replaces the manual previous-value reset effect that Svelte
-                   5.50+ flags as state_referenced_locally. -->
-              {#key effectiveId(selectedRevision!.commit)}
+                   5.50+ flags as state_referenced_locally.
+                   Guard: loadedTarget.kind==='single' renders this, but
+                   selectedRevision (cursor) can be null when a custom revset
+                   excludes @ → workingCopyIndex=-1. Key on loadedTarget.changeId
+                   (what's actually displayed) so the remount tracks the DIFF,
+                   not the cursor. -->
+              {#if selectedRevision}
+              {#key loadedTarget?.kind === 'single' ? loadedTarget.changeId : ''}
               <RevisionHeader
-                revision={selectedRevision!}
+                revision={selectedRevision}
                 {fullDescription}
                 {descriptionEditing}
                 {descriptionDraft}
@@ -1725,6 +1748,7 @@
                 onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
               />
               {/key}
+              {/if}
             {/snippet}
           </DiffPanel>
         {/if}

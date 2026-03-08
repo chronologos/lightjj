@@ -374,7 +374,7 @@ async function streamPost(
           // fire a redundant loadLog().
           if (msg.op_id) notifyOpId(msg.op_id)
           if (msg.error) throw new Error(msg.error)
-          return { output: msg.output ?? '' }
+          return { output: msg.output ?? '', warnings: msg.warnings }
         }
         if (msg.line !== undefined) onLine(msg.line)
       }

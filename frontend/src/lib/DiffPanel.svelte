@@ -129,7 +129,10 @@
     x: number
     y: number
     editing: Annotation | null
-    lineContext: { filePath: string; lineNum: number; lineContent: string } | null
+    // changeId/createdAtCommitId are captured at open time — diffTarget is a
+    // fresh $derived object on every nav, so reading it at SAVE time would
+    // attach the annotation to whatever revision is now displayed.
+    lineContext: { filePath: string; lineNum: number; lineContent: string; changeId: string; createdAtCommitId: string } | null
   }
   let annBubble = $state<AnnotationBubbleState>({
     open: false, x: 0, y: 0, editing: null, lineContext: null,
@@ -158,7 +161,11 @@
     annBubble = {
       open: true, x, y,
       editing: existing[0] ?? null,
-      lineContext: { filePath, lineNum, lineContent },
+      lineContext: {
+        filePath, lineNum, lineContent,
+        changeId: diffTarget.changeId,
+        createdAtCommitId: diffTarget.commitId,
+      },
     }
   }
 
@@ -167,16 +174,11 @@
   }
 
   async function saveAnnotation(comment: string, severity: AnnotationSeverity) {
-    if (diffTarget?.kind !== 'single' || !annBubble.lineContext) return
+    if (!annBubble.lineContext) return
     if (annBubble.editing) {
       await annotations.update({ ...annBubble.editing, comment, severity })
     } else {
-      await annotations.add({
-        changeId: diffTarget.changeId,
-        createdAtCommitId: diffTarget.commitId,
-        ...annBubble.lineContext,
-        comment, severity,
-      })
+      await annotations.add({ ...annBubble.lineContext, comment, severity })
     }
   }
 
@@ -400,9 +402,16 @@
     return file.hunks.reduce((sum, h) => sum + h.lines.length, 0)
   }
 
+  // isOversize() is called 3× per file per navigation (wordDiffs.skip,
+  // highlights.skip, auto-collapse). DiffFile objects have stable identity
+  // within a nav (parseDiffCached) → WeakMap memo avoids the redundant walks.
+  const charCountMemo = new WeakMap<DiffFile, number>()
   function fileCharCount(file: DiffFile): number {
+    const cached = charCountMemo.get(file)
+    if (cached !== undefined) return cached
     let n = 0
     for (const h of file.hunks) for (const l of h.lines) n += l.content.length
+    charCountMemo.set(file, n)
     return n
   }
 

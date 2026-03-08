@@ -61,7 +61,7 @@ func ParseAliases(output string) []Alias {
 // into a Go string slice. Handles both single and double quotes.
 func parseAliasValue(raw string) []string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || raw[0] != '[' {
+	if len(raw) < 2 || raw[0] != '[' || raw[len(raw)-1] != ']' {
 		return nil
 	}
 

@@ -34,8 +34,12 @@ type Server struct {
 
 	// ghRepo is "owner/name" derived from DefaultRemote's URL. Lazy-resolved
 	// on first handlePullRequests; "" is a valid cached answer (not GitHub).
-	ghRepo     string
-	ghRepoOnce sync.Once
+	// ghRepoMu+ghRepoResolved (not sync.Once) so a transient failure
+	// (10s timeout on slow SSH startup) retries instead of permanently
+	// disabling PR badges for the server lifetime.
+	ghRepo         string
+	ghRepoResolved bool
+	ghRepoMu       sync.Mutex
 
 	// Watcher provides SSE auto-refresh. Nil only on --no-watch or constructor
 	// failure. Set by main.go after NewServer; routes() tolerates nil.
@@ -323,6 +327,12 @@ func (s *Server) streamMutation(w http.ResponseWriter, r *http.Request, args []s
 		done["error"] = msg
 	} else {
 		done["output"] = out
+		// StreamCombined merges stdout+stderr (jj git push writes everything
+		// to stderr). Post-process the full output so mutationMessage() on
+		// the frontend shows amber instead of green when jj warned.
+		if hasWarningLine(out) {
+			done["warnings"] = out
+		}
 	}
 	_ = enc.Encode(done)
 	flush()

@@ -105,16 +105,27 @@ function createConfig() {
   })
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined
+  let pendingSnap: Config | undefined
+  const flush = () => {
+    if (!pendingSnap) return
+    saveLocal(pendingSnap)
+    saveRemote(pendingSnap)
+    pendingSnap = undefined
+  }
+  // Flush on unload so a mid-drag close doesn't lose the last 500ms of writes.
+  // saveLocal (sync localStorage) is the one that matters here — saveRemote
+  // fire-and-forgets into a dying page but localStorage is durable.
+  addEventListener('beforeunload', flush)
   $effect.root(() => {
     $effect(() => {
       const snap = $state.snapshot(state)
       if (!hydrated) return
-      saveLocal(snap) // synchronous — next page load paints this instantly
-      // Debounce the fs write. Panel-resize drags set revisionPanelWidth on
-      // every mousemove (~60×/s); without debounce that's 60 POST requests
-      // per second of dragging, each doing read-merge-write-rename on disk.
+      // Debounce BOTH saves. Panel-resize drags set revisionPanelWidth on
+      // every mousemove (~60×/s) — 60 sync localStorage.setItem/sec is jank,
+      // 60 POST/sec each doing read-merge-write-rename on disk is worse.
+      pendingSnap = snap
       clearTimeout(saveTimer)
-      saveTimer = setTimeout(() => saveRemote(snap), 500)
+      saveTimer = setTimeout(flush, 500)
     })
   })
 

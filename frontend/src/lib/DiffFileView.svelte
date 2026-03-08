@@ -145,18 +145,20 @@
     regionLabel?: string     // e.g. "Conflict 1 of 3"
   }
 
-  interface LineMatch { startCol: number; endCol: number; isCurrent: boolean }
+  interface LineMatch { startCol: number; endCol: number; globalIndex: number }
 
   // Pre-build per-line search match lookup for O(1) access in the render loop.
   // searchMatches is already filtered to this file by the parent; each entry
   // carries its global index so we can check "is this the current match?"
+  // globalIndex (not isCurrent) stored: Map is stable across Enter presses —
+  // only the 2 lines containing old-current and new-current re-render.
   let lineMatchMap = $derived.by(() => {
     if (searchMatches.length === 0) return new Map<string, LineMatch[]>()
     const map = new Map<string, LineMatch[]>()
     for (const { item: m, index } of searchMatches) {
       const key = `${m.hunkIdx}:${m.lineIdx}`
       const list = map.get(key) ?? []
-      list.push({ startCol: m.startCol, endCol: m.endCol, isCurrent: index === currentMatchIdx })
+      list.push({ startCol: m.startCol, endCol: m.endCol, globalIndex: index })
       map.set(key, list)
     }
     return map
@@ -272,13 +274,13 @@
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
 
-  function highlightSearchInText(text: string, matches: LineMatch[]): string {
+  function highlightSearchInText(text: string, matches: LineMatch[], currentIdx: number): string {
     const sorted = [...matches].sort((a, b) => a.startCol - b.startCol)
     let result = ''
     let pos = 0
     for (const m of sorted) {
       result += escapeHtml(text.slice(pos, m.startCol))
-      const cls = m.isCurrent ? 'search-match search-match-current' : 'search-match'
+      const cls = m.globalIndex === currentIdx ? 'search-match search-match-current' : 'search-match'
       result += `<mark class="${cls}">${escapeHtml(text.slice(m.startCol, m.endCol))}</mark>`
       pos = m.endCol
     }
@@ -374,7 +376,7 @@
   {#if isMarker}
     <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
   {:else if lm && lm.length > 0}
-    {@const hasCurrent = lm.some(m => m.isCurrent)}
+    {@const hasCurrent = lm.some(m => m.globalIndex === currentMatchIdx)}
     <div
       class="diff-line"
       class:diff-add={!inConflict && line.type === 'add'}
@@ -384,7 +386,7 @@
       class:conflict-inner-remove={innerType === 'remove'}
       data-search-match-current={hasCurrent ? 'true' : undefined}
       oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
-    >{@render gutter(lineNumbers, rawContent)}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm)}</div>
+    >{@render gutter(lineNumbers, rawContent)}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm, currentMatchIdx)}</div>
   {:else if highlightedLines.has(hlKey)}
     <div
       class="diff-line highlighted"
