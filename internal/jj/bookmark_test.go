@@ -226,13 +226,3 @@ func TestParseRemoteListOutput(t *testing.T) {
 	}
 }
 
-func TestBookmark_IsDeletable(t *testing.T) {
-	assert.True(t, Bookmark{Local: &BookmarkRemote{}}.IsDeletable())
-	assert.False(t, Bookmark{}.IsDeletable())
-}
-
-func TestBookmark_IsTrackable(t *testing.T) {
-	assert.True(t, Bookmark{Local: &BookmarkRemote{}, Remotes: nil}.IsTrackable())
-	assert.False(t, Bookmark{Local: &BookmarkRemote{}, Remotes: []BookmarkRemote{{}}}.IsTrackable())
-	assert.False(t, Bookmark{}.IsTrackable())
-}

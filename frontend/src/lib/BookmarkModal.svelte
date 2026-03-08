@@ -16,10 +16,9 @@
     currentCommitId: string | null
     filterBookmark: string
     onexecute: (op: BookmarkOp) => void
-    onclose?: () => void
   }
 
-  let { open = $bindable(false), currentCommitId, filterBookmark, onexecute, onclose }: Props = $props()
+  let { open = $bindable(false), currentCommitId, filterBookmark, onexecute }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -110,7 +109,6 @@
 
   function close() {
     open = false
-    onclose?.()
     previousFocus?.focus()
   }
 

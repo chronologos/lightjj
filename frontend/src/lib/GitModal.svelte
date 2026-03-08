@@ -12,10 +12,9 @@
     open: boolean
     currentChangeId: string | null
     onexecute: (type: 'push' | 'fetch', flags: string[]) => void
-    onclose?: () => void
   }
 
-  let { open = $bindable(false), currentChangeId, onexecute, onclose }: Props = $props()
+  let { open = $bindable(false), currentChangeId, onexecute }: Props = $props()
 
   let index: number = $state(0)
   let bookmarks: Bookmark[] = $state([])
@@ -123,7 +122,6 @@
   function close() {
     fetchError = null
     open = false
-    onclose?.()
     previousFocus?.focus()
   }
 

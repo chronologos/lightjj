@@ -14,11 +14,6 @@
   to   { opacity: 1; transform: scale(1); }
 }
 
-@keyframes fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
 :root {
   --anim-duration: 150ms;
   --anim-ease: cubic-bezier(0.2, 0, 0.2, 1);
@@ -72,10 +67,11 @@ body {
   --subtext1: #e2e2e6;
   --text: #e2e2e6;
 
-  /* Tier 1: Semantic core (3 colors only) */
+  /* Tier 1: Semantic core */
   --amber: #ffa726;
   --green: #66bb6a;
   --red: #ef5350;
+  --blue: #6880b8;  /* informational (behind sync-state, question annotations) */
 
   /* Semantic backgrounds */
   --bg-hover: rgba(255,255,255,0.04);
@@ -108,8 +104,6 @@ body {
   --diff-remove-bg: rgba(239,83,80,0.08);
   --diff-add-word: rgba(102,187,106,0.2);
   --diff-remove-word: rgba(239,83,80,0.2);
-  --diff-add-text: #a5d6a7;
-  --diff-remove-text: #ef9a9a;
 
   /* File status badges (semantic — correct) */
   --badge-add-bg: rgba(102,187,106,0.12);
@@ -120,14 +114,10 @@ body {
   /* Conflicts: both sides red, side B muted */
   --conflict-boundary-border: rgba(239,83,80,0.2);
   --conflict-boundary-bg: rgba(239,83,80,0.06);
-  --conflict-boundary-color: #8a8a94;
   --conflict-side1-border: var(--red);
   --conflict-side1-bg: rgba(239,83,80,0.06);
-  --conflict-side1-marker-bg: rgba(239,83,80,0.12);
   --conflict-side2-border: rgba(239,83,80,0.5);
   --conflict-side2-bg: rgba(239,83,80,0.03);
-  --conflict-side2-marker-bg: rgba(239,83,80,0.08);
-  --conflict-marker-color: #8a8a94;
 
   /* Tier 3: Graph palette — muted, decorative only */
   --graph-0: #BF8A30;
@@ -179,6 +169,7 @@ body {
   --amber: #e68a00;
   --green: #2e7d32;
   --red: #c62828;
+  --blue: #4860a0;
 
   --bg-hover: rgba(0,0,0,0.03);
   --bg-selected: rgba(230,138,0,0.08);
@@ -208,8 +199,6 @@ body {
   --diff-remove-bg: rgba(198,40,40,0.1);
   --diff-add-word: rgba(46,125,50,0.2);
   --diff-remove-word: rgba(198,40,40,0.2);
-  --diff-add-text: #2e7d32;
-  --diff-remove-text: #c62828;
 
   --badge-add-bg: rgba(46,125,50,0.12);
   --badge-modify-bg: rgba(230,138,0,0.12);
@@ -218,14 +207,10 @@ body {
 
   --conflict-boundary-border: rgba(198,40,40,0.2);
   --conflict-boundary-bg: rgba(198,40,40,0.06);
-  --conflict-boundary-color: #71717a;
   --conflict-side1-border: var(--red);
   --conflict-side1-bg: rgba(198,40,40,0.06);
-  --conflict-side1-marker-bg: rgba(198,40,40,0.12);
   --conflict-side2-border: rgba(198,40,40,0.5);
   --conflict-side2-bg: rgba(198,40,40,0.03);
-  --conflict-side2-marker-bg: rgba(198,40,40,0.08);
-  --conflict-marker-color: #71717a;
 
   --graph-0: #9A6E18;
   --graph-1: #984830;

@@ -31,14 +31,6 @@ type Bookmark struct {
 	CommitId string `json:"commit_id"` // empty when Conflict
 }
 
-func (b Bookmark) IsDeletable() bool {
-	return b.Local != nil
-}
-
-func (b Bookmark) IsTrackable() bool {
-	return b.Local != nil && len(b.Remotes) == 0
-}
-
 // ParseBookmarkListOutput parses the \x1F-delimited output from
 // `jj bookmark list` with a custom template. defaultRemote is sorted to
 // the front of each bookmark's Remotes slice.

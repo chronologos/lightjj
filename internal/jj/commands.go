@@ -104,12 +104,6 @@ func Split(revision string, files []string, parallel bool, interactive bool) Com
 	return args
 }
 
-func Describe(revisions SelectedRevisions) CommandArgs {
-	args := []string{"describe", "--editor"}
-	args = append(args, revisions.AsArgs()...)
-	return args
-}
-
 func SetDescription(revision string, description string) (CommandArgs, string) {
 	return []string{"describe", "-r", revision, "--stdin"}, description
 }

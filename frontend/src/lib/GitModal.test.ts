@@ -31,7 +31,6 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     open: true,
     currentChangeId: null as string | null,
     onexecute: vi.fn(),
-    onclose: vi.fn(),
     ...overrides,
   }
 }
@@ -233,11 +232,10 @@ describe('GitModal', () => {
     })
 
     it('Escape closes', async () => {
-      const onclose = vi.fn()
       mockBookmarks.mockResolvedValue([])
       mockRemotes.mockResolvedValue(['origin'])
 
-      const { container } = render(GitModal, { props: defaultProps({ onclose }) })
+      const { container } = render(GitModal, { props: defaultProps() })
 
       await waitFor(() => {
         expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0)
@@ -246,7 +244,7 @@ describe('GitModal', () => {
       const modal = container.querySelector('.git-modal')!
       await fireEvent.keyDown(modal, { key: 'Escape' })
 
-      expect(onclose).toHaveBeenCalledTimes(1)
+      expect(container.querySelector('.git-modal')).toBeNull()
     })
   })
 })
