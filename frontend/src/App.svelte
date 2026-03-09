@@ -609,11 +609,12 @@
     const entry = revisions[index]
     if (!entry) return
 
-    // Cache hits: defer loader writes to rAF so the browser paints the
-    // cursor move (selectedIndex) first, then applies diff content in the
-    // next frame. Previously this was synchronous (one batch), but large
-    // diffs blocked the cursor highlight from painting until the entire
-    // diff DOM was built — revisits felt slower than first visits.
+    // Cache hits: double-rAF defers loader writes past the FIRST paint so
+    // the browser renders the cursor move (selectedIndex) before building
+    // the diff panel DOM. Single rAF isn't enough — rAF callbacks run
+    // BEFORE paint in the same frame (event → microtasks → rAF → style →
+    // layout → paint). Double-rAF: outer fires pre-paint in frame N,
+    // inner fires pre-paint in frame N+1 — frame N paints cursor-only.
     //
     // Cache misses: defer with 50ms debounce. Coalesces rapid uncached j/k
     // into one network request. The browser paints the selection highlight
@@ -624,9 +625,12 @@
     if (hit) {
       const commit = entry.commit
       navRafId = requestAnimationFrame(() => {
-        // Guard: rapid j/k may have moved past this revision already.
-        if (selectedIndex !== index) return
-        nav.applyCacheHit(commit, hit)
+        // Outer rAF: frame N (pre-paint). Schedule inner for frame N+1.
+        navRafId = requestAnimationFrame(() => {
+          // Guard: rapid j/k may have moved past this revision already.
+          if (selectedIndex !== index) return
+          nav.applyCacheHit(commit, hit)
+        })
       })
     } else {
       navDebounceTimer = setTimeout(() => {
