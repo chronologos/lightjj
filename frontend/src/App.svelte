@@ -597,6 +597,7 @@
   }
 
   let prevSelectedIndex = -1
+  let navRafId = 0
 
   function selectRevision(index: number) {
     const moved = index !== prevSelectedIndex
@@ -608,18 +609,25 @@
     const entry = revisions[index]
     if (!entry) return
 
-    // Cache hits: synchronously set loader values in the SAME tick as
-    // selectedIndex. Svelte batches both into one render → selection highlight
-    // and diff content update together, no stale-content flash. loader.set()
-    // is synchronous, getCached() reads the Map directly.
+    // Cache hits: defer loader writes to rAF so the browser paints the
+    // cursor move (selectedIndex) first, then applies diff content in the
+    // next frame. Previously this was synchronous (one batch), but large
+    // diffs blocked the cursor highlight from painting until the entire
+    // diff DOM was built — revisits felt slower than first visits.
     //
     // Cache misses: defer with 50ms debounce. Coalesces rapid uncached j/k
     // into one network request. The browser paints the selection highlight
     // before the setTimeout fires.
     clearTimeout(navDebounceTimer)
+    cancelAnimationFrame(navRafId)
     const hit = checkedRevisions.size === 0 ? getCached(entry.commit.commit_id) : null
     if (hit) {
-      nav.applyCacheHit(entry.commit, hit)
+      const commit = entry.commit
+      navRafId = requestAnimationFrame(() => {
+        // Guard: rapid j/k may have moved past this revision already.
+        if (selectedIndex !== index) return
+        nav.applyCacheHit(commit, hit)
+      })
     } else {
       navDebounceTimer = setTimeout(() => {
         const current = revisions[selectedIndex]

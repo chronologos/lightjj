@@ -754,7 +754,7 @@
     -webkit-tap-highlight-color: transparent;
     overflow: hidden;
     position: relative;
-    transition: box-shadow var(--anim-duration) var(--anim-ease);
+    transition: box-shadow 50ms var(--anim-ease);
   }
 
   /* .hovered is JS-managed (hoveredIndex state, mousemove-driven) — see
