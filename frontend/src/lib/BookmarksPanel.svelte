@@ -11,6 +11,11 @@
   export interface BookmarkRowActions {
     jump: boolean
     del: boolean
+    /** Tracked remote-only (delete-staged): `d` pushes the deletion instead
+     *  of local-delete. One entry per tracked remote; [0] is the push target
+     *  (jj git push is single-remote — user presses `d` again for the rest).
+     *  Empty = local exists or untracked or conflicted → use `del`/none. */
+    pushDelete: string[]
     /** Per-remote track/untrack toggles. Empty = nothing to do. */
     track: TrackOption[]
   }
@@ -61,9 +66,17 @@
   // $derived so context-menu can compute them for the RIGHT-CLICKED row
   // (not the keyboard-selected one).
   function computeActions(bm: Bookmark): BookmarkRowActions {
+    // Delete-staged: no local, but tracked remote(s) still exist. `d` pushes
+    // the deletion (network op). Untracked remote-only is left alone —
+    // pushing -b <name> would implicitly TRACK it, not delete. Conflicted
+    // refs are excluded too (jj refuses to push conflicts; resolve first).
+    const pushDelete = !bm.local && !bm.conflict
+      ? (bm.remotes ?? []).filter(r => r.tracked).map(r => r.remote)
+      : []
     return {
       jump: !bm.conflict && !!bm.commit_id,
       del: !!bm.local,
+      pushDelete,
       track: trackOptions(bm, allRemotes),
     }
   }
@@ -75,6 +88,7 @@
   let can = $derived({
     jump: selActions?.jump ?? false,
     del: selActions?.del ?? false,
+    pushDelete: selActions?.pushDelete ?? [],
     forget: !!selected,
     track: trackInfo.length > 0,
   })
@@ -181,9 +195,13 @@
         return
       case 'd':
         e.preventDefault()
-        if (!can.del) { confirm.disarm(); return }
+        if (!can.del && !can.pushDelete[0]) { confirm.disarm(); return }
         if (confirm.gate('d', true)) return
-        fire({ action: 'delete', bookmark: row.bm.name })
+        if (can.pushDelete[0]) {
+          fire({ action: 'push-delete', bookmark: row.bm.name, remote: can.pushDelete[0] })
+        } else {
+          fire({ action: 'delete', bookmark: row.bm.name })
+        }
         return
       case 'f':
         e.preventDefault()
@@ -331,14 +349,26 @@
 
   <div class="bp-footer">
     {#if confirm.armed === 'd'}
-      <span class="bp-confirm"><kbd>d</kbd> again to delete <b>{selected?.bm.name}</b> · Esc to cancel</span>
+      <span class="bp-confirm">
+        <kbd>d</kbd> again to
+        {#if can.pushDelete[0]}
+          push delete <b>{selected?.bm.name}</b> → {can.pushDelete[0]}
+          {#if can.pushDelete.length > 1}<span class="bp-more">(+{can.pushDelete.length - 1} more)</span>{/if}
+        {:else}
+          delete <b>{selected?.bm.name}</b>
+        {/if}
+        · Esc to cancel
+      </span>
     {:else if confirm.armed === 'f'}
       <span class="bp-confirm"><kbd>f</kbd> again to forget <b>{selected?.bm.name}</b> · Esc to cancel</span>
     {:else if confirm.armed === 't'}
       <span class="bp-confirm"><kbd>t</kbd> again to untrack <b>{selected?.bm.name}@{trackInfo[0]?.remote}</b> · Esc to cancel</span>
     {:else}
       <span class:dim={!can.jump}><kbd>⏎</kbd> jump</span>
-      <span class:dim={!can.del}><kbd>d</kbd> delete</span>
+      <span class:dim={!can.del && !can.pushDelete[0]}>
+        <kbd>d</kbd>
+        {#if can.pushDelete[0]}push delete → {can.pushDelete[0]}{:else}delete{/if}
+      </span>
       <span class:dim={!can.forget}><kbd>f</kbd> forget</span>
       <span class:dim={!can.track}>
         <kbd>t</kbd>
@@ -542,6 +572,7 @@
 
   .bp-footer .dim { opacity: 0.3; }
   .bp-remote { color: var(--overlay0); }
+  .bp-more { color: var(--overlay0); font-weight: normal; margin-left: 4px; }
 
   .bp-confirm {
     color: var(--red);
