@@ -638,6 +638,8 @@
 <style>
   .diff-file {
     border-bottom: 1px solid var(--surface0);
+    content-visibility: auto;
+    contain-intrinsic-size: auto 200px;
   }
 
   .diff-file:last-child {
