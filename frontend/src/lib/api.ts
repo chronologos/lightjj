@@ -538,6 +538,7 @@ export interface InfoResponse {
   repo_path: string
   ssh_mode: boolean
   editor_configured: boolean
+  default_remote: string
 }
 
 export interface FileChange {

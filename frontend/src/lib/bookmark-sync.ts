@@ -28,6 +28,11 @@ export function classifyBookmark(bm: Bookmark): SyncState {
   if (weAhead > 0 && weBehind > 0) return { kind: 'diverged', ahead: weAhead, behind: weBehind }
   if (weAhead > 0) return { kind: 'ahead', by: weAhead }
   if (weBehind > 0) return { kind: 'behind', by: weBehind }
+  // Synced on the first tracked remote — but jj's all-remotes `synced` bool
+  // knows about the others. Don't lie: if any tracked remote is out of sync,
+  // downgrade. (0,0) is a sentinel; syncLabel renders "other remote" instead
+  // of "↑0 ↓0".
+  if (!bm.synced) return { kind: 'diverged', ahead: 0, behind: 0 }
   return { kind: 'synced' }
 }
 
@@ -59,9 +64,36 @@ export function syncLabel(s: SyncState, remote: string): string {
     case 'synced':      return remote
     case 'ahead':       return `${remote} ↑${fmtCount(s.by)}`
     case 'behind':      return `${remote} ↓${fmtCount(s.by)}`
-    case 'diverged':    return `${remote} ↑${fmtCount(s.ahead)} ↓${fmtCount(s.behind)}`
+    case 'diverged':
+      if (s.ahead === 0 && s.behind === 0) return 'other remote out of sync'
+      return `${remote} ↑${fmtCount(s.ahead)} ↓${fmtCount(s.behind)}`
     case 'local-only':  return 'local only'
     case 'remote-only': return s.tracked ? `deleted @${remote}` : `untracked @${remote}`
     case 'conflict':    return `conflict (${s.sides} sides)`
   }
+}
+
+export interface TrackOption {
+  action: 'track' | 'untrack'
+  remote: string
+}
+
+/** All per-remote track/untrack toggles available for this bookmark.
+ *  - For each remote the bookmark exists on: toggle its tracked state.
+ *  - For each remote it DOESN'T exist on (and bm.local is set): offer track.
+ *  Default remote sorts first (backend sorts allRemotes, bm.remotes). Empty =
+ *  nothing to do (no remotes at all). */
+export function trackOptions(bm: Bookmark, allRemotes: string[]): TrackOption[] {
+  const opts: TrackOption[] = []
+  const seen = new Set<string>()
+  for (const r of bm.remotes ?? []) {
+    seen.add(r.remote)
+    opts.push({ action: r.tracked ? 'untrack' : 'track', remote: r.remote })
+  }
+  if (bm.local) {
+    for (const r of allRemotes) {
+      if (!seen.has(r)) opts.push({ action: 'track', remote: r })
+    }
+  }
+  return opts
 }

@@ -90,7 +90,9 @@ describe('GitModal', () => {
       const { container } = render(GitModal, { props: defaultProps({ currentChangeId: 'abcdefghijklmnop' }) })
 
       const cmds = await waitForCmds(container)
-      expect(cmds).toContain('git push --change abcdefgh --remote origin')
+      // Raw command uses full changeId (what actually executes); short form is in the chip
+      expect(cmds).toContain('git push --change abcdefghijklmnop --remote origin')
+      expect(container.querySelector('.git-change-chip')?.textContent).toBe('abcdefgh')
     })
 
     it('without changeId → no --change push op', async () => {
@@ -170,8 +172,8 @@ describe('GitModal', () => {
       await waitFor(() => {
         expect(container.querySelectorAll('.git-cmd').length).toBeGreaterThan(0)
       })
-      expect(container.querySelectorAll('.git-push').length).toBeGreaterThan(0)
-      expect(container.querySelectorAll('.git-fetch').length).toBeGreaterThan(0)
+      expect(container.querySelectorAll('.is-push').length).toBeGreaterThan(0)
+      expect(container.querySelectorAll('.is-fetch').length).toBeGreaterThan(0)
     })
   })
 
@@ -229,6 +231,46 @@ describe('GitModal', () => {
       expect(onexecute).toHaveBeenCalledTimes(1)
       expect(onexecute.mock.calls[0][0]).toBe('push')
       expect(onexecute.mock.calls[0][1]).toEqual(['--remote', 'origin'])
+    })
+
+    it('hotkey fires op directly', async () => {
+      const onexecute = vi.fn()
+      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'aaa', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } })])
+      mockRemotes.mockResolvedValue(['origin'])
+
+      const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
+      await waitFor(() => expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0))
+      const modal = container.querySelector('.git-modal')!
+
+      // '1' → first bookmark push
+      await fireEvent.keyDown(modal, { key: '1' })
+      expect(onexecute).toHaveBeenLastCalledWith('push', ['--bookmark', 'feat', '--remote', 'origin'])
+    })
+
+    it('scope hotkeys (a/d/f) fire matching ops', async () => {
+      const onexecute = vi.fn()
+      mockBookmarks.mockResolvedValue([])
+      mockRemotes.mockResolvedValue(['origin'])
+
+      const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
+      await waitFor(() => expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0))
+      const modal = container.querySelector('.git-modal')!
+
+      await fireEvent.keyDown(modal, { key: 'a' })
+      expect(onexecute).toHaveBeenLastCalledWith('push', ['--all', '--remote', 'origin'])
+    })
+
+    it('modifier keys bypass hotkey dispatch', async () => {
+      const onexecute = vi.fn()
+      mockBookmarks.mockResolvedValue([])
+      mockRemotes.mockResolvedValue(['origin'])
+
+      const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
+      await waitFor(() => expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0))
+      const modal = container.querySelector('.git-modal')!
+
+      await fireEvent.keyDown(modal, { key: 'a', metaKey: true })
+      expect(onexecute).not.toHaveBeenCalled()
     })
 
     it('Escape closes', async () => {

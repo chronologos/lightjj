@@ -139,3 +139,16 @@ func ParseRemoteListOutput(output string, defaultRemote string) []string {
 	}
 	return remotes
 }
+
+// ParseRemoteURLs returns remote name → URL. Tolerates extra whitespace
+// and empty lines. Used by resolveGHRepo to pick a GitHub remote.
+func ParseRemoteURLs(output string) map[string]string {
+	m := map[string]string{}
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
+		name, url, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok && name != "" {
+			m[name] = strings.TrimSpace(url)
+		}
+	}
+	return m
+}

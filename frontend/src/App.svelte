@@ -470,16 +470,20 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path, editor_configured } = await api.info()
+      const { hostname, repo_path, editor_configured, default_remote } = await api.info()
       document.title = formatTitle(hostname, repo_path)
       editorConfigured = editor_configured
+      defaultRemote = default_remote
     } catch { /* static <title> fallback + editorConfigured stays false (fail-safe) */ }
   }
 
-  // api.remotes() is session-memoized; first element is the default remote
-  // (backend sorts it to front). Used by BookmarksPanel's track-action label.
+  // Backend resolves this per-tab from --default-remote flag > jj config
+  // git.push > "origin". Pre-load fallback until loadInfo() completes.
   let defaultRemote: string = $state('origin')
-  api.remotes().then(r => { if (r[0]) defaultRemote = r[0] }).catch(() => {})
+  // Full remote list — session-memoized. Used by BookmarksPanel/Modal for
+  // multi-remote track/untrack submenus.
+  let allRemotes: string[] = $state([])
+  api.remotes().then(r => { allRemotes = r }).catch(() => {})
 
   // Visually distinct, platform-stable glyphs. No flags/people/hands (vary
   // wildly across OS/font), no skin-tone modifiers. Contiguous string iterates
@@ -685,17 +689,30 @@
       { label: 'Forget', shortcut: 'f', danger: true,
         action: () => handleBookmarkOp({ action: 'forget', bookmark: bm.name }) },
     ]
-    if (actions.track) {
-      const t = actions.track
-      items.push({ label: t.action === 'track' ? `Track @${t.remote}` : `Untrack @${t.remote}`,
-        shortcut: 't',
-        action: () => handleBookmarkOp({ action: t.action, bookmark: bm.name, remote: t.remote }) })
+    for (const t of actions.track) {
+      items.push({
+        label: t.action === 'track' ? `Track @${t.remote}` : `Untrack @${t.remote}`,
+        shortcut: actions.track.length === 1 ? 't' : undefined,
+        action: () => handleBookmarkOp({ action: t.action, bookmark: bm.name, remote: t.remote }),
+      })
     }
     items.push(
       { separator: true },
       { label: `Copy name (${bm.name})`, action: () => navigator.clipboard.writeText(bm.name) },
     )
     contextMenu = { items, x, y }
+  }
+
+  // Keyboard-triggered track submenu — used when `t` is pressed on a
+  // bookmark with multiple remotes. Reuses the ContextMenu component.
+  function showTrackMenu(bm: Bookmark, opts: import('./lib/bookmark-sync').TrackOption[], x: number, y: number) {
+    contextMenu = {
+      items: opts.map(t => ({
+        label: t.action === 'track' ? `Track @${t.remote}` : `Untrack @${t.remote}`,
+        action: () => handleBookmarkOp({ action: t.action, bookmark: bm.name, remote: t.remote }),
+      })),
+      x, y,
+    }
   }
 
   function jumpToBookmark(bm: Bookmark) {
@@ -1807,12 +1824,14 @@
           loading={bookmarksPanel.loading}
           error={bookmarksPanel.error}
           {defaultRemote}
+          {allRemotes}
           {prByBookmark}
           onjump={jumpToBookmark}
           onexecute={handleBookmarkOp}
           onrefresh={() => bookmarksPanel.load()}
           onclose={() => { activeView = 'log' }}
           oncontextmenu={showBookmarkContextMenu}
+          ontrackmenu={showTrackMenu}
         />
       </div>
     {:else if activeView === 'operations'}
@@ -1875,6 +1894,7 @@
     currentCommitId={selectedRevision?.commit.commit_id ?? null}
     filterBookmark={bookmarkModalFilter}
     onexecute={handleBookmarkOp}
+    ontrackmenu={showTrackMenu}
   />
 
   {#if welcomeOpen}

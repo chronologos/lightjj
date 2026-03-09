@@ -311,16 +311,36 @@ describe('BookmarkModal', () => {
       expect(onexecute).not.toHaveBeenCalled()
     })
 
-    it('t fires track against default remote for local-only bookmark', async () => {
+    it('t fires track against default remote for local-only bookmark (single remote)', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
         makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
       ])
-      mockRemotes.mockResolvedValue(['upstream', 'origin']) // [0] is default
+      mockRemotes.mockResolvedValue(['upstream']) // single remote → immediate fire
       await renderSettled(defaultProps({ onexecute }))
 
       await fireEvent.keyDown(modal(), { key: 't' }) // track, non-destructive, fires immediately
       expect(onexecute).toHaveBeenCalledWith({ action: 'track', bookmark: 'feat', remote: 'upstream' })
+    })
+
+    it('t opens submenu for local-only bookmark with multiple remotes', async () => {
+      const onexecute = vi.fn()
+      const ontrackmenu = vi.fn()
+      mockBookmarks.mockResolvedValue([
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+      ])
+      mockRemotes.mockResolvedValue(['origin', 'upstream'])
+      await renderSettled(defaultProps({ onexecute, ontrackmenu }))
+
+      await fireEvent.keyDown(modal(), { key: 't' })
+      expect(onexecute).not.toHaveBeenCalled()
+      expect(ontrackmenu).toHaveBeenCalledTimes(1)
+      const [bm, opts] = ontrackmenu.mock.calls[0]
+      expect(bm.name).toBe('feat')
+      expect(opts).toEqual([
+        { action: 'track', remote: 'origin' },
+        { action: 'track', remote: 'upstream' },
+      ])
     })
   })
 

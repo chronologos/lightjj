@@ -575,3 +575,8 @@ func TestResolve_EscapedFile(t *testing.T) {
 	assert.Equal(t, []string{"resolve", "--tool", ":theirs", "-r", "abc", `root-file:"path with \"quotes\".go"`}, got)
 }
 
+func TestConfigGet(t *testing.T) {
+	got := ConfigGet("git.push")
+	assert.Equal(t, []string{"config", "get", "git.push", "--color", "never", "--ignore-working-copy"}, got)
+}
+

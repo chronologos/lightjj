@@ -368,6 +368,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"repo_path":         s.RepoPath,
 		"ssh_mode":          s.RepoDir == "",
 		"editor_configured": len(tmpl) > 0,
+		"default_remote":    s.DefaultRemote,
 	})
 }
 
@@ -1012,14 +1013,17 @@ func githubRepoFromURL(url string) string {
 	return rest
 }
 
-// resolveGHRepo derives "owner/repo" from the default remote's URL. Lazy-init
-// via sync.Once — the `jj git remote list` call happens once per Server
-// lifetime, on the first PR-badge fetch. Empty result ("") is a valid cached
-// answer meaning "not a GitHub repo" — the Once ensures we don't re-query.
+// resolveGHRepo derives "owner/repo" for PR-badge queries. Lazy-init via
+// mutex+bool — the `jj git remote list` call happens once per Server lifetime
+// (on the first PR-badge fetch), unless it fails transiently.
+//
+// Remote priority: upstream > DefaultRemote > any GitHub remote. Fork
+// workflows put PRs in upstream (origin=fork, upstream=canonical); the gh
+// CLI's headRefName matching works across forks as long as --repo points at
+// the canonical repo.
 //
 // Uses its own timeout (not the request ctx): the remote URL is server-lifetime
-// state. A cancelled first request would otherwise permanently cache "" (Once
-// has no retry) — every subsequent PR-badge fetch would silently return empty.
+// state. A cancelled first request would otherwise permanently cache "".
 func (s *Server) resolveGHRepo() string {
 	s.ghRepoMu.Lock()
 	defer s.ghRepoMu.Unlock()
@@ -1030,17 +1034,26 @@ func (s *Server) resolveGHRepo() string {
 	defer cancel()
 	out, err := s.Runner.Run(ctx, jj.GitRemoteList())
 	if err != nil {
-		return "" // transient — next call retries
+		return "" // transient — next call retries (ghRepoResolved still false)
 	}
-	// Format: "<name> <url>\n..." — pick the default remote's URL.
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		name, url, ok := strings.Cut(line, " ")
-		if ok && name == s.DefaultRemote {
-			s.ghRepo = githubRepoFromURL(strings.TrimSpace(url))
-			break
+	urls := jj.ParseRemoteURLs(string(out))
+
+	tryRemote := func(name string) bool {
+		if repo := githubRepoFromURL(urls[name]); repo != "" {
+			s.ghRepo = repo
+			return true
+		}
+		return false
+	}
+	if !tryRemote("upstream") && !tryRemote(s.DefaultRemote) {
+		for _, url := range urls { // any-GitHub fallback — non-deterministic but rare
+			if repo := githubRepoFromURL(url); repo != "" {
+				s.ghRepo = repo
+				break
+			}
 		}
 	}
-	s.ghRepoResolved = true // success (even if not-GitHub → ""): don't re-query
+	s.ghRepoResolved = true // cache result (even if "" = not GitHub)
 	return s.ghRepo
 }
 

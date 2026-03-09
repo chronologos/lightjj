@@ -27,4 +27,6 @@ export const FEATURES: TutorialFeature[] = [
   { version: '0.7.0', shortcut: null, title: 'Op undo / restore', description: 'Right-click any op-log entry to undo or restore repo state to that point.' },
   { version: '0.8.0', shortcut: null, title: 'Tabs survive restart', description: 'Open tabs persist to config.json \u2014 they come back on next launch. Multi-host aware: two --remote sessions don\u2019t stomp each other.' },
   { version: '0.8.0', shortcut: null, title: 'Mutation hang protection', description: 'Non-streaming mutations now time out at 60s instead of hanging forever. If the server stalls mid-response, you\u2019ll see "may have completed \u2014 check the log".' },
+  { version: '0.9.0', shortcut: 'g', title: 'Multi-remote support', description: 'Git modal now has a remote selector (\u2190/\u2192 to cycle). Track/untrack (t) opens a per-remote submenu when you have multiple remotes. Default remote reads from jj config git.push per-repo.' },
+  { version: '0.9.0', shortcut: null, title: 'Fork-aware PR badges', description: 'PR badges now query upstream first (fork convention), then your default remote. Bookmarks panel correctly flags "other remote out of sync" instead of showing green.' },
 ]
