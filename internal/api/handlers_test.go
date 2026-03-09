@@ -851,6 +851,7 @@ func TestHandleInfo(t *testing.T) {
 	assert.Equal(t, "myhost", got["hostname"])
 	assert.Equal(t, "/home/user/repo", got["repo_path"])
 	assert.Equal(t, true, got["ssh_mode"]) // newTestServer passes RepoDir=""
+	assert.Equal(t, "origin", got["default_remote"]) // NewServer's baseline
 }
 
 func TestHandleRemotes(t *testing.T) {
@@ -2000,6 +2001,35 @@ func TestGithubRepoFromURL(t *testing.T) {
 			assert.Equal(t, tt.want, githubRepoFromURL(tt.url))
 		})
 	}
+}
+
+func TestResolveGHRepo(t *testing.T) {
+	mkServer := func(t *testing.T, remotes string) *Server {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect(jj.GitRemoteList()).SetOutput([]byte(remotes))
+		return newTestServer(runner)
+	}
+
+	t.Run("upstream wins over origin (fork workflow)", func(t *testing.T) {
+		srv := mkServer(t, "origin https://github.com/myfork/repo.git\nupstream https://github.com/canonical/repo.git\n")
+		assert.Equal(t, "canonical/repo", srv.resolveGHRepo())
+	})
+
+	t.Run("default remote used when no upstream", func(t *testing.T) {
+		srv := mkServer(t, "origin https://github.com/owner/repo.git\nmirror git@internal:/path/repo\n")
+		assert.Equal(t, "owner/repo", srv.resolveGHRepo())
+	})
+
+	t.Run("falls back to any GitHub remote when default isn't GitHub", func(t *testing.T) {
+		srv := mkServer(t, "origin git@internal:/path\ngh https://github.com/x/y.git\n")
+		assert.Equal(t, "x/y", srv.resolveGHRepo())
+	})
+
+	t.Run("no GitHub remotes → empty, cached", func(t *testing.T) {
+		srv := mkServer(t, "origin git@internal:/path\n")
+		assert.Equal(t, "", srv.resolveGHRepo())
+		assert.Equal(t, "", srv.resolveGHRepo()) // cached: MockRunner would panic on 2nd call
+	})
 }
 
 // prTestServer wires the `jj git remote list` → `gh pr list --repo X` chain

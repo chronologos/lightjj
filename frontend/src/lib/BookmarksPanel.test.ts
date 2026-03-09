@@ -18,6 +18,7 @@ function props(overrides: Record<string, unknown> = {}) {
     loading: false,
     error: '',
     defaultRemote: 'origin',
+    allRemotes: ['origin'],
     prByBookmark: new Map<string, PullRequest>(),
     onjump: vi.fn(),
     onexecute: vi.fn(),
@@ -157,6 +158,25 @@ describe('BookmarksPanel — actions', () => {
     expect(onexecute).not.toHaveBeenCalled()
     await fireEvent.keyDown(list(), { key: 't' })
     expect(onexecute).toHaveBeenCalledWith({ action: 'untrack', bookmark: 'feat', remote: 'origin' })
+  })
+
+  it('t with multiple remotes opens submenu instead of firing', async () => {
+    const onexecute = vi.fn()
+    const ontrackmenu = vi.fn()
+    const bm = mkBm({ name: 'feat', local: mkLocal(), remotes: [mkRemote({ tracked: true })] })
+    render(BookmarksPanel, { props: props({
+      bookmarks: [bm], onexecute, ontrackmenu,
+      allRemotes: ['origin', 'upstream'],
+    }) })
+    await fireEvent.keyDown(list(), { key: 't' })
+    expect(onexecute).not.toHaveBeenCalled()
+    expect(ontrackmenu).toHaveBeenCalledTimes(1)
+    const [passedBm, opts] = ontrackmenu.mock.calls[0]
+    expect(passedBm.name).toBe('feat')
+    expect(opts).toEqual([
+      { action: 'untrack', remote: 'origin' },
+      { action: 'track', remote: 'upstream' },
+    ])
   })
 
   it('nav disarms pending confirm', async () => {

@@ -393,6 +393,12 @@ func ConfigListAliases() CommandArgs {
 	return []string{"config", "list", "aliases", "--color", "never", "--ignore-working-copy"}
 }
 
+// ConfigGet returns args to read a single jj config key. Exits non-zero if
+// the key is unset — caller treats that as "not configured".
+func ConfigGet(key string) CommandArgs {
+	return []string{"config", "get", key, "--color", "never", "--ignore-working-copy"}
+}
+
 // FileShow returns args for `jj file show` to get a file's content at a revision.
 // Uses EscapeFileName for consistency and to prevent dash-prefix flag injection.
 func FileShow(revision string, path string) CommandArgs {

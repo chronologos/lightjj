@@ -4,6 +4,7 @@
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
   import { createConfirmGate } from './confirm-gate.svelte'
+  import { trackOptions, type TrackOption } from './bookmark-sync'
 
   export interface BookmarkOp {
     action: 'move' | 'advance' | 'delete' | 'forget' | 'track' | 'untrack'
@@ -16,9 +17,10 @@
     currentCommitId: string | null
     filterBookmark: string
     onexecute: (op: BookmarkOp) => void
+    ontrackmenu?: (bm: Bookmark, opts: TrackOption[], x: number, y: number) => void
   }
 
-  let { open = $bindable(false), currentCommitId, filterBookmark, onexecute }: Props = $props()
+  let { open = $bindable(false), currentCommitId, filterBookmark, onexecute, ontrackmenu }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -56,26 +58,15 @@
   // Per-selection action availability. Drives footer hint dimming and key
   // handler guards. No forget entry — forget is always available for any
   // selection (only dimmed when nothing is selected).
-  interface TrackInfo { action: 'track' | 'untrack'; remote: string }
   let can = $derived.by(() => {
     const bm = selected
-    if (!bm) return { move: false, del: false, track: null as TrackInfo | null }
+    if (!bm) return { move: false, del: false, track: [] as TrackOption[] }
     return {
       move: !!currentCommitId && bm.commit_id !== currentCommitId,
       del: !!bm.local,
-      track: trackInfo(bm),
+      track: trackOptions(bm, remotes),
     }
   })
-
-  function trackInfo(bm: Bookmark): TrackInfo | null {
-    // Prefer an existing remote entry; toggle its tracked state.
-    // ParseBookmarkListOutput sorts the default remote first, so [0] is it.
-    // Multi-remote: [1..] unreachable here — rare, use CLI.
-    const r = bm.remotes?.[0]
-    if (r) return { action: r.tracked ? 'untrack' : 'track', remote: r.remote }
-    if (remotes[0]) return { action: 'track', remote: remotes[0] }
-    return null
-  }
 
   $effect(() => {
     if (open) {
@@ -199,10 +190,23 @@
         return
       case 't': {
         e.preventDefault()
-        const t = can.track
-        if (!t) { disarm(); return }
-        if (confirm.gate('t', t.action === 'untrack')) return
-        fire({ action: t.action, bookmark: bm.name, remote: t.remote })
+        const opts = can.track
+        if (opts.length === 0) { disarm(); return }
+        if (opts.length === 1) {
+          const t = opts[0]
+          if (confirm.gate('t', t.action === 'untrack')) return
+          fire({ action: t.action, bookmark: bm.name, remote: t.remote })
+          return
+        }
+        // Multi-remote: open submenu at the active row. Modal closes so the
+        // ContextMenu can receive focus — tick() ensures unmount completes
+        // before the menu's own mount-focus effect fires.
+        disarm()
+        const rect = modalEl?.querySelector('.bm-item-active')?.getBoundingClientRect()
+        const x = rect ? rect.right - 40 : window.innerWidth / 2
+        const y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2
+        close()
+        tick().then(() => ontrackmenu?.(bm, opts, x, y))
         return
       }
       default:
@@ -262,7 +266,7 @@
       {:else}
         {#each filtered as bm, i (bm.name)}
           {@const here = bm.commit_id === currentCommitId}
-          {@const track = trackInfo(bm)}
+          {@const tracked = bm.remotes?.find(r => r.tracked)}
           <!-- svelte-ignore a11y_click_events_have_key_events -- Enter on the
                modal's onkeydown fires the same action as click. -->
           <div
@@ -283,8 +287,8 @@
             {/if}
             {#if bm.conflict}
               <span class="bm-badge bm-badge-conflict">conflict</span>
-            {:else if track?.action === 'untrack'}
-              <span class="bm-badge bm-badge-tracked">⊙ {track.remote}</span>
+            {:else if tracked}
+              <span class="bm-badge bm-badge-tracked">⊙ {tracked.remote}</span>
             {:else if bm.local}
               <span class="bm-badge">○ local</span>
             {/if}
@@ -298,14 +302,21 @@
       {:else if armed === 'f'}
         <span class="bm-confirm"><kbd>f</kbd> again to forget <b>{selected?.name}</b> · Esc to cancel</span>
       {:else if armed === 't'}
-        <span class="bm-confirm"><kbd>t</kbd> again to untrack <b>{selected?.name}@{can.track?.remote}</b> · Esc to cancel</span>
+        <span class="bm-confirm"><kbd>t</kbd> again to untrack <b>{selected?.name}@{can.track[0]?.remote}</b> · Esc to cancel</span>
       {:else}
         <span class:dim={!can.move}><kbd>⏎</kbd> move here</span>
         <span class:dim={!can.move}><kbd>a</kbd> advance</span>
         <span class:dim={!can.del}><kbd>d</kbd> delete</span>
         <span class:dim={!selected}><kbd>f</kbd> forget</span>
-        <span class:dim={!can.track}>
-          <kbd>t</kbd> {can.track?.action ?? 'track'}{#if can.track} <span class="bm-remote">({can.track.remote})</span>{/if}
+        <span class:dim={can.track.length === 0}>
+          <kbd>t</kbd>
+          {#if can.track.length === 1}
+            {can.track[0].action} <span class="bm-remote">({can.track[0].remote})</span>
+          {:else if can.track.length > 1}
+            track/untrack…
+          {:else}
+            track
+          {/if}
         </span>
       {/if}
     </div>

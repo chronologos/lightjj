@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyBookmark, syncPriority, fmtCount, syncLabel } from './bookmark-sync'
+import { classifyBookmark, syncPriority, fmtCount, syncLabel, trackOptions } from './bookmark-sync'
 import type { Bookmark, BookmarkRemote } from './api'
 
 const mkRemote = (over: Partial<BookmarkRemote> = {}): BookmarkRemote => ({
@@ -67,6 +67,13 @@ describe('classifyBookmark', () => {
     const bm = mkBm({ conflict: true, added_targets: ['a', 'b', 'c'], local: mkRemote({ remote: '.' }), remotes: [mkRemote()] })
     expect(classifyBookmark(bm)).toEqual({ kind: 'conflict', sides: 3 })
   })
+
+  it('synced on first tracked remote but bm.synced=false → diverged(0,0) sentinel', () => {
+    // origin is 0/0 (synced) but jj's all-remotes synced bool says no —
+    // e.g. upstream is behind. Don't show green.
+    const bm = mkBm({ local: mkRemote({ remote: '.' }), remotes: [mkRemote()], synced: false })
+    expect(classifyBookmark(bm)).toEqual({ kind: 'diverged', ahead: 0, behind: 0 })
+  })
 })
 
 describe('syncPriority', () => {
@@ -103,11 +110,46 @@ describe('syncLabel', () => {
     [{ kind: 'ahead' as const, by: 3 }, 'origin', 'origin ↑3'],
     [{ kind: 'behind' as const, by: 7392 }, 'origin', 'origin ↓7.4k'],
     [{ kind: 'diverged' as const, ahead: 1, behind: 130774 }, 'origin', 'origin ↑1 ↓131k'],
+    [{ kind: 'diverged' as const, ahead: 0, behind: 0 }, 'origin', 'other remote out of sync'],
     [{ kind: 'local-only' as const }, 'origin', 'local only'],
     [{ kind: 'remote-only' as const, tracked: true }, 'origin', 'deleted @origin'],
     [{ kind: 'remote-only' as const, tracked: false }, 'origin', 'untracked @origin'],
     [{ kind: 'conflict' as const, sides: 3 }, 'origin', 'conflict (3 sides)'],
   ])('%j @ %s → %s', (state, remote, want) => {
     expect(syncLabel(state, remote)).toBe(want)
+  })
+})
+
+describe('trackOptions', () => {
+  it('toggles tracked state for each existing remote', () => {
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [mkRemote({ remote: 'origin', tracked: true }), mkRemote({ remote: 'upstream', tracked: false })],
+    })
+    expect(trackOptions(bm, ['origin', 'upstream'])).toEqual([
+      { action: 'untrack', remote: 'origin' },
+      { action: 'track', remote: 'upstream' },
+    ])
+  })
+
+  it('offers track for remotes the bookmark is not on (local-only)', () => {
+    const bm = mkBm({ local: mkRemote({ remote: '.' }) })
+    expect(trackOptions(bm, ['origin', 'upstream'])).toEqual([
+      { action: 'track', remote: 'origin' },
+      { action: 'track', remote: 'upstream' },
+    ])
+  })
+
+  it('does not offer track-on-absent remotes when no local ref', () => {
+    // remote-only bookmark: can only toggle the remote it's on
+    const bm = mkBm({ remotes: [mkRemote({ remote: 'origin', tracked: false })] })
+    expect(trackOptions(bm, ['origin', 'upstream'])).toEqual([
+      { action: 'track', remote: 'origin' },
+    ])
+  })
+
+  it('empty when no remotes at all', () => {
+    const bm = mkBm({ local: mkRemote({ remote: '.' }) })
+    expect(trackOptions(bm, [])).toEqual([])
   })
 })

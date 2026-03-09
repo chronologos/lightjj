@@ -226,3 +226,23 @@ func TestParseRemoteListOutput(t *testing.T) {
 	}
 }
 
+func TestParseRemoteURLs(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   map[string]string
+	}{
+		{"single", "origin https://github.com/x/y.git\n", map[string]string{"origin": "https://github.com/x/y.git"}},
+		{"multi", "origin https://o.git\nupstream git@github.com:a/b.git\n",
+			map[string]string{"origin": "https://o.git", "upstream": "git@github.com:a/b.git"}},
+		{"extra whitespace", "  origin   https://o.git  \n\n  upstream  git@u:/p  \n",
+			map[string]string{"origin": "https://o.git", "upstream": "git@u:/p"}},
+		{"empty", "", map[string]string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ParseRemoteURLs(tt.output))
+		})
+	}
+}
+

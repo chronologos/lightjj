@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import type { Bookmark, PullRequest } from './api'
-  import { classifyBookmark, syncPriority, syncLabel, type SyncState } from './bookmark-sync'
+  import { classifyBookmark, syncPriority, syncLabel, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
   import { fuzzyMatch } from './fuzzy'
   import { createConfirmGate } from './confirm-gate.svelte'
   import type { BookmarkOp } from './BookmarkModal.svelte'
@@ -11,8 +11,8 @@
   export interface BookmarkRowActions {
     jump: boolean
     del: boolean
-    /** Non-null when track/untrack is possible; carries the resolved remote. */
-    track: { action: 'track' | 'untrack'; remote: string } | null
+    /** Per-remote track/untrack toggles. Empty = nothing to do. */
+    track: TrackOption[]
   }
 
   interface Props {
@@ -20,15 +20,17 @@
     loading: boolean
     error: string
     defaultRemote: string
+    allRemotes: string[]
     prByBookmark: Map<string, PullRequest>
     onjump: (bm: Bookmark) => void
     onexecute: (op: BookmarkOp) => void
     onrefresh: () => void
     onclose: () => void
     oncontextmenu?: (bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) => void
+    ontrackmenu?: (bm: Bookmark, opts: TrackOption[], x: number, y: number) => void
   }
 
-  let { bookmarks, loading, error, defaultRemote, prByBookmark, onjump, onexecute, onrefresh, onclose, oncontextmenu }: Props = $props()
+  let { bookmarks, loading, error, defaultRemote, allRemotes, prByBookmark, onjump, onexecute, onrefresh, onclose, oncontextmenu, ontrackmenu }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -59,26 +61,22 @@
   // $derived so context-menu can compute them for the RIGHT-CLICKED row
   // (not the keyboard-selected one).
   function computeActions(bm: Bookmark): BookmarkRowActions {
-    // Track/untrack: prefer an existing remote entry (toggle its state);
-    // fall back to defaultRemote for local-only bookmarks.
-    const r = bm.remotes?.[0]
-    const track = r ? { action: r.tracked ? 'untrack' as const : 'track' as const, remote: r.remote }
-      : bm.local && defaultRemote ? { action: 'track' as const, remote: defaultRemote }
-      : null
     return {
       jump: !bm.conflict && !!bm.commit_id,
       del: !!bm.local,
-      track,
+      track: trackOptions(bm, allRemotes),
     }
   }
 
-  let trackInfo = $derived(selected ? computeActions(selected.bm).track : null)
+  // Single computeActions() call; both can and trackInfo derive from it.
+  let selActions = $derived(selected ? computeActions(selected.bm) : null)
+  let trackInfo = $derived(selActions?.track ?? [])
 
   let can = $derived({
-    jump: !!selected && !selected.bm.conflict && !!selected.bm.commit_id,
-    del: !!selected?.bm.local,
+    jump: selActions?.jump ?? false,
+    del: selActions?.del ?? false,
     forget: !!selected,
-    track: trackInfo,
+    track: trackInfo.length > 0,
   })
 
   // Reload can reorder rows (sync state changed → different priority).
@@ -194,10 +192,21 @@
         return
       case 't': {
         e.preventDefault()
-        const t = trackInfo
-        if (!t) { confirm.disarm(); return }
-        if (confirm.gate('t', t.action === 'untrack')) return
-        fire({ action: t.action, bookmark: row.bm.name, remote: t.remote })
+        const opts = trackInfo
+        if (opts.length === 0) { confirm.disarm(); return }
+        if (opts.length === 1) {
+          // Single-remote: preserve current immediate-fire + confirm ergonomics.
+          const t = opts[0]
+          if (confirm.gate('t', t.action === 'untrack')) return
+          fire({ action: t.action, bookmark: row.bm.name, remote: t.remote })
+          return
+        }
+        // Multi-remote: open submenu at the active row's right edge.
+        confirm.disarm()
+        const rect = listEl?.querySelector('.bp-row-active')?.getBoundingClientRect()
+        ontrackmenu?.(row.bm, opts,
+          rect ? rect.right - 40 : window.innerWidth / 2,
+          rect ? rect.top + rect.height / 2 : window.innerHeight / 2)
         return
       }
       default:
@@ -326,13 +335,20 @@
     {:else if confirm.armed === 'f'}
       <span class="bp-confirm"><kbd>f</kbd> again to forget <b>{selected?.bm.name}</b> · Esc to cancel</span>
     {:else if confirm.armed === 't'}
-      <span class="bp-confirm"><kbd>t</kbd> again to untrack <b>{selected?.bm.name}@{trackInfo?.remote}</b> · Esc to cancel</span>
+      <span class="bp-confirm"><kbd>t</kbd> again to untrack <b>{selected?.bm.name}@{trackInfo[0]?.remote}</b> · Esc to cancel</span>
     {:else}
       <span class:dim={!can.jump}><kbd>⏎</kbd> jump</span>
       <span class:dim={!can.del}><kbd>d</kbd> delete</span>
       <span class:dim={!can.forget}><kbd>f</kbd> forget</span>
       <span class:dim={!can.track}>
-        <kbd>t</kbd> {trackInfo?.action ?? 'track'}{#if trackInfo} <span class="bp-remote">({trackInfo.remote})</span>{/if}
+        <kbd>t</kbd>
+        {#if trackInfo.length === 1}
+          {trackInfo[0].action} <span class="bp-remote">({trackInfo[0].remote})</span>
+        {:else if trackInfo.length > 1}
+          track/untrack…
+        {:else}
+          track
+        {/if}
       </span>
       <span><kbd>r</kbd> refresh</span>
       <span><kbd>/</kbd> filter</span>

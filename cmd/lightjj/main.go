@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/chronologos/lightjj/internal/api"
+	"github.com/chronologos/lightjj/internal/jj"
 	"github.com/chronologos/lightjj/internal/runner"
 )
 
@@ -48,7 +49,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj util snapshot` interval (0 to disable)")
 	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
-	defaultRemote := flag.String("default-remote", "origin", "Remote name to prefer in bookmark/remote lists")
+	defaultRemote := flag.String("default-remote", "", "Remote name to prefer (overrides jj config git.push; defaults to origin)")
 	autoShutdown := flag.Duration("auto-shutdown", 0, "Shut down after this `duration` with no browser tabs connected (0 to disable)")
 	flag.Parse()
 
@@ -110,8 +111,20 @@ func main() {
 	// (and only here) keeps the two paths in sync. isSSH selects watcher
 	// mode: local fsnotify vs SSH op-id polling.
 	makeServer := func(r runner.CommandRunner, repoDir, repoPath string, isSSH bool) *api.Server {
-		s := api.NewServer(r, repoDir)
-		s.DefaultRemote = *defaultRemote
+		s := api.NewServer(r, repoDir) // DefaultRemote = "origin"
+		// Priority: explicit --default-remote flag > jj config git.push > "origin".
+		// jj config is per-repo, so tabs on different repos get different defaults.
+		// One extra round trip at tab-open (~20ms local, ~440ms SSH — acceptable).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if out, err := r.Run(ctx, jj.ConfigGet("git.push")); err == nil {
+			if v := strings.TrimSpace(string(out)); v != "" {
+				s.DefaultRemote = v
+			}
+		}
+		cancel()
+		if *defaultRemote != "" {
+			s.DefaultRemote = *defaultRemote
+		}
 		s.Hostname = displayHost
 		s.RepoPath = repoPath
 		s.SSHHost = sshHost
