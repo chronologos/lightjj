@@ -1,16 +1,18 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { api, type Bookmark } from './api'
+  import { fuzzyMatch } from './fuzzy'
 
   // Structured op — presentation decided in template, not here.
   // Raw command line is derived: `git ${type} ${flags.join(' ')}`
   interface GitOp {
     type: 'push' | 'fetch'
-    flags: string[]
     title: string
     hotkey?: string    // single-char; rendered as kbd hint + wired into handleKeydown
     bookmark?: string  // → badge (mirrors RevisionGraph's .bookmark-badge)
     scope?: 'all' | 'deleted' | 'tracked' | 'all-remotes'  // → chip
     changeId?: string  // short form, for the --change entry
+    flags: string[]
   }
 
   interface Props {
@@ -21,6 +23,7 @@
 
   let { open = $bindable(false), currentChangeId, onexecute }: Props = $props()
 
+  let query: string = $state('')
   let index: number = $state(0)
   let bookmarks: Bookmark[] = $state([])
   let remotes: string[] = $state([])
@@ -28,6 +31,8 @@
   let loading: boolean = $state(false)
   let fetchError: string | null = $state(null)
   let modalEl: HTMLDivElement | undefined = $state(undefined)
+  let inputEl: HTMLInputElement | undefined = $state(undefined)
+  let inputFocused: boolean = $state(false)
   let previousFocus: HTMLElement | null = null
   let fetchGen: number = 0
 
@@ -64,24 +69,59 @@
     return ops
   }
 
-  let ops = $derived(buildOps(bookmarks, selectedRemote, remotes, currentChangeId))
-  let hotkeyMap = $derived(new Map(ops.filter(o => o.hotkey).map(o => [o.hotkey!, o])))
+  let allOps = $derived(buildOps(bookmarks, selectedRemote, remotes, currentChangeId))
+  let hotkeyMap = $derived(new Map(allOps.filter(o => o.hotkey).map(o => [o.hotkey!, o])))
+
+  let filtered = $derived.by(() => {
+    if (!open) return []
+    if (!query) return allOps
+    // Match against title, bookmark name, and scope
+    return allOps.filter(op =>
+      fuzzyMatch(query, op.title) ||
+      (op.bookmark && fuzzyMatch(query, op.bookmark)) ||
+      (op.scope && fuzzyMatch(query, op.scope))
+    )
+  })
+
+  // Compute section boundaries for rendering headers
+  let sections = $derived.by(() => {
+    const result: { header: string; ops: { op: GitOp; globalIndex: number }[] }[] = []
+    let currentType = ''
+    for (let i = 0; i < filtered.length; i++) {
+      const op = filtered[i]
+      if (op.type !== currentType) {
+        currentType = op.type
+        result.push({ header: op.type === 'push' ? 'Push' : 'Fetch', ops: [] })
+      }
+      result[result.length - 1].ops.push({ op, globalIndex: i })
+    }
+    return result
+  })
+
+  let selected = $derived(filtered[index] as GitOp | undefined)
 
   $effect(() => {
     if (open) {
       previousFocus = document.activeElement as HTMLElement | null
+      query = ''
       index = 0
       loading = true
       fetchError = null
       const gen = ++fetchGen
-      Promise.all([api.bookmarks(), api.remotes()]).then(([bms, rms]) => {
+      Promise.all([api.bookmarks({ local: true }), api.remotes()]).then(([bms, rms]) => {
         if (gen !== fetchGen) return
         bookmarks = bms
         remotes = rms
         selectedRemote = rms[0] ?? 'origin' // backend sorts default-remote first
         loading = false
       }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
-      modalEl?.focus()
+      tick().then(() => modalEl?.focus())
+    }
+  })
+
+  $effect(() => {
+    if (open && index >= filtered.length && filtered.length > 0) {
+      index = filtered.length - 1
     }
   })
 
@@ -113,38 +153,50 @@
     switch (e.key) {
       case 'ArrowDown':
       case 'j':
+        if (e.key === 'j' && inputFocused) return
         e.preventDefault()
-        index = Math.min(index + 1, ops.length - 1)
+        if (inputFocused) modalEl?.focus()
+        index = Math.min(index + 1, Math.max(filtered.length - 1, 0))
         scrollActiveIntoView()
-        break
+        return
       case 'ArrowUp':
       case 'k':
+        if (e.key === 'k' && inputFocused) return
         e.preventDefault()
         index = Math.max(index - 1, 0)
         scrollActiveIntoView()
-        break
+        return
       case 'ArrowLeft':
       case 'h':
+        if (inputFocused) return
         if (remotes.length > 1) { e.preventDefault(); cycleRemote(-1) }
-        break
+        return
       case 'ArrowRight':
       case 'l':
+        if (inputFocused) return
         if (remotes.length > 1) { e.preventDefault(); cycleRemote(1) }
-        break
+        return
       case 'Enter':
         e.preventDefault()
         e.stopPropagation()
-        if (ops[index]) execute(ops[index])
-        break
+        if (selected) execute(selected)
+        return
       case 'Escape':
         e.preventDefault()
         e.stopPropagation()
+        if (query) { query = ''; modalEl?.focus(); return }
         close()
-        break
+        return
+      case '/':
+        if (inputFocused) return
+        e.preventDefault()
+        e.stopPropagation()
+        inputEl?.focus()
+        return
       default: {
         // Single-char hotkey — fires immediately. No modifier keys (they bubble
-        // for global shortcuts like Cmd+K).
-        if (e.ctrlKey || e.metaKey || e.altKey) break
+        // for global shortcuts like Cmd+K). Guard against input focus.
+        if (inputFocused || e.ctrlKey || e.metaKey || e.altKey) break
         const op = hotkeyMap.get(e.key)
         if (op) {
           e.preventDefault()
@@ -154,12 +206,26 @@
       }
     }
   }
+
+  let inputCollapsed = $derived(!query && !inputFocused)
 </script>
 
 {#if open}
   <div class="git-backdrop" onclick={close} role="presentation"></div>
-  <div class="git-modal" bind:this={modalEl} onkeydown={handleKeydown} role="dialog" aria-label="Git operations" tabindex="-1">
-    <div class="git-header">Git Operations</div>
+  <div
+    bind:this={modalEl}
+    class="git-modal"
+    onkeydown={handleKeydown}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Git operations"
+    aria-describedby="git-footer"
+    tabindex="-1"
+  >
+    <div class="git-header">
+      Git
+      <span class="git-header-hint"><kbd>/</kbd> to filter</span>
+    </div>
     {#if remotes.length > 1}
       <div class="git-remotes">
         <span class="git-remotes-label">remote:</span>
@@ -170,34 +236,69 @@
             onclick={() => { selectedRemote = r; index = 0 }}
           >{r}</button>
         {/each}
-        <span class="git-remotes-hint">←/→</span>
+        <span class="git-remotes-hint">h/l</span>
       </div>
     {/if}
-    {#if loading}
-      <div class="git-empty">Loading...</div>
-    {:else if fetchError}
-      <div class="git-empty" style="color: var(--red)">{fetchError}</div>
-    {:else}
-      <div class="git-results">
-        {#each ops as op, i}
-          <button
-            class="git-item"
-            class:git-item-active={i === index}
-            onclick={() => execute(op)}
-            onmouseenter={() => { index = i }}
-          >
-            <div class="git-title" class:is-push={op.type === 'push'} class:is-fetch={op.type === 'fetch'}>
-              {op.title}
-              {#if op.bookmark}<span class="git-bm-badge">⑂ {op.bookmark}</span>{/if}
-              {#if op.changeId}<span class="git-change-chip">{op.changeId}</span>{/if}
-              {#if op.scope}<span class="git-scope-chip">{op.scope}</span>{/if}
-              {#if op.hotkey}<kbd class="git-hotkey">{op.hotkey}</kbd>{/if}
+    <input
+      bind:this={inputEl}
+      bind:value={query}
+      class="git-input"
+      class:git-input-collapsed={inputCollapsed}
+      type="text"
+      placeholder="Filter..."
+      tabindex={inputCollapsed ? -1 : 0}
+      aria-hidden={inputCollapsed}
+      oninput={() => { index = 0 }}
+      onfocus={() => { inputFocused = true }}
+      onblur={() => { inputFocused = false }}
+    />
+    <div
+      class="git-results"
+      role="listbox"
+      tabindex="-1"
+      aria-label="Git operations"
+      aria-activedescendant={selected ? `git-opt-${index}` : undefined}
+    >
+      {#if loading}
+        <div class="git-empty">Loading...</div>
+      {:else if fetchError}
+        <div class="git-empty git-error" role="alert">{fetchError}</div>
+      {:else if filtered.length === 0}
+        <div class="git-empty">No matching operations</div>
+      {:else}
+        {#each sections as section}
+          <div class="git-section-header">{section.header}</div>
+          {#each section.ops as { op, globalIndex } (globalIndex)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              id="git-opt-{globalIndex}"
+              class="git-item"
+              class:git-item-active={globalIndex === index}
+              onmousemove={() => { if (index !== globalIndex) index = globalIndex }}
+              onclick={() => execute(op)}
+              role="option"
+              tabindex="-1"
+              aria-selected={globalIndex === index}
+            >
+              <div class="git-title" class:is-push={op.type === 'push'} class:is-fetch={op.type === 'fetch'}>
+                {op.title}
+                {#if op.bookmark}<span class="git-bm-badge">⑂ {op.bookmark}</span>{/if}
+                {#if op.changeId}<span class="git-change-chip">{op.changeId}</span>{/if}
+                {#if op.scope}<span class="git-scope-chip">{op.scope}</span>{/if}
+                {#if op.hotkey}<kbd class="git-hotkey">{op.hotkey}</kbd>{/if}
+              </div>
+              <div class="git-cmd">git {op.type} {op.flags.join(' ')}</div>
             </div>
-            <div class="git-cmd">git {op.type} {op.flags.join(' ')}</div>
-          </button>
+          {/each}
         {/each}
-      </div>
-    {/if}
+      {/if}
+    </div>
+    <div id="git-footer" class="git-footer">
+      <span><kbd>⏎</kbd> execute</span>
+      <span><kbd>j</kbd><kbd>k</kbd> navigate</span>
+      {#if remotes.length > 1}<span><kbd>h</kbd><kbd>l</kbd> remote</span>{/if}
+      <span><kbd>Esc</kbd> close</span>
+    </div>
   </div>
 {/if}
 
@@ -211,11 +312,11 @@
 
   .git-modal {
     position: fixed;
-    top: 15%;
+    top: 20%;
     left: 50%;
     transform: translateX(-50%);
-    width: 560px;
-    max-height: 500px;
+    width: 520px;
+    max-height: 420px;
     background: var(--base);
     border: 1px solid var(--surface1);
     border-radius: 8px;
@@ -228,13 +329,22 @@
   }
 
   .git-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
     padding: 10px 16px 6px;
     font-size: 12px;
     font-weight: 700;
     color: var(--subtext0);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    border-bottom: 1px solid var(--surface0);
+  }
+
+  .git-header-hint {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--surface2);
   }
 
   .git-remotes {
@@ -262,27 +372,63 @@
     border-color: var(--overlay0);
   }
 
+  .git-input {
+    width: 100%;
+    background: var(--mantle);
+    color: var(--text);
+    border: none;
+    border-bottom: 1px solid var(--surface0);
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: max-height 0.12s ease, padding 0.12s ease, opacity 0.12s ease;
+    max-height: 40px;
+  }
+
+  .git-input-collapsed {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-width: 0;
+    opacity: 0;
+  }
+
+  .git-input::placeholder { color: var(--surface2); }
+
   .git-results {
     overflow-y: auto;
     padding: 4px 0;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .git-section-header {
+    padding: 8px 16px 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--overlay0);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    user-select: none;
+  }
+
+  .git-section-header:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--surface0);
+    padding-top: 10px;
   }
 
   .git-item {
     display: block;
     width: 100%;
     padding: 7px 16px;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    font-family: inherit;
     font-size: 13px;
+    user-select: none;
     cursor: pointer;
-    text-align: left;
   }
 
-  .git-item-active {
-    background: var(--surface0);
-  }
+  .git-item-active { background: var(--surface0); }
 
   /* Title line: description + inline badge/chip. Color-coded by op type. */
   .git-title {
@@ -358,10 +504,36 @@
     margin-top: 2px;
   }
 
+  .git-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--surface0);
+    font-size: 11px;
+    color: var(--subtext0);
+    background: var(--mantle);
+  }
+
   .git-empty {
     padding: 16px;
     color: var(--surface2);
     text-align: center;
     font-size: 13px;
+  }
+
+  .git-error { color: var(--red); }
+
+  kbd {
+    display: inline-block;
+    min-width: 14px;
+    padding: 1px 4px;
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    text-align: center;
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    border-radius: 3px;
+    color: var(--text);
   }
 </style>
