@@ -69,7 +69,11 @@
     z-index: 50;
     display: flex;
     flex-direction: column-reverse;
-    background: var(--msg-bg);
+    /* --msg-bg vars are translucent tints (theme.css: rgba ~0.1 alpha). As a
+       fixed overlay it sits on top of panel footers (BookmarksPanel kbd hints
+       bleed through). Layer the tint over opaque --base via linear-gradient
+       stacking so the result is opaque regardless of what's underneath. */
+    background: linear-gradient(var(--msg-bg), var(--msg-bg)), var(--base);
     border-left: 3px solid var(--msg-fg);
     border-top: 1px solid color-mix(in srgb, var(--msg-fg) 30%, transparent);
     color: var(--msg-fg);

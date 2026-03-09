@@ -680,12 +680,19 @@
   let pendingSelectCommitId: string | null = null
 
   function showBookmarkContextMenu(bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) {
+    const pd = actions.pushDelete
+    const delOp: BookmarkOp = pd[0]
+      ? { action: 'push-delete', bookmark: bm.name, remote: pd[0] }
+      : { action: 'delete', bookmark: bm.name }
+    const delLabel = pd[0]
+      ? `Push delete → ${pd[0]}${pd.length > 1 ? ` (+${pd.length - 1})` : ''}`
+      : 'Delete'
     const items: ContextMenuItem[] = [
       { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump,
         action: () => jumpToBookmark(bm) },
       { separator: true },
-      { label: 'Delete', shortcut: 'd', danger: true, disabled: !actions.del,
-        action: () => handleBookmarkOp({ action: 'delete', bookmark: bm.name }) },
+      { label: delLabel, shortcut: 'd', danger: true, disabled: !actions.del && !pd[0],
+        action: () => handleBookmarkOp(delOp) },
       { label: 'Forget', shortcut: 'f', danger: true,
         action: () => handleBookmarkOp({ action: 'forget', bookmark: bm.name }) },
     ]
@@ -944,9 +951,18 @@
   }
 
   function handleBookmarkOp(op: BookmarkOp) {
+    bookmarkModalOpen = false
+    // Delete-staged completion (tracked remote-only): pushing IS the delete.
+    // Delegate to handleGitOp — push is a slow network op and the streaming
+    // path handles mutationProgress + PR reload.
+    if (op.action === 'push-delete') {
+      // exact: prefix — jj git push -b uses glob matching by default; a
+      // bookmark literally named "*" would otherwise match everything.
+      return handleGitOp('push', ['--bookmark', `exact:${op.bookmark}`, '--remote', op.remote!])
+    }
     if ((op.action === 'move' || op.action === 'advance') && !selectedRevision) return
     const changeId = selectedRevision ? effectiveId(selectedRevision.commit) : ''
-    const actions: Record<BookmarkOp['action'], () => Promise<MutationResult>> = {
+    const actions: Record<Exclude<BookmarkOp['action'], 'push-delete'>, () => Promise<MutationResult>> = {
       move: () => api.bookmarkMove(op.bookmark, changeId),
       advance: () => api.bookmarkAdvance(op.bookmark, changeId),
       delete: () => api.bookmarkDelete(op.bookmark),
@@ -957,7 +973,6 @@
     runMutation(
       actions[op.action],
       `${op.action} ${op.bookmark}`,
-      { before: () => { bookmarkModalOpen = false } },
     )
   }
 
