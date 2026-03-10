@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseGraphLog_LinearHistory(t *testing.T) {
-	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1ff766300c\x1fmain\n" +
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1ff766300c\x1fmain\x1fmain@origin\n" +
 		"○  _PREFIX:r_PREFIX:f_PREFIX:false_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\x1fb6a3ed01\x1f\n" +
 		"○  _PREFIX:m_PREFIX:b_PREFIX:false_PREFIX:false\x1fmwoxvszn\x1fb6a3ed01\x1fport jjui golang code\x1f\x1f00000000\x1f\n" +
 		"◆  _PREFIX:z_PREFIX:0_PREFIX:false_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\x1f\n"
@@ -22,7 +22,7 @@ func TestParseGraphLog_LinearHistory(t *testing.T) {
 	assert.Equal(t, 2, rows[0].Commit.CommitPrefix)  // "20" = 2 chars
 	assert.True(t, rows[0].Commit.IsWorkingCopy)
 	assert.Equal(t, "my commit", rows[0].Description)
-	assert.Equal(t, []string{"main"}, rows[0].Bookmarks)
+	assert.Equal(t, []string{"main", "main@origin"}, rows[0].Bookmarks)
 	assert.Equal(t, []string{"f766300c"}, rows[0].Commit.ParentIds)
 	assert.Nil(t, rows[3].Commit.ParentIds) // root has no parents
 
@@ -290,4 +290,11 @@ func TestParseGraphLog_ConnectorWithoutPrecedingNode(t *testing.T) {
 	assert.Equal(t, "aaaaaaaa", rows[0].Commit.ChangeId)
 	// Orphaned connector line was dropped (current != nil only after first node)
 	assert.Len(t, rows[0].GraphLines, 1)
+}
+
+func TestParseGraphLog_RemoteOnlyBookmarks(t *testing.T) {
+	output := "◆  _PREFIX:a_PREFIX:1_PREFIX:false_PREFIX:false\x1fabcdefgh\x1f12345678\x1ffix something\x1f\x1f00000000\x1ffeat/foo@upstream\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"feat/foo@upstream"}, rows[0].Bookmarks)
 }

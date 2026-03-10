@@ -29,6 +29,8 @@ func TestLogGraph(t *testing.T) {
 	assert.Contains(t, joined, "divergent")
 	assert.Contains(t, joined, "empty")
 	assert.Contains(t, joined, "parents")
+	assert.Contains(t, joined, "bookmarks.map")
+	assert.NotContains(t, joined, "local_bookmarks")
 }
 
 func TestLogGraph_NoRevset(t *testing.T) {

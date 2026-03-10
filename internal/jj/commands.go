@@ -59,10 +59,11 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
 	// Parent IDs are comma-joined (commit IDs are hex, commas can't appear).
 	// Bookmarks are joined with \x1F and MUST be the last field — the parser's SplitN leaves the tail unsplit.
-	// Uses local_bookmarks.map(|b| b.name()) — the raw bookmarks keyword includes remote tracking
-	// entries (@origin) and a * suffix for bookmarks ahead of their remote. .name() strips both.
+	// Uses bookmarks.map(|b| if(b.remote(), b.name() ++ "@" ++ b.remote(), b.name()))
+	// — emits local bookmarks as "name" and remote as "name@remote". .name() strips
+	// the * suffix for bookmarks ahead of their remote.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name()).join("\x1F") ++ "\n"`,
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ bookmarks.map(|b| if(b.remote(), b.name() ++ "@" ++ b.remote(), b.name())).join("\x1F") ++ "\n"`,
 		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args
