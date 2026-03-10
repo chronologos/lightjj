@@ -24,7 +24,12 @@
   // center content came from — 'theirs' initially (seed), 'ours' after →,
   // 'mixed' after user hand-edits inside the block.
   type BlockSource = 'ours' | 'theirs' | 'mixed'
-  interface ApplyBlockEffect { idx: number; side: 'ours' | 'theirs'; newTo: number }
+  // newFrom/newTo are NEW-doc positions computed by takeBlock — it knows the
+  // exact surgery (leading/trailing separator, deletion extent) so it can
+  // place the block range precisely. mapPos() in the tracker can't: it only
+  // knows old positions and change deltas, not semantics like "the leading
+  // \n is a separator, not block content".
+  interface ApplyBlockEffect { idx: number; side: 'ours' | 'theirs'; newFrom: number; newTo: number }
   const applyBlock = StateEffect.define<ApplyBlockEffect>()
   const editInside = StateEffect.define<number>()  // block index → mark mixed
   // Undo inverse: restores {source, from, to} snapshot captured pre-apply.
@@ -48,24 +53,29 @@
         // the change or they retain stale pre-transaction offsets. (Old code
         // gated mapPos on `result === blocks`, skipping it when applyBlock's
         // .map() created a fresh array — block 1 kept block-0's old positions.)
-        let result: CenterBlock[] = tr.changes.empty ? blocks : blocks.map(b => ({
-          ...b,
-          from: tr.changes.mapPos(b.from, 1),
-          to: tr.changes.mapPos(b.to, -1),
-        }))
+        //
+        // assoc=1/-1 (right/left-leaning) keeps from/to anchored outside a
+        // mid-block replace — BUT if the user selects the ENTIRE block range
+        // and types, the asymmetric assoc inverts: from(assoc=1) jumps past
+        // the insert while to(assoc=-1) lands before it → from>to → next
+        // arrow click dispatches an invalid {from,to} and CM6 throws. Clamp
+        // to a degenerate empty range at the insertion point.
+        let result: CenterBlock[] = tr.changes.empty ? blocks : blocks.map(b => {
+          const from = tr.changes.mapPos(b.from, 1)
+          const to = tr.changes.mapPos(b.to, -1)
+          return from <= to ? { ...b, from, to } : { ...b, from: to, to }
+        })
         // Effects override mapped positions for the target block. applyBlock
-        // carries `newTo` because mapPos(to, -1) maps the OLD range's end to
-        // the deletion point, not to the end of the NEW insert.
+        // carries BOTH newFrom and newTo as explicit new-doc positions —
+        // mapPos() cannot derive these correctly: for a leading-\n insert at
+        // end-of-doc, mapPos(origFrom, -1) stays at the \n separator position,
+        // making the block range include the separator → sourceHighlight
+        // decorates the preceding line, and toggle-back deletion corrupts.
         for (const e of tr.effects) {
           if (e.is(applyBlock)) {
-            const { idx, side, newTo } = e.value
-            // from: pre-mapped by the pass above — but for pure-insertion case
-            // (old from===to), mapPos(from,1) with assoc=1 jumps PAST the
-            // insert. The block's from should STAY at the insertion point.
-            // Use assoc=-1 to stick left of the insert start.
-            const origFrom = blocks[idx].from
+            const { idx, side, newFrom, newTo } = e.value
             result = result.map((b, i) => i === idx
-              ? { from: tr.changes.mapPos(origFrom, -1), to: newTo, source: side }
+              ? { from: newFrom, to: newTo, source: side }
               : b)
           } else if (e.is(editInside)) {
             result = result.map((b, i) => i === e.value
@@ -229,19 +239,62 @@
           ...sharedExts,
           history(),
           // Undo restores TEXT but not StateField state. Register inverse
-          // effects so Cmd+Z after an arrow click also restores the block's
-          // prior {from, to, source} — otherwise arrow stays dimmed, highlight
-          // stays wrong, counter stays wrong.
+          // effects so Cmd+Z also restores block source/positions — otherwise
+          // arrow stays dimmed, highlight stays wrong, counter stays wrong.
+          // applyBlock (arrow click) and editInside (first hand-keystroke)
+          // both snapshot→restore via restoreBlock. editInside inversion works
+          // because restoreBlock's positions ARE correct post-undo: the undo
+          // transaction's mapPos restores to pre-edit positions, and
+          // restoreBlock then writes the SAME pre-edit positions (from the
+          // startState snapshot).
           invertedEffects.of(tr => {
-            // editInside is NOT inverted — it's dispatched as an effect-only
-            // transaction from updateListener (no doc change → not in history).
+            const inv: StateEffect<unknown>[] = []
+            const old = tr.startState.field(tracker)
             for (const e of tr.effects) {
               if (e.is(applyBlock)) {
-                const old = tr.startState.field(tracker)[e.value.idx]
-                return [restoreBlock.of({ idx: e.value.idx, ...old })]
+                inv.push(restoreBlock.of({ idx: e.value.idx, ...old[e.value.idx] }))
+              } else if (e.is(editInside)) {
+                inv.push(restoreBlock.of({ idx: e.value, ...old[e.value] }))
               }
             }
-            return []
+            return inv
+          }),
+          // editInside as transactionExtender (NOT updateListener dispatch) so
+          // it bundles with the text change — single transaction → in history →
+          // refreshArrows sees the fresh 'mixed' source on the SAME listener
+          // tick (no 1-keystroke lag) → Cmd+Z of the edit also restores source
+          // via the invertedEffects above.
+          //
+          // Exclude applyBlock (arrow click) and restoreBlock (undo/redo of
+          // arrow click or prior hand-edit) — both have their own source-setting.
+          // The extender running on undo would otherwise re-mark 'mixed' and
+          // immediately clobber what restoreBlock just restored.
+          EditorState.transactionExtender.of(tr => {
+            if (!tr.docChanged) return null
+            if (tr.effects.some(e => e.is(applyBlock) || e.is(restoreBlock))) return null
+            // iterChanges yields OLD-doc coords; startState.field = OLD block
+            // positions. Same coord system (unlike u.state.field which is
+            // post-mapping).
+            const tracked = tr.startState.field(tracker)
+            const effects: StateEffect<number>[] = []
+            tr.changes.iterChanges((fromA, toA) => {
+              for (let i = 0; i < tracked.length; i++) {
+                const b = tracked[i]
+                // Non-strict overlap: boundary-touching DELETES affect the
+                // block even though [b.from-1,b.from) doesn't strictly overlap
+                // [b.from,b.to). Backspace at block start joins with preceding
+                // line → block's from maps mid-line → next arrow click garbles
+                // content. Marking 'mixed' makes takeBlock's idempotent-source
+                // check irrelevant (user can still arrow-toggle, but at least
+                // the source indicator is honest). Pure insertions at
+                // boundaries (fromA===toA===b.from) are still OK with <= here:
+                // they don't join lines.
+                if (b.source !== 'mixed' && fromA <= b.to && toA >= b.from) {
+                  effects.push(editInside.of(i))
+                }
+              }
+            })
+            return effects.length ? { effects } : null
           }),
           highlightActiveLine(),
           highlightActiveLineGutter(),
@@ -253,22 +306,6 @@
             // the downstream gutter DOM diff on every keystroke.
             if (!u.docChanged) return
             dirty = true
-            // Detect user edits INSIDE a block (not via arrow) → mark mixed.
-            // Arrow clicks dispatch applyBlock which sets source explicitly,
-            // so this only catches hand-edits.
-            if (!u.transactions.some(t => t.effects.some(e => e.is(applyBlock)))) {
-              const tracked = u.state.field(tracker)
-              const effects: StateEffect<number>[] = []
-              u.changes.iterChanges((fromA, toA) => {
-                for (let i = 0; i < tracked.length; i++) {
-                  const b = tracked[i]
-                  if (b.source !== 'mixed' && fromA < b.to && toA > b.from) {
-                    effects.push(editInside.of(i))
-                  }
-                }
-              })
-              if (effects.length) u.view.dispatch({ effects })
-            }
             refreshArrows()
           }),
           keymap.of([
@@ -355,30 +392,65 @@
     const srcLines = side === 'ours' ? oursLines : theirsLines
     const from1 = side === 'ours' ? blk.aFrom : blk.bFrom
     const to1 = side === 'ours' ? blk.aTo : blk.bTo
+    // from1===to1 means the source side has ZERO lines for this block (pure
+    // deletion). NOT `!insert` — a single empty line slices to [''] which
+    // joins to '', falsy, but is valid content (a blank line the user wants
+    // to keep). Blank-line conflicts are common in code formatting merges.
+    const srcEmpty = from1 === to1
     let insert = srcLines.slice(from1 - 1, to1 - 1).join('\n')
 
     // Line-boundary surgery. pos.from is line-start, pos.to is line-end (no
     // trailing \n — CM6's line.to excludes the line break).
     let { from, to } = pos
+    const doc = centerView.state.doc
+    // contentOff: where insert's CONTENT starts, relative to `from` in the
+    // NEW doc. 0 normally; 1 if we prepend a \n separator (that \n is NOT
+    // block content — the tracked range must exclude it or sourceHighlight
+    // decorates the preceding line and toggle-back deletion mis-computes).
+    // contentLen: content bytes excluding any separator we add.
+    let contentOff = 0
+    let contentLen = insert.length
     if (from === to) {
       // Zero-width position (pure-insertion block, or prior apply deleted all).
-      // Add trailing \n so insert becomes its own line(s), not prepended.
-      if (insert) insert += '\n'
-    } else if (!insert) {
+      // Which separator we add depends on WHERE from sits:
+      //   - line-start (lineAt(from).from === from): trailing \n pushes the
+      //     following line down. Correct for mid-doc insertions.
+      //   - line-end (from === doc.length, no trailing \n in doc): trailing \n
+      //     would concatenate the doc's last line with insert's first line.
+      //     Need a LEADING \n instead.
+      // The latter happens when diffBlocks' bFrom points past theirs' last
+      // line AND theirs lacks a trailing \n (common: files without final
+      // newline, or backend's TrimRight stripped it).
+      if (!srcEmpty) {
+        if (doc.lineAt(from).from === from) insert += '\n'
+        else { insert = '\n' + insert; contentOff = 1 }
+      }
+    } else if (srcEmpty) {
       // Deleting a non-empty region (flank side is empty for this block).
-      // Extend `to` through newline so we don't leave a blank line.
-      if (to < centerView.state.doc.length) to += 1
+      // Extend through the adjacent newline so we don't leave a blank line.
+      // Prefer the trailing one; if we're at end-of-doc (no trailing \n),
+      // consume the LEADING one instead — otherwise "a\nb\nBLOCK" deleting
+      // BLOCK leaves "a\nb\n" with a phantom trailing newline the source
+      // side never had.
+      //
+      // Verify we're actually consuming a \n. User hand-edits can move the
+      // tracked `to` off a line boundary (e.g. typing at the exact end-of-
+      // block position: mapPos(to, -1) sticks left of the insert, so `to`
+      // now sits mid-line). Consuming a non-\n char would corrupt content.
+      if (to < doc.length && doc.sliceString(to, to + 1) === '\n') to += 1
+      else if (from > 0 && doc.sliceString(from - 1, from) === '\n') from -= 1
     }
 
-    // Compute where the block's new `to` will land AFTER the insertion. The
-    // tracker's mapPos would map old-to to the deletion point (=from), not to
-    // the end of the new insert. Explicit computation: from + insert.length,
-    // minus the trailing \n we added (so `to` sits at line-end not next-line-start).
-    const newTo = from + insert.length - (from === to && insert ? 1 : 0)
+    // Compute new-doc positions for the block range. These are authoritative —
+    // the tracker's mapPos() can't derive them (it doesn't know separator
+    // semantics). newFrom skips a leading \n separator; newTo ends at the
+    // last content byte, excluding any trailing \n separator.
+    const newFrom = from + contentOff
+    const newTo = newFrom + contentLen
 
     centerView.dispatch({
       changes: { from, to, insert },
-      effects: applyBlock.of({ idx, side, newTo }),
+      effects: applyBlock.of({ idx, side, newFrom, newTo }),
       scrollIntoView: true,
     })
   }
@@ -413,6 +485,11 @@
   // boundary; internal keys (Mod-s/Escape/editing) are handled by CM6's keymap
   // before bubbling reaches here.
   function swallowKeydown(e: KeyboardEvent) {
+    // CM6's keymap preventDefault()s handled keys but does NOT stopPropagation().
+    // Without this check, Escape fires tryCancel() from the keymap AND here on
+    // bubble-up → two confirm() dialogs when dirty (user dismisses one, gets hit
+    // with another), or double oncancel() when clean.
+    if (e.defaultPrevented) { e.stopPropagation(); return }
     // Allow browser-level shortcuts (Cmd-R, Cmd-W, devtools) to pass.
     if (e.metaKey || e.ctrlKey) {
       // Except Cmd-S — MergePanel handles it, but if focus is on a button
@@ -431,7 +508,14 @@
   // We approximate: a block is resolved once it's NOT 'theirs'. Clicking ←
   // on a theirs block is a no-op (idempotent), so this doesn't flip it — but
   // that's fine: explicitly keeping theirs IS implicit by saving as-is.
-  let pendingCount = $derived(oursArrows.filter(a => a.source === 'theirs').length)
+  //
+  // Exclude blocks with empty ours side (aFrom===aTo → oursArrows[i].empty).
+  // The → arrow isn't rendered for those (nothing to take), ← is a no-op
+  // (already theirs), so the only way to "resolve" would be hand-editing —
+  // the counter would otherwise never reach N/N.
+  let pendingCount = $derived(
+    oursArrows.filter(a => a.source === 'theirs' && !a.empty).length
+  )
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->

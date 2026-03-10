@@ -64,6 +64,22 @@
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
 
+  // Hidden context exists if there are lines before the first hunk or between
+  // hunks. We can't know trailing lines (no total-line-count in diff headers)
+  // so "rest of file" expand is approximated by showing the button whenever
+  // ANY leading/between gap exists — the user clicks once, gets everything.
+  // Previous gate was `hunks.length > 1` which hid the button entirely for
+  // single-hunk-mid-file diffs (the common case).
+  let hasHiddenContext = $derived.by(() => {
+    if (file.hunks.length === 0) return false
+    if (file.hunks[0].newStart > 1) return true
+    for (let i = 1; i < file.hunks.length; i++) {
+      const prev = file.hunks[i - 1]
+      if (file.hunks[i].newStart > prev.newStart + prev.newCount) return true
+    }
+    return false
+  })
+
   // Truncate long side labels for tab text. Full label goes in title attribute.
   function truncate(s: string, n = 28): string {
     return s.length > n ? s.slice(0, n - 1) + '…' : s
@@ -455,7 +471,7 @@
   {#if !isCollapsed}
     {#if effectiveSplit}
       <!-- Split (side-by-side) view -->
-      {#if !isExpanded && file.hunks.length > 1}
+      {#if !isExpanded && hasHiddenContext}
         <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show full context for {filePath}">
           <span class="expand-dots" aria-hidden="true">···</span>
           <span class="expand-label">full context</span>
@@ -567,6 +583,18 @@
           {/each}
         </div>
       {/each}
+      {#if !isExpanded && file.hunks.length > 0}
+        <!-- Trailing expand — unconditional (gated only on !isExpanded).
+             Diff headers don't carry total file line count, so we can't
+             prove trailing context exists. A hunk at the top of a file
+             (newStart=1) has hidden trailing lines but hasHiddenContext
+             misses it. Showing the button when there IS no trailing context
+             is harmless — expanded view just shows the same hunk. -->
+        <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show full file context">
+          <span class="expand-dots" aria-hidden="true">···</span>
+          <span class="expand-label">rest of file</span>
+        </button>
+      {/if}
     {/if}
   {/if}
 </div>

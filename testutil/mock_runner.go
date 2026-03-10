@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -71,6 +73,12 @@ type MockRunner struct {
 	expectations map[string][]*ExpectedCommand
 	allowed      map[string]*ExpectedCommand // optional commands keyed by full args string
 	mu           sync.Mutex
+
+	// WriteDir, if set, makes WriteFile actually write to disk (os.WriteFile
+	// under WriteDir). Unset → WriteFile is a no-op. Tests that assert on
+	// file contents set this to t.TempDir(); the rest leave it blank to skip
+	// the jj-expectation-unrelated filesystem side effect.
+	WriteDir string
 }
 
 func NewMockRunner(t *testing.T) *MockRunner {
@@ -143,6 +151,11 @@ func (m *MockRunner) Run(_ context.Context, args []string) ([]byte, error) {
 	return e.output, e.err
 }
 
+func (m *MockRunner) ReadBytes(_ context.Context, args []string) ([]byte, error) {
+	e := m.findExpectation(args)
+	return e.output, e.err
+}
+
 func (m *MockRunner) RunWithInput(_ context.Context, args []string, stdin string) ([]byte, error) {
 	e := m.findExpectation(args)
 	m.mu.Lock()
@@ -181,4 +194,13 @@ func (m *MockRunner) StreamCombined(_ context.Context, args []string) (io.ReadCl
 func (m *MockRunner) RunRaw(_ context.Context, argv []string) ([]byte, error) {
 	e := m.findExpectation(argv)
 	return e.output, e.err
+}
+
+// WriteFile is not a jj-command expectation. If WriteDir is set it writes to
+// disk there (so handler tests can assert file contents); otherwise no-op.
+func (m *MockRunner) WriteFile(_ context.Context, relPath string, content []byte) error {
+	if m.WriteDir == "" {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(m.WriteDir, relPath), content, 0o644)
 }

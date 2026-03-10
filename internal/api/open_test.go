@@ -247,7 +247,6 @@ func TestReadConfigEditor(t *testing.T) {
 }
 
 func TestValidateRepoRelativePath(t *testing.T) {
-	repo := "/repo"
 	cases := []struct{ in, wantErr string }{
 		{"", "path is required"},
 		{"a\x00b", "invalid path"},
@@ -258,14 +257,13 @@ func TestValidateRepoRelativePath(t *testing.T) {
 		{".git/x", "internal"},
 	}
 	for _, c := range cases {
-		_, _, err := validateRepoRelativePath(repo, c.in)
+		_, err := validateRepoRelativePath(c.in)
 		require.Error(t, err, c.in)
 		assert.Contains(t, err.Error(), c.wantErr, c.in)
 	}
 
 	// Happy path
-	cleaned, abs, err := validateRepoRelativePath(repo, "src/main.go")
+	cleaned, err := validateRepoRelativePath("src/main.go")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join("src", "main.go"), cleaned)
-	assert.Equal(t, filepath.Join(repo, "src", "main.go"), abs)
 }

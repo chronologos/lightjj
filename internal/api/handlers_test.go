@@ -2423,12 +2423,25 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestHandleFileWrite covers handler-layer concerns: lexical validation +
+// delegation to Runner.WriteFile. Symlink-escape is a runner-layer concern —
+// tested in internal/runner/local_test.go (TestLocalRunner_WriteFile_*).
 func TestHandleFileWrite(t *testing.T) {
+	// newFileWriteSrv returns a server whose MockRunner writes to dir.
+	// The handler no longer uses s.RepoDir for writes; it delegates to
+	// Runner.WriteFile, so MockRunner needs to know the target dir.
+	newFileWriteSrv := func(t *testing.T, dir string) *Server {
+		runner := testutil.NewMockRunner(t)
+		runner.WriteDir = dir
+		// Snapshot fires after successful write so the X-JJ-Op-Id header is fresh.
+		runner.Allow(jj.DebugSnapshot()).SetOutput([]byte(""))
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		return NewServer(runner, dir)
+	}
+
 	t.Run("success", func(t *testing.T) {
 		dir := t.TempDir()
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
+		srv := newFileWriteSrv(t, dir)
 
 		body, _ := json.Marshal(fileWriteRequest{Path: "hello.txt", Content: "hello world"})
 		req := jsonPost("/api/file-write", body)
@@ -2444,9 +2457,7 @@ func TestHandleFileWrite(t *testing.T) {
 	t.Run("subdirectory", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0755))
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
+		srv := newFileWriteSrv(t, dir)
 
 		body, _ := json.Marshal(fileWriteRequest{Path: "src/main.go", Content: "package main"})
 		req := jsonPost("/api/file-write", body)
@@ -2460,9 +2471,7 @@ func TestHandleFileWrite(t *testing.T) {
 	})
 
 	t.Run("missing path", func(t *testing.T) {
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, "/tmp")
+		srv := newFileWriteSrv(t, "/tmp")
 
 		body, _ := json.Marshal(fileWriteRequest{Content: "data"})
 		req := jsonPost("/api/file-write", body)
@@ -2473,10 +2482,7 @@ func TestHandleFileWrite(t *testing.T) {
 	})
 
 	t.Run("path traversal", func(t *testing.T) {
-		dir := t.TempDir()
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
+		srv := newFileWriteSrv(t, t.TempDir())
 
 		for _, p := range []string{"../etc/passwd", "foo/../../etc/passwd", "/etc/passwd"} {
 			body, _ := json.Marshal(fileWriteRequest{Path: p, Content: "pwned"})
@@ -2488,10 +2494,7 @@ func TestHandleFileWrite(t *testing.T) {
 	})
 
 	t.Run("internal paths", func(t *testing.T) {
-		dir := t.TempDir()
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
+		srv := newFileWriteSrv(t, t.TempDir())
 
 		for _, p := range []string{".jj/repo/store", ".git/config", ".git/hooks/pre-commit"} {
 			body, _ := json.Marshal(fileWriteRequest{Path: p, Content: "bad"})
@@ -2503,10 +2506,7 @@ func TestHandleFileWrite(t *testing.T) {
 	})
 
 	t.Run("allows jj-prefixed non-internal files", func(t *testing.T) {
-		dir := t.TempDir()
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
+		srv := newFileWriteSrv(t, t.TempDir())
 
 		body, _ := json.Marshal(fileWriteRequest{Path: ".jjignore", Content: "*.tmp"})
 		req := jsonPost("/api/file-write", body)
@@ -2515,51 +2515,8 @@ func TestHandleFileWrite(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
-	t.Run("symlink escape", func(t *testing.T) {
-		dir := t.TempDir()
-		target := t.TempDir() // separate dir to simulate outside-repo target
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, "escape")))
-
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
-
-		body, _ := json.Marshal(fileWriteRequest{Path: "escape/evil.txt", Content: "pwned"})
-		req := jsonPost("/api/file-write", body)
-		w := httptest.NewRecorder()
-		srv.Mux.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-		// Verify no file was written
-		_, err := os.Stat(filepath.Join(target, "evil.txt"))
-		assert.True(t, os.IsNotExist(err), "file should not have been written outside repo")
-	})
-
-	t.Run("leaf symlink escape", func(t *testing.T) {
-		dir := t.TempDir()
-		target := filepath.Join(t.TempDir(), "stolen.txt")
-		// Create a symlink at the file level: repo/link.txt -> /tmp/.../stolen.txt
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, "link.txt")))
-
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
-
-		body, _ := json.Marshal(fileWriteRequest{Path: "link.txt", Content: "pwned"})
-		req := jsonPost("/api/file-write", body)
-		w := httptest.NewRecorder()
-		srv.Mux.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-		assert.Contains(t, w.Body.String(), "symlink")
-		// Verify no file was written at the symlink target
-		_, err := os.Stat(target)
-		assert.True(t, os.IsNotExist(err), "file should not have been written via symlink")
-	})
-
 	t.Run("null byte in path", func(t *testing.T) {
-		dir := t.TempDir()
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, dir)
+		srv := newFileWriteSrv(t, t.TempDir())
 
 		body, _ := json.Marshal(fileWriteRequest{Path: "foo\x00bar", Content: "bad"})
 		req := jsonPost("/api/file-write", body)
@@ -2568,18 +2525,23 @@ func TestHandleFileWrite(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("ssh mode", func(t *testing.T) {
-		runner := testutil.NewMockRunner(t)
-		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-		srv := NewServer(runner, "") // empty RepoDir = SSH mode
+	// SSH mode (RepoDir == "") now works — handler delegates to
+	// Runner.WriteFile, which SSHRunner implements via `cat > path` over
+	// stdin. Regression pin for the "file writing is not supported" error.
+	t.Run("ssh mode succeeds (no RepoDir guard)", func(t *testing.T) {
+		srv := newFileWriteSrv(t, "") // empty RepoDir = SSH mode
 
 		body, _ := json.Marshal(fileWriteRequest{Path: "file.txt", Content: "data"})
 		req := jsonPost("/api/file-write", body)
 		w := httptest.NewRecorder()
 		srv.Mux.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusNotImplemented, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
+
+	// Symlink-escape tests moved to internal/runner/local_test.go
+	// (TestLocalRunner_WriteFile_*) — the check is now a LocalRunner
+	// concern, not a handler concern.
 }
 
 func TestHandleOpUndo(t *testing.T) {

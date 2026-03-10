@@ -221,6 +221,107 @@ describe('reconstructSides', () => {
     expect(reconstructSides(raw)).toBeNull()
   })
 
+  it('normalizes CRLF — sides come out LF-only', () => {
+    // Remote merge bug: CRLF file content → split('\n') left \r on line tails →
+    // diffBlocks LCS found no matches between visually-identical lines →
+    // → arrow copied only a tail subset. Normalization guarantees the LCS
+    // (and CM6's doc, which also normalizes) see the same line content.
+    const raw = [
+      'shared\r',
+      '<<<<<<< Conflict 1 of 1\r',
+      '+++++++ s1\r',
+      'ours\r',
+      '+++++++ s2\r',
+      'theirs\r',
+      '>>>>>>>\r',
+      'footer\r',
+    ].join('\n')  // CRLF = \r on each line + \n join
+
+    const r = reconstructSides(raw)!
+    // Trailing \r → \n means the file HAD a terminating line break → preserved.
+    expect(r.ours).toBe('shared\nours\nfooter\n')
+    expect(r.theirs).toBe('shared\ntheirs\nfooter\n')
+    expect(r.ours.includes('\r')).toBe(false)
+    expect(r.theirs.includes('\r')).toBe(false)
+    // The real assertion: ours and theirs agree line-for-line on the shared
+    // spans. Pre-fix, theirs' 'shared' had \r, ours' would too — but mixed-EOL
+    // conflicts (jj markers are LF, content may be CRLF) made them diverge.
+    expect(r.ours.split('\n')[0]).toBe(r.theirs.split('\n')[0])
+  })
+
+  it('normalizes lone CR — TrimRight(\\n) on CRLF-terminated file leaves trailing \\r', () => {
+    // Backend's Run() does bytes.TrimRight(out, "\n") — CRLF file ends with
+    // a lone \r after the strip. Pre-fix, that \r survived split('\n') on
+    // the last line and CM6 normalized it to \n (phantom line) while
+    // theirsLines.length stayed the same → block position mismatch.
+    const raw = 'line1\nline2\r'  // lone CR at end
+    const r = reconstructSides(raw)!
+    // Trailing lone \r → \n → split gives trailing '' — preserved through join
+    expect(r.ours).toBe('line1\nline2\n')
+    expect(r.ours.includes('\r')).toBe(false)
+  })
+
+  it('diff-prefixed dash content does NOT match M_BASE (mode gate)', () => {
+    // bughunter bug_025: file line `------` (6 dashes) deleted → jj prefixes
+    // `-` → 7 dashes total → matched the old {7,} regex → parser switched to
+    // base mode mid-diff, losing subsequent additions. jj doesn't escalate
+    // for 6-dash content (only ≥7 triggers), so the exact-length check alone
+    // doesn't help here — the mode gate does (M_BASE is Snapshot-style-only;
+    // it never appears after %%%%%%% in any jj output).
+    const raw = [
+      '<<<<<<<',
+      '%%%%%%% Changes from base to side #1',
+      ' context',
+      '-------',   // diff prefix `-` + content `------` = 7 dashes. Mode gate → treated as content.
+      '+replacement',
+      '+++++++ Contents of side #2',
+      'theirs',
+      '>>>>>>>',
+    ].join('\n')
+    const r = reconstructSides(raw)!
+    expect(r.base).toBe('context\n------')   // `-` stripped, `------` pushed to base
+    expect(r.ours).toBe('context\nreplacement')
+    expect(r.theirs).toBe('theirs')
+  })
+
+  it('escalated markers: 7-dash content in snapshot section is NOT a marker', () => {
+    // bughunter bug_027: jj escalates because file has 7-dash line. Markers
+    // become 8 chars. The 7-dash content line appears verbatim in a snapshot
+    // section. Old {7,} regex matched it (7 ≥ 7); exact-length matching
+    // (mLen=8) rejects it (7 ≠ 8).
+    const raw = [
+      '<<<<<<<<',              // 8-char (escalated)
+      '++++++++ Side 1',
+      'line above',
+      '-------',               // CONTENT: 7 dashes. mLen=8 → not a marker.
+      'line below',
+      '++++++++ Side 2',
+      'theirs',
+      '>>>>>>>>',
+    ].join('\n')
+    const r = reconstructSides(raw)!
+    expect(r.ours).toBe('line above\n-------\nline below')  // ------- preserved
+    expect(r.theirs).toBe('theirs')
+  })
+
+  it('diff-prefixed plus content does NOT match M_SNAP (escalated case)', () => {
+    // bughunter bug_026: `+` prefix + `++++++` content = 7 pluses. With
+    // escalated 8-char markers, exact-length matching rejects the 7-char line.
+    const raw = [
+      '<<<<<<<<',              // 8-char
+      '%%%%%%%% Changes from base to side #1',
+      ' context',
+      '+++++++',               // diff prefix `+` + content `++++++` = 7 pluses. Not 8 → content.
+      ' more context',
+      '++++++++ Contents of side #2',
+      'theirs',
+      '>>>>>>>>',
+    ].join('\n')
+    const r = reconstructSides(raw)!
+    expect(r.ours).toBe('context\n++++++\nmore context')  // `++++++` (de-prefixed) in ours
+    expect(r.theirs).toBe('theirs')
+  })
+
   it('marker-lookalike content OUTSIDE regions is treated as content', () => {
     // `-------` markdown rule, `+++++++` ASCII art, etc. in normal file content
     // should NOT trigger the !inRegion → return null path.

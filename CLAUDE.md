@@ -35,9 +35,9 @@ internal/
     workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (name→path map)
     workspace_store_test.go — Parser tests with real binary data
   runner/                  — CommandRunner interface + implementations
-    runner.go              — Interface definition (Run, RunWithInput, RunForMutation, StreamCombined, RunRaw)
-    local.go               — LocalRunner: exec("jj", args) with configurable Binary
-    ssh.go                 — SSHRunner: wraps jj args in ssh command
+    runner.go              — Interface definition (Run, RunWithInput, RunForMutation, StreamCombined, RunRaw, WriteFile)
+    local.go               — LocalRunner: exec("jj", args) with configurable Binary. WriteFile does symlink-escape hardening (EvalSymlinks on parent + Lstat leaf) before os.WriteFile.
+    ssh.go                 — SSHRunner: wraps jj args in ssh command. WriteFile pipes content via `cd <repo> && cat > <path>` over stdin — no symlink check (same trust boundary as remote shell).
     ssh_test.go            — SSH arg escaping tests
   api/                     — HTTP handlers
     server.go              — Route registration, runMutation, op-id caching, workspace store reader, helpers

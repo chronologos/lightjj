@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -360,7 +359,14 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revision and path are required")
 		return
 	}
-	output, err := s.Runner.Run(r.Context(), jj.FileShow(revision, path))
+	// ReadBytes (not Run) — file content is data, not display text. Run's
+	// TrimRight("\n") corrupts the merge-editor round trip: a file ending
+	// in \n gets stripped here → center doc has no final \n → saveMerge
+	// writes it back without → diff shows "\ No newline at end of file".
+	// Worse: CRLF-ending files have their final \n stripped leaving a lone
+	// \r, which CM6 normalizes to \n (phantom extra line) while split('\n')
+	// doesn't — line-count mismatch breaks diffBlocks' LCS matching.
+	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(revision, path))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1163,80 +1169,61 @@ type fileWriteRequest struct {
 
 // validateRepoRelativePath applies lexical security checks to a user-supplied
 // repo-relative path: rejects null bytes, absolute paths, traversal, and
-// .jj/.git. Returns the cleaned relative path and its absolute join with
-// repoDir. Caller decides whether to additionally EvalSymlinks (write
-// protection — see handleFileWrite; read/open callers skip it).
-func validateRepoRelativePath(repoDir, p string) (cleaned, abs string, err error) {
+// .jj/.git. Returns the cleaned path (filepath.Clean — OS-native separators;
+// callers sending to a POSIX remote must filepath.ToSlash it). Filesystem
+// reality checks (symlink escape) are the Runner's concern — see
+// LocalRunner.WriteFile.
+func validateRepoRelativePath(p string) (cleaned string, err error) {
 	if p == "" {
-		return "", "", fmt.Errorf("path is required")
+		return "", fmt.Errorf("path is required")
 	}
 	if strings.ContainsRune(p, 0) {
-		return "", "", fmt.Errorf("invalid path")
+		return "", fmt.Errorf("invalid path")
 	}
 	if filepath.IsAbs(p) {
-		return "", "", fmt.Errorf("absolute paths are not allowed")
+		return "", fmt.Errorf("absolute paths are not allowed")
 	}
 	cleaned = filepath.Clean(p)
 	if strings.HasPrefix(cleaned, "..") {
-		return "", "", fmt.Errorf("path traversal is not allowed")
+		return "", fmt.Errorf("path traversal is not allowed")
 	}
 	sep := string(filepath.Separator)
 	if cleaned == ".jj" || strings.HasPrefix(cleaned, ".jj"+sep) ||
 		cleaned == ".git" || strings.HasPrefix(cleaned, ".git"+sep) {
-		return "", "", fmt.Errorf("internal directories are not allowed")
+		return "", fmt.Errorf("internal directories are not allowed")
 	}
-	return cleaned, filepath.Join(repoDir, cleaned), nil
+	return cleaned, nil
 }
 
 func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
-	if s.RepoDir == "" {
-		s.writeError(w, http.StatusNotImplemented, "file writing is not supported in SSH mode")
-		return
-	}
-
 	var req fileWriteRequest
 	if err := decodeBody(w, r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	cleaned, target, err := validateRepoRelativePath(s.RepoDir, req.Path)
+	// Lexical validation only — traversal, .jj/.git, absolute, null bytes.
+	// Symlink-escape is the Runner's concern (LocalRunner does EvalSymlinks;
+	// SSHRunner omits it — same trust boundary as remote shell).
+	// Runner.WriteFile joins against its own repo-root knowledge.
+	cleaned, err := validateRepoRelativePath(req.Path)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Resolve symlinks in the parent directory to prevent symlink escape.
-	// A tracked symlink inside the repo (e.g. link -> /etc) would pass
-	// lexical checks but resolve outside the repo tree.
-	parentDir := filepath.Dir(target)
-	resolvedParent, err := filepath.EvalSymlinks(parentDir)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "parent directory does not exist")
+	if err := s.Runner.WriteFile(r.Context(), cleaned, []byte(req.Content)); err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to write %s: %v", cleaned, err))
 		return
 	}
-	resolvedRepo, err := filepath.EvalSymlinks(s.RepoDir)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "cannot resolve repository path")
-		return
-	}
-	if !strings.HasPrefix(resolvedParent+string(filepath.Separator), resolvedRepo+string(filepath.Separator)) && resolvedParent != resolvedRepo {
-		s.writeError(w, http.StatusBadRequest, "path escapes repository")
-		return
-	}
-
-	// Check if the target itself is a symlink (leaf-level symlink escape).
-	// Parent directory symlinks are caught by EvalSymlinks above, but a
-	// symlink at the file level (e.g. link.txt -> /etc/shadow) would pass
-	// parent checks and follow the link to an arbitrary location.
-	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		s.writeError(w, http.StatusBadRequest, "cannot write to symlink")
-		return
-	}
-
-	if err := os.WriteFile(target, []byte(req.Content), 0644); err != nil {
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to write %s", cleaned))
-		return
-	}
+	// Snapshot + refresh so the X-JJ-Op-Id header is fresh. Without this the
+	// merge editor's "Save" returns a stale op-id → frontend's loadLog fetches
+	// pre-write state → conflict still shows as unresolved until the periodic
+	// snapshotLoop catches up (default 5s; worse in SSH where each round trip
+	// is ~440ms). The watcher watches op_heads/ not the WC — it won't fire
+	// until SOMETHING snapshots. Error swallowed: the write succeeded, which
+	// is the primary contract; a failed snapshot just means the UI lags.
+	_, _ = s.Runner.Run(r.Context(), jj.DebugSnapshot())
+	s.refreshOpId()
 	s.writeJSON(w, r, http.StatusOK, map[string]bool{"ok": true})
 }

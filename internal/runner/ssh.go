@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 )
 
@@ -43,6 +44,10 @@ func (r *SSHRunner) Run(ctx context.Context, args []string) ([]byte, error) {
 	return r.local.Run(ctx, r.wrapArgs(args))
 }
 
+func (r *SSHRunner) ReadBytes(ctx context.Context, args []string) ([]byte, error) {
+	return r.local.ReadBytes(ctx, r.wrapArgs(args))
+}
+
 func (r *SSHRunner) RunWithInput(ctx context.Context, args []string, stdin string) ([]byte, error) {
 	return r.local.RunWithInput(ctx, r.wrapArgs(args), stdin)
 }
@@ -66,6 +71,33 @@ func (r *SSHRunner) wrapRaw(argv []string) []string {
 
 func (r *SSHRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
 	return r.local.Run(ctx, r.wrapRaw(argv))
+}
+
+// writeFileCmd builds the remote shell command for WriteFile. Split out for
+// testability — argv correctness is the only thing worth unit-testing here;
+// actual SSH execution is covered by integration/manual testing.
+//
+// `cat >` is the canonical stdin-to-file. `cd --` stops flag parsing in case
+// RepoPath starts with `-`. relPath is single-quoted: no ~/$VAR expansion, so
+// a file literally named `$HOME` writes as-is under RepoPath.
+//
+// filepath.ToSlash: the handler passes validateRepoRelativePath output,
+// which goes through filepath.Clean → OS-native separators. On a Windows
+// host, `src/main.go` → `src\main.go`, and `cat > 'src\main.go'` on the
+// POSIX remote writes a literal backslash-in-name file at repo root. Same
+// pattern as open.go:127 for the remote-editor substitution path.
+func (r *SSHRunner) writeFileCmd(relPath string) string {
+	return fmt.Sprintf("cd -- %s && cat > %s", shellQuote(r.RepoPath), shellQuote(filepath.ToSlash(relPath)))
+}
+
+// WriteFile pipes content to `cat > <relPath>` on the remote host, cwd set to
+// RepoPath. relPath MUST be pre-validated (lexical: no `..`/`.jj`/abs/null) —
+// shellQuote prevents injection but doesn't reject traversal. Symlink-escape
+// is omitted: SSH mode already grants remote shell; a tracked symlink has the
+// same threat model as any other remote filesystem op the user could run.
+func (r *SSHRunner) WriteFile(ctx context.Context, relPath string, content []byte) error {
+	_, err := r.local.RunWithInput(ctx, r.sshArgv(r.writeFileCmd(relPath)), string(content))
+	return err
 }
 
 // ResolveWorkspaceRoot returns the jj workspace root for an arbitrary path on

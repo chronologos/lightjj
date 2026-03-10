@@ -78,9 +78,11 @@ func (r *LocalRunner) RunWithInput(ctx context.Context, args []string, stdin str
 func (r *LocalRunner) runSeparate(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
-	if stdin != "" {
-		cmd.Stdin = bytes.NewReader([]byte(stdin))
-	}
+	// Always set stdin (even for ""). SSHRunner.WriteFile pipes file content
+	// here; the empty-content path should go through the same machinery as
+	// non-empty rather than relying on nil→/dev/null to accidentally produce
+	// the right outcome.
+	cmd.Stdin = bytes.NewReader([]byte(stdin))
 	// Capture stderr separately so we can surface jj's advisory warnings on
 	// exit-0 commands. `jj git push` with no tracked bookmarks prints
 	// "Warning: Refusing to create new remote bookmark... Nothing changed."
@@ -128,11 +130,68 @@ func (r *LocalRunner) RunForMutation(ctx context.Context, args []string, stdin s
 	return r.runSeparate(ctx, args, stdin)
 }
 
+// ReadBytes executes a jj command and returns stdout byte-exact. Unlike Run,
+// no trailing-newline trim. Stderr is discarded on success (file content
+// queries shouldn't warn; if they did, mixing warnings into the byte stream
+// would corrupt it anyway).
+func (r *LocalRunner) ReadBytes(ctx context.Context, args []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, r.Binary, args...)
+	cmd.Dir = r.RepoDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			msg := strings.TrimSpace(stderr.String())
+			if msg == "" {
+				msg = strings.TrimSpace(string(out))
+			}
+			return nil, fmt.Errorf("exit code %d: %s", exitErr.ExitCode(), msg)
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *LocalRunner) RunRaw(ctx context.Context, argv []string) ([]byte, error) {
 	// Fresh struct rather than mutating r.Binary — Server.Runner is shared
 	// across HTTP handler goroutines. Reuses run()'s exit-code/stderr handling.
 	sub := &LocalRunner{Binary: argv[0], RepoDir: r.RepoDir}
 	return sub.run(ctx, argv[1:], "")
+}
+
+// WriteFile writes content to relPath under RepoDir, with symlink-escape
+// hardening. relPath MUST be pre-validated (lexical checks: no `..`, no
+// absolute, no `.jj`/`.git`) — this layer only guards against a tracked
+// symlink inside the repo (e.g. `link → /etc`) that would pass lexical
+// checks but resolve outside the tree.
+func (r *LocalRunner) WriteFile(_ context.Context, relPath string, content []byte) error {
+	target := filepath.Join(r.RepoDir, relPath)
+
+	// Parent-directory symlink escape: `src/link/foo.go` where `src/link → /`.
+	// EvalSymlinks on the parent, check it's still under RepoDir.
+	parentDir := filepath.Dir(target)
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return fmt.Errorf("parent directory does not exist")
+	}
+	resolvedRepo, err := filepath.EvalSymlinks(r.RepoDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve repository path")
+	}
+	sep := string(filepath.Separator)
+	if resolvedParent != resolvedRepo && !strings.HasPrefix(resolvedParent+sep, resolvedRepo+sep) {
+		return fmt.Errorf("path escapes repository")
+	}
+
+	// Leaf-level symlink escape: `link.txt → /etc/shadow`. Parent check
+	// passes (parent IS in repo); Lstat catches it.
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("cannot write to symlink")
+	}
+
+	return os.WriteFile(target, content, 0o644)
 }
 
 func (r *LocalRunner) StreamCombined(ctx context.Context, args []string) (io.ReadCloser, error) {

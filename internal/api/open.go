@@ -156,10 +156,10 @@ func (s *Server) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 
 	// Lexical path checks only — unlike file-write, opening a symlink target
 	// in the user's own editor is harmless (read-only disclosure of a file
-	// the user already has OS-level access to). abs is discarded (mode-aware
-	// editorTemplate computes {file} itself); cleaned feeds {relpath} so the
-	// substituted value is canonical.
-	cleaned, _, err := validateRepoRelativePath(s.RepoDir, req.Path)
+	// the user already has OS-level access to). cleaned feeds {relpath} so
+	// the substituted value is canonical; mode-aware editorTemplate computes
+	// {file} itself.
+	cleaned, err := validateRepoRelativePath(req.Path)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return

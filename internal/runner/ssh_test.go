@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,6 +46,41 @@ func TestShellQuote(t *testing.T) {
 	assert.Equal(t, "'simple'", shellQuote("simple"))
 	assert.Equal(t, "'it'\"'\"'s'", shellQuote("it's"))
 	assert.Equal(t, "'hello world'", shellQuote("hello world"))
+}
+
+func TestSSHRunner_writeFileCmd(t *testing.T) {
+	r := NewSSHRunner("user@host", "/home/user/repo")
+	got := r.writeFileCmd("src/main.go")
+	assert.Equal(t, "cd -- '/home/user/repo' && cat > 'src/main.go'", got)
+}
+
+func TestSSHRunner_writeFileCmd_ToSlash(t *testing.T) {
+	// filepath.ToSlash is a no-op unless the host separator is '\' — so this
+	// test only exercises the conversion on Windows. Scenario: filepath.Clean
+	// on the handler side turns `src/main.go` into `src\main.go` on Windows;
+	// writeFileCmd must undo that so the POSIX remote doesn't create a file
+	// literally named `src\main.go` at repo root. Same pattern as open.go:127.
+	if filepath.Separator == '/' {
+		t.Skip("filepath.ToSlash is a no-op on this platform; conversion only applies on Windows")
+	}
+	r := NewSSHRunner("user@host", "/repo")
+	got := r.writeFileCmd(`src\main.go`)
+	assert.Equal(t, "cd -- '/repo' && cat > 'src/main.go'", got)
+}
+
+func TestSSHRunner_writeFileCmd_QuotesInjectionAttempts(t *testing.T) {
+	// relPath is handler-validated (no .., no .jj, no abs) but shellQuote is
+	// the second defense for anything lexical checks don't catch. Single-quotes
+	// suppress all metachar interpretation — ;|&$`* become literals.
+	r := NewSSHRunner("user@host", "/repo")
+	got := r.writeFileCmd("foo; rm -rf /")
+	assert.Equal(t, "cd -- '/repo' && cat > 'foo; rm -rf /'", got)
+
+	// Embedded single-quote: shellQuote's '"'"' escape. The path is
+	// handler-rejected (no legit filename has this) but the escaping itself
+	// must be correct — if `'` broke out of the quote, arbitrary shell runs.
+	got = r.writeFileCmd("it's.txt")
+	assert.Equal(t, `cd -- '/repo' && cat > 'it'"'"'s.txt'`, got)
 }
 
 func TestQuoteRemotePath(t *testing.T) {

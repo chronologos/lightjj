@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,4 +135,96 @@ func TestLocalRunner_Run_TrimsTrailingNewlines(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "line", string(out))
 	assert.False(t, strings.HasSuffix(string(out), "\n"))
+}
+
+func TestLocalRunner_ReadBytes_PreservesTrailingNewline(t *testing.T) {
+	// Contrast with Run_TrimsTrailingNewlines above — this is the point.
+	// `jj file show` output is the file's byte content; trimming it corrupts
+	// the merge-editor round trip (saved file loses its final \n).
+	r := shRunner()
+	out, err := r.ReadBytes(context.Background(), []string{"-c", "printf 'line1\nline2\n'"})
+	require.NoError(t, err)
+	assert.Equal(t, "line1\nline2\n", string(out))
+}
+
+func TestLocalRunner_ReadBytes_PreservesCRLF(t *testing.T) {
+	// CRLF file ending through Run() would strip only the \n, leaving a lone
+	// \r — which CM6 normalizes to \n (phantom line) while JS split('\n')
+	// doesn't. ReadBytes must not touch it.
+	r := shRunner()
+	out, err := r.ReadBytes(context.Background(), []string{"-c", "printf 'line\r\n'"})
+	require.NoError(t, err)
+	assert.Equal(t, "line\r\n", string(out))
+}
+
+func TestLocalRunner_ReadBytes_ExitWithStderr(t *testing.T) {
+	r := shRunner()
+	_, err := r.ReadBytes(context.Background(), []string{"-c", "echo oops >&2; exit 1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit code 1")
+	assert.Contains(t, err.Error(), "oops")
+}
+
+// WriteFile symlink-escape tests — moved from handler tests when the check
+// migrated from handleFileWrite to LocalRunner.WriteFile (SSH-mode file-write
+// support). The handler does lexical validation; the runner owns filesystem
+// reality checks.
+
+func TestLocalRunner_WriteFile_Success(t *testing.T) {
+	dir := t.TempDir()
+	r := &LocalRunner{RepoDir: dir}
+
+	err := r.WriteFile(context.Background(), "hello.txt", []byte("content"))
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dir, "hello.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "content", string(got))
+}
+
+func TestLocalRunner_WriteFile_ParentSymlinkEscape(t *testing.T) {
+	// A tracked symlink inside the repo (`escape/ -> /tmp/outside`) passes
+	// lexical checks (path is `escape/evil.txt` — relative, no `..`) but
+	// resolves outside the repo tree. EvalSymlinks on the parent catches it.
+	dir := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "escape")))
+	r := &LocalRunner{RepoDir: dir}
+
+	err := r.WriteFile(context.Background(), "escape/evil.txt", []byte("pwned"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes repository")
+
+	_, statErr := os.Stat(filepath.Join(outside, "evil.txt"))
+	assert.True(t, os.IsNotExist(statErr), "file should not have been written outside repo")
+}
+
+func TestLocalRunner_WriteFile_LeafSymlinkEscape(t *testing.T) {
+	// A symlink AT the target file level (`link.txt -> /tmp/stolen`) passes
+	// the parent check (parent IS the repo) but would follow the link to an
+	// arbitrary path. Lstat on the target catches it.
+	dir := t.TempDir()
+	stolen := filepath.Join(t.TempDir(), "stolen.txt")
+	require.NoError(t, os.Symlink(stolen, filepath.Join(dir, "link.txt")))
+	r := &LocalRunner{RepoDir: dir}
+
+	err := r.WriteFile(context.Background(), "link.txt", []byte("pwned"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+
+	_, statErr := os.Stat(stolen)
+	assert.True(t, os.IsNotExist(statErr), "file should not have been written via symlink")
+}
+
+func TestLocalRunner_WriteFile_NonexistentParent(t *testing.T) {
+	// Unlike os.WriteFile (which would ENOENT), we surface "parent directory
+	// does not exist" — EvalSymlinks fails on missing paths. Handler
+	// translates this to 500, not 400; jj's tracked files always have
+	// existing parents so this is a "shouldn't happen" guard.
+	dir := t.TempDir()
+	r := &LocalRunner{RepoDir: dir}
+
+	err := r.WriteFile(context.Background(), "does/not/exist.txt", []byte("x"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent directory does not exist")
 }
