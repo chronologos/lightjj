@@ -37,7 +37,7 @@ Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api
 
 ### Backend / API
 
-- [x] **Dead command builders** (Trivial) — Deleted 9 zero-caller functions + tests from the jjui port: `DiffEdit`, `Redo`, `Duplicate`, `Absorb`, `OpRestore`, `GetParents`, `GetFirstChild`, `FilesInRevision`, `ConfigListAll`. -45 LOC commands.go, -50 LOC tests.
+- [x] **Dead command builders** (Trivial) — Deleted 8 zero-caller functions + tests from the jjui port: `DiffEdit`, `Redo`, `Duplicate`, `Absorb`, `GetParents`, `GetFirstChild`, `FilesInRevision`, `ConfigListAll`. (`OpRestore` was also deleted then re-added for the Operations panel "Restore to here" action.) -45 LOC commands.go, -50 LOC tests.
 - [x] ~~**Extract `WorkspaceSpawner`**~~ — Moot; workspace-as-tab deleted `spawnWorkspaceInstance` entirely.
 - [ ] **7 near-identical bookmark handlers** (Low, taste-dependent) — handlers.go:734-823 (~130 LOC). Each is decode → validate-non-empty → runMutation. Go's lack of structural typing makes table-driven dispatch awkward; current form is greppable. Defer unless bookmark family grows.
 - [x] **`handleDescribe` duplicates `runMutation` body** (Trivial) — `runMutationWithInput(w, r, args, stdin)` sibling; `runMutation` delegates to it with `""` stdin (LocalRunner.run only sets cmd.Stdin when stdin != ""). handleDescribe is now a one-liner.
@@ -206,7 +206,7 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] Frontend `onStale`/`isCached` entirely untested.
 - [x] Frontend HTTP error responses not tested.
 - [x] No integration tests against a real jj repo.
-- [ ] Frontend DOM integration tests (in progress).
+- [x] Frontend DOM integration tests — 30 test files via `@testing-library/svelte` (render/fireEvent/screen). 634 tests total.
 
 ### Nitpicks
 - [x] `\x1F` vs `\x1f` case inconsistency across files.
@@ -233,7 +233,6 @@ Deep review across 6 perspectives (maintainability, performance, reliability, co
 - [x] List virtualization for large repos — done, see Remaining-Performance above
 - [x] HTTP response compression (gzip middleware) — see Suggestions section
 - [x] Integration tests — build-tagged tests against a real jj repo
-- [ ] Frontend DOM integration tests (in progress)
 - [x] `Divergent bool` field — replace `??` string suffix hack on `ChangeId`
 
 ## Test Gaps — Medium/Low Priority (2026-02-24)
@@ -331,7 +330,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 ### P3 — Advanced
 - [x] Retain collapse/expand state per revision (cached per change-id, restored on revisit)
 - [x] Show total diff stats (aggregate +N -N across all files) in the file list header
-- [ ] Branch/remote sidebar (like Sublime Merge left panel)
+- [x] Branch/remote sidebar (like Sublime Merge left panel) — implemented as a dedicated Branches view (`2` key) rather than a persistent sidebar. BookmarksPanel: flat list sorted trouble-first (conflict→diverged→ahead→…→synced), sync-state dots, PR badges, d/f/t keys.
 - [ ] Drag-and-drop rebase (drag revision onto destination)
 - [x] Inline rebase mode (keyboard-driven, not a modal)
 - [x] Squash support (file-level selection, keep-emptied, use-dest-message)
@@ -341,7 +340,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] **Stacked-revision combined diff** — turns out `jj diff -r 'X|Y|Z'` already produces a combined stack diff natively. Only gapped selections errored. Fixed: multi-check revsets now wrap in `connected()` (fills gaps, no-op otherwise). Added `parent_ids` to Commit + client-side connected-set computation → revisions implicitly included via gap-fill show a dotted `◌` in the check gutter. `multiRevset()` / `computeConnectedCommitIds()` in api.ts.
 - [x] **Subtle reload over SSH** — mutations over SSH cause full-screen "Loading…" state because each jj call takes ~440ms and the `loading` flag flips. Fixed in `RevisionGraph.svelte` — `isRefreshing` derived + `.refresh-bar` always-mounted element. `loader.loading` is now a "refreshing" indicator, not a content gate; initial-load shows spinner, refresh dims + top progress bar.
 - [ ] Three-way merge editor — replace inline conflict markers with a CodeMirror `@codemirror/merge` three-way view (base | ours | theirs). Phase 1: add backend endpoint returning `{base, ours, theirs}` per conflicted file (via `jj file show` on parent revisions). Phase 2: read-only three-pane view with diff highlighting + existing Accept Ours/Theirs buttons. Phase 3: editable center pane with "Save Resolution" that writes merged content back. Current inline card view remains as fallback for N-way conflicts (3+ sides). See [CodeMirror merge demo](https://codemirror.net/3/demo/merge.html) for the UX pattern.
-- [x] **SSH inotify pipe for auto-refresh** (Small) — `NewSSHWatcher(srv, openFn)` in `watcher.go` consumes a line-oriented event stream; `main.go` supplies a closure piping `inotifywait -m -q -e create <heads>` via new `SSHRunner.StreamRaw()` (wraps `cd && argv` → `local.Stream`). `sshWatchLoop`: `bufio.Scanner` over the pipe, any line → debounce + `broadcast(refreshOpId())`. Reconnect with 1s→30s backoff on SSH drop; first-attempt-zero-lines → log `inotify-tools not installed?` and give up (no reconnect spam). One lifetime context tied to `w.stop` → `exec.CommandContext` kills remote ssh on Close(). Snapshot loop stays local-only. Remote dep: `inotify-tools` (Linux). ~80 lines.
+- [x] ~~**SSH inotify pipe for auto-refresh**~~ — **Superseded by `sshPollLoop`.** inotifywait failed in secondary workspaces (`.jj/repo` is a pointer file there, not a directory). Replaced with a simple `jj op log` poll every `--snapshot-interval` — no remote tool dependency, works on any OS, writes `cachedOp` directly to save a second round trip. Trade-off: worst-case interval latency vs. ~instant fsnotify.
 - [x] **SSH jj command latency — port-forward as headline recommendation** — README.md "Remote repos" section leads with port-forward (`ssh -L 3001:localhost:3001 host "lightjj -R /path --addr localhost:3001 --no-browser"`) as **Recommended**, with `--remote` + ControlMaster noted as fallback. Zero code changes, 10× latency win, fsnotify works natively.
 - [ ] **SSH stdin/stdout multiplexing protocol** (Complex, deferred) — one persistent SSH session, commands + responses over a framed protocol. Only worth it if port-forward isn't an option (firewall/policy). `--remote` mode stays viable for quick-peek; heavy use → port-forward.
 - [ ] SSH remote repo browser
@@ -356,7 +355,7 @@ Unit tests verifying 500 response when runner returns an error. Already covered 
 - [x] ~~Lazy rendering for large diffs (IntersectionObserver)~~ — superseded by `AUTO_COLLAPSE_TOTAL_LINES`. Collapsed files render header-only; the existing `{#if !isCollapsed}` gate does what lazy-mount would. IntersectionObserver would save the header DOM too, but headers are ~3 nodes each — not worth the complexity.
 - [x] Draggable split view divider (resize ratio)
 - [x] Support jj worktrees — detect and display workspace info via `working_copies` template field, workspace badges (teal) in graph, `GET /api/workspaces` endpoint
-- [x] Workspace switching — v0.6.0's workspace-as-tab covers "switch serving context" (dropdown → `onOpenTab(ws.path)`). ~~"Move another workspace's working copy head" (`jj edit --workspace NAME`)~~ → not a thing in jj; `jj workspace update-stale` runs IN the target workspace. Opening that workspace as a tab and pressing `E` does it.
+- [x] Workspace switching — v0.6.0's workspace-as-tab covers "switch serving context" (dropdown → `onOpenTab(ws.path)`). ~~"Move another workspace's working copy head" (`jj edit --workspace NAME`)~~ → not a thing in jj; `jj workspace update-stale` runs IN the target workspace. Stale-WC now auto-detected (snapshotLoop → SSE) with a one-click "Update stale" button in the warning bar.
 - [x] `jj split` support — inline file-level split from the UI, checked files stay, unchecked move to new revision, parallel toggle
 - [x] Divergent commit resolution UI — `GET /api/divergence` + `classify()` (stack grouping via parent-change_id walk + `alignColumns` commit_id permutation, `alignable` bailout, tautology-guarded `liveVersion`). Panel renders columns (one per /N version, rows = stack levels). `KeepPlan` abandons losing columns + empty descendants, repoints bookmarks per-change_id (not tip). Non-empty descendants confirm. Cross-column-merge warning. `/N` = index emission order (NOT commit_id sort — that was the old bug). See docs/jj-divergence.md.
 - [x] Divergence: "Rebase onto keeper" in non-empty-descendant confirm — third button (green, leftmost). `rebaseSources` runs before abandon. Safe from `-s` flattening: `g.descendants` is roots-only by classifier construction. See commit `e4160a26`.

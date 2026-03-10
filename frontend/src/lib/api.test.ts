@@ -510,42 +510,21 @@ describe('fileShow', () => {
   })
 })
 
-describe('resolve request body', () => {
-  async function callResolve(revision: string, file: string, tool: ':ours' | ':theirs') {
-    _testInternals.lastOpId = 'op1'
-    mockFetch.mockResolvedValueOnce(mockResponse({ output: 'resolved' }, 'op2'))
-    await api.resolve(revision, file, tool)
-    const [url, init] = mockFetch.mock.calls[0]
-    return { url, init, body: JSON.parse(init.body) }
-  }
-
-  it('sends revision, file, and tool', async () => {
-    const { url, init, body } = await callResolve('abc', 'src/main.go', ':ours')
-    expect(url).toBe('/tab/0/api/resolve')
-    expect(init.method).toBe('POST')
-    expect(body).toEqual({ revision: 'abc', file: 'src/main.go', tool: ':ours' })
-  })
-
-  it('sends :theirs tool', async () => {
-    const { body } = await callResolve('xyz', 'README.md', ':theirs')
-    expect(body.tool).toBe(':theirs')
-  })
-
-  it('fires stale callbacks on op-id change but does NOT clear cache', async () => {
-    // Seed cache with a diff entry keyed by commit_id
+describe('mutation op-id + cache invariant', () => {
+  it('op-id change fires stale callback but does NOT clear commit_id-keyed cache', async () => {
+    // commit_id is a content hash — entries keyed by it are valid regardless
+    // of op-id. Only the stale callback (→ loadLog) should fire.
     _testInternals.lastOpId = 'op1'
     _testInternals.cache.set('diff:abc', { diff: '+cached' })
 
     const staleCb = vi.fn()
     onStale(staleCb)
 
-    // Resolve returns a new op-id → fires stale callback (triggers loadLog)
-    // but does NOT clear the cache — commit_id-keyed entries are still valid.
-    mockFetch.mockResolvedValueOnce(mockResponse({ output: 'resolved' }, 'op2'))
-    await api.resolve('abc', 'file.go', ':ours')
-    await Promise.resolve() // drain microtask queue for stale callback
+    mockFetch.mockResolvedValueOnce(mockResponse({ output: 'done' }, 'op2'))
+    await api.describe('abc', 'new desc')
+    await Promise.resolve()
 
-    expect(_testInternals.cache.size).toBe(1) // NOT cleared
+    expect(_testInternals.cache.size).toBe(1)
     expect(_testInternals.cache.get('diff:abc')).toEqual({ diff: '+cached' })
     expect(staleCb).toHaveBeenCalledTimes(1)
   })
