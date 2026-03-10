@@ -1,0 +1,180 @@
+<h2>BookmarksPanel with Visibility Toggles</h2>
+<p class="subtitle">Per-remote groups with collapsible tree + eye icons. Compare current vs proposed.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Current — flat list, no remote grouping</div>
+    <div class="mockup-body" style="background:#1e1e2e;color:#cdd6f4;font-family:monospace;font-size:12px;padding:0;">
+      <!-- Current flat list -->
+      <div style="display:flex;align-items:center;gap:12px;padding:6px 14px;border-bottom:1px solid #313244;">
+        <input style="background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:3px;padding:4px 8px;font-size:11px;width:200px;" placeholder="Filter bookmarks... (/ to focus)" />
+        <span style="font-size:10px;color:#6c7086;background:#313244;padding:1px 6px;border-radius:8px;">15</span>
+      </div>
+      <div style="padding:2px 0;">
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:200px;font-weight:500;">copilot/add-github-actions-workflow</span>
+          <span style="font-size:10px;color:#a6adc8;width:120px;">untracked @upstream</span>
+          <span style="font-size:10px;color:#89b4fa;">4b417a12</span>
+          <span style="font-size:11px;color:#6c7086;">Add explicit permissions...</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:200px;font-weight:500;">feat/structured-search</span>
+          <span style="font-size:10px;color:#a6adc8;width:120px;">untracked @upstream</span>
+          <span style="font-size:10px;color:#89b4fa;">8ebe5ab3</span>
+          <span style="font-size:11px;color:#6c7086;">feat(cli): add structured query...</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:200px;font-weight:500;">liquidai-query-expansion</span>
+          <span style="font-size:10px;color:#a6adc8;width:120px;">untracked @upstream</span>
+          <span style="font-size:10px;color:#89b4fa;">57f7caa9</span>
+          <span style="font-size:11px;color:#6c7086;">feat: add LiquidAI LFM2...</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px;font-size:12px;opacity:0.5;">
+          <span>... 11 more upstream branches ...</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:#a6e3a1;flex-shrink:0;"></span>
+          <span style="width:200px;font-weight:500;">main</span>
+          <span style="font-size:10px;color:#a6adc8;width:120px;">origin</span>
+          <span style="font-size:10px;color:#6c7086;">d11bb46f</span>
+          <span style="font-size:11px;color:#a6adc8;">feat: switch remote query...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Proposed — grouped by remote, eye toggles</div>
+    <div class="mockup-body" style="background:#1e1e2e;color:#cdd6f4;font-family:monospace;font-size:12px;padding:0;">
+      <div style="display:flex;align-items:center;gap:12px;padding:6px 14px;border-bottom:1px solid #313244;">
+        <input style="background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:3px;padding:4px 8px;font-size:11px;width:200px;" placeholder="Filter bookmarks... (/ to focus)" />
+        <span style="font-size:10px;color:#6c7086;background:#313244;padding:1px 6px;border-radius:8px;">15</span>
+      </div>
+      <div style="padding:2px 0;">
+        <!-- Local section -->
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 14px;background:#181825;font-size:11px;font-weight:600;color:#a6adc8;text-transform:uppercase;letter-spacing:0.5px;">
+          <span style="font-size:9px;">▼</span>
+          LOCAL
+          <span style="margin-left:auto;cursor:pointer;opacity:0.8;font-size:13px;" title="Toggle visibility in log">👁</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px 5px 28px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:#a6e3a1;flex-shrink:0;"></span>
+          <span style="width:180px;font-weight:500;">main</span>
+          <span style="font-size:10px;color:#a6adc8;width:80px;">origin</span>
+          <span style="font-size:10px;color:#6c7086;">d11bb46f</span>
+          <span style="font-size:11px;color:#a6adc8;">feat: switch remote query...</span>
+        </div>
+
+        <!-- Origin section -->
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 14px;background:#181825;font-size:11px;font-weight:600;color:#a6adc8;text-transform:uppercase;letter-spacing:0.5px;">
+          <span style="font-size:9px;">▶</span>
+          ORIGIN
+          <span style="font-size:9px;color:#6c7086;font-weight:normal;text-transform:none;">(1 bookmark)</span>
+          <span style="margin-left:auto;cursor:pointer;opacity:0.4;font-size:13px;" title="Toggle visibility in log">👁</span>
+        </div>
+
+        <!-- Upstream section — expanded -->
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 14px;background:#181825;font-size:11px;font-weight:600;color:#a6adc8;text-transform:uppercase;letter-spacing:0.5px;">
+          <span style="font-size:9px;">▼</span>
+          UPSTREAM
+          <span style="font-size:9px;color:#6c7086;font-weight:normal;text-transform:none;">(14 bookmarks)</span>
+          <span style="margin-left:auto;cursor:pointer;font-size:13px;opacity:0.8;" title="Toggle visibility in log">👁</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px 5px 28px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:180px;font-weight:500;">main</span>
+          <span style="font-size:10px;color:#89b4fa;">55f16460</span>
+          <span style="font-size:11px;color:#6c7086;">fix(ci): guard LLM calls...</span>
+          <span style="margin-left:auto;cursor:pointer;font-size:12px;opacity:0.8;">👁</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px 5px 28px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:180px;font-weight:500;">feat/structured-search</span>
+          <span style="font-size:10px;color:#89b4fa;">8ebe5ab3</span>
+          <span style="font-size:11px;color:#6c7086;">feat(cli): add structured...</span>
+          <span style="margin-left:auto;cursor:pointer;font-size:12px;opacity:0.8;">👁</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px 5px 28px;font-size:12px;opacity:0.4;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:180px;font-weight:500;text-decoration:line-through;">copilot/add-github-actions-workflow</span>
+          <span style="font-size:10px;color:#89b4fa;">4b417a12</span>
+          <span style="font-size:11px;color:#6c7086;">Add explicit permissions...</span>
+          <span style="margin-left:auto;cursor:pointer;font-size:12px;opacity:0.3;">👁</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px 5px 28px;font-size:12px;">
+          <span style="width:7px;height:7px;border-radius:50%;border:1px solid #6c7086;flex-shrink:0;"></span>
+          <span style="width:180px;font-weight:500;">liquidai-query-expansion</span>
+          <span style="font-size:10px;color:#89b4fa;">57f7caa9</span>
+          <span style="font-size:11px;color:#6c7086;">feat: add LiquidAI LFM2...</span>
+          <span style="margin-left:auto;cursor:pointer;font-size:12px;opacity:0.8;">👁</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:5px 14px 5px 28px;font-size:12px;opacity:0.5;">
+          <span>... 10 more ...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:32px;">Revision Graph — Remote Bookmark Badges</h3>
+<p class="subtitle">Compact, subdued badges for visible remote bookmarks alongside existing local badges</p>
+
+<div class="mockup" style="max-width:800px;margin:16px auto;">
+  <div class="mockup-header">Revision graph with remote badges</div>
+  <div class="mockup-body" style="background:#1e1e2e;color:#cdd6f4;font-family:monospace;font-size:12px;padding:8px 0;">
+    <!-- Working copy -->
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#f9e2af;">@</span>
+      <span style="background:#f9e2af22;padding:1px 5px;border-radius:3px;font-size:10px;color:#f9e2af;margin-right:6px;">@</span>
+      <span style="color:#a6adc8;">(empty)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#f9e2af;">│</span>
+      <span style="color:#fab387;font-size:11px;">zwt</span><span style="color:#6c7086;font-size:11px;">quxyvtylk</span>
+      <span style="color:#6c7086;font-size:11px;margin-left:6px;">ff8735038ca0</span>
+    </div>
+
+    <!-- Main commit with both local and remote badges -->
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#89b4fa;">◆</span>
+      <span>feat: switch remote query expansion to chat completions API</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#89b4fa;">│</span>
+      <!-- Local badge (existing style) -->
+      <span style="background:#31324488;padding:1px 6px;border-radius:3px;font-size:10px;color:#cdd6f4;border:1px solid #45475a;margin-right:5px;">⑂ main</span>
+      <!-- Remote badge (new — compact, subdued) -->
+      <span style="padding:1px 5px;border-radius:3px;font-size:9px;color:#6c7086;border:1px solid #31324488;margin-right:5px;">origin/main</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#89b4fa;">│</span>
+      <span style="color:#fab387;font-size:11px;">tw</span><span style="color:#6c7086;font-size:11px;">ylynpyywsv</span>
+      <span style="color:#6c7086;font-size:11px;margin-left:6px;">d11bb46fd483</span>
+    </div>
+
+    <!-- Elided -->
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#585b70;">┆</span>
+      <span style="color:#585b70;font-size:10px;">------- (elided revisions) -------</span>
+    </div>
+
+    <!-- Upstream/main commit — only remote badge, no local -->
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#89b4fa;">◆</span>
+      <span>fix(ci): guard LLM calls in CI and increase test timeouts</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#89b4fa;">│</span>
+      <!-- Remote-only badge -->
+      <span style="padding:1px 5px;border-radius:3px;font-size:9px;color:#6c7086;border:1px solid #31324488;">upstream/main</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0;padding:3px 12px;">
+      <span style="width:30px;text-align:center;color:#89b4fa;">│</span>
+      <span style="color:#fab387;font-size:11px;">pz</span><span style="color:#6c7086;font-size:11px;">nxnykxwvwk</span>
+      <span style="color:#6c7086;font-size:11px;margin-left:6px;">55f16460</span>
+    </div>
+  </div>
+</div>

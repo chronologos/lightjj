@@ -292,6 +292,8 @@
         {@const label = syncLabel(row.sync, shownRemote?.remote ?? defaultRemote)}
         {@const local = row.bm.local}
         {@const diverged = local && shownRemote && local.commit_id !== shownRemote.commit_id}
+        {@const primaryCid = local?.commit_id ?? shownRemote?.commit_id}
+        {@const extraRemotes = (row.bm.remotes ?? []).filter(r => r !== shownRemote && r.commit_id && r.commit_id !== primaryCid)}
         {@const pr = prByBookmark.get(row.bm.name)}
         <!-- svelte-ignore a11y_click_events_have_key_events -- Enter handled on panel -->
         <div
@@ -341,6 +343,9 @@
             {:else}
               <span class="bp-cid">—</span>
             {/if}
+            {#each extraRemotes as extra}
+              {@render commitLine(extra, true)}
+            {/each}
           </div>
         </div>
       {/each}

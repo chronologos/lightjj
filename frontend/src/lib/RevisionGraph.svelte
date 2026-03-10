@@ -83,12 +83,24 @@
     isHidden: boolean
     isImmutable?: boolean
     isDivergent?: boolean
+    nodeLane?: number // graph lane of this entry's node (for bookmark color hints)
   }
 
   const sourceModeLabel: Record<string, string> = { '-r': 'move', '-s': 'source', '-b': 'branch' }
 
   // Build a continuation gutter: replace node symbols with │, keep pipes and spaces
   const nodeChars = new Set(['@', '○', '◆', '×', '◌'])
+  const GRAPH_COLORS = 8
+
+  /** Find the lane of the node character in a gutter string. */
+  function findNodeLane(gutter: string): number {
+    let col = 0
+    for (const ch of gutter) {
+      if (nodeChars.has(ch)) return Math.floor(col / 2)
+      col++
+    }
+    return 0
+  }
   const branchChars = new Set(['─', '╮', '╯', '╭', '╰', '├', '┤'])
 
   function continuationGutter(gutter: string): string {
@@ -122,6 +134,21 @@
       ? gutter.slice(0, maxGutterLen)
       : gutter.padEnd(maxGutterLen)
   }
+
+  // Bookmarks that appear on multiple entries get no lane tint (stay grey).
+  let multiBookmarks = $derived.by(() => {
+    const counts = new Map<string, number>()
+    for (const entry of revisions) {
+      for (const bm of entry.bookmarks ?? []) {
+        counts.set(bm, (counts.get(bm) ?? 0) + 1)
+      }
+    }
+    const multi = new Set<string>()
+    for (const [bm, count] of counts) {
+      if (count > 1) multi.add(bm)
+    }
+    return multi
+  })
 
   // Compute divergence offsets: for divergent commits sharing a change_id,
   // assign /0, /1, ... in jj's emission order (GlobalCommitPosition — NOT
@@ -178,6 +205,7 @@
               isDescLine: false,
               isWorkingCopy: entry.commit.is_working_copy,
               isHidden: entry.commit.hidden,
+              nodeLane: findNodeLane(gl.gutter),
             })
           }
           lines.push({
@@ -416,22 +444,26 @@
             </span>
           {:else if line.isBookmarkLine}
             {@const entry = revisions[line.entryIndex]}
+            {@const laneColorVar = line.nodeLane != null ? `var(--graph-${line.nodeLane % GRAPH_COLORS})` : ''}
             <span class="bookmark-line-content">
               {#each entry.commit.working_copies ?? [] as ws}
                 <span class="workspace-badge">◇ {ws}@</span>
               {/each}
               {#each entry.bookmarks ?? [] as bm}
                 {@const pr = prByBookmark.get(bm)}
+                {@const tinted = !!laneColorVar && !multiBookmarks.has(bm)}
                 {#if pr}
                   <a class="pr-badge" class:is-draft={pr.is_draft}
                      href={pr.url} target="_blank" rel="noopener"
                      onclick={(e: MouseEvent) => e.stopPropagation()}
-                     title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
+                     title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub"
+                     style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}>
                     <span class="pr-name">↗ {bm}</span>
                     <span class="pr-number">#{pr.number}</span>
                   </a>
                 {:else}
-                  <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}>⑂ {bm}</button>
+                  <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}
+                     style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}>⑂ {bm}</button>
                 {/if}
               {/each}
             </span>
@@ -920,11 +952,21 @@
     vertical-align: baseline;
     cursor: pointer;
     font-family: inherit;
-    transition: border-color var(--anim-duration) var(--anim-ease);
+    transition: border-color var(--anim-duration) var(--anim-ease),
+                color var(--anim-duration) var(--anim-ease);
   }
 
   .bookmark-badge:hover {
     border-color: var(--surface2);
+  }
+
+  .bookmark-badge.lane-tinted {
+    border-color: color-mix(in srgb, var(--lane-color) 50%, transparent);
+    color: var(--lane-color);
+  }
+
+  .bookmark-badge.lane-tinted:hover {
+    border-color: color-mix(in srgb, var(--lane-color) 75%, transparent);
   }
 
   .pr-badge {
@@ -949,6 +991,18 @@
 
   .pr-badge:hover {
     border-color: var(--border-pr-hover);
+  }
+
+  .pr-badge.lane-tinted {
+    border-color: color-mix(in srgb, var(--lane-color) 50%, transparent);
+  }
+
+  .pr-badge.lane-tinted .pr-name {
+    color: var(--lane-color);
+  }
+
+  .pr-badge.lane-tinted:hover {
+    border-color: color-mix(in srgb, var(--lane-color) 75%, transparent);
   }
 
   .pr-badge.is-draft {
