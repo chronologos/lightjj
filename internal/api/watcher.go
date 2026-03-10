@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chronologos/lightjj/internal/jj"
@@ -39,8 +40,37 @@ type Watcher struct {
 	// lock can be taken without nesting.
 	onSub, onUnsub func()
 
+	// Tracks whether snapshotLoop last saw a stale-working-copy error.
+	// Broadcast fires only on transition edges (atomic.Bool.Swap returns the
+	// old value, so `if !stale.Swap(true)` = "was false, now true").
+	stale atomic.Bool
+
 	stop     chan struct{}
 	stopOnce sync.Once
+}
+
+// Meta-event sentinels broadcast on the same chan as op-ids. Op-ids are hex
+// hashes; the "!" prefix is unambiguous. Using the existing channel avoids a
+// second broadcast map + select arm for rare events.
+const (
+	evStaleWC = "!stale-wc"
+	evFreshWC = "!fresh-wc"
+)
+
+// isStaleWCError matches jj's stale-working-copy errors — both cases whose
+// hint is `jj workspace update-stale`:
+//   - WorkingCopyStale (cli_util.rs:2734): "The working copy is stale..."
+//   - ObjectNotFound (cli_util.rs:2762): "Could not read working copy's operation."
+// The third staleness case (SiblingOperation, :2744) has a DIFFERENT hint
+// (`jj op integrate`) so is deliberately NOT matched — falls through to the
+// generic transient-error path. Error strings are stable; jj doesn't i18n.
+func isStaleWCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "working copy is stale") ||
+		strings.Contains(s, "Could not read working copy's operation")
 }
 
 func newWatcher(srv *Server) *Watcher {
@@ -218,6 +248,21 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 			_, err := w.srv.Runner.Run(ctx, jj.DebugSnapshot())
 			cancel()
 			if err != nil {
+				// Stale WC is a known, user-actionable condition — don't count
+				// as a transient error (it won't self-heal, and the log message
+				// would be misleading). Broadcast once on transition; the 5s
+				// retry continues so a CLI-side `update-stale` is noticed.
+				if isStaleWCError(err) {
+					if !w.stale.Swap(true) {
+						w.broadcast(evStaleWC)
+					}
+					// Reset — stale is categorically different from transient
+					// errors. Leaving the counter frozen would inflate the
+					// next non-stale error's log threshold (3rd-failure log
+					// fires on first post-stale error if pre-stale count was 2).
+					consecutiveErrors = 0
+					continue
+				}
 				consecutiveErrors++
 				// Log on 3rd failure, then every 12 after (~1 min at 5s interval).
 				// `== 3` only would log once for a 10-minute lock; this surfaces
@@ -226,6 +271,9 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 					log.Printf("watcher: snapshot failed %dx (%v); repo may be locked, auto-refresh degraded", consecutiveErrors, err)
 				}
 			} else {
+				if w.stale.Swap(false) {
+					w.broadcast(evFreshWC)
+				}
 				consecutiveErrors = 0
 			}
 		}
@@ -241,7 +289,13 @@ func (w *Watcher) hasSubscribers() bool {
 // subscribe registers a channel to receive op-id broadcasts. Call the returned
 // unsubscribe func when the client disconnects.
 func (w *Watcher) subscribe() (ch chan string, unsubscribe func()) {
-	ch = make(chan string, 1) // buffered: writer drops if client is slow
+	// Buffer 4: op-id + stale-wc + fresh-wc + headroom. With buffer 1, a
+	// buffered op-id would cause broadcast(evStaleWC) to hit select-default
+	// and drop the sentinel. Since the stale.Swap edge fires exactly once,
+	// a dropped sentinel is never re-sent — the warning would be silently
+	// lost until SSE reconnect. Op-ids remain droppable (client coalesces
+	// to one loadLog anyway); losing a sentinel is not.
+	ch = make(chan string, 4)
 	w.subsMu.Lock()
 	w.subs[ch] = struct{}{}
 	w.subsMu.Unlock()
@@ -315,6 +369,23 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Emit current stale state unconditionally on connect. Both branches matter:
+	//   - stale=true: browser reload during staleness would otherwise lose the
+	//     warning until the next snapshot tick (up to 5s)
+	//   - stale=false: client whose SSE dropped during staleness and reconnected
+	//     after CLI recovery never saw the fresh-wc broadcast (sent while
+	//     disconnected) → workspaceStale stuck true forever. Swap edges don't
+	//     re-fire, and visibilitychange only fires on tab switch, not WiFi blips.
+	{
+		ev := evFreshWC
+		if w.stale.Load() {
+			ev = evStaleWC
+		}
+		if _, err := rw.Write([]byte("event: " + ev[1:] + "\ndata: {}\n\n")); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
 
 	keepalive := time.NewTicker(25 * time.Second)
 	defer keepalive.Stop()
@@ -328,8 +399,18 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 			// lives until the client disconnects or a keepalive write fails.
 			// Pre-tabs this was process-exit-only; now it's a runtime path.
 			return
-		case opId := <-ch:
-			if err := writeOp(opId); err != nil {
+		case msg := <-ch:
+			// Meta-event sentinel ("!"-prefixed, vs. hex op-id). Emitted as
+			// `event: <name>\ndata: {}\n\n` — the frontend adds a dedicated
+			// listener per event type, so no payload parsing needed.
+			if strings.HasPrefix(msg, "!") {
+				if _, err := rw.Write([]byte("event: " + msg[1:] + "\ndata: {}\n\n")); err != nil {
+					return
+				}
+				flusher.Flush()
+				continue
+			}
+			if err := writeOp(msg); err != nil {
 				return
 			}
 		case <-keepalive.C:

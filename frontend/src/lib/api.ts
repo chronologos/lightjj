@@ -91,6 +91,16 @@ let lastOpId: string | null = null
 const staleCallbacks = new Set<() => void>()
 let refreshQueued = false
 
+// Stale-working-copy subscribers. Server's snapshotLoop pushes `stale-wc` /
+// `fresh-wc` SSE events on transition edges (local mode); the visibilitychange
+// snapshot error path covers SSH mode. Callback arg = true (stale) | false
+// (fresh). App wires this to a persistent warning MessageBar with an
+// "Update stale" action → POST /api/workspace/update-stale.
+const staleWCCallbacks = new Set<(stale: boolean) => void>()
+function notifyStaleWC(stale: boolean) {
+  for (const cb of staleWCCallbacks) cb(stale)
+}
+
 // Per-revision cache keyed by commit_id. A commit_id is a content hash of
 // tree + parents + message — if it hasn't changed, the cached diff/files/
 // description are provably valid. No op-id suffix, no clear-on-mutation.
@@ -111,6 +121,12 @@ const MUTATION_TIMEOUT_MS = 60_000
 export function onStale(callback: () => void): () => void {
   staleCallbacks.add(callback)
   return () => { staleCallbacks.delete(callback) }
+}
+
+/** Subscribe to workspace-stale state changes (true=stale, false=recovered). */
+export function onStaleWC(callback: (stale: boolean) => void): () => void {
+  staleWCCallbacks.add(callback)
+  return () => { staleWCCallbacks.delete(callback) }
 }
 
 // Per-repo session memos — cleared by both setActiveTab (different repo) and
@@ -247,6 +263,14 @@ export function wireAutoRefresh(): () => void {
       } catch { /* malformed event — ignore */ }
     })
 
+    // Server pushes these on snapshot-loop stale-detection transition edges.
+    // Don't mark everSawEvent — reconnect heuristic keys off the op event
+    // (handleEvents sends op-id on connect unconditionally; stale only when
+    // the flag is set). Counting stale alone would break watcher-absence
+    // detection.
+    es.addEventListener('stale-wc', () => notifyStaleWC(true))
+    es.addEventListener('fresh-wc', () => notifyStaleWC(false))
+
     // Network drop → readyState CONNECTING (browser retries automatically).
     // Non-200 response (including 204 from handleEventsDisabled — spec is
     // exact-match "status is not 200") → readyState CLOSED.
@@ -278,7 +302,20 @@ export function wireAutoRefresh(): () => void {
     if (document.visibilityState !== 'visible' || snapshotInFlight) return
     snapshotInFlight = true
     api.snapshot()
-      .catch(() => {}) // WC lock contention expected; next tick catches up
+      .then(() => notifyStaleWC(false))
+      .catch((e) => {
+        // WC lock contention expected; next tick catches up. But stale-WC is
+        // user-actionable — surface it. SSH mode has no server-side snapshot
+        // loop so this visibilitychange error path IS the detection mechanism.
+        // Mirrors isStaleWCError server-side: both WorkingCopyStale and
+        // ObjectNotFound (WC-op-GC'd) jj errors share the update-stale hint.
+        if (e instanceof Error && (
+          e.message.includes('working copy is stale') ||
+          e.message.includes("Could not read working copy's operation")
+        )) {
+          notifyStaleWC(true)
+        }
+      })
       .finally(() => { snapshotInFlight = false })
   }
   document.addEventListener('visibilitychange', onVisible)
@@ -814,6 +851,8 @@ export const api = {
 
   snapshot: () => post<MutationResult>('/api/snapshot', {}),
 
+  workspaceUpdateStale: () => post<MutationResult>('/api/workspace/update-stale', {}),
+
   commit: (message: string = '') => post<MutationResult>('/api/commit', { message }),
 
   bookmarkSet: (revision: string, name: string) =>
@@ -876,6 +915,7 @@ export const _testInternals = {
   set lastOpId(v: string | null) { lastOpId = v },
   get cache() { return cache },
   get staleCallbacks() { return staleCallbacks },
+  get staleWCCallbacks() { return staleWCCallbacks },
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },
   resetSessionCaches: clearSessionMemos,

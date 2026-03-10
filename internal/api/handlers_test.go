@@ -377,6 +377,49 @@ func TestHandleSnapshot(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleWorkspaceUpdateStale(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceUpdateStale()).SetOutput([]byte("Updated working copy to fresh commit abc123"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	// Watcher nil is the common case in tests (NewServer("", "") doesn't create one).
+	req := jsonPost("/api/workspace/update-stale", []byte("{}"))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Updated working copy")
+}
+
+func TestHandleWorkspaceUpdateStale_ClearsAndBroadcasts(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceUpdateStale()).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.Watcher = &Watcher{subs: make(map[chan string]struct{})}
+	srv.Watcher.stale.Store(true)
+	ch, unsub := srv.Watcher.subscribe()
+	defer unsub()
+
+	req := jsonPost("/api/workspace/update-stale", []byte("{}"))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, srv.Watcher.stale.Load(), "stale flag should be cleared")
+	// Must broadcast — Store(false) alone would consume the Swap edge and
+	// leave other SSE clients stuck (snapshotLoop's next Swap(false) would
+	// return false → no fresh-wc).
+	select {
+	case got := <-ch:
+		assert.Equal(t, evFreshWC, got)
+	default:
+		t.Fatal("expected fresh-wc broadcast")
+	}
+}
+
 func TestHandleBookmarkSet(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.BookmarkSet("abc", "feature")).SetOutput([]byte(""))

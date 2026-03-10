@@ -656,6 +656,31 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.DebugSnapshot())
 }
 
+// handleWorkspaceUpdateStale recovers a stale working copy. The watcher's
+// snapshotLoop detects staleness and pushes an SSE warning; this is the
+// one-click fix.
+func (s *Server) handleWorkspaceUpdateStale(w http.ResponseWriter, r *http.Request) {
+	if err := decodeBody(w, r, &struct{}{}); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.runMutation(w, r, jj.WorkspaceUpdateStale())
+	// Clear + broadcast immediately. A bare Store(false) would consume the
+	// Swap edge WITHOUT notifying connected clients — snapshotLoop's next
+	// success would then Swap(false)→old=false→no broadcast. Other SSE
+	// clients (2nd browser window, same tab URL) would stay stuck on stale
+	// until reload. The clicking tab is covered by the frontend's `after`
+	// callback; this covers the rest.
+	//
+	// Runs even on error: runMutation early-returns internally but Go doesn't
+	// propagate that to us. Self-heals — if update-stale FAILED, the next
+	// snapshot re-detects (Swap(true) edge re-fires) within 5s. The spurious
+	// fresh-wc in that window is a brief false-clear, bounded by one tick.
+	if s.Watcher != nil && s.Watcher.stale.Swap(false) {
+		s.Watcher.broadcast(evFreshWC)
+	}
+}
+
 func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Message string `json:"message"`

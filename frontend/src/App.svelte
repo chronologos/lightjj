@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
@@ -70,6 +70,12 @@
   let messageExpanded: boolean = $state(false)
   let messageClearTimer: number | undefined
 
+  // Server's snapshotLoop detects stale-WC and pushes SSE; SSH mode detects
+  // via api.snapshot() error. Either way onStaleWC fires. Non-dismissable —
+  // the bar is a fixed overlay (doesn't block the graph), and the condition
+  // persists until fixed. "Update stale" button or CLI recovery clears it.
+  let workspaceStale = $state(false)
+
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
   let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
@@ -103,7 +109,21 @@
       messageClearTimer = setTimeout(() => { if (!messageExpanded) message = null }, 3000)
     }
   }
-  const showError = (e: unknown) => setMessage(errorMessage(e))
+  // Mirrors isStaleWCError server-side. Mutation-failure detection: if the
+  // user tries abandon/rebase/etc. while the WC is stale, jj fails with this
+  // error. Without this hook the user sees a generic red error and no
+  // "Update stale" button (workspaceStale only gets set via the snapshot
+  // paths — 5s loop in local mode, tab-focus in SSH). After dismissing the
+  // error, displayMessage shows staleWCMessage → button appears.
+  const STALE_WC_PATTERNS = [
+    'working copy is stale',
+    "Could not read working copy's operation",
+  ]
+  function showError(e: unknown) {
+    const msg = errorMessage(e)
+    if (STALE_WC_PATTERNS.some(p => msg.text.includes(p))) workspaceStale = true
+    setMessage(msg)
+  }
   const dismissMessage = () => setMessage(null)
 
   // --- Data loaders ---
@@ -832,6 +852,27 @@
   const handleUndo = () =>
     runMutation(() => api.undo(), 'Undo successful')
 
+  // One-click stale-WC recovery. `after` clears optimistically — server also
+  // clears its flag, but the fresh-wc SSE event only fires on the NEXT
+  // snapshot (up to 5s later); without this the success toast auto-clears
+  // at 3s and the stale warning flashes back for ~2s.
+  const handleUpdateStale = () =>
+    runMutation(
+      () => api.workspaceUpdateStale(),
+      'Working copy updated',
+      { after: () => { workspaceStale = false } },
+    )
+
+  // Stale warning is lower-priority than a mutation error the user just
+  // triggered, so `message` wins. Non-dismissable (the problem persists until
+  // fixed); the ✕ only dismisses real messages.
+  const staleWCMessage: Message = {
+    kind: 'warning',
+    text: 'Working copy is stale — another workspace rewrote shared history',
+    action: { label: 'Update stale', onClick: handleUpdateStale },
+  }
+  let displayMessage = $derived(message ?? (workspaceStale ? staleWCMessage : null))
+
   const handleOpUndo = (id: string) =>
     runMutation(() => api.opUndo(id), `Undid operation ${id.slice(0, 8)}`)
 
@@ -1485,6 +1526,7 @@
   // Both route through notifyOpId → onStale so the guards above apply. The
   // body reads no reactive state → runs once on mount, cleanup on unmount.
   $effect(() => wireAutoRefresh())
+  $effect(() => onStaleWC((s) => { workspaceStale = s }))
 
   // Raw setTimeout escapes {#key} remount — clear on tab-switch unmount so
   // stale closures don't keep the old instance's signals alive.
@@ -1875,8 +1917,8 @@
     />
   </div>
 
-  {#if message}
-    <MessageBar {message} expanded={messageExpanded}
+  {#if displayMessage}
+    <MessageBar message={displayMessage} expanded={messageExpanded}
       onDismiss={dismissMessage}
       onExpandToggle={() => messageExpanded = !messageExpanded}
     />

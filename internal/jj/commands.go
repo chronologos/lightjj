@@ -485,6 +485,14 @@ func Resolve(revision string, file string, tool string) CommandArgs {
 	return []string{"resolve", "--tool", tool, "-r", revision, EscapeFileName(file)}
 }
 
+// WorkspaceUpdateStale returns args for `jj workspace update-stale`.
+// Recovers a workspace whose working-copy commit was rewritten by another
+// workspace. jj snapshots any uncommitted edits into a new commit first, then
+// checks out the current view's @ — no data loss, but files change on disk.
+func WorkspaceUpdateStale() CommandArgs {
+	return []string{"workspace", "update-stale"}
+}
+
 // WorkspaceList returns args for `jj workspace list` with a template.
 // WorkspaceRef.name() + .target() (Commit) — structured output, no parsing
 // of "default: skpssuxl a14ce848 desc" human format (which broke on

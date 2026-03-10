@@ -99,6 +99,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/op/restore", s.opMutation(jj.OpRestore))
 	s.Mux.HandleFunc("POST /api/restore-from", s.handleRestoreFrom)
 	s.Mux.HandleFunc("POST /api/snapshot", s.handleSnapshot)
+	s.Mux.HandleFunc("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale)
 	s.Mux.HandleFunc("POST /api/commit", s.handleCommit)
 	s.Mux.HandleFunc("POST /api/open-file", s.handleOpenFile)
 

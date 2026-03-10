@@ -47,12 +47,15 @@ func TestWatcher_BroadcastDropsOnFullBuffer(t *testing.T) {
 	ch, unsub := w.subscribe()
 	defer unsub()
 
-	// Fill the buffer (cap 1), then broadcast again — second should be dropped
-	// without blocking.
-	w.broadcast("first")
+	// Fill the buffer (cap 4), then broadcast again — fifth should be dropped
+	// without blocking. Buffer is 4 (not 1) so sentinel events aren't dropped
+	// by a single buffered op-id.
+	for i := range 4 {
+		w.broadcast(string(rune('a' + i)))
+	}
 	done := make(chan struct{})
 	go func() {
-		w.broadcast("second")
+		w.broadcast("dropped")
 		close(done)
 	}()
 	select {
@@ -62,8 +65,11 @@ func TestWatcher_BroadcastDropsOnFullBuffer(t *testing.T) {
 		t.Fatal("broadcast blocked on full buffer")
 	}
 
-	assert.Equal(t, "first", <-ch)
-	// Channel should now be empty; second was dropped.
+	assert.Equal(t, "a", <-ch)
+	assert.Equal(t, "b", <-ch)
+	assert.Equal(t, "c", <-ch)
+	assert.Equal(t, "d", <-ch)
+	// Channel should now be empty; "dropped" was dropped.
 	select {
 	case v := <-ch:
 		t.Fatalf("expected empty channel, got %q", v)
@@ -94,6 +100,103 @@ func TestWatcher_BroadcastEmptyIsNoop(t *testing.T) {
 	case v := <-ch:
 		t.Fatalf("empty broadcast delivered: %q", v)
 	default:
+	}
+}
+
+func TestIsStaleWCError(t *testing.T) {
+	// WorkingCopyStale (cli_util.rs:2734)
+	assert.True(t, isStaleWCError(errors.New("Error: The working copy is stale (not updated since operation abc123).")))
+	// ObjectNotFound (cli_util.rs:2762) — WC op was GC'd; same update-stale fix
+	assert.True(t, isStaleWCError(errors.New("Error: Could not read working copy's operation.")))
+	// SiblingOperation (cli_util.rs:2744) — different fix (jj op integrate), must NOT match
+	assert.False(t, isStaleWCError(errors.New("The repo was loaded at operation abc, which seems to be a sibling of the working copy's operation def")))
+	// Generic
+	assert.False(t, isStaleWCError(errors.New("exit status 1: repo lock held")))
+	assert.False(t, isStaleWCError(nil))
+}
+
+func TestHandleEvents_MetaEventSentinel(t *testing.T) {
+	srv := &Server{cachedOp: "op-before"}
+	watcher := &Watcher{
+		srv:  srv,
+		subs: make(map[chan string]struct{}),
+		stop: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest("GET", "/api/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		watcher.handleEvents(rec, req)
+		close(done)
+	}()
+
+	// Wait for subscriber to register, then broadcast the sentinel.
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && !watcher.hasSubscribers() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	watcher.broadcast(evStaleWC)
+
+	for time.Now().Before(deadline) {
+		if bytes.Contains(rec.Body.Bytes(), []byte("event: stale-wc")) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "event: stale-wc\ndata: {}", "sentinel should emit as named SSE event")
+	// Initial op-id still written (sentinel doesn't interfere with op path).
+	assert.Contains(t, body, `"op_id":"op-before"`)
+}
+
+func TestHandleEvents_EmitsStaleStateOnConnect(t *testing.T) {
+	// Both branches — true emits stale-wc, false emits fresh-wc. The false
+	// branch matters: a client whose SSE dropped during staleness and
+	// reconnected after CLI recovery would otherwise have workspaceStale
+	// stuck true (the fresh-wc broadcast was sent while disconnected).
+	for _, tc := range []struct {
+		stale bool
+		want  string
+	}{
+		{true, "event: stale-wc\ndata: {}"},
+		{false, "event: fresh-wc\ndata: {}"},
+	} {
+		srv := &Server{cachedOp: "some-op"}
+		watcher := &Watcher{
+			srv:  srv,
+			subs: make(map[chan string]struct{}),
+			stop: make(chan struct{}),
+		}
+		watcher.stale.Store(tc.stale)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		req := httptest.NewRequest("GET", "/api/events", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		done := make(chan struct{})
+		go func() {
+			watcher.handleEvents(rec, req)
+			close(done)
+		}()
+
+		deadline := time.Now().Add(1 * time.Second)
+		for time.Now().Before(deadline) {
+			if bytes.Contains(rec.Body.Bytes(), []byte(tc.want)) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		<-done
+		assert.Contains(t, rec.Body.String(), tc.want, "stale=%v", tc.stale)
 	}
 }
 

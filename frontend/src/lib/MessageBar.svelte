@@ -4,6 +4,8 @@
     text: string
     /** Multi-line jj output; presence triggers the [+N] expand affordance. */
     details?: string
+    /** Inline action button (e.g. "Update stale" for workspace-stale warning). */
+    action?: { label: string; onClick: () => void }
   }
 
   /** Unknown → error Message. Shared coercion for catch blocks. */
@@ -45,7 +47,11 @@
         {expanded ? '−' : `+${detailLines}`}
       </button>
     {/if}
-    <button class="dismiss" onclick={onDismiss} aria-label="Dismiss">✕</button>
+    {#if message.action}
+      <button class="action-btn" onclick={message.action.onClick}>{message.action.label}</button>
+    {:else}
+      <button class="dismiss" onclick={onDismiss} aria-label="Dismiss">✕</button>
+    {/if}
   </div>
   {#if expanded && message.details}
     <div class="message-details">
@@ -123,6 +129,7 @@
     background: color-mix(in srgb, var(--msg-fg) 15%, transparent);
   }
 
+  .action-btn,
   .dismiss {
     background: transparent;
     border: 1px solid var(--msg-fg);
@@ -134,8 +141,14 @@
     font-size: 11px;
   }
 
+  .action-btn {
+    font-weight: 600;
+    background: color-mix(in srgb, var(--msg-fg) 10%, transparent);
+  }
+
+  .action-btn:hover,
   .dismiss:hover {
-    background: color-mix(in srgb, var(--msg-fg) 15%, transparent);
+    background: color-mix(in srgb, var(--msg-fg) 20%, transparent);
   }
 
   .message-details {
@@ -180,6 +193,7 @@
   }
 
   .expand-badge:focus-visible,
+  .action-btn:focus-visible,
   .dismiss:focus-visible,
   .detail-btn:focus-visible {
     outline: 2px solid var(--msg-fg);

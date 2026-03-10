@@ -220,6 +220,11 @@ func TestDebugSnapshot(t *testing.T) {
 	assert.Equal(t, CommandArgs{"util", "snapshot"}, got)
 }
 
+func TestWorkspaceUpdateStale(t *testing.T) {
+	got := WorkspaceUpdateStale()
+	assert.Equal(t, CommandArgs{"workspace", "update-stale"}, got)
+}
+
 func TestFilesBatch(t *testing.T) {
 	got := FilesBatch([]string{"abc", "def"})
 	assert.Contains(t, got, "log")
