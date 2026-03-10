@@ -635,6 +635,13 @@ export interface PullRequest {
   is_draft: boolean
 }
 
+export interface RemoteVisibilityEntry {
+  visible: boolean
+  hidden?: string[]
+}
+
+export type RemoteVisibility = Record<string, RemoteVisibilityEntry>
+
 /** Returns the best unique identifier for a commit.
  *  Divergent and hidden commits share change_id, so we fall back to commit_id.
  *  Mirrors the Go Commit.GetChangeId() logic. */

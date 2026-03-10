@@ -1,4 +1,5 @@
 // Persistent user preferences, reactive via Svelte 5 runes.
+import type { RemoteVisibility } from './api'
 //
 // Primary storage: $XDG_CONFIG_HOME/lightjj/config.json via the backend.
 // Survives port changes — spawned workspace instances on different ports
@@ -23,6 +24,7 @@ interface Config {
   editorArgs: string[]
   /** Same, but used when lightjj is in --remote mode. */
   editorArgsRemote: string[]
+  remoteVisibility: RemoteVisibility
 }
 
 const defaults: Config = {
@@ -34,6 +36,7 @@ const defaults: Config = {
   tutorialVersion: '',
   editorArgs: [],
   editorArgsRemote: [],
+  remoteVisibility: {},
 }
 
 function loadLocal(): Partial<Config> {
@@ -153,6 +156,9 @@ function createConfig() {
 
     get editorArgsRemote() { return state.editorArgsRemote },
     set editorArgsRemote(v: string[]) { state.editorArgsRemote = v },
+
+    get remoteVisibility() { return state.remoteVisibility },
+    set remoteVisibility(v: RemoteVisibility) { state.remoteVisibility = v },
 
     /** Resolves when the remote config has been loaded and merged. Callers that
      *  need the "real" config (not just localStorage defaults) should await this
