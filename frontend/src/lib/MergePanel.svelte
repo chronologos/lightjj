@@ -27,6 +27,10 @@
   interface ApplyBlockEffect { idx: number; side: 'ours' | 'theirs'; newTo: number }
   const applyBlock = StateEffect.define<ApplyBlockEffect>()
   const editInside = StateEffect.define<number>()  // block index → mark mixed
+  // Undo inverse: restores {source, from, to} snapshot captured pre-apply.
+  // Without this, Cmd+Z restores the TEXT but the block stays marked as the
+  // new source (arrow stays dimmed, highlight wrong, counter wrong).
+  const restoreBlock = StateEffect.define<{ idx: number; from: number; to: number; source: BlockSource }>()
   interface CenterBlock {
     /** doc position (0-based char offset) of block start. */
     from: number
@@ -39,29 +43,38 @@
     return StateField.define<CenterBlock[]>({
       create() { return initial },
       update(blocks, tr) {
-        let result = blocks
-        // Effects first — applyBlock sets the explicit new `to` position
-        // AFTER the insertion, overriding the mapPos computation below.
+        // Position mapping ALWAYS runs first on doc change — applyBlock's target
+        // overrides below. Critical: non-target blocks MUST be mapped through
+        // the change or they retain stale pre-transaction offsets. (Old code
+        // gated mapPos on `result === blocks`, skipping it when applyBlock's
+        // .map() created a fresh array — block 1 kept block-0's old positions.)
+        let result: CenterBlock[] = tr.changes.empty ? blocks : blocks.map(b => ({
+          ...b,
+          from: tr.changes.mapPos(b.from, 1),
+          to: tr.changes.mapPos(b.to, -1),
+        }))
+        // Effects override mapped positions for the target block. applyBlock
+        // carries `newTo` because mapPos(to, -1) maps the OLD range's end to
+        // the deletion point, not to the end of the NEW insert.
         for (const e of tr.effects) {
           if (e.is(applyBlock)) {
             const { idx, side, newTo } = e.value
+            // from: pre-mapped by the pass above — but for pure-insertion case
+            // (old from===to), mapPos(from,1) with assoc=1 jumps PAST the
+            // insert. The block's from should STAY at the insertion point.
+            // Use assoc=-1 to stick left of the insert start.
+            const origFrom = blocks[idx].from
             result = result.map((b, i) => i === idx
-              ? { from: tr.changes.mapPos(b.from, 1), to: newTo, source: side }
+              ? { from: tr.changes.mapPos(origFrom, -1), to: newTo, source: side }
               : b)
           } else if (e.is(editInside)) {
             result = result.map((b, i) => i === e.value
               ? { ...b, source: 'mixed' as const }
               : b)
+          } else if (e.is(restoreBlock)) {
+            const { idx, from, to, source } = e.value
+            result = result.map((b, i) => i === idx ? { from, to, source } : b)
           }
-        }
-        // Map remaining blocks through changes (only if no applyBlock — which
-        // already produced a fresh array with correct positions).
-        if (!tr.changes.empty && result === blocks) {
-          result = blocks.map(b => ({
-            ...b,
-            from: tr.changes.mapPos(b.from, 1),
-            to: tr.changes.mapPos(b.to, -1),
-          }))
         }
         return result
       },
@@ -94,7 +107,7 @@
 
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands'
+  import { defaultKeymap, indentWithTab, history, historyKeymap, invertedEffects } from '@codemirror/commands'
   import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language'
   import { highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
   import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
@@ -215,6 +228,21 @@
         extensions: [
           ...sharedExts,
           history(),
+          // Undo restores TEXT but not StateField state. Register inverse
+          // effects so Cmd+Z after an arrow click also restores the block's
+          // prior {from, to, source} — otherwise arrow stays dimmed, highlight
+          // stays wrong, counter stays wrong.
+          invertedEffects.of(tr => {
+            // editInside is NOT inverted — it's dispatched as an effect-only
+            // transaction from updateListener (no doc change → not in history).
+            for (const e of tr.effects) {
+              if (e.is(applyBlock)) {
+                const old = tr.startState.field(tracker)[e.value.idx]
+                return [restoreBlock.of({ idx: e.value.idx, ...old })]
+              }
+            }
+            return []
+          }),
           highlightActiveLine(),
           highlightActiveLineGutter(),
           tracker,
