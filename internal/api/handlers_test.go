@@ -534,6 +534,40 @@ func TestHandleDivergence_Empty(t *testing.T) {
 	assert.Equal(t, "[]\n", w.Body.String())
 }
 
+func TestHandleStaleImmutable(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.StaleImmutable()).SetOutput([]byte(
+		"abc\x1F1110000000000000000000000000000000000000\x1F\x1F\x1Ffeat A\n" +
+			"abc\x1F2220000000000000000000000000000000000000\x1Fmain\x1Fmain@origin\x1Ffeat A\n",
+	))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/stale-immutable", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var groups []jj.StaleImmutableGroup
+	json.Unmarshal(w.Body.Bytes(), &groups)
+	assert.Equal(t, 1, len(groups))
+	assert.Equal(t, "1110000000000000000000000000000000000000", groups[0].Stale.CommitId)
+	assert.Equal(t, "2220000000000000000000000000000000000000", groups[0].Keeper.CommitId)
+}
+
+func TestHandleStaleImmutable_Empty(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.StaleImmutable()).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/stale-immutable", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "[]\n", w.Body.String())
+}
+
 func TestHandleFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.FilesTemplate("abc")).SetOutput(

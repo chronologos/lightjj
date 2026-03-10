@@ -147,6 +147,18 @@ Maps the taxonomy above into a ranked `Strategy[]` — what the panel recommends
 
 `findRoot` checks parent **change_ids** match, but `/N` emission is per-commit index position. A 4-step rebase-then-describe sequence produces crossed columns: `A/0=A₂, A/1=A₁, B/0=B₃(parent A₁), B/1=B₂(parent A₂)`. Without alignment, `buildPlan(0)` keeps `{A₂, B₃}` but abandons B₃'s parent — jj auto-rebases B₃ onto trunk, silently wrong. `alignColumns()` permutes by parent **commit_id**; returns `null` on arity mismatch or non-bijective mapping → `alignable: false` → panel disables Keep.
 
+## Stale immutable detection (shipped 2026-03-10)
+
+Force-push from another machine creates immutable divergence: both copies are in trunk, neither clearable by `jj util gc`. The `divergent() & mutable()` revset misses them entirely.
+
+**Detection:** `GET /api/stale-immutable` runs `jj log -r 'divergent() & immutable()'`, groups by change_id, filters to actionable pairs (exactly 2 copies, bookmark asymmetry — one has bookmarks, the other doesn't). The bookmarked copy is the keeper (remote considers it canonical after force-push).
+
+**Trigger:** Post-git-fetch/push only. Zero overhead during normal editing.
+
+**Resolution:** MessageBar warning with "Clean up" button → `POST /api/abandon` with `ignore_immutable: true` and the stale commit_ids. Reuses the existing abandon endpoint — jj accepts commit_id prefixes in `-r` flags, which disambiguates divergent copies that share a change_id.
+
+**Why bookmark asymmetry works:** `jj git fetch` moves remote-tracking bookmarks to the newly imported commit. The old local copy loses its bookmark — it's an orphan. Verified empirically with force-push of tagged release.
+
 ## Open questions
 
 - **Divergent merge commits** — `parents[0]` comparison is wrong. Compare full parent sets? Rare enough to punt.

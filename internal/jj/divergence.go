@@ -92,6 +92,103 @@ func ParseDivergence(output string) []DivergenceEntry {
 	return entries
 }
 
+// StaleImmutableEntry is one commit in the stale-immutable detection dataset.
+// These are immutable divergent commits — force-push leftovers from other
+// machines that jj keeps as divergent copies of commits that have since been
+// rewritten upstream.
+type StaleImmutableEntry struct {
+	ChangeId        string   `json:"change_id"`
+	CommitId        string   `json:"commit_id"`
+	LocalBookmarks  []string `json:"local_bookmarks"`
+	RemoteBookmarks []string `json:"remote_bookmarks"`
+	Description     string   `json:"description"`
+}
+
+// Full commit_id (not .short()) — these IDs flow into jj abandon -r via the
+// cleanup path. Short prefixes risk ambiguity in large repos. change_id stays
+// .short() since it's display-only (the grouping key, never used in commands).
+const staleImmutableTemplate = `change_id.short() ++ "\x1F" ++ ` +
+	`commit_id ++ "\x1F" ++ ` +
+	`local_bookmarks.map(|b| b.name()).join(",") ++ "\x1F" ++ ` +
+	`remote_bookmarks.map(|b| b.name() ++ "@" ++ b.remote()).join(",") ++ "\x1F" ++ ` +
+	`description.first_line() ++ "\n"`
+
+// StaleImmutable returns args for the stale-immutable detection log call.
+// Revset captures immutable divergent commits — these are force-push leftovers.
+func StaleImmutable() CommandArgs {
+	return []string{
+		"log",
+		"-r", "divergent() & immutable()",
+		"--no-graph",
+		"--color", "never",
+		"--ignore-working-copy",
+		"-T", staleImmutableTemplate,
+	}
+}
+
+// ParseStaleImmutable parses StaleImmutable() output into entries.
+func ParseStaleImmutable(output string) []StaleImmutableEntry {
+	entries := []StaleImmutableEntry{}
+	for line := range strings.SplitSeq(output, "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\x1F")
+		if len(f) != 5 {
+			continue
+		}
+		entries = append(entries, StaleImmutableEntry{
+			ChangeId:        f[0],
+			CommitId:        f[1],
+			LocalBookmarks:  splitNonEmpty(f[2], ","),
+			RemoteBookmarks: splitNonEmpty(f[3], ","),
+			Description:     f[4],
+		})
+	}
+	return entries
+}
+
+// StaleImmutableGroup is an actionable pair: one keeper (has bookmarks) and
+// one stale copy (no bookmarks) sharing the same change_id.
+type StaleImmutableGroup struct {
+	ChangeId string              `json:"change_id"`
+	Stale    StaleImmutableEntry `json:"stale"`
+	Keeper   StaleImmutableEntry `json:"keeper"`
+}
+
+// GroupStaleImmutable groups entries by change_id and identifies actionable
+// pairs where exactly one copy has bookmarks (the keeper) and the other has
+// none (the stale copy safe to abandon). Non-pairs and symmetric cases are
+// excluded — they need manual resolution.
+func GroupStaleImmutable(entries []StaleImmutableEntry) []StaleImmutableGroup {
+	groups := []StaleImmutableGroup{}
+	byChange := map[string][]StaleImmutableEntry{}
+	var order []string
+	for _, e := range entries {
+		if _, exists := byChange[e.ChangeId]; !exists {
+			order = append(order, e.ChangeId)
+		}
+		byChange[e.ChangeId] = append(byChange[e.ChangeId], e)
+	}
+	for _, cid := range order {
+		copies := byChange[cid]
+		if len(copies) != 2 {
+			continue
+		}
+		bm0 := len(copies[0].LocalBookmarks) + len(copies[0].RemoteBookmarks)
+		bm1 := len(copies[1].LocalBookmarks) + len(copies[1].RemoteBookmarks)
+		if (bm0 == 0) == (bm1 == 0) {
+			continue
+		}
+		if bm0 > 0 {
+			groups = append(groups, StaleImmutableGroup{ChangeId: cid, Keeper: copies[0], Stale: copies[1]})
+		} else {
+			groups = append(groups, StaleImmutableGroup{ChangeId: cid, Keeper: copies[1], Stale: copies[0]})
+		}
+	}
+	return groups
+}
+
 // splitNonEmpty: strings.Split("", ",") returns [""] which would give us
 // phantom single-element parent/bookmark arrays.
 func splitNonEmpty(s, sep string) []string {

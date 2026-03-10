@@ -217,6 +217,16 @@ func (s *Server) handleDivergence(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, jj.ParseDivergence(string(output)))
 }
 
+func (s *Server) handleStaleImmutable(w http.ResponseWriter, r *http.Request) {
+	output, err := s.Runner.Run(r.Context(), jj.StaleImmutable())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	entries := jj.ParseStaleImmutable(string(output))
+	s.writeJSON(w, r, http.StatusOK, jj.GroupStaleImmutable(entries))
+}
+
 // revisionResponse is the batch payload for diff + files + description.
 // Matches the shape of the three individual endpoints' combined output so the
 // frontend can seed individual cache keys from a single fetch.

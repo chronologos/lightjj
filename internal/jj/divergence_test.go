@@ -101,6 +101,94 @@ func TestParseDivergence_MalformedLine(t *testing.T) {
 	assert.Equal(t, "good", got[0].CommitId)
 }
 
+func TestParseStaleImmutable(t *testing.T) {
+	output := "spzmpxnu\x1Fa4eecdf2f0dccfcec69fb4ec1e71fda4b0da6a36\x1F\x1F\x1Fv0.8.0: tab persistence\n" +
+		"spzmpxnu\x1F9d3d2a067c6c5e9cc72c3c422ee5416d0c89f765\x1Fv0.8.0\x1Fv0.8.0@origin\x1Fv0.8.0: tab persistence\n"
+	got := ParseStaleImmutable(output)
+	assert.Equal(t, 2, len(got))
+	assert.Equal(t, "spzmpxnu", got[0].ChangeId)
+	assert.Equal(t, "a4eecdf2f0dccfcec69fb4ec1e71fda4b0da6a36", got[0].CommitId)
+	assert.Equal(t, []string{}, got[0].LocalBookmarks)
+	assert.Equal(t, []string{}, got[0].RemoteBookmarks)
+	assert.Equal(t, "v0.8.0: tab persistence", got[0].Description)
+	assert.Equal(t, []string{"v0.8.0"}, got[1].LocalBookmarks)
+	assert.Equal(t, []string{"v0.8.0@origin"}, got[1].RemoteBookmarks)
+}
+
+func TestParseStaleImmutable_Empty(t *testing.T) {
+	got := ParseStaleImmutable("")
+	assert.Equal(t, []StaleImmutableEntry{}, got)
+}
+
+func TestParseStaleImmutable_MalformedLine(t *testing.T) {
+	got := ParseStaleImmutable("only\x1Ftwo-fields\n")
+	assert.Equal(t, []StaleImmutableEntry{}, got)
+}
+
+func TestGroupStaleImmutable_ActionablePair(t *testing.T) {
+	entries := []StaleImmutableEntry{
+		{ChangeId: "abc", CommitId: "111", LocalBookmarks: []string{}, RemoteBookmarks: []string{}, Description: "v1"},
+		{ChangeId: "abc", CommitId: "222", LocalBookmarks: []string{"main"}, RemoteBookmarks: []string{"main@origin"}, Description: "v1"},
+	}
+	groups := GroupStaleImmutable(entries)
+	assert.Equal(t, 1, len(groups))
+	assert.Equal(t, "abc", groups[0].ChangeId)
+	assert.Equal(t, "111", groups[0].Stale.CommitId)
+	assert.Equal(t, "222", groups[0].Keeper.CommitId)
+}
+
+func TestGroupStaleImmutable_SymmetricBookmarks_NotActionable(t *testing.T) {
+	entries := []StaleImmutableEntry{
+		{ChangeId: "abc", CommitId: "111", LocalBookmarks: []string{"main"}, RemoteBookmarks: []string{}, Description: "v1"},
+		{ChangeId: "abc", CommitId: "222", LocalBookmarks: []string{}, RemoteBookmarks: []string{"main@origin"}, Description: "v1"},
+	}
+	groups := GroupStaleImmutable(entries)
+	assert.Equal(t, 0, len(groups))
+}
+
+func TestGroupStaleImmutable_ThreeCopies_NotActionable(t *testing.T) {
+	entries := []StaleImmutableEntry{
+		{ChangeId: "abc", CommitId: "111", Description: "v1"},
+		{ChangeId: "abc", CommitId: "222", LocalBookmarks: []string{"main"}, Description: "v1"},
+		{ChangeId: "abc", CommitId: "333", Description: "v1"},
+	}
+	groups := GroupStaleImmutable(entries)
+	assert.Equal(t, 0, len(groups))
+}
+
+func TestGroupStaleImmutable_MultiplePairs(t *testing.T) {
+	entries := []StaleImmutableEntry{
+		{ChangeId: "abc", CommitId: "111", Description: "feat A"},
+		{ChangeId: "abc", CommitId: "222", LocalBookmarks: []string{"feat-a"}, Description: "feat A"},
+		{ChangeId: "xyz", CommitId: "333", Description: "feat B"},
+		{ChangeId: "xyz", CommitId: "444", RemoteBookmarks: []string{"feat-b@origin"}, Description: "feat B"},
+	}
+	groups := GroupStaleImmutable(entries)
+	assert.Equal(t, 2, len(groups))
+}
+
+func TestGroupStaleImmutable_NeitherHasBookmarks_NotActionable(t *testing.T) {
+	entries := []StaleImmutableEntry{
+		{ChangeId: "abc", CommitId: "111", Description: "v1"},
+		{ChangeId: "abc", CommitId: "222", Description: "v1"},
+	}
+	groups := GroupStaleImmutable(entries)
+	assert.Equal(t, 0, len(groups))
+}
+
+func TestGroupStaleImmutable_Empty(t *testing.T) {
+	groups := GroupStaleImmutable([]StaleImmutableEntry{})
+	assert.Equal(t, []StaleImmutableGroup{}, groups)
+}
+
+func TestStaleImmutable(t *testing.T) {
+	got := StaleImmutable()
+	assert.Equal(t, "log", got[0])
+	assert.Contains(t, got, "divergent() & immutable()")
+	assert.Contains(t, got, "--no-graph")
+	assert.Contains(t, got, "--ignore-working-copy")
+}
+
 func TestSplitNonEmpty(t *testing.T) {
 	assert.Equal(t, []string{}, splitNonEmpty("", ","))
 	assert.Equal(t, []string{"a"}, splitNonEmpty("a", ","))

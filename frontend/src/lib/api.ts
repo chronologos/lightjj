@@ -58,6 +58,12 @@ export interface DivergenceEntry {
   is_working_copy: boolean  // @ IS this commit — tautology guard for wc_reachable
 }
 
+export interface StaleImmutableGroup {
+  change_id: string
+  stale: { commit_id: string; description: string; local_bookmarks: string[]; remote_bookmarks: string[] }
+  keeper: { commit_id: string; description: string; local_bookmarks: string[]; remote_bookmarks: string[] }
+}
+
 export interface BookmarkRemote {
   remote: string
   commit_id: string
@@ -793,6 +799,8 @@ export const api = {
   // without changing any commit_id the panel already holds). Fetched on panel
   // open + after any mutation — same cadence as evolog.
   divergence: () => request<DivergenceEntry[]>('/api/divergence'),
+
+  staleImmutable: () => request<StaleImmutableGroup[]>('/api/stale-immutable'),
 
   diffRange: (from: string, to: string, files?: string[]) => {
     const params = new URLSearchParams({ from, to })

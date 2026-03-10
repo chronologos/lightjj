@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
@@ -75,6 +75,10 @@
   // the bar is a fixed overlay (doesn't block the graph), and the condition
   // persists until fixed. "Update stale" button or CLI recovery clears it.
   let workspaceStale = $state(false)
+
+  // Stale immutable detection — force-push leftovers. Set after git fetch/push,
+  // cleared after cleanup or if resolved externally.
+  let staleImmutableGroups = $state<StaleImmutableGroup[]>([])
 
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
@@ -879,7 +883,16 @@
     text: 'Working copy is stale — another workspace rewrote shared history',
     action: { label: 'Update stale', onClick: handleUpdateStale },
   }
-  let displayMessage = $derived(message ?? (workspaceStale ? staleWCMessage : null))
+  const staleImmutableMessage: Message | null = $derived(staleImmutableGroups.length > 0 ? {
+    kind: 'warning' as const,
+    text: `${staleImmutableGroups.length} stale immutable commit${staleImmutableGroups.length !== 1 ? 's' : ''} (likely force-pushed remotely)`,
+    details: staleImmutableGroups.map(g =>
+      `${g.stale.commit_id.slice(0, 8)} "${g.stale.description}" — keeper: ${g.keeper.commit_id.slice(0, 8)} (${g.keeper.local_bookmarks.concat(g.keeper.remote_bookmarks).join(', ')})`
+    ).join('\n'),
+    action: { label: 'Clean up', onClick: handleCleanupStaleImmutable },
+  } : null)
+
+  let displayMessage = $derived(message ?? (workspaceStale ? staleWCMessage : staleImmutableMessage))
 
   const handleOpUndo = (id: string) =>
     runMutation(() => api.opUndo(id), `Undid operation ${id.slice(0, 8)}`)
@@ -986,7 +999,28 @@
       () => (type === 'push' ? api.gitPush : api.gitFetch)(flags, onLine)
               .finally(() => { mutationProgress = '' }),
       `Git ${type} complete`,
-      { after: () => loadPullRequests() },
+      { after: () => { loadPullRequests(); checkStaleImmutable() } },
+    )
+  }
+
+  function checkStaleImmutable() {
+    api.staleImmutable().then(groups => {
+      // Guard: skip [] → [] to avoid no-op reactivity on every fetch/push.
+      if (groups.length > 0 || staleImmutableGroups.length > 0) {
+        staleImmutableGroups = groups
+      }
+    }).catch(() => {
+      // Silent — detection is best-effort. Don't block the user with
+      // an error about a background check.
+    })
+  }
+
+  function handleCleanupStaleImmutable() {
+    const staleIds = staleImmutableGroups.map(g => g.stale.commit_id)
+    runMutation(
+      () => api.abandon(staleIds, true),
+      `Cleaned up ${staleIds.length} stale immutable commit${staleIds.length !== 1 ? 's' : ''}`,
+      { after: () => { staleImmutableGroups = [] } },
     )
   }
 
