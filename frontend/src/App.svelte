@@ -1854,6 +1854,7 @@
             isDark={darkMode}
             {prByBookmark}
             {impliedCommitIds}
+            remoteVisibility={config.remoteVisibility}
           />
         </div>
 

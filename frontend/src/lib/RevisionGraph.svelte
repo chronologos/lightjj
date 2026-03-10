@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { createVirtualizer } from '@tanstack/svelte-virtual'
-  import { effectiveId, type LogEntry, type PullRequest } from './api'
+  import { effectiveId, type LogEntry, type PullRequest, type RemoteVisibility } from './api'
   import { targetModeLabel, type RebaseMode, type SquashMode, type SplitMode } from './modes.svelte'
   import GraphSvg from './GraphSvg.svelte'
 
@@ -43,6 +43,7 @@
     isDark: boolean
     prByBookmark: Map<string, PullRequest>
     impliedCommitIds: Set<string>
+    remoteVisibility: RemoteVisibility
   }
 
   let {
@@ -51,7 +52,7 @@
     onnewfromchecked, onabandonchecked, onclearchecks,
     onrevsetsubmit, onrevsetclear, onrevsetchange, onrevsetescaped, onviewmodechange, onbookmarkclick,
     rebase, squash, split,
-    isDark, prByBookmark, impliedCommitIds,
+    isDark, prByBookmark, impliedCommitIds, remoteVisibility,
   }: Props = $props()
 
   let anyModeActive = $derived(rebase.active || squash.active || split.active)
@@ -111,6 +112,17 @@
       else result += ch
     }
     return result
+  }
+
+  function isRemoteVisible(ref: string, vis: RemoteVisibility): boolean {
+    const atIdx = ref.lastIndexOf('@')
+    if (atIdx < 0) return false
+    const name = ref.slice(0, atIdx)
+    const remote = ref.slice(atIdx + 1)
+    const entry = vis[remote]
+    if (!entry?.visible) return false
+    if (entry.hidden?.includes(name)) return false
+    return true
   }
 
   // Compute max gutter width across all lines so we can pad gutters
@@ -195,7 +207,9 @@
         })
         if (isNode) {
           const contGutter = padGutter(continuationGutter(gl.gutter))
-          const hasLabels = (entry.bookmarks?.length ?? 0) + (entry.commit.working_copies?.length ?? 0) > 0
+          const localBms = (entry.bookmarks ?? []).filter(b => !b.includes('@'))
+          const visibleRemoteBms = (entry.bookmarks ?? []).filter(b => b.includes('@') && isRemoteVisible(b, remoteVisibility))
+          const hasLabels = (localBms.length + visibleRemoteBms.length + (entry.commit.working_copies?.length ?? 0)) > 0
           if (hasLabels) {
             lines.push({
               gutter: contGutter,
@@ -445,11 +459,13 @@
           {:else if line.isBookmarkLine}
             {@const entry = revisions[line.entryIndex]}
             {@const laneColorVar = line.nodeLane != null ? `var(--graph-${line.nodeLane % GRAPH_COLORS})` : ''}
+            {@const localBookmarks = (entry.bookmarks ?? []).filter(b => !b.includes('@'))}
+            {@const visibleRemoteBookmarks = (entry.bookmarks ?? []).filter(b => b.includes('@') && isRemoteVisible(b, remoteVisibility))}
             <span class="bookmark-line-content">
               {#each entry.commit.working_copies ?? [] as ws}
                 <span class="workspace-badge">◇ {ws}@</span>
               {/each}
-              {#each entry.bookmarks ?? [] as bm}
+              {#each localBookmarks as bm}
                 {@const pr = prByBookmark.get(bm)}
                 {@const tinted = !!laneColorVar && !multiBookmarks.has(bm)}
                 {#if pr}
@@ -465,6 +481,10 @@
                   <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}
                      style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}>⑂ {bm}</button>
                 {/if}
+              {/each}
+              {#each visibleRemoteBookmarks as ref}
+                {@const atIdx = ref.lastIndexOf('@')}
+                <span class="remote-bookmark-badge">{ref.slice(atIdx + 1)}/{ref.slice(0, atIdx)}</span>
               {/each}
             </span>
           {:else if line.isDescLine}
@@ -967,6 +987,20 @@
 
   .bookmark-badge.lane-tinted:hover {
     border-color: color-mix(in srgb, var(--lane-color) 75%, transparent);
+  }
+
+  .remote-bookmark-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--overlay0);
+    border: 1px solid var(--surface0);
+    line-height: 1.15;
+    letter-spacing: 0.02em;
+    vertical-align: baseline;
   }
 
   .pr-badge {
