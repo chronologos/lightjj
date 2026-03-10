@@ -313,7 +313,7 @@
             const lineContent = file.hunks[hunkIdx].lines[i]?.content ?? ''
             // \\\\\\\ sub-marker lines: hide them (no sideLabel → no tab).
             // They're metadata already absorbed into the parent side's label.
-            if (isDiff && /^\+\\{7}\s/.test(lineContent)) {
+            if (isDiff && /^\+\\{7,}\s/.test(lineContent)) {
               metaMap.set(i, { cssClass: 'conflict-diff-marker', sideIndex: sideIdx })
             } else {
               metaMap.set(i, { cssClass: lineClass, sideIndex: sideIdx })
