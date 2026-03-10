@@ -88,6 +88,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/new", s.handleNew)
 	s.Mux.HandleFunc("POST /api/edit", s.handleEdit)
 	s.Mux.HandleFunc("POST /api/abandon", s.handleAbandon)
+	s.Mux.HandleFunc("POST /api/metaedit-change-id", s.handleMetaeditChangeId)
 	s.Mux.HandleFunc("POST /api/restore", s.handleRestore)
 	s.Mux.HandleFunc("POST /api/describe", s.handleDescribe)
 	s.Mux.HandleFunc("POST /api/rebase", s.handleRebase)

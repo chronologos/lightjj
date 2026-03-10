@@ -59,6 +59,13 @@ func TestEdit(t *testing.T) {
 	assert.Equal(t, []string{"edit", "-r", "xyz", "--ignore-immutable"}, Edit("xyz", true))
 }
 
+func TestMetaeditUpdateChangeId(t *testing.T) {
+	assert.Equal(t,
+		[]string{"metaedit", "-r", "abc123", "--update-change-id"},
+		MetaeditUpdateChangeId("abc123"),
+	)
+}
+
 func TestAbandon(t *testing.T) {
 	revs := NewSelectedRevisions(&Commit{ChangeId: "abc"}, &Commit{ChangeId: "def"})
 	got := Abandon(revs, false)

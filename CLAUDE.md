@@ -84,8 +84,9 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     GitModal.svelte        — Git push/fetch modal
     EvologPanel.svelte     — Evolution log: entry list with inline diffs (server emits rebase-safe inter_diff per entry), ArrowUp/Down navigation
     OplogPanel.svelte      — Operation log panel
-    DivergencePanel.svelte — Stack-aware divergence resolution. classify() → columns (one per /N version, rows = stack levels). KeepPlan computed here, executed in App.svelte. {#key changeId} in parent enforces single-mount-per-changeId.
+    DivergencePanel.svelte — Stack-aware divergence resolution. classify() → columns (one per /N version, rows = stack levels). Strategy recommendation card (confidence-tinted) above columns; KeepPlan computed here, executed in App.svelte; split-identity/squash via onsplit/onsquash. Immutable-sibling case: split-identity card instead of error string. {#key changeId} in parent enforces single-mount-per-changeId.
     divergence.ts          — classify(): stack grouping (parent-change_id walk + alignColumns commit_id permutation), kind (same/diff/compound), liveVersion with jj-edit tautology guard, descendants, conflicted bookmarks. refineRebaseKind() fileUnion subtraction. See docs/jj-divergence.md.
+    divergence-strategy.ts — recommend(group, refinedKind) → ranked Strategy[] (keep/squash + confidence + reason). Mirrors jj-guide Strategies 1+3. Conservative: 'high' only for pure-rebase+live-hint. Squash gated on non-stack (tip-only resolution leaves intermediates divergent). Immutable-sibling: hardcoded buttons in panel, not Strategy[] — split-identity (metaedit --update-change-id) vs abandon-mutable.
     diff-parser.ts         — Unified diff parser
     conflict-parser.ts     — jj conflict marker parser; diff-side labels use \\\\\\\ "to:" value (what :ours keeps), not %%%%%%% "from:"
     split-view.ts          — Side-by-side diff alignment

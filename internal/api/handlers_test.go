@@ -194,6 +194,30 @@ func TestHandleAbandon(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleMetaeditChangeId(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.MetaeditUpdateChangeId("abc")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(metaeditChangeIdRequest{Revision: "abc"})
+	req := jsonPost("/api/metaedit-change-id", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleMetaeditChangeId_EmptyRevision(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(metaeditChangeIdRequest{Revision: ""})
+	req := jsonPost("/api/metaedit-change-id", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 // TestRunMutation_Warnings verifies that exit-0 commands with stderr content
 // surface that content as a "warnings" field in the response. This is the
 // path that catches `jj rebase` printing rebased commits to stdout +

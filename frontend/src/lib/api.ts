@@ -810,6 +810,11 @@ export const api = {
   abandon: (revisions: string[], ignoreImmutable = false) =>
     post<MutationResult>('/api/abandon', { revisions, ignore_immutable: ignoreImmutable }),
 
+  // Split-identity divergence resolution (jj-guide Strategy 2). Gives one
+  // commit a fresh change_id → no longer shares with its divergent sibling.
+  metaeditChangeId: (revision: string) =>
+    post<MutationResult>('/api/metaedit-change-id', { revision }),
+
   restore: (revision: string, files: string[]) =>
     post<MutationResult>('/api/restore', { revision, files }),
 

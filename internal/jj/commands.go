@@ -112,6 +112,15 @@ func GetDescription(revision string) CommandArgs {
 	return []string{"log", "-r", revision, "--template", "description", "--no-graph", "--ignore-working-copy", "--color", "never", "--quiet"}
 }
 
+// MetaeditUpdateChangeId gives one commit a fresh change_id — the jj-guide
+// "split identity" divergence resolution. Divergence = two commits sharing a
+// change_id; rerolling one commit's change_id breaks the link without touching
+// content. Primary use case: divergent-with-immutable-sibling where abandon
+// would discard the user's mutable work and Keep can't abandon the trunk copy.
+func MetaeditUpdateChangeId(commitId string) CommandArgs {
+	return []string{"metaedit", "-r", commitId, "--update-change-id"}
+}
+
 func Abandon(revisions SelectedRevisions, ignoreImmutable bool) CommandArgs {
 	args := []string{"abandon", "--retain-bookmarks"}
 	args = append(args, revisions.AsArgs()...)

@@ -470,6 +470,26 @@ func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
 	s.runMutation(w, r, jj.Abandon(revs, req.IgnoreImmutable))
 }
 
+type metaeditChangeIdRequest struct {
+	Revision string `json:"revision"`
+}
+
+// handleMetaeditChangeId wraps `jj metaedit --update-change-id` — the "split
+// identity" divergence resolution. See docs/jj-divergence.md and the jj guide
+// (docs.jj-vcs.dev/latest/guides/divergence/ §Strategy 2).
+func (s *Server) handleMetaeditChangeId(w http.ResponseWriter, r *http.Request) {
+	var req metaeditChangeIdRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	s.runMutation(w, r, jj.MetaeditUpdateChangeId(req.Revision))
+}
+
 type restoreRequest struct {
 	Revision string   `json:"revision"`
 	Files    []string `json:"files"`

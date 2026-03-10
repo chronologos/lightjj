@@ -107,13 +107,41 @@ Revset: `(stale_root::):: ~ ::keeper_tip ~ divergent()` — finds them correctly
 
 `jj bookmark set <name> -r <keeper_version_of_same_change_id>` — NOT `<keeper_tip>`. A bookmark on the stack's middle commit (change_id B) should repoint to B's keeper, not jump to D. Map by change_id.
 
+## Strategy recommendations (shipped 2026-03-10)
+
+Maps the taxonomy above into a ranked `Strategy[]` — what the panel recommends, not just what it classifies. Strategies mirror the jj guide's four (docs.jj-vcs.dev/guides/divergence); we implement three, the fourth (accept/do-nothing for immutable-vs-immutable) is the implicit null.
+
+| jj-guide strategy | jj command | lightjj strategy kind |
+|---|---|---|
+| 1: Abandon | `jj abandon <loser-id>` | `keep` (keeps the winner, abandons others) |
+| 2: Split identity | `jj metaedit --update-change-id <id>` | `split-identity` |
+| 3: Squash | `jj squash --from <loser> --into <keeper>` | `squash` |
+| 4: Accept | — | Empty recommendation list |
+
+`recommend(group, refinedKind)` returns ranked list; `[0]` renders as the primary card, `[1..]` as secondary pills. Confidence capped at `medium` for anything content-at-risk — `high` reserved for pure-rebase + live-hint (picking wrong is a provable near-no-op).
+
+| RefinedKind | liveVersion | → primary | confidence |
+|---|---|---|---|
+| `pure-rebase` | set | keep live | **high** |
+| `pure-rebase` | null | keep (no target — user picks) | medium |
+| `metadata-only` | any | keep (no target) | low |
+| `edit-conflict` | any | squash (into live if set) | medium |
+| `rebase-edit` | set | keep live (+ warn) | medium |
+| `rebase-edit` | null | squash (no target) | low |
+| `compound` / non-alignable / N>2 | — | *(empty — manual only)* | — |
+
+**Immutable-sibling** (1-copy group, the other filtered by `& mutable()`): two hardcoded buttons — NOT routed through `Strategy[]` (would overload `'keep'` with inverted semantics). Split-identity primary (preserves mutable work as a new change); abandon-mutable secondary ("accept trunk's version").
+
+**Not implemented:** fresher-trunk heuristic for pure-rebase+null-live. Design: lazy `jj log -r 'heads(P0|P1)'` fetch → the column whose parent is the sole head is the freshly-rebased one. Needs a `heads()` API wrapper first.
+
 ## Implementation (shipped 2026-03-05)
 
 - Template/parser: `internal/jj/divergence.go` — 10 fields, NO `committer.timestamp` (see §"Failed heuristics")
 - Endpoint: `GET /api/divergence` (`handlers.go`)
 - Classifier: `frontend/src/lib/divergence.ts` — `classify()` + `alignColumns()` + `refineRebaseKind()`
-- Panel: `DivergencePanel.svelte` — unified column rendering for stack AND single; `{#key changeId}` in parent enforces single-mount
-- 29 frontend tests, 9 backend
+- **Strategy engine (2026-03-10):** `frontend/src/lib/divergence-strategy.ts` — `recommend()` pure function; `POST /api/metaedit-change-id` for split-identity
+- Panel: `DivergencePanel.svelte` — unified column rendering + strategy card; `{#key changeId}` in parent enforces single-mount
+- 45 frontend tests, 11 backend
 
 ### Column alignment (found during review, not in initial design)
 

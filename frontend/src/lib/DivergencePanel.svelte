@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { api, type DivergenceEntry, type FileChange } from './api'
+  import { api, type DivergenceEntry } from './api'
   import { classify, refineRebaseKind, type DivergenceGroup } from './divergence'
+  import { recommend, immutableSiblingCopy, type RefinedKind, type Strategy } from './divergence-strategy'
   import { parseDiffContent } from './diff-parser'
   import DiffFileView from './DiffFileView.svelte'
 
@@ -28,18 +29,35 @@
   interface Props {
     changeId: string
     onkeep: (plan: KeepPlan) => Promise<void>
+    // Split-identity (jj-guide Strategy 2): metaedit --update-change-id.
+    // Panel passes the COMMIT_ID to re-id. Single command, no plan struct.
+    onsplit: (commitId: string) => Promise<void>
+    // Squash (Strategy 3): jj squash --from loser --into keeper. Panel
+    // computes both IDs from the column indices; App just wraps api.squash().
+    onsquash: (fromCommitId: string, intoCommitId: string) => Promise<void>
+    // Abandon-mutable for the immutable-sibling case. Distinct from onkeep:
+    // no keeper id available (the immutable copy is filtered by mutable()
+    // revset), no bookmark repoint plan. Just `jj abandon <mutable>`.
+    onabandon: (commitId: string) => Promise<void>
     onclose: () => void
   }
 
-  let { changeId, onkeep, onclose }: Props = $props()
+  let { changeId, onkeep, onsplit, onsquash, onabandon, onclose }: Props = $props()
 
   // --- Group classification ---
   // One api.divergence() call on mount gives us everything. Finding the group
   // containing changeId routes to stack or single rendering.
   let group = $state<DivergenceGroup | null>(null)
+  // Immutable-sibling case: classify() returns a 1-copy group (the other copy
+  // was filtered by `& mutable()`). Not representable as a Keep-able group —
+  // stash the lone mutable commit_id and render via recommendForImmutableSibling().
+  let immutableSibling = $state<string | null>(null)
   let loading = $state(true)
   let error = $state('')
   let keepingIdx = $state(-1)
+  // Guards handleSplit/handleSquash re-entry (same role as keepingIdx for Keep
+  // — but Keep needs the idx for "Keeping…" per-button; these are one-shot).
+  let strategyBusy = $state(false)
 
   // Derived view data
   let isStack = $derived((group?.changeIds.length ?? 0) > 1)
@@ -53,13 +71,31 @@
   let fileUnion = $state<Set<string>>(new Set())
 
   let parsedCrossDiff = $derived(parseDiffContent(crossDiff))
-  // refinedKind depends on both classify() AND the lazy diffRange fetch.
-  // Consumes parsedCrossDiff (not re-parsing crossDiff — derived memoizes).
-  let refinedKind = $derived.by(() => {
-    if (!group || group.kind === 'same-parent' || group.kind === 'compound') return group?.kind
-    if (diffLoading || parsedCrossDiff.length === 0) return 'diff-parent'
+
+  // RefinedKind — full taxonomy after tree-delta lands. Feeds both the kind
+  // badge AND recommend(). The old refinedKind only refined diff-parent; this
+  // also splits same-parent into metadata-only/edit-conflict.
+  //
+  // crossDiff === '' means diffRange returned empty → trees identical.
+  // diffLoading means fetch in flight → 'pending' (recommend() waits).
+  let refinedKind = $derived.by((): RefinedKind => {
+    if (!group) return 'pending'
+    if (!group.alignable || group.kind === 'compound') return 'compound'
+    if (diffLoading) return 'pending'
+    const treeEmpty = crossDiff === ''
+    if (group.kind === 'same-parent') {
+      return treeEmpty ? 'metadata-only' : 'edit-conflict'
+    }
+    // diff-parent: refineRebaseKind subtracts fileUnion-external paths
+    // (trunk churn). Empty remainder → pure-rebase.
+    if (treeEmpty) return 'pure-rebase'
     return refineRebaseKind(parsedCrossDiff.map(f => f.filePath), fileUnion)
   })
+
+  // Strategy recommendations — ranked list, [0] rendered as primary card.
+  // Recomputes when refinedKind settles (pending→concrete). Immutable-sibling
+  // doesn't use this — two hardcoded buttons, see template.
+  let strategies = $derived(group ? recommend(group, refinedKind) : [])
 
   // A descendant merging two column tips is likely the user's manual
   // reconciliation (`jj new keeper loser`). buildPlan would silently exclude
@@ -106,18 +142,14 @@
       if (found.versions[0].length < 2) {
         // Divergent-with-immutable-sibling: the other copy was filtered out
         // by `& mutable()`. Can't abandon it (it's in trunk's DAG permanently).
-        // This is the "never clears" case from docs/jj-divergence.md — the
-        // panel has nothing to offer. Common in repos with automated
-        // warm-merge trains where trunk was rewritten.
+        // Old panel showed an error string with a shell hint; now we offer
+        // actionable strategies — split-identity keeps the user's work,
+        // abandon-mutable accepts trunk's version. See recommendForImmutableSibling().
         //
         // findRoot's parentCommits.size >= 2 guard ensures these never chain
         // as roots of resolvable stacks — versions[0] here is always the
-        // clicked change. commit_id (not change_id) in the abandon hint:
-        // `jj abandon <change_id>` on a divergent change errors with
-        // "resolved to more than one revision".
-        error = `Change ${id} is divergent with an immutable copy (likely in trunk history). ` +
-          'The immutable copy cannot be abandoned; this divergence will persist. ' +
-          'To discard your mutable copy instead: jj abandon ' + found.versions[0][0].commit_id
+        // clicked change.
+        immutableSibling = found.versions[0][0].commit_id
         loading = false
         return
       }
@@ -127,9 +159,13 @@
       // filtered → first response discarded by diffGen but wasted round trip.
       // With this order: fileUnion set → diff effect checks `if (!group)` →
       // bails. group set → single filtered fetch.
+      // No per-call .catch(): a silently-empty fileUnion makes refineRebaseKind
+      // unconditionally return 'pure-rebase' (filter against empty set → []),
+      // triggering a HIGH-confidence keep recommendation when trees may
+      // actually differ. Let failures bubble to the outer catch → panel error.
       const tipLevel = found.versions[found.versions.length - 1]
       const fileResults = await Promise.all(
-        tipLevel.map(v => api.files(v.commit_id).catch(() => [] as FileChange[]))
+        tipLevel.map(v => api.files(v.commit_id))
       )
       const paths = new Set<string>()
       for (const files of fileResults) for (const f of files) paths.add(f.path)
@@ -235,6 +271,49 @@
     }
   }
 
+  // Dispatches a Strategy to the right handler. Centralized so both the
+  // primary card button AND secondary pills go through one path.
+  // recommend() never emits 'split-identity' — that's immutable-sibling-only,
+  // handled by splitMutable()/abandonMutable() below (hardcoded buttons).
+  async function applyStrategy(s: Strategy) {
+    if (strategyBusy || keepingIdx >= 0) return
+    switch (s.kind) {
+      case 'keep':
+        // targetIdx null → no recommendation on WHICH column; let user pick
+        // via the per-column Keep buttons. The card is informational only.
+        if (s.targetIdx === null) return
+        await handleKeep(s.targetIdx)
+        return
+      case 'squash': {
+        // targetIdx is the --into side; --from is the other column. n=2 and
+        // non-stack guaranteed upstream (recommend() gates on both); re-checked
+        // here as defense-in-depth for direct callers.
+        if (!group || nVersions !== 2 || isStack) return
+        const into = s.targetIdx ?? 0
+        const from = 1 - into
+        const tipLevel = group.versions[group.versions.length - 1]
+        strategyBusy = true
+        try {
+          await onsquash(tipLevel[from].commit_id, tipLevel[into].commit_id)
+        } finally { strategyBusy = false }
+        return
+      }
+    }
+  }
+
+  // Immutable-sibling actions. Two fixed choices; not routed through
+  // Strategy[] (would overload 'keep' with inverted semantics).
+  async function splitMutable() {
+    if (!immutableSibling || strategyBusy) return
+    strategyBusy = true
+    try { await onsplit(immutableSibling) } finally { strategyBusy = false }
+  }
+  async function abandonMutable() {
+    if (!immutableSibling || strategyBusy) return
+    strategyBusy = true
+    try { await onabandon(immutableSibling) } finally { strategyBusy = false }
+  }
+
   function confirmAbandonDescendants() {
     if (!pendingPlan) return
     execute({
@@ -259,14 +338,22 @@
     }, pendingKeeperIdx)
   }
 
-  // Kind → badge text. Panel shows what it knows; refined kinds appear once
-  // the cross-diff lands.
-  const kindLabel: Record<string, { text: string; hint: string }> = {
-    'same-parent': { text: 'concurrent edit', hint: 'Both versions rewrote from the same base. Check the diff — one may have changes the other doesn\'t.' },
-    'diff-parent': { text: 'rebased', hint: 'One version was rebased. Loading diff to check for content drift…' },
-    'pure-rebase': { text: 'pure rebase', hint: 'Trees identical (modulo trunk). Either version is safe.' },
-    'rebase-edit': { text: 'rebase + edit', hint: 'One version has edits the other doesn\'t. Check the diff before keeping.' },
-    'compound': { text: 'compound', hint: '3+ versions with mixed parents. Pick manually.' },
+  // RefinedKind → badge text. Shown in the header; updates as cross-diff lands.
+  const kindLabel: Record<RefinedKind, { text: string; hint: string }> = {
+    'pending':       { text: '…',               hint: 'Loading tree diff to refine classification…' },
+    'metadata-only': { text: 'metadata only',   hint: 'Same tree, same parent — only description/author differ.' },
+    'edit-conflict': { text: 'edit conflict',   hint: 'Both versions have unique edits from the same base.' },
+    'pure-rebase':   { text: 'pure rebase',     hint: 'Trees identical (modulo trunk). Either version is safe.' },
+    'rebase-edit':   { text: 'rebase + edit',   hint: 'One version has edits the other doesn\'t. Check the diff before keeping.' },
+    'compound':      { text: 'compound',        hint: '3+ versions or non-alignable columns. Resolve manually.' },
+  }
+
+  // Strategy → button verb + what jj will run (for the title tooltip).
+  // recommend() only emits keep/squash; split-identity is immutable-sibling
+  // only (hardcoded buttons, doesn't go through strategyCard).
+  const strategyLabel: Record<'keep' | 'squash', { verb: string; cmd: (s: Strategy) => string }> = {
+    'keep':   { verb: 'Keep',   cmd: s => s.targetIdx === null ? 'jj abandon <other>' : `Keep /${s.targetIdx} (abandons others)` },
+    'squash': { verb: 'Squash', cmd: s => `jj squash --from /${s.targetIdx === null ? '?' : 1 - s.targetIdx} --into /${s.targetIdx ?? '?'}` },
   }
 </script>
 
@@ -274,9 +361,13 @@
   <div class="panel-header">
     <span class="panel-title">
       Divergence
-      {#if group}
-        <span class="kind-badge" title={kindLabel[refinedKind ?? group.kind]?.hint}>
-          {kindLabel[refinedKind ?? group.kind]?.text}
+      {#if immutableSibling}
+        <span class="kind-badge kind-immut" title="The other copy is in immutable history (trunk). It cannot be abandoned.">
+          immutable sibling
+        </span>
+      {:else if group}
+        <span class="kind-badge" title={kindLabel[refinedKind].hint}>
+          {kindLabel[refinedKind].text}
         </span>
         {#if isStack}
           <span class="stack-badge">{group.changeIds.length}-change stack</span>
@@ -293,6 +384,40 @@
   {:else if error}
     <div class="panel-content">
       <div class="error-message">{error}</div>
+    </div>
+  {:else if immutableSibling}
+    <!-- Divergent-with-immutable-sibling: the other copy is trunk. No columns
+         to keep — the immutable side is permanent. Two hardcoded actions;
+         NOT routed through Strategy[] (would overload 'keep' semantics). -->
+    <div class="panel-content">
+      <div class="divergence-info">
+        Change <span class="change-id-highlight">{changeId.slice(0, 12)}</span>
+        is divergent with an <strong>immutable</strong> copy (likely in trunk history).
+        That copy cannot be abandoned.
+      </div>
+      <div class="strategy-card conf-medium">
+        <div class="strategy-head">
+          <span class="strategy-verb">Split identity</span>
+          <span class="strategy-conf">recommended</span>
+        </div>
+        <div class="strategy-reason">{immutableSiblingCopy.splitReason}</div>
+        <div class="strategy-actions">
+          <button class="strategy-apply"
+            onclick={splitMutable}
+            disabled={strategyBusy}
+            title="jj metaedit --update-change-id {immutableSibling.slice(0, 8)}"
+          >
+            {strategyBusy ? 'Applying…' : 'Apply'}
+          </button>
+          <button class="strategy-pill"
+            onclick={abandonMutable}
+            disabled={strategyBusy}
+            title="{immutableSiblingCopy.abandonReason} — jj abandon {immutableSibling.slice(0, 8)}"
+          >
+            Abandon mutable
+          </button>
+        </div>
+      </div>
     </div>
   {:else if group}
     <div class="panel-content">
@@ -344,15 +469,32 @@
         {/if}
       </div>
 
+      {@render strategyCard()}
+
       <!-- Columns: one per version, rows = stack levels. For single-change
            divergence this is 1 row × N columns = the old card layout. -->
       <div class="version-columns" style="--n-cols: {nVersions}">
         {#each Array(nVersions) as _, colIdx}
           {@const tipCommitId = group.versions[group.versions.length - 1][colIdx].commit_id}
+          {@const rootV = group.versions[0][colIdx]}
           <div class="version-col" class:col-live={group.liveVersion === colIdx} class:col-from={colIdx === compareFrom} class:col-to={colIdx === compareTo}>
             <div class="col-header">
               <span class="col-idx">/{colIdx}</span>
               {#if group.liveVersion === colIdx}<span class="live-dot" title="@ descends from here">●</span>{/if}
+            </div>
+            <!-- Description line — the metadata-only discriminator. first_line()
+                 from the template (divergence.go:42). Highlighted when THIS is
+                 the thing to compare (metadata-only case). -->
+            <div class="col-desc" class:col-desc-key={refinedKind === 'metadata-only'}
+              title={rootV.description}>
+              {rootV.description || '(no description)'}
+            </div>
+            <!-- Parent commit chip — for diff-parent cases these DIFFER and
+                 answer "which trunk point?"; for same-parent they match. -->
+            <div class="col-parent" class:col-parent-key={group.kind === 'diff-parent'}
+              title="Parent commit. Cross-reference in the log to see which trunk point this sits on.">
+              <span class="col-parent-label">on</span>
+              <span class="col-parent-id">{rootV.parent_commit_ids[0]?.slice(0, 8)}</span>
             </div>
             {#each group.changeIds as cid, levelIdx}
               {@const v = group.versions[levelIdx][colIdx]}
@@ -406,7 +548,17 @@
           {#if diffLoading}
             <div class="diff-loading">Loading diff…</div>
           {:else if crossDiff === '' && compareFrom !== compareTo}
-            <div class="diff-empty">Trees identical — only metadata differs</div>
+            <!-- Diff is filtered to fileUnion — empty means the files THIS
+                 change owns are identical. For same-parent that's "only
+                 metadata"; for diff-parent the trees may still differ via
+                 trunk churn (which was filtered out). -->
+            <div class="diff-empty">
+              {#if group.kind === 'diff-parent'}
+                No content drift in change-owned files — differences are trunk churn only
+              {:else}
+                Trees identical — only metadata differs
+              {/if}
+            </div>
           {:else}
             <div class="cross-diff">
               {#each parsedCrossDiff as file}
@@ -429,6 +581,64 @@
     </div>
   {/if}
 </div>
+
+<!-- Strategy recommendation card — primary (#1 in ranked list) rendered
+     prominently with confidence-tinted accent, secondaries as small pills.
+     Only rendered in the normal-group path; immutable-sibling uses hardcoded
+     buttons (two fixed actions, no ranking). Empty list = no card. -->
+{#snippet strategyCard()}
+  {#if strategies.length > 0}
+    {@const primary = strategies[0]}
+    {@const label = strategyLabel[primary.kind]}
+    <!-- null targetIdx = "we don't know which direction". keep: informational
+         only (per-column buttons below). squash: offer BOTH directions —
+         defaulting to /0 silently would be arbitrary. -->
+    {@const needsDirection = primary.targetIdx === null}
+    <div class="strategy-card conf-{primary.confidence}">
+      <div class="strategy-head">
+        <span class="strategy-verb">{label.verb}
+          {#if primary.targetIdx !== null}<span class="strategy-target">/{primary.targetIdx}</span>{/if}
+        </span>
+        <span class="strategy-conf">{primary.confidence}</span>
+      </div>
+      <div class="strategy-reason">{primary.reason}</div>
+      <div class="strategy-actions">
+        {#if !needsDirection}
+          <button class="strategy-apply"
+            onclick={() => applyStrategy(primary)}
+            disabled={strategyBusy || keepingIdx >= 0}
+            title={label.cmd(primary)}
+          >
+            {strategyBusy ? 'Applying…' : 'Apply'}
+          </button>
+        {:else if primary.kind === 'squash'}
+          <!-- Directional squash: two buttons, each a concrete --into. -->
+          {#each [0, 1] as into}
+            <button class="strategy-apply"
+              onclick={() => applyStrategy({ ...primary, targetIdx: into })}
+              disabled={strategyBusy || keepingIdx >= 0}
+              title="jj squash --from /{1 - into} --into /{into}"
+            >
+              {strategyBusy ? '…' : `Into /${into}`}
+            </button>
+          {/each}
+        {/if}
+        <!-- keep with targetIdx null → no button, per-column Keep handles it.
+             The reason text already says "pick"; no extra hint needed. -->
+        {#each strategies.slice(1) as s}
+          {@const sLabel = strategyLabel[s.kind]}
+          <button class="strategy-pill"
+            onclick={() => applyStrategy(s)}
+            disabled={strategyBusy || keepingIdx >= 0}
+            title="{s.reason} — {sLabel.cmd(s)}"
+          >
+            {sLabel.verb}{#if s.targetIdx !== null} /{s.targetIdx}{/if}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+{/snippet}
 
 <style>
   .divergence-panel { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
@@ -480,27 +690,82 @@
   .version-columns {
     display: grid;
     grid-template-columns: repeat(var(--n-cols), minmax(0, 1fr));
-    gap: 8px;
+    gap: 10px;
     margin-bottom: 16px;
   }
   .version-col {
-    display: flex; flex-direction: column; gap: 4px;
-    padding: 8px; border-radius: 4px;
-    background: var(--surface0); border: 1px solid var(--surface1);
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px 12px; border-radius: 6px;
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
     border-top: 3px solid var(--surface1);
+    /* Subtle lift — columns are CHOICES, not just data rows. */
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.02);
+    transition: border-color 120ms ease;
   }
   .version-col.col-live { border-top-color: var(--green); }
-  .version-col.col-from { border-left: 2px solid var(--red); }
-  .version-col.col-to { border-right: 2px solid var(--green); }
+  /* diff-selector from/to markers — corner indicator dots, not noisy full-
+     height borders that compete with the confidence accent. */
+  .version-col.col-from::before,
+  .version-col.col-to::before {
+    content: ''; position: absolute; width: 6px; height: 6px; border-radius: 50%;
+    top: 6px;
+  }
+  .version-col { position: relative; }
+  .version-col.col-from::before { left: 6px; background: var(--red); }
+  .version-col.col-to::before { right: 6px; background: var(--green); }
 
   .col-header {
     display: flex; align-items: center; gap: 6px;
-    font-family: var(--font-mono); font-size: 11px; font-weight: 700;
-    color: var(--subtext1); padding-bottom: 4px;
-    border-bottom: 1px solid var(--surface1);
+    font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+    color: var(--subtext1); padding-bottom: 6px;
   }
-  .col-idx { color: var(--overlay0); }
+  .col-idx {
+    color: var(--overlay0);
+    /* /N is the column's "name" — make it readable. */
+    font-size: 13px; letter-spacing: -0.02em;
+  }
   .live-dot { color: var(--green); font-size: 10px; }
+
+  /* Description — THE discriminator for metadata-only. When it IS the key
+     difference (.col-desc-key), quote-block it with an amber accent so the
+     eye lands there first. */
+  .col-desc {
+    font-size: 11px; color: var(--text); line-height: 1.4;
+    padding: 2px 0 6px; border-bottom: 1px solid var(--surface1);
+    overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .col-desc-key {
+    padding: 6px 8px; margin: 2px 0 4px;
+    border-left: 2px solid var(--amber); border-bottom: none;
+    background: color-mix(in srgb, var(--amber) 6%, transparent);
+    border-radius: 0 3px 3px 0;
+    font-weight: 500;
+  }
+
+  /* Parent commit chip. For diff-parent (fresher-trunk question), these
+     DIFFER — amber tint calls attention. For same-parent they match so
+     the subdued default styling de-emphasizes. */
+  .col-parent {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    padding: 2px 0; font-size: 10px;
+  }
+  .col-parent-label {
+    color: var(--overlay0); font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .col-parent-id {
+    font-family: var(--font-mono); color: var(--subtext0);
+    padding: 1px 5px; border-radius: 2px;
+    background: var(--surface1);
+  }
+  /* diff-parent case — parents differ, this IS the answer to "fresher trunk" */
+  .col-parent-key .col-parent-id {
+    background: color-mix(in srgb, var(--amber) 14%, var(--surface1));
+    color: var(--text);
+    border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+  }
 
   .version-cell {
     display: flex; align-items: baseline; gap: 6px;
@@ -525,14 +790,20 @@
   }
 
   .keep-btn {
-    margin-top: 4px; padding: 4px 10px;
-    background: transparent; border: 1px solid var(--surface2); color: var(--text);
-    border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600;
+    margin-top: auto; padding: 6px 10px;
+    background: var(--surface1); border: 1px solid var(--surface2); color: var(--text);
+    border-radius: 4px; cursor: pointer;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+    transition: background 100ms ease, transform 80ms ease;
   }
-  .keep-btn.keep-live { border-color: var(--green); color: var(--green); }
-  .keep-btn:hover:not(:disabled) { background: var(--surface1); }
+  .keep-btn.keep-live {
+    background: color-mix(in srgb, var(--green) 12%, var(--surface1));
+    border-color: var(--green); color: var(--green);
+  }
+  .keep-btn:hover:not(:disabled) { background: var(--surface2); transform: translateY(-1px); }
   .keep-btn.keep-live:hover:not(:disabled) { background: var(--green); color: var(--crust); }
-  .keep-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .keep-btn:active:not(:disabled) { transform: translateY(0); }
+  .keep-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .compare-section { border-top: 1px solid var(--surface1); padding-top: 12px; }
   .compare-header {
@@ -590,6 +861,84 @@
     gap: 8px; padding: 48px 24px; color: var(--surface2); font-size: 13px;
   }
   .error-message { color: var(--red); font-size: 12px; padding: 12px; }
+
+  .kind-immut { background: var(--amber); color: var(--crust); }
+
+  /* Strategy card — confidence-tinted left accent. High = green (near-certain
+     no content risk), medium = amber (plausible but verify), low = overlay
+     (informational). Visually bridges to the columns below: narrower bottom
+     margin + bottom-only radius = "this card annotates those columns". */
+  .strategy-card {
+    padding: 10px 14px; margin-bottom: 10px;
+    background: linear-gradient(to bottom,
+      var(--surface0),
+      color-mix(in srgb, var(--surface0) 60%, transparent));
+    border-radius: 6px 6px 3px 3px;
+    border-left: 3px solid var(--overlay0);
+  }
+  .strategy-card.conf-high   { border-left-color: var(--green); }
+  .strategy-card.conf-medium { border-left-color: var(--amber); }
+
+  .strategy-head {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 3px;
+  }
+  .strategy-verb {
+    font-size: 13px; font-weight: 700; color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .strategy-target {
+    font-family: var(--font-mono); font-weight: 700; color: var(--amber);
+    margin-left: 1px;
+  }
+  .strategy-conf {
+    font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 2px 6px; border-radius: 3px;
+    background: var(--surface1); color: var(--subtext0);
+    /* Sit tight against the verb, not floating off to the right. */
+  }
+  .conf-high .strategy-conf {
+    background: color-mix(in srgb, var(--green) 18%, var(--surface1)); color: var(--green);
+  }
+  .conf-medium .strategy-conf {
+    background: color-mix(in srgb, var(--amber) 18%, var(--surface1)); color: var(--amber);
+  }
+
+  .strategy-reason {
+    font-size: 11px; color: var(--subtext0); line-height: 1.45;
+  }
+  .strategy-reason:not(:last-child) { margin-bottom: 8px; }
+
+  .strategy-actions {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .strategy-apply {
+    padding: 5px 16px; font-size: 11px; font-weight: 700;
+    background: var(--surface1); color: var(--text);
+    border: 1px solid var(--surface2); border-radius: 4px; cursor: pointer;
+    letter-spacing: 0.01em;
+    transition: background 100ms ease, transform 80ms ease;
+  }
+  .conf-high .strategy-apply {
+    background: var(--green); color: var(--crust); border-color: var(--green);
+    /* High confidence = decisive weight */
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--green) 25%, transparent);
+  }
+  .conf-medium .strategy-apply {
+    background: color-mix(in srgb, var(--amber) 10%, var(--surface1));
+    border-color: var(--amber); color: var(--amber);
+  }
+  .strategy-apply:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
+  .strategy-apply:active:not(:disabled) { transform: translateY(0); }
+  .strategy-apply:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .strategy-pill {
+    padding: 3px 10px; font-size: 10px; font-weight: 500;
+    background: transparent; color: var(--subtext0);
+    border: 1px solid var(--surface2); border-radius: 12px; cursor: pointer;
+    transition: background 100ms ease, color 100ms ease;
+  }
+  .strategy-pill:hover:not(:disabled) { background: var(--surface1); color: var(--text); }
+  .strategy-pill:disabled { opacity: 0.4; cursor: not-allowed; }
   .spinner {
     width: 20px; height: 20px;
     border: 2px solid var(--surface0); border-top-color: var(--amber);
