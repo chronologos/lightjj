@@ -882,9 +882,6 @@ export const api = {
   gitFetch: (flags: string[] | undefined, onLine: (line: string) => void) =>
     streamPost('/api/git/fetch', { flags }, onLine),
 
-  resolve: (revision: string, file: string, tool: ':ours' | ':theirs') =>
-    post<MutationResult>('/api/resolve', { revision, file, tool }),
-
   pullRequests: () => request<PullRequest[]>('/api/pull-requests'),
 
   aliases: () => _aliases ??= request<Alias[]>('/api/aliases').catch(e => { _aliases = undefined; throw e }),

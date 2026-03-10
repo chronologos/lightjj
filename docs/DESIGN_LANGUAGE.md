@@ -6,7 +6,7 @@ Every color in the UI carries **semantic meaning**. Entity types (bookmarks, wor
 
 ---
 
-## Tier 1: Semantic Core (3 colors only)
+## Tier 1: Semantic Core (4 colors only)
 
 ### Amber — Active / Changed / Brand
 - Dark: `#ffa726` · Light: `#e68a00`
@@ -19,6 +19,10 @@ Every color in the UI carries **semantic meaning**. Entity types (bookmarks, wor
 ### Red — Removed / Negative
 - Dark: `#ef5350` · Light: `#c62828`
 - Uses: deleted files/lines, diff deletions, conflicts (both sides), errors, destructive actions
+
+### Blue — Informational
+- Dark: `#6880b8` · Light: `#4860a0`
+- Uses: behind-sync status dot, question-severity annotations, informational (non-actionable) state
 
 ---
 

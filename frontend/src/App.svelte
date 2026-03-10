@@ -1017,15 +1017,6 @@
     )
   }
 
-  function handleResolve(file: string, tool: ':ours' | ':theirs') {
-    const revision = selectedRevision ? effectiveId(selectedRevision.commit) : undefined
-    if (!revision) return
-    runMutation(
-      () => api.resolve(revision, file, tool),
-      `Resolved ${file.split('/').pop()} with ${tool.slice(1)}`,
-    )
-  }
-
   async function handleKeepDivergent(plan: KeepPlan) {
     return withMutation(async () => {
       try {
@@ -1802,7 +1793,6 @@
             fileSelectionMode={squash.active ? 'squash' : split.active ? (split.review ? 'review' : 'split') : false}
             {selectedFiles}
             ontogglefile={toggleFileSelection}
-            onresolve={inlineMode ? undefined : handleResolve}
             onfilesaved={loadLog}
             onjjmutation={withMutation}
             oncontextmenu={showContextMenu}

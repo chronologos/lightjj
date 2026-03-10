@@ -18,7 +18,7 @@
     wordDiffs: Map<string, Map<number, WordSpan[]>>
     ontoggle: (path: string) => void
     onexpand: (path: string) => void
-    onresolve?: (file: string, tool: ':ours' | ':theirs') => void
+    onmerge?: (file: string) => void
     searchMatches?: { item: SearchMatch; index: number }[]
     currentMatchIdx?: number
     editing?: boolean
@@ -52,7 +52,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onresolve, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick }: Props = $props()
 
   let editorRef: FileEditor | undefined = $state(undefined)
 
@@ -63,11 +63,6 @@
 
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
-  // Conflict arity from the conflicted_files template (conflict_side_count()).
-  // 2 = resolvable with :ours/:theirs. 0 = unknown (fall back to marker counting).
-  // 3+ = N-way merge, resolve tools are ambiguous so buttons are hidden.
-  let conflictSides = $derived(fileStats?.conflict_sides ?? 0)
-  let hoveredResolve: { regionIdx: number; side: number } | null = $state(null)
 
   // Truncate long side labels for tab text. Full label goes in title attribute.
   function truncate(s: string, n = 28): string {
@@ -139,9 +134,6 @@
     isRegionEnd?: boolean
     sideLabel?: string       // what choosing this side KEEPS (the "to" commit for diff sides)
     sideIndex?: number       // 0-based side index within the conflict region
-    regionIdx?: number       // which conflict region (0-based) this line belongs to
-    sideCount?: number       // number of sides in this conflict region
-    sideLabels?: string[]    // full labels for each side (for tooltips)
     regionLabel?: string     // e.g. "Conflict 1 of 3"
   }
 
@@ -293,27 +285,19 @@
   let conflictData = $derived.by(() => {
     if (!isConflict) return null
     const lineMeta = new Map<number, Map<number, ConflictLineMeta>>()
-    const allRegionEnds: ConflictLineMeta[] = []
     let totalConflicts = 0
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
       const regions = findConflicts(file.hunks[hunkIdx].lines)
       if (regions.length === 0) continue
       totalConflicts += regions.length
       const metaMap = new Map<number, ConflictLineMeta>()
-      for (let regionIdx = 0; regionIdx < regions.length; regionIdx++) {
-        const region = regions[regionIdx]
-        const sideLabels = region.sides.map(s => s.label || (s.type === 'diff' ? 'changes' : 'content'))
-        // Region start holds resolve buttons (see choices before content).
+      for (const region of regions) {
         metaMap.set(region.startIdx, {
-          cssClass: 'conflict-boundary', isRegionStart: true, regionLabel: region.label, regionIdx,
-          sideCount: region.sides.length, sideLabels,
+          cssClass: 'conflict-boundary', isRegionStart: true, regionLabel: region.label,
         })
-        const endMeta: ConflictLineMeta = {
-          cssClass: 'conflict-boundary', isRegionEnd: true,
-          sideCount: region.sides.length, sideLabels, regionLabel: region.label, regionIdx,
-        }
-        metaMap.set(region.endIdx, endMeta)
-        allRegionEnds.push(endMeta)
+        metaMap.set(region.endIdx, {
+          cssClass: 'conflict-boundary', isRegionEnd: true, regionLabel: region.label,
+        })
         for (let sideIdx = 0; sideIdx < region.sides.length; sideIdx++) {
           const side = region.sides[sideIdx]
           const isDiff = side.type === 'diff'
@@ -322,7 +306,7 @@
           // pick this side — for diff sides that's the "to" commit.
           metaMap.set(side.startIdx, {
             cssClass: isDiff ? 'conflict-diff-marker' : 'conflict-snap-marker',
-            sideLabel: label, sideIndex: sideIdx, regionIdx,
+            sideLabel: label, sideIndex: sideIdx,
           })
           const lineClass = isDiff ? 'conflict-diff-line' : 'conflict-snap-line'
           for (let i = side.startIdx + 1; i <= side.endIdx; i++) {
@@ -330,24 +314,16 @@
             // \\\\\\\ sub-marker lines: hide them (no sideLabel → no tab).
             // They're metadata already absorbed into the parent side's label.
             if (isDiff && /^\+\\{7}\s/.test(lineContent)) {
-              metaMap.set(i, { cssClass: 'conflict-diff-marker', sideIndex: sideIdx, regionIdx })
+              metaMap.set(i, { cssClass: 'conflict-diff-marker', sideIndex: sideIdx })
             } else {
-              metaMap.set(i, { cssClass: lineClass, sideIndex: sideIdx, regionIdx })
+              metaMap.set(i, { cssClass: lineClass, sideIndex: sideIdx })
             }
           }
         }
       }
       lineMeta.set(hunkIdx, metaMap)
     }
-    // Determine if :ours/:theirs resolution is applicable. Prefer the authoritative
-    // arity from the conflicted_files template (conflictSides). Fall back to marker counting
-    // when arity is unknown (conflictSides === 0). jj can represent a 2-way conflict
-    // with a single %%%%%%% diff section (sideCount === 1), so marker counting alone
-    // would incorrectly hide the buttons for those conflicts.
-    const allTwoWay = conflictSides > 0
-      ? conflictSides === 2
-      : allRegionEnds.length > 0 && allRegionEnds.every(m => (m.sideCount ?? 0) <= 2)
-    return { lineMeta, totalConflicts, allRegionEnds, allTwoWay }
+    return { lineMeta, totalConflicts }
   })
 </script>
 
@@ -466,26 +442,13 @@
         <span class="conflict-glyph" aria-hidden="true">⚡</span>
         {conflictData.totalConflicts} conflict{conflictData.totalConflicts !== 1 ? 's' : ''}
       </span>
-      {#if onresolve && conflictData.allTwoWay}
-        <!-- File-header resolve buttons. Generic tooltips — section order can
-             differ across conflicts in the same file, so using region 1's
-             labels would be misleading. Hover preview shows the truth. -->
-        <button class="resolve-btn resolve-ours"
-          onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
-          onmouseenter={() => hoveredResolve = { regionIdx: -1, side: 0 }}
-          onfocus={() => hoveredResolve = { regionIdx: -1, side: 0 }}
-          onmouseleave={() => hoveredResolve = null}
-          onblur={() => hoveredResolve = null}
-          title="Keep side A (:ours) in all conflicts — hover to preview"
-        >Keep <span class="side-badge">A</span></button>
-        <button class="resolve-btn resolve-theirs"
-          onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
-          onmouseenter={() => hoveredResolve = { regionIdx: -1, side: 1 }}
-          onfocus={() => hoveredResolve = { regionIdx: -1, side: 1 }}
-          onmouseleave={() => hoveredResolve = null}
-          onblur={() => hoveredResolve = null}
-          title="Keep side B (:theirs) in all conflicts — hover to preview"
-        >Keep <span class="side-badge">B</span></button>
+      {#if onmerge}
+        <!-- 3-pane merge editor. N-way conflicts: reconstructSides returns null
+             → falls back to raw FileEditor (still the correct entry point). -->
+        <button class="resolve-btn"
+          onclick={(e: MouseEvent) => { e.stopPropagation(); onmerge(filePath) }}
+          title="3-pane merge editor — edit the resolution manually"
+        >⧉ Merge</button>
       {/if}
     {/if}
   </div>
@@ -576,44 +539,17 @@
             {@const cm = conflictData?.lineMeta.get(hunkIdx)?.get(lineIdx)}
             {@const ln = lineNums[lineIdx]}
             {#if cm}
-              {@const inScope = hoveredResolve !== null && (hoveredResolve.regionIdx === -1 || cm.regionIdx === hoveredResolve.regionIdx)}
-              {@const isKept = inScope && cm.sideIndex === hoveredResolve?.side}
-              {@const isDiscarded = inScope && cm.sideIndex !== undefined && cm.sideIndex !== hoveredResolve?.side}
               <div
                 class="conflict-line {cm.cssClass}"
                 class:conflict-region-start={cm.isRegionStart}
                 class:conflict-region-end={cm.isRegionEnd}
-                class:conflict-side-kept={isKept}
-                class:conflict-side-discarded={isDiscarded}
               >
                 {#if cm.isRegionStart}
-                  <!-- Region header: conflict label + resolve buttons.
-                       Buttons use letter badges (A/B) that spatially correspond
-                       to the same badges on section tabs below. No label-matching
-                       required — hover to preview, click to commit. -->
-                  <div class="conflict-region-header" role="group" onmouseleave={() => hoveredResolve = null}>
+                  <div class="conflict-region-header">
                     <span class="conflict-region-title">
                       <span class="conflict-glyph" aria-hidden="true">⚡</span>
                       {cm.regionLabel || 'Conflict'}
                     </span>
-                    {#if onresolve && conflictData?.allTwoWay}
-                      {@const full0 = cm.sideLabels?.[0] ?? 'side 1'}
-                      {@const full1 = cm.sideLabels?.[1] ?? 'side 2'}
-                      <button class="conflict-pick conflict-pick-ours"
-                        onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':ours') }}
-                        onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}
-                        onfocus={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 0 }}
-                        onblur={() => hoveredResolve = null}
-                        title="Keep: {full0}&#10;Discard: {full1}"
-                      >Keep <span class="side-badge">A</span></button>
-                      <button class="conflict-pick conflict-pick-theirs"
-                        onclick={(e: MouseEvent) => { e.stopPropagation(); onresolve!(filePath, ':theirs') }}
-                        onmouseenter={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}
-                        onfocus={() => hoveredResolve = { regionIdx: cm.regionIdx!, side: 1 }}
-                        onblur={() => hoveredResolve = null}
-                        title="Keep: {full1}&#10;Discard: {full0}"
-                      >Keep <span class="side-badge">B</span></button>
-                    {/if}
                   </div>
                 {:else if cm.sideLabel && cm.sideIndex !== undefined}
                   <!-- Side header: letter badge + commit description.
@@ -965,17 +901,15 @@
     filter: drop-shadow(0 0 2px rgba(239, 83, 80, 0.4));
   }
 
-  /* Resolve buttons: compact, with a letter badge that matches the section
-     tab below. "Keep [A]" visually corresponds to the "[A] description" tab. */
-  .resolve-btn,
-  .conflict-pick {
+  /* Merge button — opens 3-pane editor. Compact pill matching file-header style. */
+  .resolve-btn {
     display: inline-flex;
     align-items: center;
     gap: 5px;
     background: var(--surface0);
     border: 1px solid var(--surface1);
     color: var(--subtext0);
-    padding: 3px 4px 3px 8px;
+    padding: 3px 8px;
     border-radius: 4px;
     cursor: pointer;
     font-family: inherit;
@@ -985,8 +919,14 @@
     white-space: nowrap;
     transition: all 0.12s var(--anim-ease);
   }
+  .resolve-btn:hover {
+    background: var(--bg-selected);
+    border-color: var(--amber);
+    color: var(--text);
+    transform: translateY(-1px);
+  }
 
-  /* Letter badge: the spatial anchor. Same style in buttons AND tabs. */
+  /* Letter badge: still used by per-side tabs in the conflict region display. */
   .side-badge {
     display: inline-flex;
     align-items: center;
@@ -1001,19 +941,6 @@
     letter-spacing: 0.02em;
     background: var(--surface1);
     color: var(--subtext1);
-  }
-
-  /* Hover: lift + amber accent to signal "this will be kept" */
-  .resolve-btn:hover, .conflict-pick:hover {
-    background: var(--bg-selected);
-    border-color: var(--amber);
-    color: var(--text);
-    transform: translateY(-1px);
-  }
-  .resolve-btn:hover .side-badge,
-  .conflict-pick:hover .side-badge {
-    background: var(--amber);
-    color: var(--base);
   }
 
   /* ─── Conflict region frame ─────────────────────────────────────────── */
@@ -1130,68 +1057,19 @@
     border-left-color: var(--green);
   }
 
-  /* Side 2: snapshot section (muted red per design language) */
+  /* Side 2: snapshot section. Snapshot content is RAW (no +/- prefix) — it's
+     "what this side has", semantically equivalent to the + lines in side 1's
+     diff section. Without a visible tint it looks like context, not a side's
+     contribution. Match the inner-add green so both sides' content reads as
+     "this is what you get if you pick this side". */
   .conflict-snap-marker,
   .conflict-snap-line {
     --conflict-side-color: var(--conflict-side2-border);
   }
 
   .conflict-snap-line :global(.diff-line) {
-    background: var(--conflict-side2-bg);
-  }
-
-  /* ─── Hover preview: what happens if you click this button? ─────────── */
-
-  /* Base transition on all sides so preview engages/disengages smoothly */
-  .conflict-side-kept :global(.diff-line),
-  .conflict-side-discarded :global(.diff-line),
-  .conflict-side-kept .conflict-side-tab,
-  .conflict-side-discarded .conflict-side-tab {
-    transition:
-      opacity calc(var(--anim-duration) * 1.2) var(--anim-ease),
-      transform calc(var(--anim-duration) * 1.2) var(--anim-ease),
-      border-left-color var(--anim-duration) var(--anim-ease);
-  }
-
-  /* KEPT: amber accent rail + subtle forward pull */
-  .conflict-side-kept :global(.diff-line) {
-    border-left-color: var(--amber);
-    box-shadow: inset 4px 0 12px -8px var(--amber);
-  }
-  .conflict-side-kept .conflict-side-tab {
-    border-left-color: var(--amber);
-    color: var(--text);
-    transform: translateX(2px);
-  }
-  .conflict-side-kept .conflict-side-tab .side-badge {
-    background: var(--amber);
-    color: var(--base);
-  }
-
-  /* Inner-diff red/green survives the amber kept accent */
-  .conflict-side-kept :global(.conflict-inner-remove) {
-    border-left-color: var(--red);
-  }
-  .conflict-side-kept :global(.conflict-inner-add) {
+    background: var(--diff-add-bg);
     border-left-color: var(--green);
-  }
-
-  /* DISCARDED: dim + diagonal redaction stripes + subtle recede */
-  .conflict-side-discarded :global(.diff-line) {
-    opacity: 0.3;
-    transform: scaleY(0.96);
-    transform-origin: left center;
-    background-image: repeating-linear-gradient(
-      -45deg,
-      transparent 0,
-      transparent 8px,
-      var(--surface1) 8px,
-      var(--surface1) 9px
-    );
-  }
-  .conflict-side-discarded .conflict-side-tab {
-    opacity: 0.3;
-    transform: translateX(-2px);
   }
 
   /* --- Edit mode --- */

@@ -100,10 +100,11 @@ The single seam between HTTP handlers and subprocess execution:
 
 ```go
 type CommandRunner interface {
-    Run(ctx, args)            → ([]byte, error)       // jj subcommand
-    RunWithInput(ctx, args, stdin) → ([]byte, error)   // jj subcommand + stdin
-    Stream(ctx, args)         → (io.ReadCloser, error) // jj subcommand, streaming
-    RunRaw(ctx, argv)         → ([]byte, error)       // non-jj binary (gh)
+    Run(ctx, args)                 → ([]byte, error)        // jj subcommand
+    RunWithInput(ctx, args, stdin) → ([]byte, error)        // jj subcommand + stdin
+    RunForMutation(ctx, args, stdin) → (stdout, stderr, err) // separate stderr for warning detection
+    StreamCombined(ctx, args)      → (io.ReadCloser, error) // jj subcommand, streaming
+    RunRaw(ctx, argv)              → ([]byte, error)        // non-jj binary (gh)
 }
 ```
 
@@ -228,7 +229,7 @@ The `diff-range` endpoint (`GET /api/diff-range?from=X&to=Y&files=a&files=b`) co
 
 `jj evolog` tracks every working-copy snapshot as a hidden commit addressable by `jj diff`. The `Evolog()` builder uses `CommitEvolutionEntry` template methods (`.commit()`, `.operation()`, `.predecessors()`) to emit structured entries. `EvologPanel` renders these as a clickable list; clicking an entry calls `api.diffRange(predecessor_id, commit_id)` and renders the result through the existing `DiffFileView`. Zero new state tracking on either end — jj's object store is the state. `{#key selectedRevision?.commit.change_id}` in App.svelte remounts the panel on revision change to reset selection state.
 
-**Limitation:** `diff --from pred --to cur` is only correct when parents didn't change between snapshots (the "agent editing WC" case). For rebase-heavy workflows, `CommitEvolutionEntry.inter_diff()` is rebase-safe (same as `jj evolog -p`) — not yet exposed.
+The `Evolog()` template embeds `self.inter_diff().git()` per entry — rebase-safe (diffs each version's contribution relative to its own parents, same as `jj evolog -p`), so the inline diffs are correct even when parents changed between snapshots.
 
 ### Inline rebase UX
 
@@ -316,7 +317,7 @@ defer runner.Verify()  // asserts all expectations called
 
 9. **Op-ID staleness detection** — Every response carries `X-JJ-Op-Id`. The frontend detects operation changes and auto-refreshes. Mutation endpoints refresh the cached op-id asynchronously to avoid adding latency.
 
-10. **Divergent commit identity** — Divergent commits share the same `change_id`, so the frontend uses `effectiveId()` (falls back to `commit_id`) for identity operations. The `change_id()` revset function (not `all:` which doesn't exist in jj 0.38) resolves all divergent versions. Divergence offsets (`/0`, `/1`) are computed client-side by lexicographic commit ID sort, matching jj's convention. The DivergencePanel is self-fetching — it receives only a `changeId` and manages its own data loading with separate generation counters for version fetching and diff fetching.
+10. **Divergent commit identity** — Divergent commits share the same `change_id`, so the frontend uses `effectiveId()` (falls back to `commit_id`) for identity operations. The `change_id()` revset function (not `all:` which doesn't exist in jj 0.38) resolves all divergent versions. Divergence offsets (`/0`, `/1`) preserve jj's emission order (`GlobalCommitPosition` — index-insertion order, NOT commit_id sort). The frontend does not re-sort; doing so would mislabel which copy `jj restore -r abc/0` targets. The DivergencePanel is self-fetching — it receives only a `changeId` and manages its own data loading with separate generation counters for version fetching and diff fetching.
 
 ## Frontend Performance Patterns
 

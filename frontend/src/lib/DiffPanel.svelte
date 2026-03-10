@@ -14,6 +14,8 @@
   import { highlightLines, detectLanguage } from './highlighter'
   import { createDiffDerivation } from './diff-derivation.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
+  import MergePanel from './MergePanel.svelte'
+  import { reconstructSides, type MergeSides } from './conflict-extract'
   import FileSelectionPanel from './FileSelectionPanel.svelte'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
   import AnnotationBubble from './AnnotationBubble.svelte'
@@ -39,7 +41,6 @@
     fileSelectionMode: 'squash' | 'split' | 'review' | false
     selectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
-    onresolve?: (file: string, tool: ':ours' | ':theirs') => void
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
      *  Returns undefined if blocked (another mutation in flight). */
@@ -55,7 +56,7 @@
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, splitView = $bindable(false), header,
-    fileSelectionMode, selectedFiles, ontogglefile, onresolve,
+    fileSelectionMode, selectedFiles, ontogglefile,
     onfilesaved, onjjmutation, oncontextmenu, onopenfile,
   }: Props = $props()
 
@@ -76,6 +77,11 @@
   let editFileContents = $state(new Map<string, string>())
   let editBusy = new SvelteSet<string>()  // concurrency guard + loading indicator
   let editError = $state('')  // last error message (shown in status bar area)
+
+  // 3-pane merge — when set, MergePanel takes over .panel-content entirely
+  // (vs FileEditor which slots into split-view's right column per-file).
+  let mergeSides: MergeSides | null = $state(null)
+  let mergingPath: string | null = $state(null)
 
   // --- Diff line context menu ---
   function openDiffLineContextMenu(e: MouseEvent, info: DiffLineInfo): void {
@@ -247,37 +253,99 @@
     }
   }
 
-  async function startEdit(path: string) {
-    if (diffTarget?.kind !== 'single' || editBusy.has(path)) return
-    // Editor lives in the right split column — switch if coming from unified.
-    // splitView is $bindable so this persists to config and the parent.
-    if (!splitView) splitView = true
-    // Capture from diffTarget (what's displayed), not selectedRevision (cursor).
-    // In squash mode the cursor can be elsewhere.
+  /** Shared prologue for startEdit/startMerge: guard, auto-jj-edit non-WC,
+   *  fetch file content, post-await identity guards. Returns undefined on any
+   *  bail (concurrent op, navigation during await, network error). The tricky
+   *  post-await guards live here so a race fix lands in one place. */
+  async function fetchFileForEdit(path: string, errorPrefix: string): Promise<string | undefined> {
+    if (diffTarget?.kind !== 'single' || editBusy.has(path)) return undefined
     const { changeId: revId, isWorkingCopy } = diffTarget
     editBusy.add(path)
     editError = ''
     try {
       if (!isWorkingCopy) {
-        // api.edit is a jj mutation — must go through App's mutation lock
-        // to prevent races with keyboard-triggered mutations (e.g. 'u' undo).
-        // Returns undefined if blocked by a concurrent mutation.
+        // api.edit is a jj mutation — goes through App's mutation lock to
+        // prevent races with keyboard-triggered mutations (e.g. 'u' undo).
         const result = onjjmutation
           ? await onjjmutation(() => api.edit(revId))
           : await api.edit(revId)
         if (result === undefined && onjjmutation) {
           editError = 'Operation in progress — try again'
-          return
+          return undefined
         }
       }
-      // Guard against display-target change during await (navigation)
-      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
+      // Post-await identity guard — j/k navigation is possible during await.
+      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return undefined
       const resp = await api.fileShow(revId, path)
-      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
-      editFileContents = new Map(editFileContents).set(path, resp.content)
-      editingFiles.add(path)
+      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return undefined
+      return resp.content
     } catch (e) {
-      editError = `Edit failed: ${e instanceof Error ? e.message : String(e)}`
+      editError = `${errorPrefix} failed: ${e instanceof Error ? e.message : String(e)}`
+      return undefined
+    } finally {
+      editBusy.delete(path)
+    }
+  }
+
+  function openFileEditor(path: string, content: string): void {
+    // Editor lives in the right split column — switch if coming from unified.
+    if (!splitView) splitView = true
+    editFileContents = new Map(editFileContents).set(path, content)
+    editingFiles.add(path)
+  }
+
+  async function startEdit(path: string) {
+    const content = await fetchFileForEdit(path, 'Edit')
+    if (content === undefined) return
+    openFileEditor(path, content)
+  }
+
+  async function startMerge(path: string) {
+    // MergePanel takes over .panel-content → all FileEditors unmount → CM6
+    // state destroyed → unsaved edits lost. Editing the SAME file is fine (user
+    // is switching edit modes); OTHER files might have unsaved work. Confirm
+    // before any await — no post-await identity-guard complexity for this.
+    const otherEdits = [...editingFiles].filter(p => p !== path)
+    if (otherEdits.length > 0) {
+      const names = otherEdits.length === 1 ? otherEdits[0] : `${otherEdits.length} files`
+      if (!confirm(`Discard unsaved edits in ${names}?`)) return
+    }
+    const content = await fetchFileForEdit(path, 'Merge')
+    if (content === undefined) return
+    const sides = reconstructSides(content)
+    // Unparseable (N-way, git-style) OR auto-resolved race (conflict_sides
+    // said 2 but jj resolved between /api/files and here → all identical)
+    // → fall back to raw FileEditor.
+    if (!sides || sides.ours === sides.theirs) {
+      openFileEditor(path, content)
+      return
+    }
+    // Entering merge clears ALL in-progress file editors — MergePanel takes
+    // over .panel-content entirely. User was warned via confirm() above.
+    editingFiles.clear()
+    editFileContents = new Map()
+    mergeSides = sides
+    mergingPath = path
+  }
+
+  function closeMerge() {
+    mergeSides = null
+    mergingPath = null
+  }
+
+  async function saveMerge(content: string) {
+    const path = mergingPath
+    if (!path || editBusy.has(path) || diffTarget?.kind !== 'single') return
+    const revId = diffTarget.changeId
+    editBusy.add(path)
+    editError = ''
+    try {
+      await api.fileWrite(path, content)
+      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
+      closeMerge()
+      await onfilesaved?.()
+    } catch (e) {
+      editError = `Save failed: ${e instanceof Error ? e.message : String(e)}`
     } finally {
       editBusy.delete(path)
     }
@@ -343,28 +411,30 @@
   })
 
   let conflictFileDiffs: Map<string, DiffFile> = $state(new Map())
-  let conflictFetchGen = 0
 
   $effect(() => {
-    const gen = ++conflictFetchGen
     const files = conflictOnlyFiles
     // untrack: .size/.has() reads would register conflictFileDiffs as a dep;
-    // the async .then() write would then re-trigger this effect → O(n²) fetches
-    // (each response bumps gen, invalidating all sibling in-flight requests).
+    // the async .then() write would then re-trigger this effect → O(n²) fetches.
     if (files.length === 0) {
       if (untrack(() => conflictFileDiffs.size) > 0) conflictFileDiffs = new Map()
       return
     }
     // `jj file show -r 'connected(a|b)' path` is undefined — gate on single.
-    // Multi-check conflict-only files stay unfetched (rare; the combined diff
-    // usually includes them anyway).
     if (diffTarget?.kind !== 'single') return
     const revId = diffTarget.commitId
+    // NO gen-counter. The old pattern (++gen here, gen check in callback) raced
+    // with the reset effect: effects run in declaration order, so this fetch
+    // fired FIRST on diffTarget change, then reset bumped gen → callback's gen
+    // check failed → discarded → NO retry (reset's writes aren't tracked deps).
+    // commitId alone is the correct invariant: it's a content hash, never
+    // recycles, and IS what the fetch was keyed to. If diffTarget.commitId
+    // still matches when fetch resolves, the data is provably valid.
     const already = untrack(() => conflictFileDiffs)
     for (const f of files) {
       if (already.has(f.path)) continue
       api.fileShow(revId, f.path).then(result => {
-        if (gen !== conflictFetchGen) return // discard stale responses
+        if (diffTarget?.kind !== 'single' || diffTarget.commitId !== revId) return
         const lines: DiffLine[] = result.content.split('\n').map(line => ({
           type: 'add' as const,
           content: '+' + line,
@@ -601,8 +671,9 @@
     editFileContents = new Map()
     editBusy.clear()
     editError = ''
+    mergeSides = null
+    mergingPath = null
     activeFilePath = null
-    conflictFetchGen++ // invalidate in-flight fileShow requests
     conflictFileDiffs = new Map()
     if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
 
@@ -990,7 +1061,15 @@
     </div>
   {/if}
   <div class="panel-content" bind:this={panelContentEl}>
-    {#if diffLoading && parsedDiff.length === 0}
+    {#if mergeSides && mergingPath}
+      <!-- {#key} enforces fresh-mount per file — MergePanel's $effect has no
+           centerView guard and relies on this for props-never-change-mid-mount. -->
+      {#key mergingPath}
+        <MergePanel sides={mergeSides} filePath={mergingPath}
+          busy={editBusy.has(mergingPath)} error={editError}
+          onsave={saveMerge} oncancel={closeMerge} />
+      {/key}
+    {:else if diffLoading && parsedDiff.length === 0}
       <!-- Spinner only on INITIAL load. For refreshes (parsedDiff populated),
            keep showing stale content until fresh arrives — prevents scroll
            jump from unmounting all DiffFileViews. The keyed {#each} preserves
@@ -1029,13 +1108,13 @@
             wordDiffs={wordDiffs.byFile.get(filePath) ?? EMPTY_WD}
             ontoggle={toggleFile}
             onexpand={expandFile}
-            {onresolve}
             searchMatches={matchesByFile.get(filePath) ?? EMPTY_MATCHES}
             {currentMatchIdx}
             editing={editingFiles.has(filePath)}
             editContent={editFileContents.get(filePath)}
             editBusy={editBusy.has(filePath)}
             onedit={canMutateFiles ? startEdit : undefined}
+            onmerge={canMutateFiles ? startMerge : undefined}
             ondiscard={canMutateFiles ? discardFile : undefined}
             onsavefile={saveFile}
             oncanceledit={cancelEdit}
@@ -1059,7 +1138,7 @@
               wordDiffs={EMPTY_WD}
               ontoggle={toggleFile}
               onexpand={expandFile}
-              {onresolve}
+              onmerge={canMutateFiles ? startMerge : undefined}
               searchMatches={matchesByFile.get(cf.path) ?? EMPTY_MATCHES}
               {currentMatchIdx}
               onlinecontext={openDiffLineContextMenu}
@@ -1072,10 +1151,6 @@
                 <span class="file-type-badge badge-C">C</span>
                 <span class="diff-file-path">{cf.path}</span>
                 <span class="conflict-loading">Loading...</span>
-                {#if onresolve}
-                  <button class="resolve-btn resolve-ours" onclick={() => onresolve!(cf.path, ':ours')}>Accept Ours</button>
-                  <button class="resolve-btn resolve-theirs" onclick={() => onresolve!(cf.path, ':theirs')}>Accept Theirs</button>
-                {/if}
               </div>
             </div>
           {/if}
@@ -1287,29 +1362,6 @@
     flex: 1;
   }
 
-  .resolve-btn {
-    background: transparent;
-    border: 1px solid var(--surface1);
-    color: var(--subtext0);
-    padding: 1px 6px;
-    border-radius: 3px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 10px;
-    flex-shrink: 0;
-  }
-
-  .resolve-ours:hover {
-    background: var(--conflict-side1-bg);
-    border-color: var(--amber);
-    color: var(--amber);
-  }
-
-  .resolve-theirs:hover {
-    background: var(--conflict-side2-bg);
-    border-color: var(--conflict-side2-border);
-    color: var(--red);
-  }
   /* --- Annotations summary bar --- */
   .annotations-bar {
     display: flex;

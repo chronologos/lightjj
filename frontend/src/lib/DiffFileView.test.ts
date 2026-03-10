@@ -110,8 +110,9 @@ describe('DiffFileView', () => {
     })
   })
 
-  describe('resolve buttons', () => {
-    function conflictProps(onresolve?: (file: string, tool: ':ours' | ':theirs') => void) {
+  describe('merge button', () => {
+    it('shows Merge button for conflicted files when onmerge provided', () => {
+      const onmerge = vi.fn()
       const file = makeFile('conflict.go', [
         { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
         { type: 'add', content: '+%%%%%%% "side A changes"' },
@@ -120,55 +121,24 @@ describe('DiffFileView', () => {
         { type: 'add', content: '+new content' },
         { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
       ])
-      const stats = makeStats('conflict.go', { conflict: true })
-      return defaultProps({ file, fileStats: stats, onresolve })
-    }
-
-    it('shows file-header resolve buttons with letter badges', () => {
-      // Buttons say "Keep [A]" / "Keep [B]" — the letter badge spatially
-      // corresponds to the badge on the section tabs below.
+      const stats = makeStats('conflict.go', { conflict: true, conflict_sides: 2 })
       const { container } = render(DiffFileView, {
-        props: conflictProps(vi.fn()),
+        props: defaultProps({ file, fileStats: stats, onmerge }),
       })
-      const buttons = container.querySelectorAll('.resolve-btn')
-      expect(buttons).toHaveLength(2)
-      expect(buttons[0].textContent?.trim()).toBe('Keep A')
-      expect(buttons[1].textContent?.trim()).toBe('Keep B')
-      expect(buttons[0].querySelector('.side-badge')?.textContent).toBe('A')
-      // Generic tooltip — section order can differ across conflicts, so
-      // using region 1's labels here would be misleading. Per-region buttons
-      // carry the accurate local labels.
-      expect(buttons[0].getAttribute('title')).toContain(':ours')
-      expect(buttons[1].getAttribute('title')).toContain(':theirs')
+      const btn = container.querySelector('.resolve-btn')
+      expect(btn?.textContent).toContain('Merge')
     })
 
-    it('does not show resolve buttons when onresolve is not provided', () => {
+    it('does not show Merge button when onmerge is undefined', () => {
+      const file = makeFile('conflict.go', [
+        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
+        { type: 'add', content: '+%%%%%%% x' },
+        { type: 'add', content: '+>>>>>>> end' },
+      ])
       const { container } = render(DiffFileView, {
-        props: conflictProps(undefined),
+        props: defaultProps({ file, fileStats: makeStats('conflict.go', { conflict: true }) }),
       })
       expect(container.querySelectorAll('.resolve-btn')).toHaveLength(0)
-    })
-
-    it('clicking Keep side 1 calls onresolve with :ours', async () => {
-      const onresolve = vi.fn()
-      const { container } = render(DiffFileView, {
-        props: conflictProps(onresolve),
-      })
-      const btn = container.querySelector('.resolve-ours')
-      expect(btn).toBeInTheDocument()
-      await fireEvent.click(btn!)
-      expect(onresolve).toHaveBeenCalledWith('conflict.go', ':ours')
-    })
-
-    it('clicking Keep side 2 calls onresolve with :theirs', async () => {
-      const onresolve = vi.fn()
-      const { container } = render(DiffFileView, {
-        props: conflictProps(onresolve),
-      })
-      const btn = container.querySelector('.resolve-theirs')
-      expect(btn).toBeInTheDocument()
-      await fireEvent.click(btn!)
-      expect(onresolve).toHaveBeenCalledWith('conflict.go', ':theirs')
     })
   })
 
@@ -441,89 +411,6 @@ describe('DiffFileView', () => {
       expect(tabs[0].textContent).toContain('side X')
       expect(tabs[0].textContent).not.toContain('Conflict resolution') // that's the FROM
       expect(tabs[1].textContent).toContain('side Y')
-    })
-
-    it('region buttons use letter badges, tooltips carry full labels', () => {
-      const { container } = render(DiffFileView, {
-        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats(), onresolve: vi.fn() }),
-      })
-      const picks = container.querySelectorAll('.conflict-pick')
-      expect(picks).toHaveLength(2)
-      // Buttons just say "Keep [A]" / "Keep [B]" — commit descriptions are
-      // opaque to users; the letter badge creates spatial correspondence.
-      expect(picks[0].textContent?.trim()).toBe('Keep A')
-      expect(picks[1].textContent?.trim()).toBe('Keep B')
-      // Full labels in tooltip for those who want them.
-      // Side A (diff, :ours) = the TO label = "side X"
-      expect(picks[0].getAttribute('title')).toContain('side X')
-      expect(picks[0].getAttribute('title')).not.toContain('Conflict resolution')
-      // Side B (snapshot, :theirs) = "side Y"
-      expect(picks[1].getAttribute('title')).toContain('side Y')
-    })
-
-    it('shows resolve buttons with side labels for 2-way conflicts', () => {
-      const onresolve = vi.fn()
-      const { container } = render(DiffFileView, {
-        props: defaultProps({ file: twoSideConflict(), fileStats: conflictStats(), onresolve }),
-      })
-      const buttons = container.querySelectorAll('.resolve-btn')
-      expect(buttons.length).toBe(2)
-      expect(buttons[0].textContent).toContain('Keep')
-      expect(buttons[1].textContent).toContain('Keep')
-      // Should use side labels, not "Accept Ours/Theirs"
-      expect(buttons[0].textContent).not.toContain('Ours')
-      expect(buttons[1].textContent).not.toContain('Theirs')
-    })
-
-    it('shows resolve buttons for single-%%%%% conflicts (2-way conflict, 1 marker section)', () => {
-      // jj can represent a 2-way conflict with just one %%%%%%% diff section
-      // (showing from→to). sideCount === 1 but :ours/:theirs still work.
-      // Regression: was gating on sideCount === 2, hiding buttons for this format.
-      const file = makeFile('one-side.ts', [
-        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
-        { type: 'add', content: '+%%%%%%% "only changes"' },
-        { type: 'add', content: '++  changed line' },
-        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
-      ])
-      const { container } = render(DiffFileView, {
-        props: defaultProps({ file, fileStats: makeStats('one-side.ts', { conflict: true, conflict_sides: 2 }), onresolve: vi.fn() }),
-      })
-      expect(container.querySelectorAll('.resolve-btn')).toHaveLength(2)
-      // Per-region buttons now live at region START (.conflict-pick), not end
-      expect(container.querySelectorAll('.conflict-pick')).toHaveLength(2)
-    })
-
-    it('hides resolve buttons for 3-sided conflicts', () => {
-      // When conflict_sides=3 (3-way merge), :ours/:theirs is ambiguous —
-      // hide buttons regardless of how many marker sections the diff shows.
-      const file = makeFile('three-way.ts', [
-        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
-        { type: 'add', content: '+%%%%%%% "side A"' },
-        { type: 'add', content: '++line a' },
-        { type: 'add', content: '+++++++ "side B"' },
-        { type: 'add', content: '+line b' },
-        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
-      ])
-      const { container } = render(DiffFileView, {
-        props: defaultProps({ file, fileStats: makeStats('three-way.ts', { conflict: true, conflict_sides: 3 }), onresolve: vi.fn() }),
-      })
-      expect(container.querySelectorAll('.resolve-btn')).toHaveLength(0)
-      expect(container.querySelectorAll('.conflict-pick')).toHaveLength(0)
-    })
-
-    it('falls back to marker counting when conflict_sides is 0 (arity unknown)', () => {
-      // When backend couldn't parse arity, fall back to counting marker sections.
-      // 1 or 2 sections → show buttons (conservative: assume 2-way).
-      const file = makeFile('unknown.ts', [
-        { type: 'add', content: '+<<<<<<< Conflict 1 of 1' },
-        { type: 'add', content: '+%%%%%%% "changes"' },
-        { type: 'add', content: '++x' },
-        { type: 'add', content: '+>>>>>>> Conflict 1 of 1 ends' },
-      ])
-      const { container } = render(DiffFileView, {
-        props: defaultProps({ file, fileStats: makeStats('unknown.ts', { conflict: true, conflict_sides: 0 }), onresolve: vi.fn() }),
-      })
-      expect(container.querySelectorAll('.resolve-btn')).toHaveLength(2)
     })
 
     it('forces unified view for conflicted files even when splitView=true', () => {
