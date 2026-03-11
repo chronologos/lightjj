@@ -29,8 +29,11 @@ func TestLogGraph(t *testing.T) {
 	assert.Contains(t, joined, "divergent")
 	assert.Contains(t, joined, "empty")
 	assert.Contains(t, joined, "parents")
-	assert.Contains(t, joined, "bookmarks.map")
-	assert.NotContains(t, joined, "local_bookmarks")
+	// local_bookmarks + remote_bookmarks concatenated — `bookmarks` alone
+	// collapses tracked-and-synced remotes into the local form.
+	assert.Contains(t, joined, "local_bookmarks.map")
+	assert.Contains(t, joined, "remote_bookmarks.map")
+	assert.Contains(t, joined, `\x1E`) // name/remote separator (git-ref-safe)
 }
 
 func TestLogGraph_NoRevset(t *testing.T) {

@@ -35,6 +35,10 @@
     sync: SyncState
     remote: string
     visibleInLog: boolean
+    // commit_id to jump to on click/Enter. For remote-group rows this is the
+    // scoped remote's commit_id — display (shownRemote) and click must agree.
+    // Falls back to bm.commit_id (LOCAL group, or remote entry without one).
+    jumpTarget?: string
   }
 
   type PanelRow = GroupRow | BookmarkRow
@@ -47,16 +51,20 @@
     allRemotes: string[]
     remoteVisibility: RemoteVisibility
     prByBookmark: Map<string, PullRequest>
-    onjump: (bm: Bookmark) => void
+    /** Commit_id of the graph's selected revision — rows whose jumpTarget
+     *  matches get an amber tint (bidirectional: click bookmark → graph
+     *  highlights, click graph → bookmark highlights). */
+    graphCommitId?: string
+    onjump: (bm: Bookmark, commitId?: string) => void
     onexecute: (op: BookmarkOp) => void
     onrefresh: () => void
     onclose: () => void
     onvisibilitychange: (vis: RemoteVisibility) => void
-    oncontextmenu?: (bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) => void
+    oncontextmenu?: (bm: Bookmark, actions: BookmarkRowActions, x: number, y: number, jumpTarget?: string) => void
     ontrackmenu?: (bm: Bookmark, opts: TrackOption[], x: number, y: number) => void
   }
 
-  let { bookmarks, loading, error, defaultRemote, allRemotes, remoteVisibility, prByBookmark, onjump, onexecute, onrefresh, onclose, onvisibilitychange, oncontextmenu, ontrackmenu }: Props = $props()
+  let { bookmarks, loading, error, defaultRemote, allRemotes, remoteVisibility, prByBookmark, graphCommitId, onjump, onexecute, onrefresh, onclose, onvisibilitychange, oncontextmenu, ontrackmenu }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -67,6 +75,46 @@
   const confirm = createConfirmGate<'d' | 'f' | 't'>()
 
   let expandedGroups = $state(new Set<string>(['.']))
+
+  // Group-level toggle. OFF→ON clears `hidden` (intent of the big toggle is
+  // "show all of this remote"); ON→OFF preserves it (re-enabling later
+  // remembers per-bookmark selections). Without the OFF→ON clear, toggling
+  // the group after a single-bookmark flip would claim "visible" while
+  // still hiding N-1 bookmarks.
+  function toggleGroupVisibility(remote: string) {
+    const vis = { ...remoteVisibility }
+    const current = vis[remote]
+    const next = !current?.visible
+    vis[remote] = { visible: next, hidden: next ? [] : (current?.hidden ?? []) }
+    onvisibilitychange(vis)
+  }
+
+  // Toggle a single bookmark's visibility. Three cases:
+  //  - remote hidden → enable remote with hidden=[all_other_bookmarks]
+  //    (flip on JUST this bookmark without flooding the log — the original
+  //    design required enabling the whole remote first then hiding N-1)
+  //  - remote visible + bookmark shown → add to hidden
+  //  - remote visible + bookmark hidden → remove from hidden
+  function toggleBookmarkVisibility(remote: string, name: string) {
+    const vis = { ...remoteVisibility }
+    const entry = vis[remote]
+    if (!entry?.visible) {
+      // All bookmarks that have a presence on this remote, except the one
+      // we're turning on. Computed fresh at click time (bookmarks prop may
+      // lag behind a concurrent fetch; stale = worst case one bookmark
+      // briefly appears that wasn't in the snapshot — benign).
+      const others = bookmarks
+        .filter(bm => bm.name !== name && bm.remotes?.some(r => r.remote === remote))
+        .map(bm => bm.name)
+      vis[remote] = { visible: true, hidden: others }
+    } else {
+      const hidden = new Set(entry.hidden ?? [])
+      if (hidden.has(name)) hidden.delete(name)
+      else hidden.add(name)
+      vis[remote] = { ...entry, hidden: [...hidden] }
+    }
+    onvisibilitychange(vis)
+  }
 
   // Auto-expand newly discovered remote groups
   $effect(() => {
@@ -115,9 +163,15 @@
       if (expandedGroups.has(remote)) {
         for (const bm of filtered.sort((a, b) => a.name.localeCompare(b.name))) {
           const hidden = visEntry?.hidden?.includes(bm.name) ?? false
+          // classifyBookmark(bm, remote) — scoped so the sync dot/label
+          // describe THIS remote's state, not the first-tracked-remote's.
+          // jumpTarget is the scoped remote's commit_id for the same reason:
+          // display and click must agree on which commit they mean.
+          const scoped = bm.remotes?.find(r => r.remote === remote)
           result.push({
-            kind: 'bookmark', bm, sync: classifyBookmark(bm), remote,
+            kind: 'bookmark', bm, sync: classifyBookmark(bm, remote), remote,
             visibleInLog: (visEntry?.visible ?? false) && !hidden,
+            jumpTarget: scoped?.commit_id ?? bm.commit_id,
           })
         }
       }
@@ -153,7 +207,10 @@
   let trackInfo = $derived(selActions?.track ?? [])
 
   let can = $derived({
-    jump: selActions?.jump ?? false,
+    // selActions.jump checks bm.commit_id — but remote-group rows can have
+    // empty bm.commit_id (delete-staged on a non-default remote) with a valid
+    // jumpTarget. Enter/click both pass jumpTarget; the gate must honor it too.
+    jump: (selActions?.jump ?? false) || !!(selected?.kind === 'bookmark' && selected.jumpTarget),
     del: selActions?.del ?? false,
     pushDelete: selActions?.pushDelete ?? [],
     forget: selected?.kind === 'bookmark',
@@ -161,22 +218,37 @@
   })
 
   // Reload can reorder rows (sync state changed → different priority).
-  // Restore selection by name when bookmarks prop changes. untrack() on
-  // index/panelRows so j/k doesn't trigger this (would immediately restore the
-  // pre-j index). Clamp stays inside: runs only on prop change too, which
-  // is the only time panelRows.length can shrink under index.
+  // Restore selection by (name, remote) when bookmarks prop changes. Tracking
+  // both fields means selecting `main` in the UPSTREAM group restores there,
+  // not to the LOCAL row with the same name. untrack() on index/panelRows so
+  // j/k doesn't trigger this (would immediately restore the pre-j index).
   let lastSelectedName: string | undefined
+  let lastSelectedRemote: string | undefined
   $effect(() => {
-    void bookmarks // ONLY tracked dep
+    void bookmarks // tracked dep: reload reorders, restore needed
     untrack(() => {
       if (lastSelectedName) {
-        const i = panelRows.findIndex(r => r.kind === 'bookmark' && r.bm.name === lastSelectedName)
+        const i = panelRows.findIndex(r =>
+          r.kind === 'bookmark' && r.bm.name === lastSelectedName && r.remote === lastSelectedRemote
+        )
         if (i >= 0) index = i
       }
-      if (index >= panelRows.length && panelRows.length > 0) index = panelRows.length - 1
     })
   })
-  $effect(() => { lastSelectedName = selected?.kind === 'bookmark' ? selected.bm.name : undefined })
+  // Clamp is a SEPARATE effect tracking panelRows.length — collapsing a group
+  // via Enter shrinks panelRows without changing bookmarks; the restore effect
+  // above wouldn't fire, leaving index past the end → selected undefined →
+  // d/f/t/e silently no-op.
+  $effect(() => {
+    const len = panelRows.length
+    untrack(() => {
+      if (index >= len && len > 0) index = len - 1
+    })
+  })
+  $effect(() => {
+    lastSelectedName = selected?.kind === 'bookmark' ? selected.bm.name : undefined
+    lastSelectedRemote = selected?.kind === 'bookmark' ? selected.remote : undefined
+  })
 
   // Disarm when selection changes (keyboard OR mouse OR reload-deleted-row).
   // Identity change, not value — rows rederive gives new wrapper objects.
@@ -235,7 +307,7 @@
           else next.add(selected.remote)
           expandedGroups = next
         } else if (can.jump && selected?.kind === 'bookmark') {
-          onjump(selected.bm)
+          onjump(selected.bm, selected.jumpTarget)
         }
         return
       case 'Escape':
@@ -257,19 +329,9 @@
         const eRow = panelRows[index]
         if (!eRow) return
         if (eRow.kind === 'group' && eRow.visibility) {
-          const vis = { ...remoteVisibility }
-          const current = vis[eRow.remote]
-          vis[eRow.remote] = { ...current, visible: !current?.visible, hidden: current?.hidden ?? [] }
-          onvisibilitychange(vis)
+          toggleGroupVisibility(eRow.remote)
         } else if (eRow.kind === 'bookmark' && eRow.remote !== '.') {
-          const vis = { ...remoteVisibility }
-          const entry = vis[eRow.remote]
-          if (!entry?.visible) return
-          const hidden = new Set(entry.hidden ?? [])
-          if (hidden.has(eRow.bm.name)) hidden.delete(eRow.bm.name)
-          else hidden.add(eRow.bm.name)
-          vis[eRow.remote] = { ...entry, hidden: [...hidden] }
-          onvisibilitychange(vis)
+          toggleBookmarkVisibility(eRow.remote, eRow.bm.name)
         }
         return
       }
@@ -359,6 +421,18 @@
   </div>
 {/snippet}
 
+{#snippet eyeIcon(visible: boolean)}
+  <!-- Stroke-only SVG (inherits currentColor). The diagonal slash is drawn
+       only when hidden — shape distinction in addition to opacity, so the
+       state reads at a glance without hovering. -->
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/>
+    <circle cx="12" cy="12" r="3"/>
+    {#if !visible}<path d="M3 3l18 18"/>{/if}
+  </svg>
+{/snippet}
+
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions --
      keydown is delegated here so filter-input and listbox share handlers;
      the focusable listbox child holds actual focus. -->
@@ -415,40 +489,42 @@
             <span class="bp-group-count">({row.count})</span>
             {#if row.visibility}
               <button class="bp-eye" class:bp-eye-off={!row.visibility.visible}
-                onclick={(ev: MouseEvent) => {
-                  ev.stopPropagation()
-                  const vis = { ...remoteVisibility }
-                  const current = vis[row.remote]
-                  vis[row.remote] = { ...current, visible: !current?.visible, hidden: current?.hidden ?? [] }
-                  onvisibilitychange(vis)
-                }}
+                onclick={(ev: MouseEvent) => { ev.stopPropagation(); toggleGroupVisibility(row.remote) }}
                 title={row.visibility.visible ? 'Hide from revision graph' : 'Show in revision graph'}>
-                👁
+                {@render eyeIcon(row.visibility.visible)}
               </button>
             {/if}
           </div>
         {:else}
+          <!-- Remote-group rows scope to THIS group's remote entry; LOCAL group
+               uses the first tracked remote for sync context. Without this, the
+               UPSTREAM > main row showed `origin 2d37a09e` — the row.remote
+               context was computed but never used to select which remote's
+               commit_id/sync state to render. -->
+          {@const scopedRemote = row.remote !== '.' ? row.bm.remotes?.find(r => r.remote === row.remote) : undefined}
           {@const trackedRemote = row.bm.remotes?.find(r => r.tracked)}
-          {@const shownRemote = trackedRemote ?? row.bm.remotes?.[0]}
+          {@const shownRemote = scopedRemote ?? trackedRemote ?? row.bm.remotes?.[0]}
           {@const label = syncLabel(row.sync, shownRemote?.remote ?? defaultRemote)}
-          {@const local = row.bm.local}
+          {@const local = row.remote === '.' ? row.bm.local : undefined}
           {@const diverged = local && shownRemote && local.commit_id !== shownRemote.commit_id}
           {@const primaryCid = local?.commit_id ?? shownRemote?.commit_id}
-          {@const extraRemotes = (row.bm.remotes ?? []).filter(r => r !== shownRemote && r.commit_id && r.commit_id !== primaryCid)}
+          {@const extraRemotes = row.remote === '.' ? (row.bm.remotes ?? []).filter(r => r !== shownRemote && r.commit_id && r.commit_id !== primaryCid) : []}
           {@const pr = prByBookmark.get(row.bm.name)}
+          {@const matchesGraph = !!graphCommitId && (row.jumpTarget ?? row.bm.commit_id) === graphCommitId}
           <!-- svelte-ignore a11y_click_events_have_key_events -- Enter handled on panel -->
           <div
             id="bp-row-{i}"
             class="bp-row bp-bookmark-row"
             class:bp-row-active={i === index}
+            class:bp-row-matches-graph={matchesGraph}
             class:bp-row-hidden={!row.visibleInLog && row.remote !== '.'}
             onmousemove={() => { if (index !== i) index = i }}
-            onclick={() => { if (!row.bm.conflict && row.bm.commit_id) onjump(row.bm) }}
+            onclick={() => { if (!row.bm.conflict && (row.jumpTarget ?? row.bm.commit_id)) onjump(row.bm, row.jumpTarget) }}
             oncontextmenu={oncontextmenu ? (e: MouseEvent) => {
               e.preventDefault()
               confirm.disarm() // right-click cancels any pending double-press confirm
               index = i        // sync keyboard selection to right-clicked row
-              oncontextmenu!(row.bm, computeActions(row.bm), e.clientX, e.clientY)
+              oncontextmenu!(row.bm, computeActions(row.bm), e.clientX, e.clientY, row.jumpTarget)
             } : undefined}
             role="option"
             tabindex="-1"
@@ -494,17 +570,10 @@
               <button class="bp-eye bp-eye-inline" class:bp-eye-off={!row.visibleInLog}
                 onclick={(ev: MouseEvent) => {
                   ev.stopPropagation()
-                  const vis = { ...remoteVisibility }
-                  const entry = vis[row.remote]
-                  if (!entry?.visible) return
-                  const hidden = new Set(entry.hidden ?? [])
-                  if (hidden.has(row.bm.name)) hidden.delete(row.bm.name)
-                  else hidden.add(row.bm.name)
-                  vis[row.remote] = { ...entry, hidden: [...hidden] }
-                  onvisibilitychange(vis)
+                  toggleBookmarkVisibility(row.remote, row.bm.name)
                 }}
                 title={row.visibleInLog ? 'Hide from revision graph' : 'Show in revision graph'}>
-                👁
+                {@render eyeIcon(row.visibleInLog)}
               </button>
             {/if}
           </div>
@@ -546,7 +615,9 @@
           track
         {/if}
       </span>
-      <span class:dim={selected?.kind === 'group' ? !selected.visibility : selected?.remote === '.'}><kbd>e</kbd> eye</span>
+      <!-- dim when `e` would no-op: no selection, LOCAL group header, or a LOCAL bookmark row.
+           Remote-group bookmarks are always toggleable now (hidden-remote → allowlist flip). -->
+      <span class:dim={!selected || (selected.kind === 'group' && !selected.visibility) || (selected.kind === 'bookmark' && selected.remote === '.')}><kbd>e</kbd> eye</span>
       <span><kbd>r</kbd> refresh</span>
       <span><kbd>/</kbd> filter</span>
     {/if}
@@ -639,18 +710,19 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 13px;
-    padding: 0 2px;
-    opacity: 0.8;
-    color: inherit;
+    padding: 2px;
+    opacity: 0.7;
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
   }
-  .bp-eye:hover { opacity: 1; }
-  .bp-eye-off { opacity: 0.3; }
-  .bp-eye-off:hover { opacity: 0.5; }
+  .bp-eye:hover { opacity: 1; color: var(--mauve); }
+  .bp-eye-off { opacity: 0.35; }
+  .bp-eye-off:hover { opacity: 0.6; }
   .bp-eye-inline {
-    font-size: 12px;
     flex-shrink: 0;
   }
+  .bp-eye svg { display: block; }
 
   .bp-row {
     display: flex;
@@ -669,6 +741,19 @@
   .bp-row-active {
     background: var(--surface0);
     border-left-color: var(--blue);
+  }
+
+  /* Graph cursor points at this bookmark's commit. Amber (=active, Tier 1)
+     right-border mirrors the graph's amber left-border selection — visual
+     symmetry across the divider. Keyboard cursor (blue left-border) is
+     independent; both can show. */
+  .bp-row-matches-graph {
+    background: var(--bg-selected);
+    border-right: 2px solid var(--amber);
+  }
+  .bp-row-matches-graph.bp-row-active {
+    /* Stack: amber tint wins over gray, but keep both borders visible */
+    background: var(--bg-selected);
   }
 
   .bp-row-hidden {

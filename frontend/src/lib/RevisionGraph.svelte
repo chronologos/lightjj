@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { createVirtualizer } from '@tanstack/svelte-virtual'
-  import { effectiveId, type LogEntry, type PullRequest, type RemoteVisibility } from './api'
+  import { effectiveId, type LogEntry, type PullRequest, type RemoteRef, type RemoteVisibility } from './api'
   import { targetModeLabel, type RebaseMode, type SquashMode, type SplitMode } from './modes.svelte'
   import GraphSvg from './GraphSvg.svelte'
 
@@ -113,14 +113,12 @@
     return result
   }
 
-  function isRemoteVisible(ref: string, vis: RemoteVisibility): boolean {
-    const atIdx = ref.lastIndexOf('@')
-    if (atIdx < 0) return false
-    const name = ref.slice(0, atIdx)
-    const remote = ref.slice(atIdx + 1)
-    const entry = vis[remote]
+  // Parser already splits remote bookmarks into {name, remote} and filters
+  // the @git colocation synthetic — all we do here is check visibility config.
+  function isRemoteVisible(ref: RemoteRef, vis: RemoteVisibility): boolean {
+    const entry = vis[ref.remote]
     if (!entry?.visible) return false
-    if (entry.hidden?.includes(name)) return false
+    if (entry.hidden?.includes(ref.name)) return false
     return true
   }
 
@@ -206,8 +204,8 @@
         })
         if (isNode) {
           const contGutter = padGutter(continuationGutter(gl.gutter))
-          const localBms = (entry.bookmarks ?? []).filter(b => !b.includes('@'))
-          const visibleRemoteBms = (entry.bookmarks ?? []).filter(b => b.includes('@') && isRemoteVisible(b, remoteVisibility))
+          const localBms = entry.bookmarks ?? []
+          const visibleRemoteBms = (entry.remote_bookmarks ?? []).filter(r => isRemoteVisible(r, remoteVisibility))
           const hasLabels = (localBms.length + visibleRemoteBms.length + (entry.commit.working_copies?.length ?? 0)) > 0
           if (hasLabels) {
             lines.push({
@@ -456,8 +454,8 @@
           {:else if line.isBookmarkLine}
             {@const entry = revisions[line.entryIndex]}
             {@const laneColorVar = line.nodeLane != null ? `var(--graph-${line.nodeLane % GRAPH_COLORS})` : ''}
-            {@const localBookmarks = (entry.bookmarks ?? []).filter(b => !b.includes('@'))}
-            {@const visibleRemoteBookmarks = (entry.bookmarks ?? []).filter(b => b.includes('@') && isRemoteVisible(b, remoteVisibility))}
+            {@const localBookmarks = entry.bookmarks ?? []}
+            {@const visibleRemoteBookmarks = (entry.remote_bookmarks ?? []).filter(r => isRemoteVisible(r, remoteVisibility))}
             <span class="bookmark-line-content">
               {#each entry.commit.working_copies ?? [] as ws}
                 <span class="workspace-badge">◇ {ws}@</span>
@@ -480,8 +478,7 @@
                 {/if}
               {/each}
               {#each visibleRemoteBookmarks as ref}
-                {@const atIdx = ref.lastIndexOf('@')}
-                <span class="remote-bookmark-badge">{ref.slice(atIdx + 1)}/{ref.slice(0, atIdx)}</span>
+                <span class="remote-bookmark-badge">{ref.remote}/{ref.name}</span>
               {/each}
             </span>
           {:else if line.isDescLine}
