@@ -22,6 +22,9 @@ export default defineConfig({
     // Output to a directory the Go binary will embed
     outDir: '../cmd/lightjj/frontend-dist',
     emptyOutDir: true,
+    // Single-bundle app (no dynamic imports), shipped embedded in a Go binary —
+    // code-splitting buys nothing. Silence the 500kB warning.
+    chunkSizeWarningLimit: 1000,
   },
   test: {
     environment: 'jsdom',
