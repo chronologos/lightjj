@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type RemoteVisibility } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
@@ -83,15 +83,49 @@
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
   let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
-  const TRACKED_REVSET = 'ancestors(@ | mutable() & mine() | trunk()..tracked_remote_bookmarks(), 2) | trunk()'
+  // Builds a revset that shows commits reachable from the visible remote bookmarks.
+  // Uses remote_bookmarks(remote="X") — the named `remote=` arg selects by remote name,
+  // not bookmark name pattern. Returns '' if no remotes are visible.
+  function buildVisibilityRevset(vis: RemoteVisibility, bookmarks: Bookmark[]): string {
+    const parts: string[] = []
+    for (const [remote, entry] of Object.entries(vis)) {
+      if (!entry.visible) continue
+      if (!entry.hidden?.length) {
+        // All bookmarks in this remote visible — named remote arg
+        parts.push(`remote_bookmarks(remote="${remote}")`)
+      } else {
+        const hidden = new Set(entry.hidden)
+        const visible = bookmarks
+          .flatMap(bm => (bm.remotes ?? [])
+            .filter(r => r.remote === remote && !hidden.has(bm.name))
+            .map(() => `"${bm.name}@${remote}"`)
+          )
+        if (visible.length > 0) parts.push(visible.join(' | '))
+      }
+    }
+    if (parts.length === 0) return ''
+    return `ancestors(${parts.join(' | ')}, 2)`
+  }
+
   // viewMode is a discretization of revsetFilter, not independent state — the
-  // toggle just writes a preset string into the textbox. Typing anything else
-  // auto-surfaces a third "Custom" tab.
+  // filter is set by the visibility config effect. Typing anything else
+  // auto-surfaces a "Custom" indicator.
+  let visibilityRevset = $derived(buildVisibilityRevset(config.remoteVisibility, bookmarksPanel.value))
   const viewMode = $derived(
-    revsetFilter === '' ? 'log'
-    : revsetFilter === TRACKED_REVSET ? 'tracked'
-    : 'custom'
+    revsetFilter === '' || revsetFilter === visibilityRevset ? 'log' : 'custom'
   )
+  // When visibilityRevset changes and we're in 'log' mode (no custom filter typed),
+  // update revsetFilter to reflect the new visibility config and reload.
+  $effect(() => {
+    const vr = visibilityRevset
+    untrack(() => {
+      if (viewMode === 'log') {
+        revsetFilter = vr
+        handleRevsetSubmit()
+      }
+    })
+  })
+
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
   let navDebounceTimer: number | undefined
@@ -472,7 +506,6 @@
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
     { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
-    { label: viewMode === 'tracked' ? 'Switch to log view' : 'Switch to tracked view', category: 'View', action: () => setViewMode(viewMode === 'tracked' ? 'log' : 'tracked') },
   ])
 
   let aliasCommands = $derived<PaletteCommand[]>(
@@ -1391,11 +1424,6 @@
     handleRevsetSubmit()
   }
 
-  function setViewMode(mode: 'log' | 'tracked') {
-    revsetFilter = mode === 'tracked' ? TRACKED_REVSET : ''
-    handleRevsetSubmit()
-  }
-
   // --- Keyboard shortcuts ---
   //
   // Dispatcher reads as policy:
@@ -1846,7 +1874,6 @@
             onrevsetclear={clearRevsetFilter}
             onrevsetchange={(v) => { revsetFilter = v }}
             onrevsetescaped={clearRevsetFilter}
-            onviewmodechange={setViewMode}
             onbookmarkclick={openBookmarkModal}
             {rebase}
             {squash}
@@ -1966,11 +1993,13 @@
           error={bookmarksPanel.error}
           {defaultRemote}
           {allRemotes}
+          remoteVisibility={config.remoteVisibility}
           {prByBookmark}
           onjump={jumpToBookmark}
           onexecute={handleBookmarkOp}
           onrefresh={() => bookmarksPanel.load()}
           onclose={() => { activeView = 'log' }}
+          onvisibilitychange={(vis) => { config.remoteVisibility = vis }}
           oncontextmenu={showBookmarkContextMenu}
           ontrackmenu={showTrackMenu}
         />

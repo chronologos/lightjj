@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(pnpm exec:*)",
-      "Bash(pnpm test:*)"
+      "Bash(pnpm test:*)",
+      "Skill(ship-it-jj-pushmain)"
     ]
   }
 }
