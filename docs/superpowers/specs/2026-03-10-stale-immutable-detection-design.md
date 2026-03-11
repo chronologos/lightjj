@@ -1,5 +1,7 @@
 # Stale Immutable Detection
 
+> **STATUS**: Shipped in `wnpsmqvw` → main `1291127a`.
+
 Detects and resolves immutable divergence caused by force-pushes from other machines. Surfaces actionable cases via MessageBar with one-click cleanup.
 
 ## Problem

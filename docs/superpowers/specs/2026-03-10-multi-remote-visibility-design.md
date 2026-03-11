@@ -1,5 +1,7 @@
 # Multi-Remote Visibility
 
+> **STATUS**: Shipped. Design stack `uztwstuz..knlrkrrz` → main `cc496038` (feat) + `e610eeb3` (fixes + tests).
+
 Per-remote and per-bookmark visibility toggles for the revision graph. Designed for fork workflows (origin + upstream) but general-purpose.
 
 ## Problem
