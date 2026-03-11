@@ -17,17 +17,41 @@ export type SyncState =
   | { kind: 'remote-only'; tracked: boolean }           // no local (untracked remote OR delete-staged)
   | { kind: 'conflict'; sides: number }                 // multiple added_targets
 
-export function classifyBookmark(bm: Bookmark): SyncState {
+// scopeRemote: classify vs. THAT remote only. Without it, picks the first
+// tracked remote (the original behavior — correct for the LOCAL group where
+// the row represents the bookmark's primary sync). Remote-group rows MUST
+// pass scopeRemote so the sync state matches the remote they display —
+// otherwise an UPSTREAM > main row could pair upstream's commit_id with
+// origin's ahead/behind counts (half-fix: the scoped-commit-display change
+// was made before this param existed, producing false `upstream ↑N` labels).
+export function classifyBookmark(bm: Bookmark, scopeRemote?: string): SyncState {
   if (bm.conflict) return { kind: 'conflict', sides: bm.added_targets?.length ?? 0 }
-  if (!bm.local) return { kind: 'remote-only', tracked: bm.remotes?.[0]?.tracked ?? false }
-  const r = bm.remotes?.find(r => r.tracked)
+  const r = scopeRemote
+    ? bm.remotes?.find(r => r.remote === scopeRemote)
+    : bm.remotes?.find(r => r.tracked)
+  if (!bm.local) {
+    // No local ref. Scoped case: describe THAT remote's trackedness.
+    // Unscoped: first remote's trackedness (pre-existing behavior).
+    return { kind: 'remote-only', tracked: (r ?? bm.remotes?.[0])?.tracked ?? false }
+  }
   if (!r) return { kind: 'local-only' }
+  // Untracked remote refs have ahead/behind = 0/0 sentinel (api.ts: "only
+  // meaningful when tracked"). Scoped lookup doesn't filter by trackedness
+  // (the row SHOWS this remote regardless), so without this gate the sentinel
+  // falls through to { kind: 'synced' } — green dot for an unknown relationship.
+  // local-only is accurate: local exists and is not tracked against this remote.
+  if (!r.tracked) return { kind: 'local-only' }
   // Invert: r.ahead = remote ahead of local = WE are behind
   const weAhead = r.behind
   const weBehind = r.ahead
   if (weAhead > 0 && weBehind > 0) return { kind: 'diverged', ahead: weAhead, behind: weBehind }
   if (weAhead > 0) return { kind: 'ahead', by: weAhead }
   if (weBehind > 0) return { kind: 'behind', by: weBehind }
+  if (scopeRemote) {
+    // Scoped classification reports THIS remote's state only — the
+    // all-remotes-synced check is the LOCAL group's concern.
+    return { kind: 'synced' }
+  }
   // Synced on the first tracked remote — but jj's all-remotes `synced` bool
   // knows about the others. Don't lie: if any tracked remote is out of sync,
   // downgrade. (0,0) is a sentinel; syncLabel renders "other remote" instead

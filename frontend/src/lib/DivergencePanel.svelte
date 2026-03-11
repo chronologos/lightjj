@@ -1,30 +1,9 @@
 <script lang="ts">
-  import { api, type DivergenceEntry } from './api'
-  import { classify, refineRebaseKind, type DivergenceGroup } from './divergence'
+  import { api } from './api'
+  import { classify, refineRebaseKind, buildKeepPlan, type DivergenceGroup, type KeepPlan } from './divergence'
   import { recommend, immutableSiblingCopy, type RefinedKind, type Strategy } from './divergence-strategy'
   import { parseDiffContent } from './diff-parser'
   import DiffFileView from './DiffFileView.svelte'
-
-  // KeepPlan: everything App.svelte needs to execute a resolution. Computed
-  // here (where the group structure lives), executed in App.svelte (where
-  // withMutation/loadLog live). Bookmark targets are per-change_id, not the
-  // stack tip — a bookmark on the middle of a stack repoints to that change's
-  // keeper, not jumping to the tip. See docs/jj-divergence.md §"Collateral".
-  export interface KeepPlan {
-    keeperCommitId: string           // for the status line
-    abandonCommitIds: string[]       // losing column + empty descendants
-    bookmarkRepoints: { name: string; targetCommitId: string }[]
-    // Non-empty descendants are NOT in abandonCommitIds — they go through
-    // confirm first. Confirm resolves them into EITHER abandonCommitIds
-    // OR rebaseSources (never both). A plan with nonEmptyDescendants still
-    // populated never reaches onkeep — execute() is only called post-confirm.
-    nonEmptyDescendants: DivergenceEntry[]
-    // Descendants to rebase onto keeperCommitId BEFORE the abandon. Rebase
-    // first: if abandon ran first, jj would auto-rebase D onto the loser-
-    // stack's parent (trunk), and then our explicit rebase would hit a
-    // twice-rebased tree. -s mode (not -r) so D's own descendants follow.
-    rebaseSources: string[]
-  }
 
   interface Props {
     changeId: string
@@ -210,36 +189,9 @@
     })
   })
 
+  // Thin wrapper — logic lives in divergence.ts now (testable in isolation).
   function buildPlan(keeperIdx: number): KeepPlan {
-    const g = group!
-    // Abandon every commit in the losing columns (all levels of the stack).
-    const abandonCommitIds: string[] = []
-    for (const level of g.versions) {
-      for (let i = 0; i < level.length; i++) {
-        if (i !== keeperIdx) abandonCommitIds.push(level[i].commit_id)
-      }
-    }
-    // Descendants: empty ones go straight to abandon; non-empty go to confirm.
-    // A descendant of the KEEPER'S tip doesn't need abandoning (it stays valid).
-    const keeperTip = g.versions[g.versions.length - 1][keeperIdx].commit_id
-    const collateral = g.descendants.filter(d => !d.parent_commit_ids.includes(keeperTip))
-    const nonEmptyDescendants = collateral.filter(d => !d.empty)
-    for (const d of collateral.filter(d => d.empty)) abandonCommitIds.push(d.commit_id)
-
-    // Bookmarks: map each conflicted bookmark to the keeper at the SAME
-    // change_id level it was on. Not the stack tip. See doc §"Collateral" #2.
-    const bookmarkRepoints = g.conflictedBookmarks.map(({ name, changeId }) => {
-      const levelIdx = g.changeIds.indexOf(changeId)
-      return { name, targetCommitId: g.versions[levelIdx][keeperIdx].commit_id }
-    })
-
-    return {
-      keeperCommitId: keeperTip,
-      abandonCommitIds,
-      bookmarkRepoints,
-      nonEmptyDescendants,
-      rebaseSources: [],
-    }
+    return buildKeepPlan(group!, keeperIdx)
   }
 
   // keeperIdx is derivable from pendingPlan (the root-level commit NOT in

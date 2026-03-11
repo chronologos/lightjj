@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classify, refineRebaseKind, type DivergenceGroup } from './divergence'
+import { classify, refineRebaseKind, buildKeepPlan, type DivergenceGroup } from './divergence'
 import type { DivergenceEntry } from './api'
 
 // Minimal entry builder — only fields the classifier reads.
@@ -439,5 +439,113 @@ describe('classify — edge cases', () => {
     const gY = groups.find(g => g.rootChangeId === 'Y')!
     expect(gX.descendants.map(d => d.commit_id)).toEqual(['kx'])
     expect(gY.descendants.map(d => d.commit_id)).toEqual(['ky'])
+  })
+})
+
+// --- buildKeepPlan (extracted from DivergencePanel.svelte for testability) ---
+// Wrong-column abandon = data loss. Every invariant here corresponds to a
+// sentence in the buildKeepPlan comment block or docs/jj-divergence.md.
+describe('buildKeepPlan', () => {
+  // Hand-built DivergenceGroup — simpler than going through classify() when we
+  // want specific column/level/descendant shapes.
+  const mkGroup = (over: Partial<DivergenceGroup>): DivergenceGroup => ({
+    rootChangeId: 'A', changeIds: ['A'], versions: [],
+    kind: 'same-parent', alignable: true, liveVersion: null,
+    descendants: [], conflictedBookmarks: [],
+    ...over,
+  })
+
+  it('abandons ALL levels of losing columns, keeps the keeper column', () => {
+    // 3-level stack, 2 columns. Keeping column 1 → abandon {a0,b0,c0}.
+    const g = mkGroup({
+      changeIds: ['A', 'B', 'C'],
+      versions: [
+        [e({ commit_id: 'a0' }), e({ commit_id: 'a1' })],
+        [e({ commit_id: 'b0' }), e({ commit_id: 'b1' })],
+        [e({ commit_id: 'c0' }), e({ commit_id: 'c1' })],
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    expect(plan.keeperCommitId).toBe('c1')  // tip of keeper column
+    expect(plan.abandonCommitIds).toEqual(['a0', 'b0', 'c0'])
+  })
+
+  it('single-level (non-stack): abandons the N-1 losing versions', () => {
+    const g = mkGroup({
+      changeIds: ['X'],
+      versions: [[e({ commit_id: 'v0' }), e({ commit_id: 'v1' }), e({ commit_id: 'v2' })]],
+    })
+    const plan = buildKeepPlan(g, 0)
+    expect(plan.keeperCommitId).toBe('v0')
+    expect(plan.abandonCommitIds).toEqual(['v1', 'v2'])
+  })
+
+  it('bookmark repoints to SAME-LEVEL keeper, not the stack tip', () => {
+    // Invariant from docs/jj-divergence.md §"Collateral" #2: a bookmark on
+    // the MIDDLE of a stack repoints to that change_id's keeper — not jumping
+    // forward to the tip. Jumping to tip would move a user's mid-stack
+    // checkpoint ahead, breaking their mental model.
+    const g = mkGroup({
+      changeIds: ['A', 'B', 'C'],
+      versions: [
+        [e({ commit_id: 'a0' }), e({ commit_id: 'a1' })],
+        [e({ commit_id: 'b0' }), e({ commit_id: 'b1' })],
+        [e({ commit_id: 'c0' }), e({ commit_id: 'c1' })],
+      ],
+      conflictedBookmarks: [
+        { name: 'mid-checkpoint', changeId: 'B' },  // middle of stack
+        { name: 'tip', changeId: 'C' },
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    expect(plan.bookmarkRepoints).toEqual([
+      { name: 'mid-checkpoint', targetCommitId: 'b1' },  // B's keeper, NOT c1
+      { name: 'tip', targetCommitId: 'c1' },
+    ])
+  })
+
+  it('descendant of KEEPER tip → excluded from collateral (stays valid)', () => {
+    // c1 is the keeper tip. A descendant on c1 is still a valid ancestor chain
+    // after the abandon — no reason to touch it.
+    const g = mkGroup({
+      changeIds: ['C'],
+      versions: [[e({ commit_id: 'c0' }), e({ commit_id: 'c1' })]],
+      descendants: [
+        e({ commit_id: 'd_keeper', parent_commit_ids: ['c1'], divergent: false, empty: false }),
+        e({ commit_id: 'd_loser', parent_commit_ids: ['c0'], divergent: false, empty: false }),
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    // d_keeper is NOT in abandonCommitIds NOR nonEmptyDescendants — excluded entirely.
+    expect(plan.abandonCommitIds).toEqual(['c0'])  // only the loser column
+    expect(plan.nonEmptyDescendants.map(d => d.commit_id)).toEqual(['d_loser'])
+  })
+
+  it('empty descendant of loser → silent abandon (no confirm needed)', () => {
+    // Empty descendants are likely auto-rebase leftovers. Abandon immediately;
+    // only non-empty descendants need user confirmation.
+    const g = mkGroup({
+      changeIds: ['C'],
+      versions: [[e({ commit_id: 'c0' }), e({ commit_id: 'c1' })]],
+      descendants: [
+        e({ commit_id: 'd_empty', parent_commit_ids: ['c0'], divergent: false, empty: true }),
+        e({ commit_id: 'd_full', parent_commit_ids: ['c0'], divergent: false, empty: false }),
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    expect(plan.abandonCommitIds).toEqual(['c0', 'd_empty'])
+    expect(plan.nonEmptyDescendants.map(d => d.commit_id)).toEqual(['d_full'])
+  })
+
+  it('rebaseSources starts empty (populated by confirm resolution, not planning)', () => {
+    // rebaseSources is post-confirm state — buildKeepPlan produces the
+    // pre-confirm plan. Confirm either appends to abandonCommitIds (discard)
+    // or to rebaseSources (keep) — never both.
+    const g = mkGroup({
+      changeIds: ['X'],
+      versions: [[e({ commit_id: 'x0' }), e({ commit_id: 'x1' })]],
+      descendants: [e({ commit_id: 'd', parent_commit_ids: ['x0'], divergent: false, empty: false })],
+    })
+    expect(buildKeepPlan(g, 1).rebaseSources).toEqual([])
   })
 })

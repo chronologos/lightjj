@@ -59,11 +59,15 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
 	// Parent IDs are comma-joined (commit IDs are hex, commas can't appear).
 	// Bookmarks are joined with \x1F and MUST be the last field — the parser's SplitN leaves the tail unsplit.
-	// Uses bookmarks.map(|b| if(b.remote(), b.name() ++ "@" ++ b.remote(), b.name()))
-	// — emits local bookmarks as "name" and remote as "name@remote". .name() strips
-	// the * suffix for bookmarks ahead of their remote.
+	// local_bookmarks + remote_bookmarks are concatenated — `bookmarks` alone collapses
+	// tracked-and-synced remotes into the local form (main@upstream vanishes when local
+	// main is at the same commit). \x1E separates name from remote inside each entry
+	// (Git refs can't contain control chars per git-check-ref-format; @ CAN appear via
+	// git-side branch creation, which jj imports and RefSymbol-quotes). .name() is a
+	// RefSymbol — it quote-wraps names containing revset-special chars; the parser
+	// strips those quotes and filters the @git colocation synthetic remote.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ bookmarks.map(|b| if(b.remote(), b.name() ++ "@" ++ b.remote(), b.name())).join("\x1F") ++ "\n"`,
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name()).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
 		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args

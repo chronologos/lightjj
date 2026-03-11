@@ -113,7 +113,9 @@ describe('BookmarksPanel — navigation', () => {
     await fireEvent.keyDown(list(), { key: 'j' }) // alpha
     await fireEvent.keyDown(list(), { key: 'j' }) // beta
     await fireEvent.keyDown(list(), { key: 'Enter' })
-    expect(onjump).toHaveBeenCalledWith(expect.objectContaining({ name: 'beta' }))
+    // Second arg is jumpTarget (scoped remote's commit_id for remote-group
+    // rows); undefined for LOCAL group rows → jumpToBookmark uses bm.commit_id.
+    expect(onjump).toHaveBeenCalledWith(expect.objectContaining({ name: 'beta' }), undefined)
   })
 
   it('Enter toggles group expand/collapse on group row', async () => {
@@ -176,6 +178,59 @@ describe('BookmarksPanel — actions', () => {
     // Remote-only bookmark is NOT in LOCAL group (no local ref).
     // It's in ORIGIN group which is collapsed by default.
     // So d on group header should be no-op.
+    await fireEvent.keyDown(list(), { key: 'd' })
+    await fireEvent.keyDown(list(), { key: 'd' })
+    expect(onexecute).not.toHaveBeenCalled()
+  })
+
+  it('d on delete-staged (remote-only TRACKED) → push-delete, not delete', async () => {
+    // No local ref + tracked remote = jj already knows it's deleted locally;
+    // `d` pushes the deletion rather than running `jj bookmark delete` (which
+    // would no-op: already no local ref).
+    // This is the skzqozmm commit's new code path; untested until now.
+    const onexecute = vi.fn()
+    const deleteStaged = [mkBm({ name: 'old-feat', remotes: [mkRemote({ tracked: true })], commit_id: '' })]
+    render(BookmarksPanel, { props: props({ bookmarks: deleteStaged, onexecute }) })
+    // panelRows: LOCAL header (0, empty), ORIGIN header (1, auto-expanded),
+    // old-feat (2 — the target).
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'd' })
+    expect(footer()).toContain('again')  // still double-press — destructive
+    await fireEvent.keyDown(list(), { key: 'd' })
+    expect(onexecute).toHaveBeenCalledWith({ action: 'push-delete', bookmark: 'old-feat', remote: 'origin' })
+  })
+
+  it('d on delete-staged with multiple tracked remotes → pushes [0] (single-remote jj constraint)', async () => {
+    // jj git push is single-remote. computeActions puts the default remote at [0]
+    // (backend sorts bm.remotes). User presses `d` again for the rest — not batched.
+    const onexecute = vi.fn()
+    const deleteStaged = [mkBm({
+      name: 'old',
+      remotes: [mkRemote({ remote: 'origin', tracked: true }), mkRemote({ remote: 'upstream', tracked: true })],
+      commit_id: '',
+    })]
+    render(BookmarksPanel, { props: props({
+      bookmarks: deleteStaged, onexecute,
+      allRemotes: ['origin', 'upstream'],
+    }) })
+    // Navigate to the bookmark row under ORIGIN (index varies — two groups).
+    // panelRows: LOCAL(0,empty), ORIGIN(1), old(2), UPSTREAM(3), old(4).
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'd' })
+    await fireEvent.keyDown(list(), { key: 'd' })
+    expect(onexecute).toHaveBeenCalledWith({ action: 'push-delete', bookmark: 'old', remote: 'origin' })
+  })
+
+  it('d on untracked remote-only is gated off (pushDelete empty)', async () => {
+    // Untracked remote-only: pushing `-b <name>` would implicitly TRACK it,
+    // not delete. computeActions filters to tracked-only for pushDelete.
+    const onexecute = vi.fn()
+    const untracked = [mkBm({ name: 'foreign', remotes: [mkRemote({ tracked: false })], commit_id: '' })]
+    render(BookmarksPanel, { props: props({ bookmarks: untracked, onexecute }) })
+    await fireEvent.keyDown(list(), { key: 'j' })  // ORIGIN header
+    await fireEvent.keyDown(list(), { key: 'j' })  // foreign row
     await fireEvent.keyDown(list(), { key: 'd' })
     await fireEvent.keyDown(list(), { key: 'd' })
     expect(onexecute).not.toHaveBeenCalled()
@@ -392,5 +447,108 @@ describe('BookmarksPanel — eye visibility toggle', () => {
     // index 0 = LOCAL group header
     await fireEvent.keyDown(list(), { key: 'e' })
     expect(onvisibilitychange).not.toHaveBeenCalled()
+  })
+
+  it('e on bookmark row when remote is HIDDEN → auto-enable with hidden=[others]', async () => {
+    // toggleBookmarkVisibility case 1: flip on JUST this bookmark without
+    // flooding the log. Remote was off; now on with every OTHER bookmark
+    // on this remote in the hidden list. The original design required
+    // enabling the whole remote first, then hiding N-1 — two clicks + flood.
+    const onvisibilitychange = vi.fn()
+    const bms = [
+      mkBm({ name: 'want', remotes: [mkRemote()] }),
+      mkBm({ name: 'noise-a', remotes: [mkRemote()] }),
+      mkBm({ name: 'noise-b', remotes: [mkRemote()] }),
+    ]
+    render(BookmarksPanel, { props: props({
+      bookmarks: bms,
+      remoteVisibility: { origin: { visible: false } },  // remote hidden
+      onvisibilitychange,
+    }) })
+    // panelRows: LOCAL(0,empty), ORIGIN(1,auto-expanded), noise-a(2), noise-b(3), want(4).
+    // Remote-group rows sort alphabetically. Navigate to 'want'.
+    await fireEvent.keyDown(list(), { key: 'j' })  // → ORIGIN header
+    await fireEvent.keyDown(list(), { key: 'j' })  // → noise-a
+    await fireEvent.keyDown(list(), { key: 'j' })  // → noise-b
+    await fireEvent.keyDown(list(), { key: 'j' })  // → want
+    await fireEvent.keyDown(list(), { key: 'e' })
+    const vis = onvisibilitychange.mock.calls[0][0]
+    expect(vis.origin.visible).toBe(true)
+    // hidden contains the OTHER two (order follows bookmarks[] iteration)
+    expect(new Set(vis.origin.hidden)).toEqual(new Set(['noise-a', 'noise-b']))
+  })
+
+  it('e on group header OFF→ON clears hidden (big toggle = show all)', async () => {
+    // toggleGroupVisibility: the intent of the GROUP eye is "show all of this
+    // remote". Preserving a per-bookmark hidden list through an off→on cycle
+    // would leave the user wondering why half the bookmarks still don't appear.
+    const onvisibilitychange = vi.fn()
+    const bms = [mkBm({ name: 'feat', remotes: [mkRemote()] })]
+    render(BookmarksPanel, { props: props({
+      bookmarks: bms,
+      remoteVisibility: { origin: { visible: false, hidden: ['a', 'b', 'c'] } },
+      onvisibilitychange,
+    }) })
+    // LOCAL(0,empty), ORIGIN(1) ← target
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'e' })
+    const vis = onvisibilitychange.mock.calls[0][0]
+    expect(vis.origin).toEqual({ visible: true, hidden: [] })
+  })
+
+  it('e on group header ON→OFF preserves hidden (re-enable remembers selection)', async () => {
+    // Counterpart: turning OFF does NOT clear — so the next ON cycle can
+    // restore per-bookmark state (but only if toggled at the bookmark level,
+    // not group level — see the OFF→ON test above which DOES clear).
+    const onvisibilitychange = vi.fn()
+    const bms = [mkBm({ name: 'feat', remotes: [mkRemote()] })]
+    render(BookmarksPanel, { props: props({
+      bookmarks: bms,
+      remoteVisibility: { origin: { visible: true, hidden: ['a', 'b'] } },
+      onvisibilitychange,
+    }) })
+    await fireEvent.keyDown(list(), { key: 'j' })  // ORIGIN header
+    await fireEvent.keyDown(list(), { key: 'e' })
+    const vis = onvisibilitychange.mock.calls[0][0]
+    expect(vis.origin).toEqual({ visible: false, hidden: ['a', 'b'] })
+  })
+})
+
+// --- Per-remote row scoping invariant: display and action must agree ---
+describe('BookmarksPanel — scoped remote-group rows', () => {
+  it('remote-group row jump uses scoped remote commit_id, not bm.commit_id', async () => {
+    // bm.commit_id = local commit; but the UPSTREAM row shows upstream's
+    // commit_id. Click/Enter must jump to what's DISPLAYED, not the bookmark's
+    // "primary" commit. Without jumpTarget, clicking the upstream row jumped
+    // to the local commit — confusing and wrong.
+    const onjump = vi.fn()
+    const bms = [mkBm({
+      name: 'main', local: mkLocal(), commit_id: 'local-abc',
+      remotes: [mkRemote({ remote: 'upstream', commit_id: 'upstream-xyz', tracked: true })],
+    })]
+    render(BookmarksPanel, { props: props({
+      bookmarks: bms, allRemotes: ['upstream'],
+      remoteVisibility: { upstream: { visible: false } },
+      onjump,
+    }) })
+    // panelRows: LOCAL(0), main-local(1), UPSTREAM(2), main-upstream(3 ← target)
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'Enter' })
+    // Second arg = jumpTarget = scoped remote's commit_id
+    expect(onjump).toHaveBeenCalledWith(expect.objectContaining({ name: 'main' }), 'upstream-xyz')
+  })
+
+  it('LOCAL-group row jump passes undefined jumpTarget (bm.commit_id default)', async () => {
+    // LOCAL rows have no jumpTarget — App's jumpToBookmark falls back to
+    // bm.commit_id. This asserts the existing contract (already tested by
+    // 'Enter calls onjump' but not explicitly about the undefined arg).
+    const onjump = vi.fn()
+    const bms = [mkBm({ name: 'feat', local: mkLocal(), commit_id: 'local-abc' })]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, onjump }) })
+    await fireEvent.keyDown(list(), { key: 'j' })
+    await fireEvent.keyDown(list(), { key: 'Enter' })
+    expect(onjump).toHaveBeenCalledWith(expect.objectContaining({ name: 'feat' }), undefined)
   })
 })

@@ -22,8 +22,18 @@ export interface LogEntry {
     parent_ids?: string[]
   }
   description: string
+  // Local bookmarks only — RefSymbol quotes stripped by parser. Before the
+  // local/remote_bookmarks template split this was a mixed array with
+  // `name@remote` strings; consumers had to @-split, which broke on
+  // git-created branch names containing `@`.
   bookmarks?: string[]
+  remote_bookmarks?: RemoteRef[]
   graph_lines: GraphLine[]
+}
+
+export interface RemoteRef {
+  name: string
+  remote: string
 }
 
 export type AnnotationSeverity = 'must-fix' | 'suggestion' | 'question' | 'nitpick'

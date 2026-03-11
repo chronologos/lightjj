@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseGraphLog_LinearHistory(t *testing.T) {
-	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1ff766300c\x1fmain\x1fmain@origin\n" +
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1ff766300c\x1fmain\x1fmain\x1eorigin\n" +
 		"○  _PREFIX:r_PREFIX:f_PREFIX:false_PREFIX:false\x1frrrtptvx\x1ff766300c\x1fui v1\x1f\x1fb6a3ed01\x1f\n" +
 		"○  _PREFIX:m_PREFIX:b_PREFIX:false_PREFIX:false\x1fmwoxvszn\x1fb6a3ed01\x1fport jjui golang code\x1f\x1f00000000\x1f\n" +
 		"◆  _PREFIX:z_PREFIX:0_PREFIX:false_PREFIX:false\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\x1f\n"
@@ -22,7 +22,8 @@ func TestParseGraphLog_LinearHistory(t *testing.T) {
 	assert.Equal(t, 2, rows[0].Commit.CommitPrefix)  // "20" = 2 chars
 	assert.True(t, rows[0].Commit.IsWorkingCopy)
 	assert.Equal(t, "my commit", rows[0].Description)
-	assert.Equal(t, []string{"main", "main@origin"}, rows[0].Bookmarks)
+	assert.Equal(t, []string{"main"}, rows[0].Bookmarks)
+	assert.Equal(t, []RemoteRef{{Name: "main", Remote: "origin"}}, rows[0].RemoteBookmarks)
 	assert.Equal(t, []string{"f766300c"}, rows[0].Commit.ParentIds)
 	assert.Nil(t, rows[3].Commit.ParentIds) // root has no parents
 
@@ -121,6 +122,33 @@ func TestParseGraphLog_BookmarksMultiple(t *testing.T) {
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.Equal(t, []string{"main", "develop"}, rows[0].Bookmarks)
+}
+
+func TestParseGraphLog_BookmarksRemoteOnly(t *testing.T) {
+	// Template concatenates local_bookmarks.join(\x1F) + \x1F + remote_bookmarks.join(\x1F).
+	// Zero local bookmarks → leading \x1F → empty first segment (filtered).
+	// Parser splits remote entries on \x1E and drops @git (colocation synthetic).
+	// RefSymbol-quoted names (branches with revset-special chars created
+	// git-side, which jj imports and then quotes in template output) are
+	// unwrapped.
+	output := "○  _PREFIX:m_PREFIX:1e_PREFIX:false_PREFIX:false\x1fmnxmnwxk\x1f1e83f5a9\x1fdebug\x1f\x1f\x1f\x1fmac-scroll-bug\x1eupstream\x1fmain\x1egit\x1f\"release@v2\"\x1eorigin\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].Bookmarks) // leading empty segment filtered
+	assert.Equal(t, []RemoteRef{
+		{Name: "mac-scroll-bug", Remote: "upstream"},
+		// main@git dropped
+		{Name: "release@v2", Remote: "origin"}, // quotes stripped
+	}, rows[0].RemoteBookmarks)
+}
+
+func TestParseGraphLog_BookmarksLocalQuoted(t *testing.T) {
+	// Git-created local branch with @ in name → jj RefSymbol-quotes it.
+	output := "○  _PREFIX:m_PREFIX:1e_PREFIX:false_PREFIX:false\x1fmnxmnwxk\x1f1e83f5a9\x1fdebug\x1f\x1f\x1f\"deploy@prod\"\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"deploy@prod"}, rows[0].Bookmarks)
+	assert.Nil(t, rows[0].RemoteBookmarks)
 }
 
 func TestParseGraphLog_EmptyDescription(t *testing.T) {

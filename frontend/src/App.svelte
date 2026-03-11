@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type RemoteVisibility } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches } from './lib/diff-cache'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
@@ -49,7 +49,8 @@
   import BookmarkInput from './lib/BookmarkInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
-  import DivergencePanel, { type KeepPlan } from './lib/DivergencePanel.svelte'
+  import DivergencePanel from './lib/DivergencePanel.svelte'
+  import type { KeepPlan } from './lib/divergence'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
@@ -57,6 +58,7 @@
   import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt } from './lib/version'
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
   import WelcomeModal from './lib/WelcomeModal.svelte'
+  import { buildVisibilityRevset } from './lib/remote-visibility'
 
   // --- Global state ---
   // initialState-hydrated vars: restored on tab-switch-back via AppShell's
@@ -83,48 +85,6 @@
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
   let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
-  // Builds a revset that shows commits reachable from the visible remote bookmarks.
-  // Uses remote_bookmarks(remote="X") — the named `remote=` arg selects by remote name,
-  // not bookmark name pattern. Returns '' if no remotes are visible.
-  function buildVisibilityRevset(vis: RemoteVisibility, bookmarks: Bookmark[]): string {
-    const parts: string[] = []
-    for (const [remote, entry] of Object.entries(vis)) {
-      if (!entry.visible) continue
-      if (!entry.hidden?.length) {
-        // All bookmarks in this remote visible — named remote arg
-        parts.push(`remote_bookmarks(remote="${remote}")`)
-      } else {
-        const hidden = new Set(entry.hidden)
-        const visible = bookmarks
-          .flatMap(bm => (bm.remotes ?? [])
-            .filter(r => r.remote === remote && !hidden.has(bm.name))
-            .map(() => `"${bm.name}@${remote}"`)
-          )
-        if (visible.length > 0) parts.push(visible.join(' | '))
-      }
-    }
-    if (parts.length === 0) return ''
-    return `ancestors(${parts.join(' | ')}, 2)`
-  }
-
-  // viewMode is a discretization of revsetFilter, not independent state — the
-  // filter is set by the visibility config effect. Typing anything else
-  // auto-surfaces a "Custom" indicator.
-  let visibilityRevset = $derived(buildVisibilityRevset(config.remoteVisibility, bookmarksPanel.value))
-  const viewMode = $derived(
-    revsetFilter === '' || revsetFilter === visibilityRevset ? 'log' : 'custom'
-  )
-  // When visibilityRevset changes and we're in 'log' mode (no custom filter typed),
-  // update revsetFilter to reflect the new visibility config and reload.
-  $effect(() => {
-    const vr = visibilityRevset
-    untrack(() => {
-      if (viewMode === 'log') {
-        revsetFilter = vr
-        handleRevsetSubmit()
-      }
-    })
-  })
 
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
@@ -177,6 +137,32 @@
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
   const bookmarksPanel = createLoader(() => api.bookmarks(), [] as Bookmark[])
+
+  // viewMode is a discretization of revsetFilter, not independent state — the
+  // filter is set by the visibility config effect. Typing anything else
+  // auto-surfaces a "Custom" indicator.
+  let visibilityRevset = $derived(buildVisibilityRevset(config.remoteVisibility, bookmarksPanel.value))
+  const viewMode = $derived(
+    revsetFilter === '' || revsetFilter === visibilityRevset ? 'log' : 'custom'
+  )
+  // When visibilityRevset changes and the user hasn't typed a custom filter,
+  // update revsetFilter to reflect the new visibility config and reload.
+  // The guard compares against prevVisibilityRevset (the value that THIS effect
+  // previously wrote), NOT viewMode — reading viewMode inside the effect lazily
+  // recomputes it with NEW visibilityRevset + OLD revsetFilter → 'custom' →
+  // guard fails on every toggle after the first. untrack() blocks dep tracking,
+  // not $derived lazy recomputation.
+  let prevVisibilityRevset = ''
+  $effect(() => {
+    const vr = visibilityRevset
+    untrack(() => {
+      if (revsetFilter === '' || revsetFilter === prevVisibilityRevset) {
+        revsetFilter = vr
+        handleRevsetSubmit()
+      }
+      prevVisibilityRevset = vr
+    })
+  })
 
   // Abort predicate for nav.loadDiffAndFiles — re-checked after its await.
   // User checking a revision during the fetch means the multi-check $effect
@@ -744,7 +730,7 @@
   // write so the effect-triggered loadLog sees it.
   let pendingSelectCommitId: string | null = null
 
-  function showBookmarkContextMenu(bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) {
+  function showBookmarkContextMenu(bm: Bookmark, actions: BookmarkRowActions, x: number, y: number, jumpTarget?: string) {
     const pd = actions.pushDelete
     const delOp: BookmarkOp = pd[0]
       ? { action: 'push-delete', bookmark: bm.name, remote: pd[0] }
@@ -753,8 +739,8 @@
       ? `Push delete → ${pd[0]}${pd.length > 1 ? ` (+${pd.length - 1})` : ''}`
       : 'Delete'
     const items: ContextMenuItem[] = [
-      { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump,
-        action: () => jumpToBookmark(bm) },
+      { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump && !jumpTarget,
+        action: () => jumpToBookmark(bm, jumpTarget) },
       { separator: true },
       { label: delLabel, shortcut: 'd', danger: true, disabled: !actions.del && !pd[0],
         action: () => handleBookmarkOp(delOp) },
@@ -787,16 +773,26 @@
     }
   }
 
-  function jumpToBookmark(bm: Bookmark) {
-    if (bm.conflict || !bm.commit_id) return
-    activeView = 'log'
-    const idx = revisions.findIndex(r => r.commit.commit_id === bm.commit_id)
-    if (idx >= 0) { selectRevision(idx); return }
+  // overrideCommitId: when jumping from a BookmarksPanel remote-group row,
+  // bm.commit_id is the "primary" (local if exists, else defaultRemote) but
+  // the row DISPLAYED the scoped remote's commit_id — display and click must
+  // agree. The override is passed through from row.jumpTarget.
+  //
+  // Does NOT switch activeView — the branches panel stays open in the right
+  // column so the selection highlight appears in the graph on the left. In
+  // branches view, skip diff load (panel occupies the diff slot).
+  function jumpToBookmark(bm: Bookmark, overrideCommitId?: string) {
+    const commitId = overrideCommitId ?? bm.commit_id
+    if (bm.conflict || !commitId) return
+    const select = activeView === 'branches' ? selectRevisionCursorOnly : selectRevision
+    const idx = revisions.findIndex(r => r.commit.commit_id === commitId)
+    if (idx >= 0) { select(idx); return }
     // Not loaded: reload with bookmark revset. Bare name only works for
-    // local refs — remote-only needs name@remote. Use commit_id as fallback
-    // revset (always valid, resolves to a single commit).
-    pendingSelectCommitId = bm.commit_id
-    revsetFilter = bm.local ? bm.name : bm.commit_id
+    // local refs when the primary commit_id is the intended target. Any
+    // override or remote-only bookmark uses the commit_id directly (always
+    // valid revset, resolves to exactly one commit).
+    pendingSelectCommitId = commitId
+    revsetFilter = (bm.local && !overrideCommitId) ? bm.name : commitId
     handleRevsetSubmit()
   }
 
@@ -1797,22 +1793,19 @@
             class:toolbar-nav-active={activeView === 'log'}
             onclick={() => { if (!inlineMode) activeView = 'log' }}
             disabled={inlineMode}
-            title="Revisions (1)"
-          >◉ Revisions</button>
+          >◉ Revisions <kbd class="toolbar-nav-kbd">1</kbd></button>
           <button
             class="toolbar-nav-btn"
             class:toolbar-nav-active={activeView === 'branches'}
             onclick={() => { if (!inlineMode) activeView = 'branches' }}
             disabled={inlineMode}
-            title="Branches (2)"
-          >⑂ Branches</button>
+          >⑂ Branches <kbd class="toolbar-nav-kbd">2</kbd></button>
           <button
             class="toolbar-nav-btn"
             class:toolbar-nav-active={activeView === 'operations'}
             onclick={() => { if (!inlineMode) { activeView = 'operations'; loadOplog() } }}
             disabled={inlineMode}
-            title="Operations (3)"
-          >⟲ Operations</button>
+          >⟲ Operations <kbd class="toolbar-nav-kbd">3</kbd></button>
         </nav>
         <span class="toolbar-divider"></span>
         <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">
@@ -1850,7 +1843,7 @@
 
     {@render tabBar?.()}
 
-    {#if activeView === 'log'}
+    {#if activeView === 'log' || activeView === 'branches'}
       <div class="workspace">
         <div class="revision-panel-wrapper" style="width: {config.revisionPanelWidth}px">
           <RevisionGraph
@@ -1863,7 +1856,7 @@
             {revsetFilter}
             {viewMode}
             {lastCheckedIndex}
-            onselect={selectRevision}
+            onselect={activeView === 'branches' ? selectRevisionCursorOnly : selectRevision}
             oncheck={toggleCheck}
             onrangecheck={rangeCheck}
             oncontextmenu={openRevisionContextMenu}
@@ -1888,7 +1881,29 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="panel-divider" class:divider-active={draggingDivider} onmousedown={startDividerDrag}></div>
 
-        {#if divergence.active}
+        {#if activeView === 'branches'}
+          <!-- Branches view: graph stays visible on the left so clicking a
+               bookmark shows its position immediately. jumpToBookmark updates
+               selectedIndex without switching view. -->
+          <BookmarksPanel
+            bind:this={bookmarksPanelRef}
+            bookmarks={bookmarksPanel.value}
+            loading={bookmarksPanel.loading}
+            error={bookmarksPanel.error}
+            {defaultRemote}
+            {allRemotes}
+            remoteVisibility={config.remoteVisibility}
+            {prByBookmark}
+            graphCommitId={selectedRevision?.commit.commit_id}
+            onjump={jumpToBookmark}
+            onexecute={handleBookmarkOp}
+            onrefresh={() => bookmarksPanel.load()}
+            onclose={() => { activeView = 'log' }}
+            onvisibilitychange={(vis) => { config.remoteVisibility = vis }}
+            oncontextmenu={showBookmarkContextMenu}
+            ontrackmenu={showTrackMenu}
+          />
+        {:else if divergence.active}
           <!-- {#key} enforces what DivergencePanel assumes: changeId never
                changes in-place. createDivergenceMode.enter() doesn't guard
                against re-entry; the key does. Fresh mount = no stale-promise
@@ -1951,7 +1966,7 @@
         {/if}
       </div>
 
-      {#if evologOpen}
+      {#if activeView === 'log' && evologOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="evolog-divider"
@@ -1972,7 +1987,7 @@
         {/key}
       {/if}
 
-      {#if oplogOpen}
+      {#if activeView === 'log' && oplogOpen}
         <OplogPanel
           entries={oplogEntries}
           loading={oplogLoading}
@@ -1984,26 +1999,6 @@
           oncontextmenu={showContextMenu}
         />
       {/if}
-    {:else if activeView === 'branches'}
-      <div class="fullwidth-panel">
-        <BookmarksPanel
-          bind:this={bookmarksPanelRef}
-          bookmarks={bookmarksPanel.value}
-          loading={bookmarksPanel.loading}
-          error={bookmarksPanel.error}
-          {defaultRemote}
-          {allRemotes}
-          remoteVisibility={config.remoteVisibility}
-          {prByBookmark}
-          onjump={jumpToBookmark}
-          onexecute={handleBookmarkOp}
-          onrefresh={() => bookmarksPanel.load()}
-          onclose={() => { activeView = 'log' }}
-          onvisibilitychange={(vis) => { config.remoteVisibility = vis }}
-          oncontextmenu={showBookmarkContextMenu}
-          ontrackmenu={showTrackMenu}
-        />
-      </div>
     {:else if activeView === 'operations'}
       <div class="fullwidth-panel">
         <OplogPanel
@@ -2347,6 +2342,22 @@
   .toolbar-nav-active {
     color: var(--amber);
     font-weight: 600;
+  }
+
+  .toolbar-nav-kbd {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--overlay0);
+    background: none;
+    border: 1px solid var(--surface1);
+    padding: 0 4px;
+    border-radius: 3px;
+    margin-left: 2px;
+  }
+  .toolbar-nav-active .toolbar-nav-kbd {
+    /* Active nav button: tint the kbd amber too, subtle */
+    color: var(--amber);
+    border-color: color-mix(in srgb, var(--amber) 30%, transparent);
   }
 
   .toolbar-search {

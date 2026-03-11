@@ -9,11 +9,36 @@ import (
 	"github.com/chronologos/lightjj/internal/jj"
 )
 
+// stripRefQuotes removes enclosing double-quotes from a RefSymbol-formatted
+// name. jj's template .name() quotes names containing revset-special chars
+// (e.g. `@`, `/`, `::`) — same behavior `bookmark.go:48` strips for.
+func stripRefQuotes(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// RemoteRef is a remote bookmark split into its name and remote components.
+// The @git synthetic remote (jj's git-colocation tracking) is filtered out
+// at parse time — it's not a real remote and clutters UI.
+type RemoteRef struct {
+	Name   string `json:"name"`
+	Remote string `json:"remote"`
+}
+
 // GraphRow represents one revision in the log, with its graph lines and commit data.
 type GraphRow struct {
 	Commit      jj.Commit `json:"commit"`
 	Description string    `json:"description"`
-	Bookmarks   []string  `json:"bookmarks,omitempty"`
+	// Bookmarks holds LOCAL bookmark names only (RefSymbol quotes stripped).
+	// Before the local/remote_bookmarks template split, this was a mixed array
+	// with `name@remote` strings — consumers had to parse them, and the naive
+	// @-split broke on git-side branch names containing `@`.
+	Bookmarks []string `json:"bookmarks,omitempty"`
+	// RemoteBookmarks holds remote refs split at parse time. The \x1E
+	// template separator never crosses the wire.
+	RemoteBookmarks []RemoteRef `json:"remote_bookmarks,omitempty"`
 	// GraphLines contains all the visual lines for this row,
 	// including the node line and any connector lines below it.
 	GraphLines []GraphLine `json:"graph_lines"`
@@ -142,13 +167,27 @@ func parseNodeLine(line string) GraphRow {
 		row.Commit.ParentIds = strings.Split(parts[5], ",")
 	}
 
-	// Bookmarks are joined with \x1F in the template. After SplitN(7), remaining
-	// separators within the bookmarks field delimit individual bookmark names.
+	// Bookmarks field (after SplitN(7) keeps tail unsplit) contains locals then
+	// remotes, all \x1F-joined. Remotes are `name\x1Eremote`; locals have no
+	// \x1E. RefSymbol quoting (`"name"`) is stripped — it's a template-output
+	// detail (jj quotes names with revset-special chars). The @git synthetic
+	// colocation remote is dropped here so no consumer needs to filter it.
 	if len(parts) > 6 && parts[6] != "" {
 		for bm := range strings.SplitSeq(parts[6], "\x1f") {
 			bm = strings.TrimSpace(bm)
-			if bm != "" {
-				row.Bookmarks = append(row.Bookmarks, bm)
+			if bm == "" {
+				continue
+			}
+			if name, remote, ok := strings.Cut(bm, "\x1e"); ok {
+				if remote == "git" {
+					continue
+				}
+				row.RemoteBookmarks = append(row.RemoteBookmarks, RemoteRef{
+					Name:   stripRefQuotes(name),
+					Remote: remote,
+				})
+			} else {
+				row.Bookmarks = append(row.Bookmarks, stripRefQuotes(bm))
 			}
 		}
 	}

@@ -76,6 +76,98 @@ describe('classifyBookmark', () => {
   })
 })
 
+// --- scopeRemote param (remote-group rows in BookmarksPanel) ---
+// Regression suite for bughunt findings — per-remote row sync MUST scope to
+// that remote, not the first-tracked one. Display and action must agree.
+describe('classifyBookmark — scopeRemote', () => {
+  it('scoped lookup selects named remote, not first-tracked', () => {
+    // origin is the first-tracked (ahead), upstream is behind. Unscoped → ahead.
+    // Scoped to upstream → behind.
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [
+        mkRemote({ remote: 'origin', tracked: true, behind: 3 }),
+        mkRemote({ remote: 'upstream', tracked: true, ahead: 5 }),
+      ],
+    })
+    expect(classifyBookmark(bm)).toEqual({ kind: 'ahead', by: 3 })              // unscoped
+    expect(classifyBookmark(bm, 'upstream')).toEqual({ kind: 'behind', by: 5 }) // scoped
+  })
+
+  it('scoped UNTRACKED remote → local-only (NOT synced from 0/0 sentinel)', () => {
+    // THE BUG (bughunt round 2 #1): scoped lookup finds the remote, reads
+    // ahead/behind = 0/0, falls through to { kind: 'synced' } — green dot for
+    // an unknown relationship. The `if (!r.tracked)` gate prevents this: we
+    // have a local ref but no tracking relationship with THIS remote → the
+    // 0/0 is a sentinel, not real data. 'local-only' is accurate per-remote.
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [
+        mkRemote({ remote: 'origin', tracked: true, behind: 2 }),
+        mkRemote({ remote: 'upstream', tracked: false }),  // 0/0 sentinel
+      ],
+    })
+    expect(classifyBookmark(bm, 'upstream')).toEqual({ kind: 'local-only' })
+    // NOT this:
+    expect(classifyBookmark(bm, 'upstream')).not.toEqual({ kind: 'synced' })
+  })
+
+  it('scoped tracked 0/0 → synced (genuine sync, sentinel check is on tracked)', () => {
+    // Contrast with the untracked case above: tracked + 0/0 IS real.
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [
+        mkRemote({ remote: 'origin', tracked: true, behind: 2 }),
+        mkRemote({ remote: 'upstream', tracked: true }),  // tracked 0/0 = synced
+      ],
+      synced: false,  // all-remotes check would say diverged — scoped skips it
+    })
+    expect(classifyBookmark(bm, 'upstream')).toEqual({ kind: 'synced' })
+  })
+
+  it('scoped synced skips bm.synced all-remotes check (that is LOCAL-group concern)', () => {
+    // Scoped classification reports THIS remote's state only. The unscoped
+    // version downgrades 0/0 to diverged(0,0) when bm.synced=false (some
+    // OTHER remote is out of sync). Scoped does not — an UPSTREAM row showing
+    // "upstream: other remote out of sync" would be nonsense.
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [mkRemote({ remote: 'origin', tracked: true })],
+      synced: false,
+    })
+    expect(classifyBookmark(bm)).toEqual({ kind: 'diverged', ahead: 0, behind: 0 })  // unscoped downgrades
+    expect(classifyBookmark(bm, 'origin')).toEqual({ kind: 'synced' })               // scoped reports truth
+  })
+
+  it('scoped remote absent from bm.remotes → local-only (no r found)', () => {
+    // UPSTREAM group row for a bookmark that was tracked only on origin.
+    // Shouldn't happen in normal panelRows construction (filter excludes it),
+    // but the function is defensive: `if (!r) return local-only`.
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [mkRemote({ remote: 'origin', tracked: true })],
+    })
+    expect(classifyBookmark(bm, 'upstream')).toEqual({ kind: 'local-only' })
+  })
+
+  it('scoped remote-only (no local) → uses scoped remote tracked state', () => {
+    // No local ref. Scoped to origin (untracked) vs upstream (tracked) must
+    // differ — the row represents that remote's relationship, not the first-
+    // tracked one's. The unscoped case uses `r` (first-tracked or fallback
+    // [0]), so with upstream tracked the unscoped case reports tracked=true
+    // too — the scopeRemote distinction matters when scoping to the UNTRACKED
+    // remote, not the tracked one.
+    const bm = mkBm({
+      remotes: [
+        mkRemote({ remote: 'origin', tracked: false }),
+        mkRemote({ remote: 'upstream', tracked: true }),
+      ],
+    })
+    expect(classifyBookmark(bm, 'origin')).toEqual({ kind: 'remote-only', tracked: false })
+    expect(classifyBookmark(bm, 'upstream')).toEqual({ kind: 'remote-only', tracked: true })
+  })
+})
+
 describe('syncPriority', () => {
   it('conflict < diverged < ahead < behind < local-only < remote-only < synced', () => {
     const states = [
