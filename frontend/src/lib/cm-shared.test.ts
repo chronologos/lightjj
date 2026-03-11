@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectIndent } from './cm-shared'
+import { detectIndent, getCmLanguage } from './cm-shared'
 
 describe('detectIndent', () => {
   it('empty file → default (2-space)', () => {
@@ -11,9 +11,12 @@ describe('detectIndent', () => {
     expect(detectIndent('function f() {\nreturn 1\n}')).toEqual({ usesTabs: false, width: 2 })
   })
 
-  it('detects tabs', () => {
+  it('detects tabs (width is the default — no space lines to infer from)', () => {
+    // width:2 here is the HARD-CODED FALLBACK, not a computed value. Tab-
+    // indented lines skip width inference entirely (they go into the tabLines
+    // counter, not widthCounts). Only asserting usesTabs is meaningful.
     const src = 'func main() {\n\tfmt.Println()\n\treturn\n}'
-    expect(detectIndent(src)).toEqual({ usesTabs: true, width: 2 })
+    expect(detectIndent(src).usesTabs).toBe(true)
   })
 
   it('detects 4-space indent', () => {
@@ -54,5 +57,34 @@ describe('detectIndent', () => {
     const head = '    x\n'.repeat(200)
     const tail = '  y\n'.repeat(1000)
     expect(detectIndent(head + tail)).toEqual({ usesTabs: false, width: 4 })
+  })
+})
+
+// getCmLanguage routes through detectLanguage() (highlighter.ts) to map file
+// extensions to CM6 LanguageSupport. Wrong mapping → plain-text editing in
+// FileEditor/MergePanel (silent degradation, no error). The detectLanguage
+// mapping IS the real test surface — asserting `instanceof LanguageSupport`
+// would be tautological. Instead assert the routing is non-null where a
+// language is expected, null where it isn't.
+describe('getCmLanguage', () => {
+  it.each([
+    ['foo.ts', 'typescript'],
+    ['foo.tsx', 'typescript'],
+    ['foo.js', 'javascript'],
+    ['foo.jsx', 'javascript'],
+    ['foo.py', 'python'],
+    ['foo.go', 'go'],
+    ['foo.rs', 'rust'],
+  ])('%s → non-null (%s)', (path) => {
+    expect(getCmLanguage(path)).not.toBeNull()
+  })
+
+  it.each([
+    ['foo.txt'],
+    ['foo.md'],     // detectLanguage returns 'markdown' but cm-shared doesn't wire it
+    ['foo'],        // no extension
+    ['Makefile'],
+  ])('%s → null (plain text)', (path) => {
+    expect(getCmLanguage(path)).toBeNull()
   })
 })

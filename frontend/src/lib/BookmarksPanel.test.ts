@@ -474,8 +474,10 @@ describe('BookmarksPanel — eye visibility toggle', () => {
     await fireEvent.keyDown(list(), { key: 'e' })
     const vis = onvisibilitychange.mock.calls[0][0]
     expect(vis.origin.visible).toBe(true)
-    // hidden contains the OTHER two (order follows bookmarks[] iteration)
+    // Set equality — order is implementation detail (bookmarks[] iteration),
+    // not part of the contract (jj revset is order-independent).
     expect(new Set(vis.origin.hidden)).toEqual(new Set(['noise-a', 'noise-b']))
+    expect(vis.origin.hidden).toHaveLength(2)  // no duplicates
   })
 
   it('e on group header OFF→ON clears hidden (big toggle = show all)', async () => {

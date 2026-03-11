@@ -85,8 +85,10 @@ describe('buildVisibilityRevset', () => {
     // operator. `"release@v2"@"upstream"` ≠ `"release@v2@upstream"`.
     const vis: RemoteVisibility = { upstream: { visible: true, hidden: ['x'] } }
     const bms = [mkBm('release@v2', ['upstream']), mkBm('x', ['upstream'])]
-    expect(buildVisibilityRevset(vis, bms))
-      .toBe('ancestors("release@v2"@"upstream", 2)')
+    const revset = buildVisibilityRevset(vis, bms)
+    expect(revset).toBe('ancestors("release@v2"@"upstream", 2)')
+    // The bug form: name-@ and @-remote collapsed into one quoted string.
+    expect(revset).not.toContain('"release@v2@upstream"')
   })
 
   it('all bookmarks hidden → remote contributes no part (not empty string)', () => {
@@ -112,12 +114,30 @@ describe('buildVisibilityRevset', () => {
   })
 
   it('multiple visible remotes → parts joined with |', () => {
+    // | operand order matches Object.entries insertion order (ES2015+
+    // guarantees this for string keys). jj's revset is commutative over |,
+    // but this test asserts the exact string — a companion test below
+    // verifies the order doesn't affect what's INCLUDED.
     const vis: RemoteVisibility = {
       origin: { visible: true },
       upstream: { visible: true },
     }
     expect(buildVisibilityRevset(vis, []))
       .toBe('ancestors(remote_bookmarks(remote="origin") | remote_bookmarks(remote="upstream"), 2)')
+  })
+
+  it('object key order does not affect WHICH remotes are included', () => {
+    // Companion to the exact-string test above: flipped key order still
+    // produces a revset with both parts. This is the semantic invariant;
+    // the exact-string test is the regression lock.
+    const vis: RemoteVisibility = {
+      upstream: { visible: true },
+      origin: { visible: true },
+    }
+    const revset = buildVisibilityRevset(vis, [])
+    expect(revset).toContain('remote_bookmarks(remote="origin")')
+    expect(revset).toContain('remote_bookmarks(remote="upstream")')
+    expect(revset).toMatch(/^ancestors\(.+ \| .+, 2\)$/)
   })
 
   it('mixed: one remote shorthand + one per-bookmark enumeration', () => {
