@@ -8,7 +8,7 @@
     squashFileCount: { selected: number, total: number } | null
     split: SplitMode
     splitFileCount: { selected: number, total: number } | null
-    activeView: 'log' | 'branches' | 'operations'
+    activeView: 'log' | 'branches'
   }
 
   let { statusText, rebase, squash, squashFileCount, split, splitFileCount, activeView }: Props = $props()
@@ -115,11 +115,6 @@
           <kbd>f</kbd> forget
           <kbd>t</kbd> track
           <kbd>/</kbd> filter
-        </span>
-      {:else if activeView === 'operations'}
-        <span class="key-hints">
-          <kbd>j</kbd>/<kbd>k</kbd> navigate
-          <kbd>u</kbd> undo
         </span>
       {/if}
     </div>

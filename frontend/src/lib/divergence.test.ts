@@ -467,7 +467,9 @@ describe('buildKeepPlan', () => {
     })
     const plan = buildKeepPlan(g, 1)
     expect(plan.keeperCommitId).toBe('c1')  // tip of keeper column
-    expect(plan.abandonCommitIds).toEqual(['a0', 'b0', 'c0'])
+    // Set comparison — order is implementation detail (levels-then-cols vs
+    // cols-then-levels), jj abandon doesn't care.
+    expect(new Set(plan.abandonCommitIds)).toEqual(new Set(['a0', 'b0', 'c0']))
   })
 
   it('single-level (non-stack): abandons the N-1 losing versions', () => {
@@ -477,7 +479,23 @@ describe('buildKeepPlan', () => {
     })
     const plan = buildKeepPlan(g, 0)
     expect(plan.keeperCommitId).toBe('v0')
-    expect(plan.abandonCommitIds).toEqual(['v1', 'v2'])
+    // Set comparison — jj abandon takes a revset union, order is irrelevant.
+    expect(new Set(plan.abandonCommitIds)).toEqual(new Set(['v1', 'v2']))
+  })
+
+  it('MIDDLE-column keeper: both sides abandoned (i !== keeperIdx, not i < or i >)', () => {
+    // A bug of the form `i < keeperIdx` would abandon only the left side,
+    // silently leaving v2 divergent. `i > keeperIdx` would do the opposite.
+    // This is the highest-stakes invariant in buildKeepPlan — wrong-column
+    // abandon = data loss OR silent non-resolution.
+    const g = mkGroup({
+      changeIds: ['X'],
+      versions: [[e({ commit_id: 'v0' }), e({ commit_id: 'v1' }), e({ commit_id: 'v2' })]],
+    })
+    const plan = buildKeepPlan(g, 1)
+    expect(plan.keeperCommitId).toBe('v1')
+    expect(new Set(plan.abandonCommitIds)).toEqual(new Set(['v0', 'v2']))
+    expect(plan.abandonCommitIds).not.toContain('v1')
   })
 
   it('bookmark repoints to SAME-LEVEL keeper, not the stack tip', () => {
@@ -533,7 +551,7 @@ describe('buildKeepPlan', () => {
       ],
     })
     const plan = buildKeepPlan(g, 1)
-    expect(plan.abandonCommitIds).toEqual(['c0', 'd_empty'])
+    expect(new Set(plan.abandonCommitIds)).toEqual(new Set(['c0', 'd_empty']))
     expect(plan.nonEmptyDescendants.map(d => d.commit_id)).toEqual(['d_full'])
   })
 

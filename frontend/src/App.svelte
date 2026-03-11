@@ -12,7 +12,7 @@
   export interface TabState {
     selectedIndex: number
     revsetFilter: string
-    activeView: 'log' | 'branches' | 'operations'
+    activeView: 'log' | 'branches'
     diffScrollTop: number
   }
 </script>
@@ -232,7 +232,12 @@
   let selectedFiles = new SvelteSet<string>()
   let totalFileCount: number = $state(0) // snapshot of file count at entry time
 
-  let activeView: 'log' | 'branches' | 'operations' = $state(init?.activeView ?? 'log')
+  // Runtime guard: TabState is in-memory (AppShell), not disk, so stale
+  // 'operations' from before the type narrowing can only occur via HMR.
+  // The === check costs nothing and prevents an invalid union value.
+  let activeView: 'log' | 'branches' = $state(
+    init?.activeView === 'branches' ? 'branches' : 'log'
+  )
 
   let currentWorkspace: string = $state('')
   let workspaceList: Workspace[] = $state([])
@@ -611,7 +616,7 @@
     }
     // Refresh open panels — oplog always reflects new operations,
     // evolog may change if the selected revision was modified
-    if (oplogOpen || activeView === 'operations') oplog.load()
+    if (oplogOpen) oplog.load()
     if (activeView === 'branches') bookmarksPanel.load()
     if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
       evolog.load(effectiveId(revisions[selectedIndex].commit))
@@ -1553,7 +1558,13 @@
         return true
       case '1': e.preventDefault(); activeView = 'log'; return true
       case '2': e.preventDefault(); activeView = 'branches'; return true
-      case '3': e.preventDefault(); activeView = 'operations'; loadOplog(); return true
+      // 3/4 open bottom drawers. Switch to log first so the drawer actually
+      // renders (evolog/oplog are gated on activeView==='log' — they'd steal
+      // vertical space from the bookmarks panel otherwise).
+      case '3': e.preventDefault(); activeView = 'log'; toggleOplog(); return true
+      case '4':
+        if (selectedRevision) { e.preventDefault(); activeView = 'log'; toggleEvolog(); return true }
+        return false
     }
     return false
   }
@@ -1800,13 +1811,23 @@
             onclick={() => { if (!inlineMode) activeView = 'branches' }}
             disabled={inlineMode}
           >⑂ Branches <kbd class="toolbar-nav-kbd">2</kbd></button>
-          <button
-            class="toolbar-nav-btn"
-            class:toolbar-nav-active={activeView === 'operations'}
-            onclick={() => { if (!inlineMode) { activeView = 'operations'; loadOplog() } }}
-            disabled={inlineMode}
-          >⟲ Operations <kbd class="toolbar-nav-kbd">3</kbd></button>
         </nav>
+        <span class="toolbar-divider"></span>
+        <!-- Drawer toggles — semantically distinct from the nav tabs above
+             (they open bottom panels, not swap the right column). Active state
+             reflects drawer visibility, not current view. -->
+        <button
+          class="toolbar-nav-btn"
+          class:toolbar-nav-active={oplogOpen}
+          onclick={() => { if (!inlineMode) { activeView = 'log'; toggleOplog() } }}
+          disabled={inlineMode}
+        >⟲ Oplog <kbd class="toolbar-nav-kbd">3</kbd></button>
+        <button
+          class="toolbar-nav-btn"
+          class:toolbar-nav-active={evologOpen}
+          onclick={() => { if (!inlineMode && selectedRevision) { activeView = 'log'; toggleEvolog() } }}
+          disabled={inlineMode || !selectedRevision}
+        >◐ Evolog <kbd class="toolbar-nav-kbd">4</kbd></button>
         <span class="toolbar-divider"></span>
         <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">
           <span class="toolbar-search-text">Search…</span>
@@ -1843,8 +1864,7 @@
 
     {@render tabBar?.()}
 
-    {#if activeView === 'log' || activeView === 'branches'}
-      <div class="workspace">
+    <div class="workspace">
         <div class="revision-panel-wrapper" style="width: {config.revisionPanelWidth}px">
           <RevisionGraph
             bind:this={revisionGraphRef}
@@ -1999,20 +2019,6 @@
           oncontextmenu={showContextMenu}
         />
       {/if}
-    {:else if activeView === 'operations'}
-      <div class="fullwidth-panel">
-        <OplogPanel
-          entries={oplogEntries}
-          loading={oplogLoading}
-          error={oplog.error}
-          onrefresh={loadOplog}
-          onclose={() => { activeView = 'log' }}
-          onopundo={handleOpUndo}
-          onoprestore={handleOpRestore}
-          oncontextmenu={showContextMenu}
-        />
-      </div>
-    {/if}
 
     <StatusBar
       {statusText}
@@ -2144,12 +2150,6 @@
   .evolog-divider:hover::after,
   .evolog-divider.dragging::after {
     background: var(--surface2);
-  }
-
-  .fullwidth-panel {
-    flex: 1;
-    overflow: hidden;
-    display: flex;
   }
 
   /* --- Toolbar (replaces sidebar) --- */
