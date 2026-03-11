@@ -1,5 +1,11 @@
 # lightjj Backlog
 
+## Branches view follow-ups (2026-03-11)
+
+- [ ] **Smart views in key `2`** (Medium) — In addition to bookmarks, the right-column panel should offer preset revset "views" (my open PRs, trunk-diverged, recent activity, etc.). Each view computes a revset that populates the graph on the left. Bookmarks become ONE of the views rather than the whole panel. Design TBD — could be a tab strip within BookmarksPanel or a separate component.
+- [ ] **Bookmark jump outside current revset** (Small) — When `jumpToBookmark` triggers a revset reload (`pendingSelectCommitId` path), it sets `revsetFilter = commitId` — resulting graph shows ONLY that one commit in isolation with no ancestors/context. Should use `ancestors(commitId, N)` or `commitId | @-..` or similar to show the bookmark *in relation to* recent work. Alternatively: append to the current revset via `(current) | commitId` so existing graph context is preserved.
+- [ ] **OplogPanel keyboard nav + improvements** (Small) — Currently has no j/k or arrow navigation (RevisionGraph and EvologPanel both do). Also: op descriptions are truncated; no way to expand/inspect what an op actually did beyond the one-line summary. Consider: j/k nav, Enter to expand op details (jj op show equivalent), visual diff between op snapshots.
+
 ## Architecture Review Round 3 (2026-03-06)
 
 Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api.ts client, cross-cutting). Architecture is sound at the boundaries, sprawling in the middle — ~80% of maintainability risk lives in two god-files (App.svelte 2013L, DiffPanel.svelte 1755L). No single decision "really hampers" things; it's accretion.

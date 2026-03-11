@@ -1181,10 +1181,37 @@
     })
   }
 
+  // Returning to log view after graph clicks in branches view (which use
+  // selectRevisionCursorOnly) leaves the diff loader pointing at whatever
+  // was loaded BEFORE branches view. This resyncs. Returns true if the
+  // LOADED diff matches the CURSOR — enter*Mode callers gate on this to
+  // avoid initializing selectedFiles from a stale changedFiles snapshot.
+  //
+  // checkedRevisions guard is load-bearing: multi-check diff (what
+  // enterSquashMode needs for selectedFiles) must not be clobbered by a
+  // single-revision reload. Returns true in that case — the loaded multi
+  // diff IS the state enter*Mode wants.
+  function switchToLogView(): boolean {
+    activeView = 'log'
+    // Cancel any queued selectRevision debounce/rAF — the direct load below
+    // supersedes it. Otherwise context-menu → selectByChangeId → selectRevision
+    // schedules a load, then switchToLogView fires another, then 50ms later
+    // the debounce fires a third. revGen makes it correct but it's wasteful.
+    clearTimeout(navDebounceTimer)
+    cancelAnimationFrame(navRafId)
+    const sel = revisions[selectedIndex]
+    if (!sel || checkedRevisions.size > 0) return true
+    const loaded = diff.value.target
+    if (loaded?.kind === 'single' && loaded.commitId === sel.commit.commit_id) return true
+    nav.loadDiffAndFiles(sel.commit, hasChecked)
+    return false
+  }
+
   function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
     cancelInlineModes()
+    switchToLogView()
     rebase.enter(revs)
   }
 
@@ -1221,6 +1248,10 @@
     const revs = effectiveRevisions
     if (revs.length === 0 || files.loading) return
     cancelInlineModes()
+    // false = diff was stale, load just fired, changedFiles is still the
+    // OLD revision's file list. User retries once the load settles (visible
+    // in diff panel). Reachable via palette/context-menu from branches view.
+    if (!switchToLogView()) return
     // Initialize with all current changed files (source's files) and snapshot the count
     for (const f of changedFiles) selectedFiles.add(f.path)
     totalFileCount = changedFiles.length
@@ -1286,6 +1317,7 @@
   function enterSplitMode(asReview = false) {
     if (!selectedRevision || checkedRevisions.size > 0 || files.loading) return
     cancelInlineModes()
+    if (!switchToLogView()) return
     for (const f of changedFiles) selectedFiles.add(f.path)
     totalFileCount = changedFiles.length
     split.enter(effectiveId(selectedRevision.commit), asReview)
@@ -1480,9 +1512,11 @@
       paletteOpen = true
       return true
     }
-    if (e.key === 'f') {
+    // Gate preventDefault on diffPanelRef — otherwise branches view eats
+    // the browser's native find shortcut without opening any search UI.
+    if (e.key === 'f' && diffPanelRef) {
       e.preventDefault()
-      diffPanelRef?.openSearch()
+      diffPanelRef.openSearch()
       return true
     }
     return false
@@ -1556,14 +1590,14 @@
         e.preventDefault()
         if (workspaceList.length > 1) wsDropdownOpen = !wsDropdownOpen
         return true
-      case '1': e.preventDefault(); activeView = 'log'; return true
+      case '1': e.preventDefault(); switchToLogView(); return true
       case '2': e.preventDefault(); activeView = 'branches'; return true
       // 3/4 open bottom drawers. Switch to log first so the drawer actually
       // renders (evolog/oplog are gated on activeView==='log' — they'd steal
       // vertical space from the bookmarks panel otherwise).
-      case '3': e.preventDefault(); activeView = 'log'; toggleOplog(); return true
+      case '3': e.preventDefault(); switchToLogView(); toggleOplog(); return true
       case '4':
-        if (selectedRevision) { e.preventDefault(); activeView = 'log'; toggleEvolog(); return true }
+        if (selectedRevision) { e.preventDefault(); switchToLogView(); toggleEvolog(); return true }
         return false
     }
     return false
@@ -1802,15 +1836,15 @@
           <button
             class="toolbar-nav-btn"
             class:toolbar-nav-active={activeView === 'log'}
-            onclick={() => { if (!inlineMode) activeView = 'log' }}
+            onclick={() => { if (!inlineMode) switchToLogView() }}
             disabled={inlineMode}
-          >◉ Revisions <kbd class="toolbar-nav-kbd">1</kbd></button>
+          >◉ Revisions <kbd class="nav-hint">1</kbd></button>
           <button
             class="toolbar-nav-btn"
             class:toolbar-nav-active={activeView === 'branches'}
             onclick={() => { if (!inlineMode) activeView = 'branches' }}
             disabled={inlineMode}
-          >⑂ Branches <kbd class="toolbar-nav-kbd">2</kbd></button>
+          >⑂ Branches <kbd class="nav-hint">2</kbd></button>
         </nav>
         <span class="toolbar-divider"></span>
         <!-- Drawer toggles — semantically distinct from the nav tabs above
@@ -1819,15 +1853,15 @@
         <button
           class="toolbar-nav-btn"
           class:toolbar-nav-active={oplogOpen}
-          onclick={() => { if (!inlineMode) { activeView = 'log'; toggleOplog() } }}
+          onclick={() => { if (!inlineMode) { switchToLogView(); toggleOplog() } }}
           disabled={inlineMode}
-        >⟲ Oplog <kbd class="toolbar-nav-kbd">3</kbd></button>
+        >⟲ Oplog <kbd class="nav-hint">3</kbd></button>
         <button
           class="toolbar-nav-btn"
           class:toolbar-nav-active={evologOpen}
-          onclick={() => { if (!inlineMode && selectedRevision) { activeView = 'log'; toggleEvolog() } }}
+          onclick={() => { if (!inlineMode && selectedRevision) { switchToLogView(); toggleEvolog() } }}
           disabled={inlineMode || !selectedRevision}
-        >◐ Evolog <kbd class="toolbar-nav-kbd">4</kbd></button>
+        >◐ Evolog <kbd class="nav-hint">4</kbd></button>
         <span class="toolbar-divider"></span>
         <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">
           <span class="toolbar-search-text">Search…</span>
@@ -1918,7 +1952,7 @@
             onjump={jumpToBookmark}
             onexecute={handleBookmarkOp}
             onrefresh={() => bookmarksPanel.load()}
-            onclose={() => { activeView = 'log' }}
+            onclose={switchToLogView}
             onvisibilitychange={(vis) => { config.remoteVisibility = vis }}
             oncontextmenu={showBookmarkContextMenu}
             ontrackmenu={showTrackMenu}
@@ -2344,18 +2378,9 @@
     font-weight: 600;
   }
 
-  .toolbar-nav-kbd {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--overlay0);
-    background: none;
-    border: 1px solid var(--surface1);
-    padding: 0 4px;
-    border-radius: 3px;
-    margin-left: 2px;
-  }
-  .toolbar-nav-active .toolbar-nav-kbd {
-    /* Active nav button: tint the kbd amber too, subtle */
+  /* Toolbar kbd hints use the global .nav-hint base; this just adds the
+     active-amber tint. Keeps the kbd styling single-source. */
+  .toolbar-nav-active .nav-hint {
     color: var(--amber);
     border-color: color-mix(in srgb, var(--amber) 30%, transparent);
   }

@@ -241,6 +241,25 @@ body {
   --syn-atom:     #fe640b;
 }
 
+/* Subtle keyboard hint shown next to panel titles (Revisions, Evolog, etc.).
+   Passive UI chrome — never competes with semantic amber/green/red.
+   Used via <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd>. */
+.nav-hint {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--overlay0);
+  background: none;
+  border: 1px solid var(--surface1);
+  padding: 0 3px;
+  border-radius: 3px;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+.nav-hint + .nav-hint { margin-left: 1px; }
+
 /* --- Syntax highlighting (Lezer classHighlighter) ---
    DiffFileView renders these via {@html}. tok-variableName deliberately has
    no rule — identifiers inherit --text (default), only semantic tokens pop. */

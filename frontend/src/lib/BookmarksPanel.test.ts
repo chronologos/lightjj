@@ -554,3 +554,50 @@ describe('BookmarksPanel — scoped remote-group rows', () => {
     expect(onjump).toHaveBeenCalledWith(expect.objectContaining({ name: 'feat' }), undefined)
   })
 })
+
+// --- graphCommitId: bidirectional selection indicator ---
+// Rows whose jumpTarget (remote-group) or bm.commit_id (local-group) matches
+// the graph cursor get .bp-row-matches-graph. Mirrors the graph's amber
+// selection — clicking a graph row should tint its bookmark, and vice versa.
+describe('BookmarksPanel — graphCommitId highlight', () => {
+  function matched(): string[] {
+    return [...document.querySelectorAll('.bp-row-matches-graph .bp-name')]
+      .map(el => el.textContent?.trim() ?? '')
+  }
+
+  it('LOCAL row matches via bm.commit_id fallback (jumpTarget undefined)', () => {
+    const bms = [
+      mkBm({ name: 'main', local: mkLocal(), commit_id: 'abc123' }),
+      mkBm({ name: 'other', local: mkLocal(), commit_id: 'def456' }),
+    ]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, graphCommitId: 'abc123' }) })
+    expect(matched()).toEqual(['main'])
+  })
+
+  it('remote-group row matches via jumpTarget (scoped remote), not bm.commit_id', () => {
+    // Same subexpression as the click handler — a refactor that breaks one
+    // must break both. This test catches divergence.
+    // commit_id first-8-chars must not collide with the remote name, or the
+    // textContent check would pass via the @upstream tag instead.
+    const bms = [mkBm({
+      name: 'main', local: mkLocal(), commit_id: 'local-abc',
+      remotes: [mkRemote({ remote: 'upstream', commit_id: 'deadbeef12345', tracked: true })],
+    })]
+    render(BookmarksPanel, { props: props({
+      bookmarks: bms, allRemotes: ['upstream'],
+      remoteVisibility: { upstream: { visible: false } },
+      graphCommitId: 'deadbeef12345',
+    }) })
+    // LOCAL row (bm.commit_id='local-abc') shouldn't match; UPSTREAM row should
+    const matchedRows = document.querySelectorAll('.bp-row-matches-graph')
+    expect(matchedRows).toHaveLength(1)
+    // Verify it's the upstream-group row by checking the scoped commit_id is rendered in it
+    expect(matchedRows[0].textContent).toContain('deadbeef')
+  })
+
+  it('absent graphCommitId → no rows tinted', () => {
+    const bms = [mkBm({ name: 'main', local: mkLocal(), commit_id: 'abc123' })]
+    render(BookmarksPanel, { props: props({ bookmarks: bms }) })
+    expect(matched()).toEqual([])
+  })
+})

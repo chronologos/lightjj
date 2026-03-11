@@ -746,14 +746,11 @@
   /* Graph cursor points at this bookmark's commit. Amber (=active, Tier 1)
      right-border mirrors the graph's amber left-border selection — visual
      symmetry across the divider. Keyboard cursor (blue left-border) is
-     independent; both can show. */
+     independent; both can show. Source order after .bp-row-active = amber
+     tint wins the cascade over active-gray. */
   .bp-row-matches-graph {
     background: var(--bg-selected);
     border-right: 2px solid var(--amber);
-  }
-  .bp-row-matches-graph.bp-row-active {
-    /* Stack: amber tint wins over gray, but keep both borders visible */
-    background: var(--bg-selected);
   }
 
   .bp-row-hidden {
