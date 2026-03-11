@@ -1596,9 +1596,7 @@
       // renders (evolog/oplog are gated on activeView==='log' — they'd steal
       // vertical space from the bookmarks panel otherwise).
       case '3': e.preventDefault(); switchToLogView(); toggleOplog(); return true
-      case '4':
-        if (selectedRevision) { e.preventDefault(); switchToLogView(); toggleEvolog(); return true }
-        return false
+      case '4': e.preventDefault(); switchToLogView(); toggleEvolog(); return true
     }
     return false
   }
@@ -1634,7 +1632,7 @@
       case '/': e.preventDefault(); revisionGraphRef?.focusRevsetInput(); break
       case ']': e.preventDefault(); diffPanelRef?.stepFile(1); break
       case '[': e.preventDefault(); diffPanelRef?.stepFile(-1); break
-      case 'E': if (selectedRevision) { e.preventDefault(); toggleEvolog() } break
+      case 'E': e.preventDefault(); toggleEvolog(); break
       case 'O': e.preventDefault(); toggleOplog(); break
       case '@': e.preventDefault(); if (workingCopyIndex >= 0) selectRevision(workingCopyIndex); break
       case 'n':
@@ -1856,11 +1854,14 @@
           onclick={() => { if (!inlineMode) { switchToLogView(); toggleOplog() } }}
           disabled={inlineMode}
         >⟲ Oplog <kbd class="nav-hint">3</kbd></button>
+        <!-- Not gated on selectedRevision — toggleEvolog already handles the
+             null case (panel opens empty, populates once a revision is
+             selected). Disabled-during-initial-load was confusing. -->
         <button
           class="toolbar-nav-btn"
           class:toolbar-nav-active={evologOpen}
-          onclick={() => { if (!inlineMode && selectedRevision) { switchToLogView(); toggleEvolog() } }}
-          disabled={inlineMode || !selectedRevision}
+          onclick={() => { if (!inlineMode) { switchToLogView(); toggleEvolog() } }}
+          disabled={inlineMode}
         >◐ Evolog <kbd class="nav-hint">4</kbd></button>
         <span class="toolbar-divider"></span>
         <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">

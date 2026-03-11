@@ -267,6 +267,37 @@
     revsetInputEl?.focus()
   }
 
+  let helpOpen = $state(false)
+  let helpPopoverEl: HTMLElement | undefined = $state(undefined)
+
+  function applyExample(revset: string) {
+    helpOpen = false
+    onrevsetchange(revset)
+    onrevsetsubmit()
+  }
+
+  // Click-outside + Escape close. Document listener avoids a fixed backdrop
+  // div that would block clicks on the filter input (z-index hell).
+  $effect(() => {
+    if (!helpOpen) return
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== 'Escape') return
+      if (e instanceof MouseEvent && helpPopoverEl?.contains(e.target as Node)) return
+      helpOpen = false
+    }
+    // Defer registration so the click that OPENED the popover doesn't
+    // immediately bubble to document and close it.
+    const id = setTimeout(() => {
+      document.addEventListener('click', close)
+      document.addEventListener('keydown', close)
+    }, 0)
+    return () => {
+      clearTimeout(id)
+      document.removeEventListener('click', close)
+      document.removeEventListener('keydown', close)
+    }
+  })
+
   // Hover is tracked in JS, not via CSS :hover. The :hover pseudo-class
   // recomputes on every paint — layout shifts (error bar mount/unmount,
   // batch-actions bar toggle, scrollIntoView, post-rebase DOM reshuffle)
@@ -348,6 +379,20 @@
     />
     {#if revsetFilter}
       <button class="revset-clear" onclick={onrevsetclear} title="Clear filter (Escape)">x</button>
+    {/if}
+    <button class="revset-help" onclick={() => helpOpen = !helpOpen} title="Revset help">?</button>
+    {#if helpOpen}
+      <div class="revset-help-popover" bind:this={helpPopoverEl}>
+        {#snippet ex(revset: string)}
+          <button class="help-ex" onclick={() => applyExample(revset)}>{revset}</button>
+        {/snippet}
+        <p><b>Default</b>: when empty, jj uses your <code>revsets.log</code> config — typically your WIP stack + recent mutable work, <i>not</i> all history.</p>
+        <p><b>Remote toggles</b>: eye icons in the Branches view (<kbd>2</kbd>) add remote bookmarks to the visible set. <i>Only applies when this box is empty or auto-set</i> — they won't override a custom query you typed.</p>
+        <p><b>See everything</b>: {@render ex('all()')} or {@render ex('::')} (capped at 500)</p>
+        <p class="help-examples">
+          Common: {@render ex('mine()')} · {@render ex('trunk()..@')} · {@render ex('ancestors(@, 20)')}
+        </p>
+      </div>
     {/if}
   </div>
   {#if checkedRevisions.size > 0 && !anyModeActive}
@@ -589,6 +634,7 @@
     background: var(--mantle);
     border-bottom: 1px solid var(--surface0);
     flex-shrink: 0;
+    position: relative; /* anchor for help popover */
   }
 
   .revset-icon {
@@ -634,6 +680,69 @@
   .revset-clear:hover {
     color: var(--red);
   }
+
+  .revset-help {
+    background: transparent;
+    border: 1px solid var(--surface1);
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    color: var(--overlay0);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 14px;
+    flex-shrink: 0;
+  }
+  .revset-help:hover { color: var(--subtext0); border-color: var(--surface2); }
+
+  .revset-help-popover {
+    position: absolute;
+    top: 100%;
+    right: 4px;
+    margin-top: 4px;
+    width: 320px;
+    padding: 12px 14px;
+    background: var(--mantle);
+    border: 1px solid var(--surface1);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    z-index: 10;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .revset-help-popover p { margin: 0 0 8px; }
+  .revset-help-popover p:last-child { margin: 0; }
+  .revset-help-popover :is(code, kbd, .help-ex) {
+    font-family: var(--font-mono);
+    border-radius: 3px;
+  }
+  .revset-help-popover code {
+    font-size: 11px;
+    background: var(--surface0);
+    padding: 1px 4px;
+  }
+  .help-ex {
+    font-size: 11px;
+    background: var(--surface0);
+    color: var(--text);
+    border: 1px solid var(--surface1);
+    padding: 1px 5px;
+    cursor: pointer;
+  }
+  .help-ex:hover {
+    background: var(--bg-selected);
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .revset-help-popover kbd {
+    font-size: 10px;
+    border: 1px solid var(--surface1);
+    padding: 0 3px;
+  }
+  .help-examples { color: var(--subtext0); font-size: 11px; }
 
   /* --- Batch actions bar --- */
   .batch-actions-bar {
