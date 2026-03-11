@@ -216,6 +216,27 @@ describe('reconstructSides', () => {
     expect(r.theirs).toBe('x')
   })
 
+  it('added line of 6+ chars in diff section does NOT false-positive as +++++++ marker', () => {
+    // Inside %%%%%%% diff, added lines get a single `+` prefix. A content line
+    // of 6 `+` chars becomes `+++++++` (7 total) which MATCHES the snapshot
+    // marker pattern. Without mode!=='diff' gate, parser misreads diff-content
+    // as a snapshot section start → wrong sideNum, wrong output.
+    const raw = [
+      '<<<<<<<',
+      '%%%%%%% s1',
+      ' ctx',
+      '+++++++',    // ← added line: content is 6 plusses, diff-prefixed = 7 plusses
+      '+++++++ s2',  // ← THIS is the real snapshot marker (outside diff mode)
+      'theirs',
+      '>>>>>>>',
+    ].join('\n')
+    const r = reconstructSides(raw)!
+    // ours should contain ctx + the 6-plus line (diff-added content)
+    expect(r.ours).toBe('ctx\n++++++')
+    expect(r.base).toBe('ctx')
+    expect(r.theirs).toBe('theirs')
+  })
+
   it('returns null for region with only 1 side', () => {
     const raw = '<<<<<<<\n+++++++ s1\nonly\n>>>>>>>'
     expect(reconstructSides(raw)).toBeNull()

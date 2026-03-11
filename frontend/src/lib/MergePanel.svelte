@@ -35,7 +35,18 @@
   // Undo inverse: restores {source, from, to} snapshot captured pre-apply.
   // Without this, Cmd+Z restores the TEXT but the block stays marked as the
   // new source (arrow stays dimmed, highlight wrong, counter wrong).
-  const restoreBlock = StateEffect.define<{ idx: number; from: number; to: number; source: BlockSource }>()
+  //
+  // `map` REQUIRED: CM6 history groups ops within ~75ms. When two takeBlock
+  // calls on DIFFERENT blocks land in the same group, the inverse effect for
+  // block A must be mapped through block B's changes. Without map, identity
+  // mapping leaves stale absolute positions → undo restores wrong range.
+  const restoreBlock = StateEffect.define<{ idx: number; from: number; to: number; source: BlockSource }>({
+    map: (val, mapping) => ({
+      ...val,
+      from: mapping.mapPos(val.from, 1),
+      to: mapping.mapPos(val.to, -1),
+    }),
+  })
   interface CenterBlock {
     /** doc position (0-based char offset) of block start. */
     from: number
@@ -57,13 +68,20 @@
         // assoc=1/-1 (right/left-leaning) keeps from/to anchored outside a
         // mid-block replace — BUT if the user selects the ENTIRE block range
         // and types, the asymmetric assoc inverts: from(assoc=1) jumps past
-        // the insert while to(assoc=-1) lands before it → from>to → next
-        // arrow click dispatches an invalid {from,to} and CM6 throws. Clamp
-        // to a degenerate empty range at the insertion point.
+        // the insert while to(assoc=-1) lands before it → from>to. When this
+        // happens, the user replaced the block content entirely — the tracked
+        // range should SPAN the insertion, not collapse beside it. Re-map with
+        // inverted assoc: from(assoc=-1) stays before, to(assoc=1) stays after.
         let result: CenterBlock[] = tr.changes.empty ? blocks : blocks.map(b => {
           const from = tr.changes.mapPos(b.from, 1)
           const to = tr.changes.mapPos(b.to, -1)
-          return from <= to ? { ...b, from, to } : { ...b, from: to, to }
+          if (from <= to) return { ...b, from, to }
+          // Inversion → whole-block replace. Re-map to span the inserted text.
+          return {
+            ...b,
+            from: tr.changes.mapPos(b.from, -1),
+            to: tr.changes.mapPos(b.to, 1),
+          }
         })
         // Effects override mapped positions for the target block. applyBlock
         // carries BOTH newFrom and newTo as explicit new-doc positions —
@@ -418,11 +436,17 @@
       //   - line-end (from === doc.length, no trailing \n in doc): trailing \n
       //     would concatenate the doc's last line with insert's first line.
       //     Need a LEADING \n instead.
-      // The latter happens when diffBlocks' bFrom points past theirs' last
-      // line AND theirs lacks a trailing \n (common: files without final
-      // newline, or backend's TrimRight stripped it).
+      //   - EMPTY line (line-start AND line-end): the prior apply left a blank
+      //     line (source had one blank line, not zero lines — srcEmpty was
+      //     false). Don't add trailing \n (pushes the blank line down → extra
+      //     blank); instead extend `to` to REPLACE the empty line. Same for
+      //     empty doc (no \n to consume, just insert as-is).
       if (!srcEmpty) {
-        if (doc.lineAt(from).from === from) insert += '\n'
+        const line = doc.lineAt(from)
+        if (line.from === from && line.to === from) {
+          // Empty line or empty doc — consume the trailing break if present.
+          if (from < doc.length) to += 1
+        } else if (line.from === from) insert += '\n'
         else { insert = '\n' + insert; contentOff = 1 }
       }
     } else if (srcEmpty) {

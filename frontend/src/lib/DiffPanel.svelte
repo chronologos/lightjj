@@ -675,6 +675,7 @@
     mergingPath = null
     activeFilePath = null
     conflictFileDiffs = new Map()
+    annBubble = { open: false, x: 0, y: 0, editing: null, lineContext: null }
     if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
 
     // Suppress chevron transition during diff switch (prevents j/k flapping)

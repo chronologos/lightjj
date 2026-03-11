@@ -165,7 +165,15 @@
   // fires on group becoming non-null (mid-way through version load's async).
   let diffGen = 0
   $effect(() => {
-    if (!group || nVersions < 2 || compareFrom === compareTo) return
+    // compareFrom === compareTo: meaningless self-compare. Clear crossDiff so
+    // the template doesn't show stale content labeled "Diff /N → /N". Also
+    // invalidate in-flight fetch (prev from/to selection) that would clobber.
+    if (!group || nVersions < 2 || compareFrom === compareTo) {
+      diffGen++
+      crossDiff = ''
+      diffLoading = false
+      return
+    }
     const tipLevel = group.versions[group.versions.length - 1]
     const fromId = tipLevel[compareFrom]?.commit_id
     const toId = tipLevel[compareTo]?.commit_id
@@ -204,7 +212,7 @@
   })
 
   async function handleKeep(idx: number) {
-    if (!group || !group.alignable || keepingIdx >= 0) return
+    if (!group || !group.alignable || keepingIdx >= 0 || strategyBusy) return
     const plan = buildPlan(idx)
     if (plan.nonEmptyDescendants.length > 0) {
       pendingPlan = plan
@@ -470,7 +478,7 @@
               class="keep-btn"
               class:keep-live={group.liveVersion === colIdx}
               onclick={() => handleKeep(colIdx)}
-              disabled={keepingIdx >= 0 || !group.alignable}
+              disabled={keepingIdx >= 0 || strategyBusy || !group.alignable}
               title={group.alignable ? '' : 'Columns don\'t form clean descent chains — one-click keep would abandon wrong commits. Resolve with jj abandon <commit_id>.'}
             >
               {keepingIdx === colIdx ? 'Keeping…' : 'Keep'}

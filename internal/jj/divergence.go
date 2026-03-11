@@ -29,15 +29,16 @@ type DivergenceEntry struct {
 // 10 fields, \x1F-separated, \n records. Order MUST match ParseDivergence.
 //
 // local_bookmarks.map(|b| b.name()) strips @origin tracking and * ahead-marker.
-// .join(",") required — bare list renders space-separated.
-// .short() to match LogGraph — RevisionGraph highlight needs change_id equality.
+// Bookmarks join on \x1E (sub-field sep) — commas are valid in git refs so
+// join(",") would split `fix,bug` into phantoms. Parent IDs stay comma-joined
+// (hex strings can't contain commas). .short() to match LogGraph.
 const divergenceTemplate = `change_id.short() ++ "\x1F" ++ ` +
 	`commit_id.short() ++ "\x1F" ++ ` +
 	`if(divergent, "1", "") ++ "\x1F" ++ ` +
 	`parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ ` +
 	`parents.map(|p| p.change_id().short()).join(",") ++ "\x1F" ++ ` +
 	`if(self.contained_in("::working_copies()"), "1", "") ++ "\x1F" ++ ` +
-	`local_bookmarks.map(|b| b.name()).join(",") ++ "\x1F" ++ ` +
+	`local_bookmarks.map(|b| b.name()).join("\x1E") ++ "\x1F" ++ ` +
 	`description.first_line() ++ "\x1F" ++ ` +
 	`if(empty, "1", "") ++ "\x1F" ++ ` +
 	`if(current_working_copy, "1", "") ++ "\n"`
@@ -83,7 +84,7 @@ func ParseDivergence(output string) []DivergenceEntry {
 			ParentCommitIds: splitNonEmpty(f[3], ","),
 			ParentChangeIds: splitNonEmpty(f[4], ","),
 			WCReachable:     f[5] == "1",
-			Bookmarks:       splitNonEmpty(f[6], ","),
+			Bookmarks:       splitNonEmpty(f[6], "\x1E"),
 			Description:     f[7],
 			Empty:           f[8] == "1",
 			IsWorkingCopy:   f[9] == "1",

@@ -329,12 +329,15 @@ func (s *Server) streamMutation(w http.ResponseWriter, r *http.Request, args []s
 		}
 		done["error"] = msg
 	} else {
-		done["output"] = out
 		// StreamCombined merges stdout+stderr (jj git push writes everything
-		// to stderr). Post-process the full output so mutationMessage() on
-		// the frontend shows amber instead of green when jj warned.
+		// to stderr). Post-process the full output so mutationMessage() on the
+		// frontend shows amber instead of green when jj warned. Don't ALSO set
+		// output — frontend concatenates both for the details expand and they're
+		// the same string here (stdout+stderr combined).
 		if hasWarningLine(out) {
 			done["warnings"] = out
+		} else {
+			done["output"] = out
 		}
 	}
 	_ = enc.Encode(done)

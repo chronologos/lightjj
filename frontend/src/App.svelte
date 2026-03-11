@@ -973,12 +973,18 @@
   async function handleDescribe() {
     if (!selectedRevision) return
     const eid = effectiveId(selectedRevision.commit)
+    const cid = selectedRevision.commit.commit_id
     return withMutation(async () => {
       try {
         const result = await api.describe(eid, descriptionDraft)
         setMessage(mutationMessage(`Updated description for ${eid.slice(0, 8)}`, result))
-        description.set(descriptionDraft)
-        descriptionEditing = false
+        // Only poke the loader if selection unchanged — otherwise we'd write
+        // the old revision's draft into the new selection's description loader.
+        // Mutation already succeeded; loadLog() will refresh either way.
+        if (selectedRevision?.commit.commit_id === cid) {
+          description.set(descriptionDraft)
+          descriptionEditing = false
+        }
         await loadLog()
       } catch (e) {
         showError(e)
@@ -1007,12 +1013,12 @@
   async function handleCommit() {
     if (!selectedRevision) return
     const cid = selectedRevision.commit.commit_id
-    commitMode = true
     const prefill = await fetchPrefillDescription()
-    // j/k during fetch → selectRevision() set descriptionEditing=false and
-    // commitMode=false (via oncanceldescribe if editor was up, or just moved
-    // cursor). Bail so we don't re-open the editor over the NEW revision.
+    // j/k during fetch → bail. commitMode is set AFTER the guard so a
+    // nav-during-await doesn't leak it to the next describe operation
+    // (next `e` press would call executeCommit instead of handleDescribe).
     if (selectedRevision?.commit.commit_id !== cid) return
+    commitMode = true
     descriptionDraft = prefill
     descriptionEditing = true
     focusDescEditor()
@@ -1666,12 +1672,14 @@
   // and the stale callback fires as a microtask BEFORE res.json() resolves (i.e.
   // while we're still inside await fn() with mutating=true, loading=false).
   // Without !mutating, every mutation over SSH fires a redundant ~440ms loadLog.
-  // If stale events occur during inline mode, refresh when mode exits.
-  let staleWhileInMode = false
+  // If stale events occur during inline mode OR a modal, defer refresh to
+  // when the suppressing condition clears. Same variable for both — the
+  // deferred-refresh effect below fires when neither is active.
+  let staleWhileSuppressed = false
   $effect(() => {
     return onStale(() => {
       if (!loading && !mutating && !anyModalOpen && !inlineMode) loadLog()
-      else if (inlineMode) staleWhileInMode = true
+      else if (inlineMode || anyModalOpen) staleWhileSuppressed = true
       // Panel's stale data is harmless during mutation (rows just look one op
       // behind); no need for the loadLog guards. Fire-and-forget.
       if (activeView === 'branches') bookmarksPanel.load()
@@ -1694,10 +1702,11 @@
     clearTimeout(messageClearTimer)
     clearTimeout(navDebounceTimer)
     clearTimeout(evologDebounceTimer)
+    cancelAnimationFrame(navRafId)
   })
   $effect(() => {
-    if (!inlineMode && staleWhileInMode) {
-      staleWhileInMode = false
+    if (!inlineMode && !anyModalOpen && staleWhileSuppressed) {
+      staleWhileSuppressed = false
       loadLog()
     }
   })
@@ -1722,8 +1731,11 @@
   // One-shot scroll restore: after the first diff finishes loading post-mount,
   // apply the saved position. pendingScrollRestore nulls itself so subsequent
   // diffLoading cycles (nav to another revision) don't re-apply a stale scroll.
+  // Gate on loadedTarget — at mount diffLoading starts false (loader initial),
+  // so without this the effect would fire on an empty panel, scroll clamp to 0,
+  // and consume the saved position before content arrives.
   $effect(() => {
-    if (pendingScrollRestore == null || diffLoading || !diffPanelRef) return
+    if (pendingScrollRestore == null || diffLoading || !diffPanelRef || !loadedTarget) return
     const v = pendingScrollRestore
     pendingScrollRestore = null
     // rAF so the diff content DOM is painted before we scroll.

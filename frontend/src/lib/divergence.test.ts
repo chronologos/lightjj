@@ -539,6 +539,28 @@ describe('buildKeepPlan', () => {
     expect(plan.nonEmptyDescendants.map(d => d.commit_id)).toEqual(['d_loser'])
   })
 
+  it('descendant of keeper ROOT (not tip) → ALSO excluded (multi-level stack)', () => {
+    // 2-level stack [[a0,a1],[b0,b1]], keeperIdx=1 keeps a1+b1. A branch off
+    // a1 (keeper's ROOT, not tip b1) has parent=a1 which is being KEPT — it
+    // must not be abandoned. Tip-only filter would miss this (parent != b1).
+    const g = mkGroup({
+      changeIds: ['A', 'B'],
+      versions: [
+        [e({ commit_id: 'a0' }), e({ commit_id: 'a1' })],
+        [e({ commit_id: 'b0' }), e({ commit_id: 'b1' })],
+      ],
+      descendants: [
+        e({ commit_id: 'branch_off_keeper_root', parent_commit_ids: ['a1'], divergent: false, empty: true }),
+        e({ commit_id: 'branch_off_loser_root', parent_commit_ids: ['a0'], divergent: false, empty: true }),
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    // branch_off_keeper_root must NOT be abandoned (a1 is kept).
+    expect(plan.abandonCommitIds).not.toContain('branch_off_keeper_root')
+    // branch_off_loser_root IS abandoned (a0 is being abandoned).
+    expect(plan.abandonCommitIds).toContain('branch_off_loser_root')
+  })
+
   it('empty descendant of loser → silent abandon (no confirm needed)', () => {
     // Empty descendants are likely auto-rebase leftovers. Abandon immediately;
     // only non-empty descendants need user confirmation.

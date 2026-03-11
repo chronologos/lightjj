@@ -138,7 +138,12 @@ export function reconstructSides(raw: string): MergeSides | null {
       else theirsLabel = label
       continue
     }
-    if (inRegion && (lbl = matchMarker(line, '+', mLen)) !== null) {
+    // The + marker CAN follow a %%%%%%% section (Diff-style: diff then snapshot).
+    // But inside the diff, content lines get `+` prefix — an added line of
+    // (mLen-1) '+' chars becomes a bare mLen-char run → false-positive. jj
+    // always labels real markers (" Contents of side #N"), so in diff mode
+    // require a non-empty label to disambiguate.
+    if (inRegion && (lbl = matchMarker(line, '+', mLen)) !== null && (mode !== 'diff' || lbl !== '')) {
       sideNum++
       if (sideNum > 2) return null
       mode = 'snap'

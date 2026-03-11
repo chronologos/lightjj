@@ -279,9 +279,12 @@ export function buildKeepPlan(g: DivergenceGroup, keeperIdx: number): KeepPlan {
     }
   }
   // Descendants: empty ones go straight to abandon; non-empty go to confirm.
-  // A descendant of the KEEPER'S tip doesn't need abandoning (it stays valid).
+  // A descendant of ANY keeper-column commit stays valid — its parent is being
+  // kept. g.descendants spans children of all levels × columns, so a branch-off
+  // from the keeper's ROOT (not tip) would otherwise be miscounted as collateral.
+  const keeperCommitIds = new Set(g.versions.map(level => level[keeperIdx].commit_id))
   const keeperTip = g.versions[g.versions.length - 1][keeperIdx].commit_id
-  const collateral = g.descendants.filter(d => !d.parent_commit_ids.includes(keeperTip))
+  const collateral = g.descendants.filter(d => !d.parent_commit_ids.some(p => keeperCommitIds.has(p)))
   const nonEmptyDescendants = collateral.filter(d => !d.empty)
   for (const d of collateral.filter(d => d.empty)) abandonCommitIds.push(d.commit_id)
 
