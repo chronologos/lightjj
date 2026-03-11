@@ -81,7 +81,7 @@
 <div class="evolog-panel" style:height="{height}px">
   <div class="panel-header">
     <span class="panel-title">
-      Evolution Log
+      Evolution Log <kbd class="nav-hint">↑</kbd><kbd class="nav-hint">↓</kbd>
       {#if selectedRevision}
         <span class="header-change-id">{selectedRevision.commit.change_id.slice(0, 12)}</span>
       {/if}

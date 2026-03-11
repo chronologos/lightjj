@@ -966,7 +966,7 @@
   {/if}
   {#if diffTarget && changedFiles.length > 0 && !fileSelectionMode}
     <div class="file-list-bar">
-      <span class="file-list-label">Files ({changedFiles.length}){#if conflictCount > 0}<span class="conflict-count-label"> · {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}</span>{/if}</span>
+      <span class="file-list-label">Files <kbd class="nav-hint">[</kbd><kbd class="nav-hint">]</kbd> ({changedFiles.length}){#if conflictCount > 0}<span class="conflict-count-label"> · {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}</span>{/if}</span>
       {#if totalStats.add > 0 || totalStats.del > 0}
         <span class="total-stats">
           {#if totalStats.add > 0}<span class="stat-add">+{totalStats.add}</span>{/if}

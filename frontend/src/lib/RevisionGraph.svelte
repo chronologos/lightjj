@@ -315,7 +315,7 @@
 
 <div class="panel revisions-panel">
   <div class="panel-header">
-    <span class="panel-title">Revisions</span>
+    <span class="panel-title">Revisions <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd></span>
     <div class="view-toggle">
       {#if viewMode === 'custom'}
         <span class="view-btn view-btn-active">Custom</span>
