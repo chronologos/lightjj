@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import type { Bookmark, PullRequest } from './api'
+  import type { Bookmark, PullRequest, RemoteVisibility, RemoteVisibilityEntry } from './api'
   import { classifyBookmark, syncPriority, syncLabel, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
   import { fuzzyMatch } from './fuzzy'
   import { createConfirmGate } from './confirm-gate.svelte'
@@ -20,22 +20,43 @@
     track: TrackOption[]
   }
 
+  interface GroupRow {
+    kind: 'group'
+    remote: string
+    label: string
+    count: number
+    expanded: boolean
+    visibility: RemoteVisibilityEntry | null  // null = local (no toggle)
+  }
+
+  interface BookmarkRow {
+    kind: 'bookmark'
+    bm: Bookmark
+    sync: SyncState
+    remote: string
+    visibleInLog: boolean
+  }
+
+  type PanelRow = GroupRow | BookmarkRow
+
   interface Props {
     bookmarks: Bookmark[]
     loading: boolean
     error: string
     defaultRemote: string
     allRemotes: string[]
+    remoteVisibility: RemoteVisibility
     prByBookmark: Map<string, PullRequest>
     onjump: (bm: Bookmark) => void
     onexecute: (op: BookmarkOp) => void
     onrefresh: () => void
     onclose: () => void
+    onvisibilitychange: (vis: RemoteVisibility) => void
     oncontextmenu?: (bm: Bookmark, actions: BookmarkRowActions, x: number, y: number) => void
     ontrackmenu?: (bm: Bookmark, opts: TrackOption[], x: number, y: number) => void
   }
 
-  let { bookmarks, loading, error, defaultRemote, allRemotes, prByBookmark, onjump, onexecute, onrefresh, onclose, oncontextmenu, ontrackmenu }: Props = $props()
+  let { bookmarks, loading, error, defaultRemote, allRemotes, remoteVisibility, prByBookmark, onjump, onexecute, onrefresh, onclose, onvisibilitychange, oncontextmenu, ontrackmenu }: Props = $props()
 
   let query: string = $state('')
   let index: number = $state(0)
@@ -45,22 +66,66 @@
 
   const confirm = createConfirmGate<'d' | 'f' | 't'>()
 
-  // Precompute sync state per bookmark — classifyBookmark walks remotes[]
-  // and the sort comparator calls it 2N·logN times otherwise.
-  interface Row { bm: Bookmark; sync: SyncState }
-  let rows = $derived.by((): Row[] => {
-    let filtered = query
-      ? bookmarks.filter(b => fuzzyMatch(query, b.name))
-      : bookmarks
-    return filtered
-      .map(bm => ({ bm, sync: classifyBookmark(bm) }))
-      .sort((a, b) => {
-        const p = syncPriority(a.sync) - syncPriority(b.sync)
-        return p !== 0 ? p : a.bm.name.localeCompare(b.bm.name)
-      })
+  let expandedGroups = $state(new Set<string>(['.']))
+
+  // Auto-expand newly discovered remote groups
+  $effect(() => {
+    void allRemotes  // tracked dep
+    const current = untrack(() => expandedGroups)  // untrack avoids self-loop
+    const next = new Set(current)
+    let changed = false
+    for (const r of allRemotes) {
+      if (!next.has(r)) { next.add(r); changed = true }
+    }
+    if (changed) expandedGroups = next
   })
 
-  let selected = $derived(rows[index] as Row | undefined)
+  let panelRows = $derived.by((): PanelRow[] => {
+    const result: PanelRow[] = []
+
+    // 1. Local group
+    const localBms = bookmarks.filter(bm => bm.local)
+    const filteredLocal = query ? localBms.filter(b => fuzzyMatch(query, b.name)) : localBms
+    result.push({
+      kind: 'group', remote: '.', label: 'LOCAL',
+      count: filteredLocal.length, expanded: expandedGroups.has('.'),
+      visibility: null,
+    })
+    if (expandedGroups.has('.')) {
+      for (const entry of filteredLocal
+        .map(bm => ({ bm, sync: classifyBookmark(bm) }))
+        .sort((a, b) => {
+          const p = syncPriority(a.sync) - syncPriority(b.sync)
+          return p !== 0 ? p : a.bm.name.localeCompare(b.bm.name)
+        })) {
+        result.push({ kind: 'bookmark', bm: entry.bm, sync: entry.sync, remote: '.', visibleInLog: true })
+      }
+    }
+
+    // 2. Per-remote groups — includes bookmarks that ALSO have local presence
+    for (const remote of allRemotes) {
+      const visEntry = remoteVisibility[remote]
+      const remoteBms = bookmarks.filter(bm => bm.remotes?.some(r => r.remote === remote))
+      const filtered = query ? remoteBms.filter(b => fuzzyMatch(query, b.name)) : remoteBms
+      result.push({
+        kind: 'group', remote, label: remote.toUpperCase(),
+        count: filtered.length, expanded: expandedGroups.has(remote),
+        visibility: visEntry ?? { visible: false },
+      })
+      if (expandedGroups.has(remote)) {
+        for (const bm of filtered.sort((a, b) => a.name.localeCompare(b.name))) {
+          const hidden = visEntry?.hidden?.includes(bm.name) ?? false
+          result.push({
+            kind: 'bookmark', bm, sync: classifyBookmark(bm), remote,
+            visibleInLog: (visEntry?.visible ?? false) && !hidden,
+          })
+        }
+      }
+    }
+    return result
+  })
+
+  let selected = $derived(panelRows[index] as PanelRow | undefined)
 
   // Per-bookmark action gates. Factored out of the keyboard-selection
   // $derived so context-menu can compute them for the RIGHT-CLICKED row
@@ -82,34 +147,36 @@
   }
 
   // Single computeActions() call; both can and trackInfo derive from it.
-  let selActions = $derived(selected ? computeActions(selected.bm) : null)
+  let selActions = $derived(
+    selected?.kind === 'bookmark' ? computeActions(selected.bm) : null
+  )
   let trackInfo = $derived(selActions?.track ?? [])
 
   let can = $derived({
     jump: selActions?.jump ?? false,
     del: selActions?.del ?? false,
     pushDelete: selActions?.pushDelete ?? [],
-    forget: !!selected,
+    forget: selected?.kind === 'bookmark',
     track: trackInfo.length > 0,
   })
 
   // Reload can reorder rows (sync state changed → different priority).
   // Restore selection by name when bookmarks prop changes. untrack() on
-  // index/rows so j/k doesn't trigger this (would immediately restore the
+  // index/panelRows so j/k doesn't trigger this (would immediately restore the
   // pre-j index). Clamp stays inside: runs only on prop change too, which
-  // is the only time rows.length can shrink under index.
+  // is the only time panelRows.length can shrink under index.
   let lastSelectedName: string | undefined
   $effect(() => {
     void bookmarks // ONLY tracked dep
     untrack(() => {
       if (lastSelectedName) {
-        const i = rows.findIndex(r => r.bm.name === lastSelectedName)
+        const i = panelRows.findIndex(r => r.kind === 'bookmark' && r.bm.name === lastSelectedName)
         if (i >= 0) index = i
       }
-      if (index >= rows.length && rows.length > 0) index = rows.length - 1
+      if (index >= panelRows.length && panelRows.length > 0) index = panelRows.length - 1
     })
   })
-  $effect(() => { lastSelectedName = selected?.bm.name })
+  $effect(() => { lastSelectedName = selected?.kind === 'bookmark' ? selected.bm.name : undefined })
 
   // Disarm when selection changes (keyboard OR mouse OR reload-deleted-row).
   // Identity change, not value — rows rederive gives new wrapper objects.
@@ -148,7 +215,7 @@
         if (e.key === 'j' && inputFocused) return
         e.preventDefault()
         if (inputFocused) listEl?.focus()
-        index = Math.min(index + 1, Math.max(rows.length - 1, 0))
+        index = Math.min(index + 1, Math.max(panelRows.length - 1, 0))
         scrollActiveIntoView()
         return
       case 'ArrowUp':
@@ -162,7 +229,14 @@
         e.preventDefault()
         e.stopPropagation()
         confirm.disarm()
-        if (can.jump && row) onjump(row.bm)
+        if (selected?.kind === 'group') {
+          const next = new Set(expandedGroups)
+          if (next.has(selected.remote)) next.delete(selected.remote)
+          else next.add(selected.remote)
+          expandedGroups = next
+        } else if (can.jump && selected?.kind === 'bookmark') {
+          onjump(selected.bm)
+        }
         return
       case 'Escape':
         e.preventDefault()
@@ -177,6 +251,28 @@
         confirm.disarm()
         inputEl?.focus()
         return
+      case 'e': {
+        if (inputFocused) return
+        e.preventDefault()
+        const eRow = panelRows[index]
+        if (!eRow) return
+        if (eRow.kind === 'group' && eRow.visibility) {
+          const vis = { ...remoteVisibility }
+          const current = vis[eRow.remote]
+          vis[eRow.remote] = { ...current, visible: !current?.visible, hidden: current?.hidden ?? [] }
+          onvisibilitychange(vis)
+        } else if (eRow.kind === 'bookmark' && eRow.remote !== '.') {
+          const vis = { ...remoteVisibility }
+          const entry = vis[eRow.remote]
+          if (!entry?.visible) return
+          const hidden = new Set(entry.hidden ?? [])
+          if (hidden.has(eRow.bm.name)) hidden.delete(eRow.bm.name)
+          else hidden.add(eRow.bm.name)
+          vis[eRow.remote] = { ...entry, hidden: [...hidden] }
+          onvisibilitychange(vis)
+        }
+        return
+      }
     }
 
     // Claim panel-owned keys even when nothing is selected (empty list,
@@ -185,6 +281,16 @@
     if (inputFocused) return
     if (!row) {
       if (['d', 'f', 't', 'r'].includes(e.key)) e.preventDefault()
+      return
+    }
+    // Guard d/f/t against GroupRow — only meaningful for bookmark rows
+    if (selected?.kind !== 'bookmark') {
+      if (['d', 'f', 't'].includes(e.key)) e.preventDefault()
+      if (e.key === 'r') {
+        e.preventDefault()
+        confirm.disarm()
+        onrefresh()
+      }
       return
     }
     switch (e.key) {
@@ -198,15 +304,15 @@
         if (!can.del && !can.pushDelete[0]) { confirm.disarm(); return }
         if (confirm.gate('d', true)) return
         if (can.pushDelete[0]) {
-          fire({ action: 'push-delete', bookmark: row.bm.name, remote: can.pushDelete[0] })
+          fire({ action: 'push-delete', bookmark: selected.bm.name, remote: can.pushDelete[0] })
         } else {
-          fire({ action: 'delete', bookmark: row.bm.name })
+          fire({ action: 'delete', bookmark: selected.bm.name })
         }
         return
       case 'f':
         e.preventDefault()
         if (confirm.gate('f', true)) return
-        fire({ action: 'forget', bookmark: row.bm.name })
+        fire({ action: 'forget', bookmark: selected.bm.name })
         return
       case 't': {
         e.preventDefault()
@@ -216,13 +322,13 @@
           // Single-remote: preserve current immediate-fire + confirm ergonomics.
           const t = opts[0]
           if (confirm.gate('t', t.action === 'untrack')) return
-          fire({ action: t.action, bookmark: row.bm.name, remote: t.remote })
+          fire({ action: t.action, bookmark: selected.bm.name, remote: t.remote })
           return
         }
         // Multi-remote: open submenu at the active row's right edge.
         confirm.disarm()
         const rect = listEl?.querySelector('.bp-row-active')?.getBoundingClientRect()
-        ontrackmenu?.(row.bm, opts,
+        ontrackmenu?.(selected.bm, opts,
           rect ? rect.right - 40 : window.innerWidth / 2,
           rect ? rect.top + rect.height / 2 : window.innerHeight / 2)
         return
@@ -268,7 +374,7 @@
       onfocus={() => { inputFocused = true }}
       onblur={() => { inputFocused = false }}
     />
-    <span class="bp-count">{rows.length}</span>
+    <span class="bp-count">{panelRows.filter(r => r.kind === 'bookmark').length}</span>
   </div>
 
   <div
@@ -283,71 +389,126 @@
       <div class="bp-empty">Loading...</div>
     {:else if error}
       <div class="bp-empty bp-error" role="alert">{error}</div>
-    {:else if rows.length === 0}
+    {:else if panelRows.length === 0}
       <div class="bp-empty">{query ? 'No matching bookmarks' : 'No bookmarks'}</div>
     {:else}
-      {#each rows as row, i (row.bm.name)}
-        {@const trackedRemote = row.bm.remotes?.find(r => r.tracked)}
-        {@const shownRemote = trackedRemote ?? row.bm.remotes?.[0]}
-        {@const label = syncLabel(row.sync, shownRemote?.remote ?? defaultRemote)}
-        {@const local = row.bm.local}
-        {@const diverged = local && shownRemote && local.commit_id !== shownRemote.commit_id}
-        {@const primaryCid = local?.commit_id ?? shownRemote?.commit_id}
-        {@const extraRemotes = (row.bm.remotes ?? []).filter(r => r !== shownRemote && r.commit_id && r.commit_id !== primaryCid)}
-        {@const pr = prByBookmark.get(row.bm.name)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -- Enter handled on panel -->
-        <div
-          id="bp-row-{i}"
-          class="bp-row"
-          class:bp-row-active={i === index}
-          onmousemove={() => { if (index !== i) index = i }}
-          onclick={() => { if (!row.bm.conflict && row.bm.commit_id) onjump(row.bm) }}
-          oncontextmenu={oncontextmenu ? (e: MouseEvent) => {
-            e.preventDefault()
-            confirm.disarm() // right-click cancels any pending double-press confirm
-            index = i        // sync keyboard selection to right-clicked row
-            oncontextmenu!(row.bm, computeActions(row.bm), e.clientX, e.clientY)
-          } : undefined}
-          role="option"
-          tabindex="-1"
-          aria-selected={i === index}
-        >
-          <span class="bp-dot {DOT_CLASS[row.sync.kind]}"></span>
-          <span class="bp-name">
-            {row.bm.name}
-            {#if pr}
-              <a class="bp-pr-badge" class:is-draft={pr.is_draft}
-                 href={pr.url} target="_blank" rel="noopener"
-                 onclick={(e) => e.stopPropagation()}
-                 title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number}">
-                #{pr.number}
-              </a>
+      {#each panelRows as row, i (row.kind === 'group' ? `g:${row.remote}` : `b:${row.remote}:${row.bm.name}`)}
+        {#if row.kind === 'group'}
+          <!-- svelte-ignore a11y_click_events_have_key_events -- Enter handled on panel -->
+          <div
+            id="bp-row-{i}"
+            class="bp-group-row"
+            class:bp-row-active={i === index}
+            onmousemove={() => { if (index !== i) index = i }}
+            onclick={() => {
+              const next = new Set(expandedGroups)
+              if (next.has(row.remote)) next.delete(row.remote)
+              else next.add(row.remote)
+              expandedGroups = next
+            }}
+            role="option"
+            tabindex="-1"
+            aria-selected={i === index}
+          >
+            <span class="bp-chevron">{row.expanded ? '▼' : '▶'}</span>
+            <span class="bp-group-label">{row.label}</span>
+            <span class="bp-group-count">({row.count})</span>
+            {#if row.visibility}
+              <button class="bp-eye" class:bp-eye-off={!row.visibility.visible}
+                onclick={(ev: MouseEvent) => {
+                  ev.stopPropagation()
+                  const vis = { ...remoteVisibility }
+                  const current = vis[row.remote]
+                  vis[row.remote] = { ...current, visible: !current?.visible, hidden: current?.hidden ?? [] }
+                  onvisibilitychange(vis)
+                }}
+                title={row.visibility.visible ? 'Hide from revision graph' : 'Show in revision graph'}>
+                👁
+              </button>
             {/if}
-          </span>
-          <span class="bp-sync" class:bp-sync-conflict={row.sync.kind === 'conflict'}>{label}</span>
-
-          <div class="bp-commits">
-            {#if row.sync.kind === 'conflict'}
-              {#each row.bm.added_targets ?? [] as cid}
-                <div class="bp-commit-line">
-                  <span class="bp-cid bp-cid-conflict">+{cid.slice(0, 8)}</span>
-                </div>
-              {/each}
-            {:else if diverged}
-              {@render commitLine(local, false)}
-              {@render commitLine(shownRemote, true)}
-            {:else if local}
-              {@render commitLine(local, false)}
-            {:else if shownRemote}
-              {@render commitLine(shownRemote, true)}
-            {:else}
-              <span class="bp-cid">—</span>
-            {/if}
-            {#each extraRemotes as extra}
-              {@render commitLine(extra, true)}
-            {/each}
           </div>
-        </div>
+        {:else}
+          {@const trackedRemote = row.bm.remotes?.find(r => r.tracked)}
+          {@const shownRemote = trackedRemote ?? row.bm.remotes?.[0]}
+          {@const label = syncLabel(row.sync, shownRemote?.remote ?? defaultRemote)}
+          {@const local = row.bm.local}
+          {@const diverged = local && shownRemote && local.commit_id !== shownRemote.commit_id}
+          {@const primaryCid = local?.commit_id ?? shownRemote?.commit_id}
+          {@const extraRemotes = (row.bm.remotes ?? []).filter(r => r !== shownRemote && r.commit_id && r.commit_id !== primaryCid)}
+          {@const pr = prByBookmark.get(row.bm.name)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -- Enter handled on panel -->
+          <div
+            id="bp-row-{i}"
+            class="bp-row bp-bookmark-row"
+            class:bp-row-active={i === index}
+            class:bp-row-hidden={!row.visibleInLog && row.remote !== '.'}
+            onmousemove={() => { if (index !== i) index = i }}
+            onclick={() => { if (!row.bm.conflict && row.bm.commit_id) onjump(row.bm) }}
+            oncontextmenu={oncontextmenu ? (e: MouseEvent) => {
+              e.preventDefault()
+              confirm.disarm() // right-click cancels any pending double-press confirm
+              index = i        // sync keyboard selection to right-clicked row
+              oncontextmenu!(row.bm, computeActions(row.bm), e.clientX, e.clientY)
+            } : undefined}
+            role="option"
+            tabindex="-1"
+            aria-selected={i === index}
+          >
+            <span class="bp-dot {DOT_CLASS[row.sync.kind]}"></span>
+            <span class="bp-name">
+              {row.bm.name}
+              {#if pr}
+                <a class="bp-pr-badge" class:is-draft={pr.is_draft}
+                   href={pr.url} target="_blank" rel="noopener"
+                   onclick={(e) => e.stopPropagation()}
+                   title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number}">
+                  #{pr.number}
+                </a>
+              {/if}
+            </span>
+            <span class="bp-sync" class:bp-sync-conflict={row.sync.kind === 'conflict'}>{label}</span>
+
+            <div class="bp-commits">
+              {#if row.sync.kind === 'conflict'}
+                {#each row.bm.added_targets ?? [] as cid}
+                  <div class="bp-commit-line">
+                    <span class="bp-cid bp-cid-conflict">+{cid.slice(0, 8)}</span>
+                  </div>
+                {/each}
+              {:else if diverged}
+                {@render commitLine(local, false)}
+                {@render commitLine(shownRemote, true)}
+              {:else if local}
+                {@render commitLine(local, false)}
+              {:else if shownRemote}
+                {@render commitLine(shownRemote, true)}
+              {:else}
+                <span class="bp-cid">—</span>
+              {/if}
+              {#each extraRemotes as extra}
+                {@render commitLine(extra, true)}
+              {/each}
+            </div>
+
+            {#if row.remote !== '.'}
+              <button class="bp-eye bp-eye-inline" class:bp-eye-off={!row.visibleInLog}
+                onclick={(ev: MouseEvent) => {
+                  ev.stopPropagation()
+                  const vis = { ...remoteVisibility }
+                  const entry = vis[row.remote]
+                  if (!entry?.visible) return
+                  const hidden = new Set(entry.hidden ?? [])
+                  if (hidden.has(row.bm.name)) hidden.delete(row.bm.name)
+                  else hidden.add(row.bm.name)
+                  vis[row.remote] = { ...entry, hidden: [...hidden] }
+                  onvisibilitychange(vis)
+                }}
+                title={row.visibleInLog ? 'Hide from revision graph' : 'Show in revision graph'}>
+                👁
+              </button>
+            {/if}
+          </div>
+        {/if}
       {/each}
     {/if}
   </div>
@@ -357,17 +518,17 @@
       <span class="bp-confirm">
         <kbd>d</kbd> again to
         {#if can.pushDelete[0]}
-          push delete <b>{selected?.bm.name}</b> → {can.pushDelete[0]}
+          push delete <b>{selected?.kind === 'bookmark' ? selected.bm.name : ''}</b> → {can.pushDelete[0]}
           {#if can.pushDelete.length > 1}<span class="bp-more">(+{can.pushDelete.length - 1} more)</span>{/if}
         {:else}
-          delete <b>{selected?.bm.name}</b>
+          delete <b>{selected?.kind === 'bookmark' ? selected.bm.name : ''}</b>
         {/if}
         · Esc to cancel
       </span>
     {:else if confirm.armed === 'f'}
-      <span class="bp-confirm"><kbd>f</kbd> again to forget <b>{selected?.bm.name}</b> · Esc to cancel</span>
+      <span class="bp-confirm"><kbd>f</kbd> again to forget <b>{selected?.kind === 'bookmark' ? selected.bm.name : ''}</b> · Esc to cancel</span>
     {:else if confirm.armed === 't'}
-      <span class="bp-confirm"><kbd>t</kbd> again to untrack <b>{selected?.bm.name}@{trackInfo[0]?.remote}</b> · Esc to cancel</span>
+      <span class="bp-confirm"><kbd>t</kbd> again to untrack <b>{selected?.kind === 'bookmark' ? selected.bm.name : ''}</b>@{trackInfo[0]?.remote} · Esc to cancel</span>
     {:else}
       <span class:dim={!can.jump}><kbd>⏎</kbd> jump</span>
       <span class:dim={!can.del && !can.pushDelete[0]}>
@@ -385,6 +546,7 @@
           track
         {/if}
       </span>
+      <span class:dim={selected?.kind === 'group' ? !selected.visibility : selected?.remote === '.'}><kbd>e</kbd> eye</span>
       <span><kbd>r</kbd> refresh</span>
       <span><kbd>/</kbd> filter</span>
     {/if}
@@ -443,6 +605,53 @@
     user-select: none;
   }
 
+  .bp-group-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: var(--mantle);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--subtext0);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .bp-group-row.bp-row-active {
+    background: var(--surface0);
+  }
+  .bp-chevron {
+    font-size: 9px;
+    width: 10px;
+    text-align: center;
+  }
+  .bp-group-count {
+    font-size: 9px;
+    color: var(--overlay0);
+    font-weight: normal;
+    text-transform: none;
+  }
+
+  .bp-eye {
+    margin-left: auto;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 2px;
+    opacity: 0.8;
+    color: inherit;
+  }
+  .bp-eye:hover { opacity: 1; }
+  .bp-eye-off { opacity: 0.3; }
+  .bp-eye-off:hover { opacity: 0.5; }
+  .bp-eye-inline {
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
   .bp-row {
     display: flex;
     align-items: flex-start;
@@ -453,9 +662,17 @@
     border-left: 2px solid transparent;
   }
 
+  .bp-bookmark-row {
+    padding-left: 28px;
+  }
+
   .bp-row-active {
     background: var(--surface0);
     border-left-color: var(--blue);
+  }
+
+  .bp-row-hidden {
+    opacity: 0.4;
   }
 
   .bp-dot {

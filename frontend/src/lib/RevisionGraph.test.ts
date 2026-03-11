@@ -78,8 +78,8 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     onrevsetclear: vi.fn(),
     onrevsetchange: vi.fn(),
     onrevsetescaped: vi.fn(),
-    onviewmodechange: vi.fn(),
     onbookmarkclick: vi.fn(),
+    remoteVisibility: {},
     rebase: createRebaseMode(),
     squash: createSquashMode(),
     split: createSplitMode(),
@@ -326,50 +326,20 @@ describe('RevisionGraph', () => {
   })
 
   describe('view mode toggle', () => {
-    it('Log button active when viewMode=log', () => {
+    it('no .view-btn elements render when viewMode=log', () => {
       const { container } = render(RevisionGraph, { props: defaultProps({ viewMode: 'log' }) })
       const buttons = container.querySelectorAll('.view-btn')
+      expect(buttons).toHaveLength(0)
+    })
+
+    it('a single active .view-btn with text "Custom" renders when viewMode=custom', () => {
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ viewMode: 'custom', revsetFilter: 'mine()' }),
+      })
+      const buttons = container.querySelectorAll('.view-btn')
+      expect(buttons).toHaveLength(1)
       expect(buttons[0]).toHaveClass('view-btn-active')
-      expect(buttons[1]).not.toHaveClass('view-btn-active')
-    })
-
-    it('Tracked button active when viewMode=tracked', () => {
-      const { container } = render(RevisionGraph, { props: defaultProps({ viewMode: 'tracked' }) })
-      const buttons = container.querySelectorAll('.view-btn')
-      expect(buttons[0]).not.toHaveClass('view-btn-active')
-      expect(buttons[1]).toHaveClass('view-btn-active')
-    })
-
-    it('clicking a preset tab calls onviewmodechange with target mode', async () => {
-      const onviewmodechange = vi.fn()
-      const { container } = render(RevisionGraph, {
-        props: defaultProps({ viewMode: 'log', onviewmodechange }),
-      })
-      const buttons = container.querySelectorAll('.view-btn')
-      await fireEvent.click(buttons[1])
-      expect(onviewmodechange).toHaveBeenCalledWith('tracked')
-    })
-
-    it('Custom tab appears only when viewMode=custom', () => {
-      const log = render(RevisionGraph, { props: defaultProps({ viewMode: 'log' }) })
-      expect(log.container.querySelectorAll('.view-btn')).toHaveLength(2)
-
-      const custom = render(RevisionGraph, { props: defaultProps({ viewMode: 'custom' }) })
-      const buttons = custom.container.querySelectorAll('.view-btn')
-      expect(buttons).toHaveLength(3)
-      expect(buttons[2]).toHaveTextContent('Custom')
-      expect(buttons[2]).toHaveClass('view-btn-active')
-    })
-
-    it('clicking Custom tab focuses revset input, does not fire onviewmodechange', async () => {
-      const onviewmodechange = vi.fn()
-      const { container } = render(RevisionGraph, {
-        props: defaultProps({ viewMode: 'custom', revsetFilter: 'mine()', onviewmodechange }),
-      })
-      const customBtn = container.querySelectorAll('.view-btn')[2]
-      await fireEvent.click(customBtn)
-      expect(onviewmodechange).not.toHaveBeenCalled()
-      expect(container.querySelector('.revset-input')).toHaveFocus()
+      expect(buttons[0]).toHaveTextContent('Custom')
     })
   })
 
