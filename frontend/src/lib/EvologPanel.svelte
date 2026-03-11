@@ -46,13 +46,14 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') { e.preventDefault(); onclose(); return }
     if (entries.length === 0) return
     switch (e.key) {
-      case 'ArrowDown':
+      case 'j': case 'ArrowDown':
         e.preventDefault()
         selectEntry(selectedIdx === -1 ? 0 : Math.min(selectedIdx + 1, entries.length - 1))
         break
-      case 'ArrowUp':
+      case 'k': case 'ArrowUp':
         e.preventDefault()
         selectEntry(selectedIdx === -1 ? 0 : Math.max(selectedIdx - 1, 0))
         break
@@ -81,7 +82,7 @@
 <div class="evolog-panel" style:height="{height}px">
   <div class="panel-header">
     <span class="panel-title">
-      Evolution Log <kbd class="nav-hint">↑</kbd><kbd class="nav-hint">↓</kbd>
+      Evolution Log <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd>
       {#if selectedRevision}
         <span class="header-change-id">{selectedRevision.commit.change_id.slice(0, 12)}</span>
       {/if}

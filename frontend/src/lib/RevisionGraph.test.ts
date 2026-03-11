@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import RevisionGraph from './RevisionGraph.svelte'
-import type { LogEntry } from './api'
+import type { LogEntry, LocalRef } from './api'
 import { createRebaseMode, createSquashMode, createSplitMode } from './modes.svelte'
 
 function activeRebase(sources: string[], sourceKey?: string, targetKey?: string) {
@@ -32,7 +32,7 @@ function makeEntry(overrides: Partial<{
   empty: boolean
   working_copies: string[]
   parent_ids: string[]
-  bookmarks: string[]
+  bookmarks: LocalRef[]
   description: string
   gutter: string
 }> = {}): LogEntry {
@@ -109,12 +109,30 @@ describe('RevisionGraph', () => {
     })
 
     it('renders bookmark labels when present', () => {
-      const entry = makeEntry({ bookmarks: ['main', 'feature'] })
+      const entry = makeEntry({ bookmarks: [{ name: 'main' }, { name: 'feature' }] })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
       const badges = container.querySelectorAll('.bookmark-badge')
       expect(badges).toHaveLength(2)
       expect(badges[0].textContent).toBe('⑂ main')
       expect(badges[1].textContent).toBe('⑂ feature')
+    })
+
+    it('conflicted bookmark shows ?? marker and red styling', () => {
+      const entry = makeEntry({ bookmarks: [{ name: 'feat', conflict: true }, { name: 'main' }] })
+      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
+      const badges = container.querySelectorAll('.bookmark-badge')
+      expect(badges[0].textContent).toBe('⑂ feat??')
+      expect(badges[0].classList.contains('conflicted')).toBe(true)
+      expect(badges[0].querySelector('.conflict-marker')).toBeInTheDocument()
+      expect(badges[1].classList.contains('conflicted')).toBe(false)
+    })
+
+    it('clicking conflicted bookmark passes the NAME, not the decorated display', () => {
+      const onbookmarkclick = vi.fn()
+      const entry = makeEntry({ bookmarks: [{ name: 'feat', conflict: true }] })
+      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry], onbookmarkclick }) })
+      ;(container.querySelector('.bookmark-badge') as HTMLElement).click()
+      expect(onbookmarkclick).toHaveBeenCalledWith('feat')
     })
 
     it('renders working copy labels when present', () => {
@@ -184,7 +202,7 @@ describe('RevisionGraph', () => {
     })
 
     it('produces 3 DOM rows per entry with bookmarks (node + bookmark + desc)', () => {
-      const entry = makeEntry({ bookmarks: ['main'] })
+      const entry = makeEntry({ bookmarks: [{ name: 'main' }] })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
       const rows = container.querySelectorAll('.graph-row')
       expect(rows).toHaveLength(3) // node-row + bookmark-row + desc-row

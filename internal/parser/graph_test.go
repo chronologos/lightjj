@@ -22,7 +22,7 @@ func TestParseGraphLog_LinearHistory(t *testing.T) {
 	assert.Equal(t, 2, rows[0].Commit.CommitPrefix)  // "20" = 2 chars
 	assert.True(t, rows[0].Commit.IsWorkingCopy)
 	assert.Equal(t, "my commit", rows[0].Description)
-	assert.Equal(t, []string{"main"}, rows[0].Bookmarks)
+	assert.Equal(t, []LocalRef{{Name: "main"}}, rows[0].Bookmarks)
 	assert.Equal(t, []RemoteRef{{Name: "main", Remote: "origin"}}, rows[0].RemoteBookmarks)
 	assert.Equal(t, []string{"f766300c"}, rows[0].Commit.ParentIds)
 	assert.Nil(t, rows[3].Commit.ParentIds) // root has no parents
@@ -121,7 +121,7 @@ func TestParseGraphLog_BookmarksMultiple(t *testing.T) {
 	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1fmy commit\x1f\x1f\x1fmain\x1fdevelop\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"main", "develop"}, rows[0].Bookmarks)
+	assert.Equal(t, []LocalRef{{Name: "main"}, {Name: "develop"}}, rows[0].Bookmarks)
 }
 
 func TestParseGraphLog_BookmarksRemoteOnly(t *testing.T) {
@@ -147,7 +147,7 @@ func TestParseGraphLog_BookmarksLocalQuoted(t *testing.T) {
 	output := "○  _PREFIX:m_PREFIX:1e_PREFIX:false_PREFIX:false\x1fmnxmnwxk\x1f1e83f5a9\x1fdebug\x1f\x1f\x1f\"deploy@prod\"\x1f\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"deploy@prod"}, rows[0].Bookmarks)
+	assert.Equal(t, []LocalRef{{Name: "deploy@prod"}}, rows[0].Bookmarks)
 	assert.Nil(t, rows[0].RemoteBookmarks)
 }
 
@@ -252,7 +252,7 @@ func TestParseGraphLog_WorkingCopies(t *testing.T) {
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
 	assert.Equal(t, []string{"base2", "default"}, rows[0].Commit.WorkingCopies)
-	assert.Equal(t, []string{"main"}, rows[0].Bookmarks)
+	assert.Equal(t, []LocalRef{{Name: "main"}}, rows[0].Bookmarks)
 	assert.Equal(t, "my change", rows[0].Description)
 }
 
@@ -321,8 +321,21 @@ func TestParseGraphLog_ConnectorWithoutPrecedingNode(t *testing.T) {
 }
 
 func TestParseGraphLog_RemoteOnlyBookmarks(t *testing.T) {
-	output := "◆  _PREFIX:a_PREFIX:1_PREFIX:false_PREFIX:false\x1fabcdefgh\x1f12345678\x1ffix something\x1f\x1f00000000\x1ffeat/foo@upstream\n"
+	// \x1E distinguishes remote entries; @git synthetic is filtered
+	output := "◆  _PREFIX:a_PREFIX:1_PREFIX:false_PREFIX:false\x1fabcdefgh\x1f12345678\x1ffix something\x1f\x1f00000000\x1ffeat/foo\x1eupstream\x1fmain\x1egit\n"
 	rows := ParseGraphLog(output)
 	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"feat/foo@upstream"}, rows[0].Bookmarks)
+	assert.Nil(t, rows[0].Bookmarks)
+	assert.Equal(t, []RemoteRef{{Name: "feat/foo", Remote: "upstream"}}, rows[0].RemoteBookmarks)
+}
+
+func TestParseGraphLog_ConflictedBookmark(t *testing.T) {
+	// Local format is name\x1Dconflict — the "??" decorator in jj's default log.
+	// A conflicted bookmark appears on multiple commits (all its added_targets).
+	output := "○  _PREFIX:a_PREFIX:1_PREFIX:false_PREFIX:false\x1faaaaaaaa\x1f11111111\x1fone side\x1f\x1f\x1ffeat\x1dtrue\x1fmain\x1dfalse\n" +
+		"○  _PREFIX:b_PREFIX:2_PREFIX:false_PREFIX:false\x1fbbbbbbbb\x1f22222222\x1fother side\x1f\x1f\x1ffeat\x1dtrue\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []LocalRef{{Name: "feat", Conflict: true}, {Name: "main"}}, rows[0].Bookmarks)
+	assert.Equal(t, []LocalRef{{Name: "feat", Conflict: true}}, rows[1].Bookmarks)
 }

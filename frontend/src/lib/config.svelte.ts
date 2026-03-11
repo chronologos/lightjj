@@ -1,5 +1,5 @@
 // Persistent user preferences, reactive via Svelte 5 runes.
-import type { RemoteVisibility } from './api'
+import type { RemoteVisibilityByRepo } from './api'
 //
 // Primary storage: $XDG_CONFIG_HOME/lightjj/config.json via the backend.
 // Survives port changes — spawned workspace instances on different ports
@@ -24,7 +24,10 @@ interface Config {
   editorArgs: string[]
   /** Same, but used when lightjj is in --remote mode. */
   editorArgsRemote: string[]
-  remoteVisibility: RemoteVisibility
+  /** Keyed by repo_path (from /api/info). Different tabs = different repos
+   *  = independent visibility. Pre-1.0 stored this flat (keyed by remote name);
+   *  old entries become orphaned keys that no repo_path will match — harmless. */
+  remoteVisibility: RemoteVisibilityByRepo
 }
 
 const defaults: Config = {
@@ -158,7 +161,7 @@ function createConfig() {
     set editorArgsRemote(v: string[]) { state.editorArgsRemote = v },
 
     get remoteVisibility() { return state.remoteVisibility },
-    set remoteVisibility(v: RemoteVisibility) { state.remoteVisibility = v },
+    set remoteVisibility(v: RemoteVisibilityByRepo) { state.remoteVisibility = v },
 
     /** Resolves when the remote config has been loaded and merged. Callers that
      *  need the "real" config (not just localStorage defaults) should await this

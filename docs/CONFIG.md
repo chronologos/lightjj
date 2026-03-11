@@ -16,7 +16,7 @@ The config file lives in your local config directory regardless of mode — only
 | `tutorialVersion` | `string` | `""` | Last-seen "what's new" version; managed by the UI |
 | `editorArgs` | `string[]` | `[]` | Open-in-editor command for local mode — see below |
 | `editorArgsRemote` | `string[]` | `[]` | Open-in-editor command for `--remote` mode — see below |
-| `remoteVisibility` | `{[remote]: {visible, hidden?}}` | `{}` | Per-remote bookmark visibility in the revision graph. `visible: true` adds that remote's bookmarks to the revset; `hidden: string[]` excludes specific bookmark names. **Per-repo semantically, stored globally** — see BACKLOG.md cross-repo bleed. |
+| `remoteVisibility` | `{[repoPath]: {[remote]: {visible, hidden?}}}` | `{}` | Per-remote bookmark visibility in the revision graph, keyed by repo path so multi-repo tabs stay independent. `visible: true` adds that remote's bookmarks to the revset; `hidden: string[]` excludes specific bookmark names. |
 
 ## Open-in-editor
 

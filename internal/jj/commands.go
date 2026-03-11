@@ -61,13 +61,16 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// Bookmarks are joined with \x1F and MUST be the last field — the parser's SplitN leaves the tail unsplit.
 	// local_bookmarks + remote_bookmarks are concatenated — `bookmarks` alone collapses
 	// tracked-and-synced remotes into the local form (main@upstream vanishes when local
-	// main is at the same commit). \x1E separates name from remote inside each entry
-	// (Git refs can't contain control chars per git-check-ref-format; @ CAN appear via
-	// git-side branch creation, which jj imports and RefSymbol-quotes). .name() is a
-	// RefSymbol — it quote-wraps names containing revset-special chars; the parser
-	// strips those quotes and filters the @git colocation synthetic remote.
+	// main is at the same commit). Delimiter hierarchy (git refs can't contain control
+	// chars per git-check-ref-format, all three are collision-safe):
+	//   \x1F — outer field separator
+	//   \x1E — distinguishes remote entries (name\x1Eremote); presence = remote
+	//   \x1D — sub-field within locals (name\x1Dconflict); the "??" marker in jj log
+	// @ CAN appear in git-created branch names, which jj imports and RefSymbol-quotes.
+	// .name() quote-wraps names containing revset-special chars; the parser strips
+	// those quotes and filters the @git colocation synthetic remote.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name()).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name() ++ "\x1D" ++ stringify(b.conflict())).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
 		JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args

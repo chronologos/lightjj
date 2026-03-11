@@ -22,13 +22,19 @@ export interface LogEntry {
     parent_ids?: string[]
   }
   description: string
-  // Local bookmarks only — RefSymbol quotes stripped by parser. Before the
-  // local/remote_bookmarks template split this was a mixed array with
-  // `name@remote` strings; consumers had to @-split, which broke on
+  // Local bookmarks with conflict state — RefSymbol quotes stripped by parser.
+  // Before the local/remote_bookmarks template split this was a mixed array
+  // with `name@remote` strings; consumers had to @-split, which broke on
   // git-created branch names containing `@`.
-  bookmarks?: string[]
+  bookmarks?: LocalRef[]
   remote_bookmarks?: RemoteRef[]
   graph_lines: GraphLine[]
+}
+
+export interface LocalRef {
+  name: string
+  /** jj's "??" — bookmark points at multiple commits, appears on each. */
+  conflict?: boolean
 }
 
 export interface RemoteRef {
@@ -651,6 +657,9 @@ export interface RemoteVisibilityEntry {
 }
 
 export type RemoteVisibility = Record<string, RemoteVisibilityEntry>
+
+/** Repo-keyed visibility — config is process-global, visibility is per-repo. */
+export type RemoteVisibilityByRepo = Record<string, RemoteVisibility>
 
 /** Returns the best unique identifier for a commit.
  *  Divergent and hidden commits share change_id, so we fall back to commit_id.

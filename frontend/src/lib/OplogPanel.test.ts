@@ -72,4 +72,68 @@ describe('OplogPanel', () => {
     const { container } = render(OplogPanel, { props: defaultProps({ entries: [] }) })
     expect(container.textContent).toContain('No operations')
   })
+
+  describe('keyboard navigation', () => {
+    const entries = [makeEntry('a', true), makeEntry('b'), makeEntry('c')]
+    const list = (c: HTMLElement) => c.querySelector('.oplog-content')!
+
+    it('j selects first entry when nothing is selected', async () => {
+      const { container } = render(OplogPanel, { props: defaultProps({ entries }) })
+      await fireEvent.keyDown(list(container), { key: 'j' })
+      expect(container.querySelectorAll('.oplog-entry')[0].classList.contains('selected')).toBe(true)
+    })
+
+    it('j/k advance and clamp at boundaries', async () => {
+      const { container } = render(OplogPanel, { props: defaultProps({ entries }) })
+      for (let i = 0; i < 5; i++) await fireEvent.keyDown(list(container), { key: 'j' })
+      const rows = container.querySelectorAll('.oplog-entry')
+      expect(rows[2].classList.contains('selected')).toBe(true)
+      for (let i = 0; i < 5; i++) await fireEvent.keyDown(list(container), { key: 'k' })
+      expect(rows[0].classList.contains('selected')).toBe(true)
+    })
+
+    it('Escape fires onclose even when entries is empty', async () => {
+      // Guard order: Escape checked BEFORE entries.length === 0 bail.
+      const onclose = vi.fn()
+      const { container } = render(OplogPanel, { props: defaultProps({ entries: [], onclose }) })
+      await fireEvent.keyDown(list(container), { key: 'Escape' })
+      expect(onclose).toHaveBeenCalledOnce()
+    })
+
+    it('click syncs selectedIdx', async () => {
+      const { container } = render(OplogPanel, { props: defaultProps({ entries }) })
+      const rows = container.querySelectorAll('.oplog-entry')
+      await fireEvent.click(rows[1])
+      expect(rows[1].classList.contains('selected')).toBe(true)
+      expect(rows[0].classList.contains('selected')).toBe(false)
+    })
+
+    it('entries change resets selection (index-based, prepend would shift)', async () => {
+      const { container, rerender } = render(OplogPanel, { props: defaultProps({ entries }) })
+      await fireEvent.keyDown(list(container), { key: 'j' })
+      await fireEvent.keyDown(list(container), { key: 'j' })  // select idx 1
+      expect(container.querySelectorAll('.oplog-entry')[1].classList.contains('selected')).toBe(true)
+
+      await rerender(defaultProps({ entries: [makeEntry('new'), ...entries] }))
+      expect(container.querySelector('.oplog-entry.selected')).toBeNull()
+    })
+
+    it('Enter opens context menu at selected row', async () => {
+      const oncontextmenu = vi.fn()
+      const { container } = render(OplogPanel, { props: defaultProps({ entries, oncontextmenu }) })
+      await fireEvent.keyDown(list(container), { key: 'j' })
+      await fireEvent.keyDown(list(container), { key: 'Enter' })
+      expect(oncontextmenu).toHaveBeenCalledOnce()
+      // items array includes the op id in the copy label
+      const [items] = oncontextmenu.mock.calls[0]
+      expect(items[0].label).toContain('a')
+    })
+
+    it('Enter is no-op when nothing selected', async () => {
+      const oncontextmenu = vi.fn()
+      const { container } = render(OplogPanel, { props: defaultProps({ entries, oncontextmenu }) })
+      await fireEvent.keyDown(list(container), { key: 'Enter' })
+      expect(oncontextmenu).not.toHaveBeenCalled()
+    })
+  })
 })

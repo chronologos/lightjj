@@ -59,16 +59,18 @@
   {#if revision.bookmarks?.length}
     <div class="detail-bookmarks">
       {#each revision.bookmarks as bm}
-        {@const pr = prByBookmark.get(bm)}
+        {@const pr = prByBookmark.get(bm.name)}
         {#if pr}
-          <a class="detail-pr-badge" class:is-draft={pr.is_draft}
+          <a class="detail-pr-badge" class:is-draft={pr.is_draft} class:conflicted={bm.conflict}
              href={pr.url} target="_blank" rel="noopener"
              title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub">
-            <span class="pr-name">↗ {bm}</span>
+            <span class="pr-name">↗ {bm.name}{#if bm.conflict}<span class="conflict-marker">??</span>{/if}</span>
             <span class="pr-number">#{pr.number}</span>
           </a>
         {:else}
-          <button class="detail-bookmark-badge" onclick={() => onbookmarkclick(bm)}>⑂ {bm}</button>
+          <button class="detail-bookmark-badge" class:conflicted={bm.conflict}
+             onclick={() => onbookmarkclick(bm.name)}
+             title={bm.conflict ? 'Conflicted — this bookmark points at multiple commits' : undefined}>⑂ {bm.name}{#if bm.conflict}<span class="conflict-marker">??</span>{/if}</button>
         {/if}
       {/each}
     </div>
@@ -228,6 +230,17 @@
   .detail-pr-badge.is-draft {
     border-style: dashed;
     opacity: 0.75;
+  }
+
+  .detail-bookmark-badge.conflicted,
+  .detail-pr-badge.conflicted {
+    border-color: color-mix(in srgb, var(--red) 40%, transparent);
+  }
+
+  .conflict-marker {
+    color: var(--red);
+    font-weight: 600;
+    margin-left: 1px;
   }
 
   .pr-name {

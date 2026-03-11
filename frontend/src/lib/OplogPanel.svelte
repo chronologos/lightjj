@@ -15,29 +15,73 @@
 
   let { entries, loading, error = '', onrefresh, onclose, onopundo, onoprestore, oncontextmenu }: Props = $props()
 
-  function handleEntryContextMenu(e: MouseEvent, op: OpEntry) {
-    if (!oncontextmenu) return
-    e.preventDefault()
-    oncontextmenu([
+  let selectedIdx = $state(-1)
+  let contentEl: HTMLElement | undefined
+
+  // Reset selection on refresh — oplog prepends new ops at HEAD so the same
+  // index points to a different operation after undo/restore.
+  $effect(() => { void entries; selectedIdx = -1 })
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') { e.preventDefault(); onclose(); return }
+    if (entries.length === 0) return
+    const move = (delta: 1 | -1) => {
+      e.preventDefault()
+      selectedIdx = selectedIdx === -1 ? 0
+        : Math.max(0, Math.min(selectedIdx + delta, entries.length - 1))
+    }
+    switch (e.key) {
+      case 'j': case 'ArrowDown': move(1); break
+      case 'k': case 'ArrowUp': move(-1); break
+      case 'Enter':
+        if (selectedIdx < 0) return
+        e.preventDefault()
+        // Open context menu at the selected row — keyboard-only path to undo/restore.
+        const row = contentEl?.querySelectorAll<HTMLElement>('.oplog-entry')[selectedIdx]
+        const r = row?.getBoundingClientRect()
+        if (r) openMenuFor(entries[selectedIdx], r.left + 20, r.top + r.height / 2)
+        break
+    }
+  }
+
+  // Auto-focus when entries load so j/k works immediately. The {#if oplogOpen}
+  // wrapper in App.svelte remounts the panel on open, resetting didAutoFocus.
+  let didAutoFocus = false
+  $effect(() => {
+    if (!didAutoFocus && entries.length > 0 && contentEl) {
+      didAutoFocus = true
+      contentEl.focus()
+    }
+  })
+
+  $effect(() => {
+    if (selectedIdx >= 0) {
+      contentEl?.querySelector('.oplog-entry.selected')?.scrollIntoView({ block: 'nearest' })
+    }
+  })
+
+  function openMenuFor(op: OpEntry, x: number, y: number) {
+    oncontextmenu?.([
       { label: `Copy op ID (${op.id})`, action: () => navigator.clipboard.writeText(op.id) },
       { separator: true },
       { label: 'Undo this operation', danger: true, disabled: op.is_current || !onopundo,
         action: () => onopundo?.(op.id) },
       { label: 'Restore to here', danger: true, disabled: op.is_current || !onoprestore,
         action: () => onoprestore?.(op.id) },
-    ], e.clientX, e.clientY)
+    ], x, y)
   }
 </script>
 
 <div class="oplog-panel">
   <div class="panel-header">
-    <span class="panel-title">Operation Log</span>
+    <span class="panel-title">Operation Log <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd></span>
     <div class="panel-actions">
       <button class="header-btn" onclick={onrefresh}>Refresh</button>
       <button class="header-btn" onclick={onclose}>Close</button>
     </div>
   </div>
-  <div class="oplog-content">
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="oplog-content" role="listbox" tabindex="-1" bind:this={contentEl} onkeydown={handleKeydown}>
     {#if loading}
       <div class="empty-state">
         <div class="spinner"></div>
@@ -49,8 +93,18 @@
         <button class="header-btn" onclick={onrefresh}>Retry</button>
       </div>
     {:else}
-      {#each entries as op (op.id)}
-        <div class="oplog-entry" class:oplog-current={op.is_current} oncontextmenu={(e) => handleEntryContextMenu(e, op)} role="row" tabindex="-1">
+      {#each entries as op, i (op.id)}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+          class="oplog-entry"
+          class:oplog-current={op.is_current}
+          class:selected={selectedIdx === i}
+          onclick={() => { selectedIdx = i }}
+          oncontextmenu={(e) => { e.preventDefault(); selectedIdx = i; openMenuFor(op, e.clientX, e.clientY) }}
+          role="option"
+          aria-selected={selectedIdx === i}
+          tabindex="-1"
+        >
           <span class="oplog-id">{op.id}</span>
           <span class="oplog-desc">{op.description}</span>
           <span class="oplog-time">{op.time}</span>
@@ -140,6 +194,14 @@
 
   .oplog-entry.oplog-current {
     background: var(--bg-checked);
+  }
+
+  .oplog-entry.selected {
+    background: var(--bg-selected);
+  }
+
+  .oplog-content:focus {
+    outline: none;
   }
 
   .oplog-id {

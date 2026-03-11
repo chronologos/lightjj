@@ -58,7 +58,7 @@
   import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt } from './lib/version'
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
   import WelcomeModal from './lib/WelcomeModal.svelte'
-  import { buildVisibilityRevset } from './lib/remote-visibility'
+  import { buildVisibilityRevset, revsetQuote } from './lib/remote-visibility'
 
   // --- Global state ---
   // initialState-hydrated vars: restored on tab-switch-back via AppShell's
@@ -141,7 +141,13 @@
   // viewMode is a discretization of revsetFilter, not independent state — the
   // filter is set by the visibility config effect. Typing anything else
   // auto-surfaces a "Custom" indicator.
-  let visibilityRevset = $derived(buildVisibilityRevset(config.remoteVisibility, bookmarksPanel.value))
+  //
+  // config.remoteVisibility is keyed by repo_path so tab A's toggles don't
+  // bleed into tab B. repoPath arrives via loadInfo() — until then the slice
+  // reads {} (no-remotes-visible) which is the feature's default anyway.
+  let repoPath = $state('')
+  let repoVisibility = $derived(config.remoteVisibility[repoPath] ?? {})
+  let visibilityRevset = $derived(buildVisibilityRevset(repoVisibility, bookmarksPanel.value))
   const viewMode = $derived(
     revsetFilter === '' || revsetFilter === visibilityRevset ? 'log' : 'custom'
   )
@@ -152,10 +158,15 @@
   // recomputes it with NEW visibilityRevset + OLD revsetFilter → 'custom' →
   // guard fails on every toggle after the first. untrack() blocks dep tracking,
   // not $derived lazy recomputation.
-  let prevVisibilityRevset = ''
+  //
+  // prev=undefined skips the FIRST fire: loadLog() at mount handles the initial
+  // load; firing handleRevsetSubmit here too is a wasted request. Subsequent
+  // fires (repoPath arriving with saved visibility, user toggle) work normally.
+  let prevVisibilityRevset: string | undefined = undefined
   $effect(() => {
     const vr = visibilityRevset
     untrack(() => {
+      if (prevVisibilityRevset === undefined) { prevVisibilityRevset = vr; return }
       if (revsetFilter === '' || revsetFilter === prevVisibilityRevset) {
         revsetFilter = vr
         handleRevsetSubmit()
@@ -522,6 +533,7 @@
       document.title = formatTitle(hostname, repo_path)
       editorConfigured = editor_configured
       defaultRemote = default_remote
+      repoPath = repo_path
     } catch { /* static <title> fallback + editorConfigured stays false (fail-safe) */ }
   }
 
@@ -792,12 +804,12 @@
     const select = activeView === 'branches' ? selectRevisionCursorOnly : selectRevision
     const idx = revisions.findIndex(r => r.commit.commit_id === commitId)
     if (idx >= 0) { select(idx); return }
-    // Not loaded: reload with bookmark revset. Bare name only works for
-    // local refs when the primary commit_id is the intended target. Any
-    // override or remote-only bookmark uses the commit_id directly (always
-    // valid revset, resolves to exactly one commit).
+    // Not loaded: reload with a context-preserving revset. | @ keeps the
+    // working copy visible for @-jump-back. commit_id is hex-safe unquoted;
+    // bookmark names can contain revset operators (@ in git refs) → revsetQuote.
     pendingSelectCommitId = commitId
-    revsetFilter = (bm.local && !overrideCommitId) ? bm.name : commitId
+    const target = (bm.local && !overrideCommitId) ? revsetQuote(bm.name) : commitId
+    revsetFilter = `ancestors(${target}, 20) | @`
     handleRevsetSubmit()
   }
 
@@ -1929,7 +1941,7 @@
             isDark={darkMode}
             {prByBookmark}
             {impliedCommitIds}
-            remoteVisibility={config.remoteVisibility}
+            remoteVisibility={repoVisibility}
           />
         </div>
 
@@ -1947,14 +1959,20 @@
             error={bookmarksPanel.error}
             {defaultRemote}
             {allRemotes}
-            remoteVisibility={config.remoteVisibility}
+            remoteVisibility={repoVisibility}
             {prByBookmark}
             graphCommitId={selectedRevision?.commit.commit_id}
             onjump={jumpToBookmark}
             onexecute={handleBookmarkOp}
             onrefresh={() => bookmarksPanel.load()}
             onclose={switchToLogView}
-            onvisibilitychange={(vis) => { config.remoteVisibility = vis }}
+            onvisibilitychange={async (vis) => {
+              // loadInfo() may have failed at mount (SSH slow-start); retry once
+              // here so toggles work after recovery instead of silently dropping.
+              if (!repoPath) await loadInfo()
+              if (!repoPath) return  // still failed — drop rather than write under '' key
+              config.remoteVisibility = { ...config.remoteVisibility, [repoPath]: vis }
+            }}
             oncontextmenu={showBookmarkContextMenu}
             ontrackmenu={showTrackMenu}
           />

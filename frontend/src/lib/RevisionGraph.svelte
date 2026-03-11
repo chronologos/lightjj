@@ -144,21 +144,6 @@
       : gutter.padEnd(maxGutterLen)
   }
 
-  // Bookmarks that appear on multiple entries get no lane tint (stay grey).
-  let multiBookmarks = $derived.by(() => {
-    const counts = new Map<string, number>()
-    for (const entry of revisions) {
-      for (const bm of entry.bookmarks ?? []) {
-        counts.set(bm, (counts.get(bm) ?? 0) + 1)
-      }
-    }
-    const multi = new Set<string>()
-    for (const [bm, count] of counts) {
-      if (count > 1) multi.add(bm)
-    }
-    return multi
-  })
-
   // Compute divergence offsets: for divergent commits sharing a change_id,
   // assign /0, /1, ... in jj's emission order (GlobalCommitPosition — NOT
   // commit_id sort; see divergence.go:65-68). `revisions` is already in that
@@ -506,20 +491,22 @@
                 <span class="workspace-badge">◇ {ws}@</span>
               {/each}
               {#each localBookmarks as bm}
-                {@const pr = prByBookmark.get(bm)}
-                {@const tinted = !!laneColorVar && !multiBookmarks.has(bm)}
+                {@const pr = prByBookmark.get(bm.name)}
+                {@const tinted = !!laneColorVar && !bm.conflict}
                 {#if pr}
-                  <a class="pr-badge" class:is-draft={pr.is_draft}
+                  <a class="pr-badge" class:is-draft={pr.is_draft} class:conflicted={bm.conflict}
                      href={pr.url} target="_blank" rel="noopener"
                      onclick={(e: MouseEvent) => e.stopPropagation()}
                      title="{pr.is_draft ? 'Draft ' : ''}PR #{pr.number} — click to open on GitHub"
                      style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}>
-                    <span class="pr-name">↗ {bm}</span>
+                    <span class="pr-name">↗ {bm.name}{#if bm.conflict}<span class="conflict-marker">??</span>{/if}</span>
                     <span class="pr-number">#{pr.number}</span>
                   </a>
                 {:else}
-                  <button class="bookmark-badge" onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm) }}
-                     style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}>⑂ {bm}</button>
+                  <button class="bookmark-badge" class:conflicted={bm.conflict}
+                     onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm.name) }}
+                     style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}
+                     title={bm.conflict ? 'Conflicted — this bookmark points at multiple commits' : undefined}>⑂ {bm.name}{#if bm.conflict}<span class="conflict-marker">??</span>{/if}</button>
                 {/if}
               {/each}
               {#each visibleRemoteBookmarks as ref}
@@ -1145,6 +1132,17 @@
   .pr-badge.is-draft {
     border-style: dashed;
     opacity: 0.75;
+  }
+
+  .bookmark-badge.conflicted,
+  .pr-badge.conflicted {
+    border-color: color-mix(in srgb, var(--red) 40%, transparent);
+  }
+
+  .conflict-marker {
+    color: var(--red);
+    font-weight: 600;
+    margin-left: 1px;
   }
 
   .pr-name {

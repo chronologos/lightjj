@@ -68,7 +68,7 @@ func TestHandleLog(t *testing.T) {
 	assert.Equal(t, 3, rows[0].Commit.CommitPrefix)
 	assert.True(t, rows[0].Commit.IsWorkingCopy)
 	assert.Equal(t, "my commit", rows[0].Description)
-	assert.Equal(t, []string{"main"}, rows[0].Bookmarks)
+	assert.Equal(t, []parser.LocalRef{{Name: "main"}}, rows[0].Bookmarks)
 }
 
 func TestHandleLog_Empty(t *testing.T) {

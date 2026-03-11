@@ -27,15 +27,22 @@ type RemoteRef struct {
 	Remote string `json:"remote"`
 }
 
+// LocalRef is a local bookmark with its conflict state. A conflicted bookmark
+// (jj's "??" decorator) points at multiple commits and appears on each of them.
+type LocalRef struct {
+	Name     string `json:"name"`
+	Conflict bool   `json:"conflict,omitempty"`
+}
+
 // GraphRow represents one revision in the log, with its graph lines and commit data.
 type GraphRow struct {
 	Commit      jj.Commit `json:"commit"`
 	Description string    `json:"description"`
-	// Bookmarks holds LOCAL bookmark names only (RefSymbol quotes stripped).
-	// Before the local/remote_bookmarks template split, this was a mixed array
-	// with `name@remote` strings — consumers had to parse them, and the naive
-	// @-split broke on git-side branch names containing `@`.
-	Bookmarks []string `json:"bookmarks,omitempty"`
+	// Bookmarks holds LOCAL bookmarks with conflict state (RefSymbol quotes
+	// stripped). Before the local/remote_bookmarks template split, this was a
+	// mixed array with `name@remote` strings — consumers had to parse them, and
+	// the naive @-split broke on git-side branch names containing `@`.
+	Bookmarks []LocalRef `json:"bookmarks,omitempty"`
 	// RemoteBookmarks holds remote refs split at parse time. The \x1E
 	// template separator never crosses the wire.
 	RemoteBookmarks []RemoteRef `json:"remote_bookmarks,omitempty"`
@@ -168,10 +175,11 @@ func parseNodeLine(line string) GraphRow {
 	}
 
 	// Bookmarks field (after SplitN(7) keeps tail unsplit) contains locals then
-	// remotes, all \x1F-joined. Remotes are `name\x1Eremote`; locals have no
-	// \x1E. RefSymbol quoting (`"name"`) is stripped — it's a template-output
-	// detail (jj quotes names with revset-special chars). The @git synthetic
-	// colocation remote is dropped here so no consumer needs to filter it.
+	// remotes, all \x1F-joined. Remotes are `name\x1Eremote`; locals are
+	// `name\x1Dconflict` (\x1E presence is the local/remote distinguisher).
+	// RefSymbol quoting (`"name"`) is stripped — it's a template-output detail
+	// (jj quotes names with revset-special chars). The @git synthetic colocation
+	// remote is dropped here so no consumer needs to filter it.
 	if len(parts) > 6 && parts[6] != "" {
 		for bm := range strings.SplitSeq(parts[6], "\x1f") {
 			bm = strings.TrimSpace(bm)
@@ -187,7 +195,11 @@ func parseNodeLine(line string) GraphRow {
 					Remote: remote,
 				})
 			} else {
-				row.Bookmarks = append(row.Bookmarks, stripRefQuotes(bm))
+				name, conflict, _ := strings.Cut(bm, "\x1d")
+				row.Bookmarks = append(row.Bookmarks, LocalRef{
+					Name:     stripRefQuotes(name),
+					Conflict: conflict == "true",
+				})
 			}
 		}
 	}
