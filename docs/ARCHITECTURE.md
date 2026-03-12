@@ -65,6 +65,7 @@ flowchart TD
 | GET | `/api/workspaces`, `/api/aliases`, `/api/pull-requests` | Environment info |
 | POST | `/api/new`, `/api/edit`, `/api/abandon`, `/api/undo`, `/api/commit` | Basic mutations |
 | POST | `/api/rebase`, `/api/squash`, `/api/split`, `/api/resolve` | Structured mutations |
+| POST | `/api/split-hunks` | Hunk-level split via `jj split --tool` binary re-entry. Local-only (501 in SSH — jj can't exec us on the remote). Spec is opaque `json.RawMessage` couriered to `apply_hunks.go`; 64MB body limit (carries synthesized file content). |
 | POST | `/api/describe` | Set description (uses `RunWithInput` for stdin) |
 | POST | `/api/bookmark/{set,delete,move,advance,forget,track,untrack}` | Bookmark ops |
 | POST | `/api/git/{push,fetch}` | Git remote ops (flag-whitelisted) |
@@ -283,11 +284,13 @@ flowchart TD
 
 | Layer | Count | Coverage |
 |-------|-------|----------|
-| Go unit | ~100 | Command builders, parsers (FilesTemplate, BookmarkList, GraphLog, WorkspaceList), models (`Commit.GetChangeId`, `SelectedRevisions`) |
-| Go handlers | ~180 | Every endpoint's happy path + validation (400) + runner error (500) via `runnerErrorTest` helper |
-| Go integration | ~30 | Build-tagged. CRUD journey, divergence resolution, diff-range file filtering, bookmark lifecycle |
-| Frontend logic | ~150 | api.ts cache/op-id, diff-parser, word-diff LCS, split-view alignment, loader races, mode factories |
-| Frontend component | ~150 | testing-library/svelte: render + fireEvent + DOM queries. Badge visibility, keyboard handlers, mode state, ARIA attrs |
+| Go unit | ~120 | Command builders, parsers (FilesTemplate, BookmarkList, GraphLog, WorkspaceList), models (`Commit.GetChangeId`, `SelectedRevisions`) |
+| Go handlers | ~230 | Every endpoint's happy path + validation (400) + runner error (500) via `runnerErrorTest` helper |
+| Go integration | ~35 | Build-tagged. CRUD journey, divergence resolution, diff-range file filtering, bookmark lifecycle |
+| Frontend pure logic | ~550 | **Extract-and-pin** modules (below) + api.ts cache/op-id, diff-parser, word-diff LCS, split-view alignment, loader races, mode factories |
+| Frontend component | ~350 | testing-library/svelte: render + fireEvent + DOM queries. Badge visibility, keyboard handlers, mode state, ARIA attrs |
+
+**Extract-and-pin.** The frontend mirror of "command builders are pure": when a Svelte component grows nontrivial position-math or decision logic, extract it to a zero-import-from-Svelte `.ts` module and pin it with invariant tests. The component shrinks to wire-up; the extracted function gets tested at a density the component never could. `merge-surgery.ts` (`planTake`/`remapBlock` — CM6 `Text` in, `{change, newTrack}` out; 51 tests including a take-ours→take-theirs round-trip that found a shipped separator-math bug on first run) and `divergence-refined.ts` (`computeRefinedKind` — 13-row decision table IS the spec) are the canonical examples. `divergence.ts:buildKeepPlan` has a generative sweep: 10 shapes × every valid `keeperIdx` × 7 structural invariants. `divergence.fixtures.ts` dedups the 11-field `DivergenceEntry` builder across 4 test files — adding a field is one edit, not four.
 
 **No E2E tests** — there's no Playwright/Cypress against a real backend. The closest is Go integration tests exercising the HTTP API directly, and component tests mounting individual Svelte components in jsdom.
 

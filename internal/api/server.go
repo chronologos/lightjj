@@ -29,6 +29,7 @@ type Server struct {
 	Hostname      string // display hostname for tab title (local os.Hostname or SSH host); main.go sets
 	RepoPath      string // display repo path for tab title (RepoDir or SSH remote path); main.go sets
 	SSHHost       string // full user@host spec for --remote mode (empty in local mode); feeds {host} placeholder
+	SelfBinary    string // os.Executable() — for --apply-hunks re-entry; empty in tests/SSH mode
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
@@ -95,6 +96,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/rebase", s.handleRebase)
 	s.Mux.HandleFunc("POST /api/squash", s.handleSquash)
 	s.Mux.HandleFunc("POST /api/split", s.handleSplit)
+	s.Mux.HandleFunc("POST /api/split-hunks", s.handleSplitHunks)
 	s.Mux.HandleFunc("POST /api/resolve", s.handleResolve)
 	s.Mux.HandleFunc("POST /api/undo", s.handleUndo)
 	s.Mux.HandleFunc("POST /api/op/undo", s.opMutation(jj.OpUndo))

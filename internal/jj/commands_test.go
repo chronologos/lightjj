@@ -198,6 +198,16 @@ func TestSplit_InteractiveNoMessage(t *testing.T) {
 	assert.NotContains(t, got, "-m")
 }
 
+func TestSplitWithTool(t *testing.T) {
+	got := SplitWithTool("abc", "/tmp/tool.toml", "fix: the bug")
+	want := []string{"split", "-r", "abc", "-m", "fix: the bug",
+		"--config-file", "/tmp/tool.toml", "--tool", "lightjj-hunks"}
+	assert.Equal(t, want, got)
+	// -m is load-bearing twice: suppresses $EDITOR (hang) AND preserves
+	// the description on the accepted-hunks commit (jj split -m sets the
+	// FIRST commit's message; second keeps original automatically).
+}
+
 func TestUndo(t *testing.T) {
 	assert.Equal(t, []string{"undo"}, Undo())
 }

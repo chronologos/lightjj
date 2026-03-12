@@ -866,6 +866,14 @@ export const api = {
   split: (revision: string, files: string[], parallel?: boolean) =>
     post<MutationResult>('/api/split', { revision, files, parallel }),
 
+  // Spec is the output of hunk-apply.ts:resolvePlan — handler is an opaque
+  // courier (json.RawMessage), schema is frontend↔apply_hunks.go. 501 in
+  // SSH mode; caller shows the error and user can file-toggle instead.
+  // Description: `jj split -m` sets the FIRST (accepted) commit's message;
+  // without it we'd wipe the description from the half that matters.
+  splitHunks: (revision: string, spec: import('./hunk-apply').HunkSpec, description: string) =>
+    post<MutationResult>('/api/split-hunks', { revision, spec, description }),
+
   squash: (revisions: string[], destination: string, opts?: {
     files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean, ignoreImmutable?: boolean
   }) =>

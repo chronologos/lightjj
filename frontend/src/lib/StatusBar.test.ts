@@ -173,18 +173,24 @@ describe('StatusBar', () => {
       expect(footer?.classList.contains('split-active')).toBe(true)
     })
 
-    it('shows review badge and accepted suffix when split.review is true', () => {
+    it('review mode: hunk count label + j/k/Space/a/n hints, no parallel', () => {
+      // Review mode is hunk-level since v1.x — splitFileCount now carries
+      // hunk counts, not file counts. The label says "hunks accepted" and
+      // the key hints show hunk-nav (j/k/Space/a/n) instead of parallel (p).
       const { container } = render(StatusBar, {
         props: defaultProps({ split: activeSplit(false, true), splitFileCount: { selected: 4, total: 6 } }),
       })
       const badge = container.querySelector('.mode-badge')
       expect(badge?.textContent).toBe('review')
       const fileCount = container.querySelector('.file-count')
-      expect(fileCount?.textContent).toBe('4/6 files accepted')
-      // parallel hint hidden in review mode — semantically unclear what "parallel review" means
-      const keys = container.querySelectorAll('.key:not(.action-key)')
-      const pKey = Array.from(keys).find(k => k.textContent === 'p')
-      expect(pKey).toBeUndefined()
+      expect(fileCount?.textContent).toBe('4/6 hunks accepted')
+
+      const keys = Array.from(container.querySelectorAll('.key:not(.action-key)'))
+        .map(k => k.textContent)
+      expect(keys).toContain('j')
+      expect(keys).toContain('Space')
+      expect(keys).toContain('a')
+      expect(keys).not.toContain('p')
     })
   })
 })

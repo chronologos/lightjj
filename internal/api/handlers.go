@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -925,6 +926,102 @@ func (s *Server) handleSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runMutation(w, r, jj.Split(req.Revision, req.Files, req.Parallel, false))
+}
+
+// hunkSpecRequest mirrors frontend's HunkSpec. The handler treats Spec as an
+// opaque json.RawMessage — it's the frontend↔apply_hunks.go contract; the
+// handler is just a courier. Schema changes there don't touch this file.
+type hunkSpecRequest struct {
+	Revision    string          `json:"revision"`
+	Spec        json.RawMessage `json:"spec"`
+	Description string          `json:"description"`
+}
+
+// Spec carries full synthesized file content for partials — can easily
+// exceed decodeBody's 1MB default on a large file. 64MB: enough for a
+// monorepo-scale commit, still bounded.
+const hunkSpecBodyLimit = 64 << 20
+
+func (s *Server) handleSplitHunks(w http.ResponseWriter, r *http.Request) {
+	// Local-only: jj must be able to exec our binary. In SSH mode the jj
+	// subprocess runs on the REMOTE host where this binary doesn't exist.
+	// RepoDir=="" is the SSH sentinel (see BACKLOG.md `RepoDir` debt note);
+	// SelfBinary=="" covers tests and any future mode that skips os.Executable.
+	if s.RepoDir == "" || s.SelfBinary == "" {
+		s.writeError(w, http.StatusNotImplemented, "hunk-level split requires local mode")
+		return
+	}
+
+	// decodeBody re-wraps with a 1MB MaxBytesReader unconditionally — our
+	// 64MB outer wrapper would be moot. Inline the decode.
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		s.writeError(w, http.StatusBadRequest, "Content-Type must be application/json")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, hunkSpecBodyLimit)
+	defer r.Body.Close()
+	var req hunkSpecRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	if len(req.Spec) == 0 {
+		s.writeError(w, http.StatusBadRequest, "spec is required")
+		return
+	}
+
+	// Two tempfiles: the spec (JSON, consumed by apply_hunks.go) and the
+	// tool config (TOML, consumed by jj). Both in os.TempDir — jj will
+	// create its OWN temp dir for $left/$right alongside these.
+	// CreateTemp is 0600 since Go 1.11 (go.mod requires 1.25+) — a
+	// same-user racer can still stat/read but the threat is bounded:
+	// that user can run `jj` directly anyway.
+	specFile, err := os.CreateTemp("", "lightjj-spec-*.json")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("tempfile: %v", err))
+		return
+	}
+	defer os.Remove(specFile.Name())
+	if _, err := specFile.Write(req.Spec); err != nil {
+		specFile.Close()
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("write spec: %v", err))
+		return
+	}
+	specFile.Close()
+
+	configFile, err := writeHunkToolConfig(s.SelfBinary, specFile.Name())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("write tool config: %v", err))
+		return
+	}
+	defer os.Remove(configFile)
+
+	s.runMutation(w, r, jj.SplitWithTool(req.Revision, configFile, req.Description))
+}
+
+// writeHunkToolConfig emits an ephemeral merge-tools TOML definition.
+// %q for the path values — Go's strconv.Quote escapes (\" \\ \n etc) are a
+// subset of TOML basic-string escapes for any path that doesn't contain
+// control chars (which filesystem paths don't). This avoids a TOML encoder
+// dep for three lines of config.
+func writeHunkToolConfig(selfBinary, specPath string) (string, error) {
+	f, err := os.CreateTemp("", "lightjj-tool-*.toml")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f,
+		"[merge-tools.lightjj-hunks]\nprogram = %q\nedit-args = [%q, \"$left\", \"$right\"]\n",
+		selfBinary, "--apply-hunks="+specPath)
+	if err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func (s *Server) handleGitFetch(w http.ResponseWriter, r *http.Request) {

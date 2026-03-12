@@ -1708,6 +1708,106 @@ func TestHandleSplit_RunnerError(t *testing.T) {
 	assert.Equal(t, "split failed", resp["error"])
 }
 
+// --- SplitHunks handler tests ---
+//
+// Happy-path is NOT tested here: the jj.SplitWithTool args contain a
+// non-deterministic tempfile path, so MockRunner.Expect can't match exactly.
+// Instead the three pieces are tested in isolation — SplitWithTool (commands_test),
+// writeHunkToolConfig (below), applyHunkSpec (cmd/lightjj/apply_hunks_test) —
+// and the handler wiring is the same decodeBody→validate→runMutation shape as
+// every other mutation handler. If a predicate-matcher lands in testutil,
+// revisit.
+
+func TestHandleSplitHunks_SSHMode501(t *testing.T) {
+	// RepoDir="" is the SSH sentinel. newTestServer already uses "" so
+	// this test is nearly free — just asserting the gate fires BEFORE any
+	// body parsing (body is garbage on purpose).
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+
+	srv := newTestServer(runner) // RepoDir="", SelfBinary=""
+	req := jsonPost("/api/split-hunks", []byte(`garbage`))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code)
+}
+
+func TestHandleSplitHunks_NoSelfBinary501(t *testing.T) {
+	// RepoDir set but SelfBinary not — covers os.Executable() failure.
+	// Distinct from SSH mode: local fs is available but we can't tell jj
+	// what to invoke.
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = "/some/repo" // not SSH
+	// SelfBinary stays ""
+
+	req := jsonPost("/api/split-hunks", []byte(`{"revision":"abc","spec":{"files":[]}}`))
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code)
+}
+
+func TestHandleSplitHunks_Validation(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = "/some/repo"
+	srv.SelfBinary = "/bin/true" // exists, won't be exec'd (validation fails first)
+
+	cases := []struct {
+		name, body string
+	}{
+		{"missing revision", `{"spec":{"files":[]}}`},
+		{"missing spec", `{"revision":"abc"}`},
+		{"bad json", `{`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, jsonPost("/api/split-hunks", []byte(tc.body)))
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
+func TestWriteHunkToolConfig(t *testing.T) {
+	path, err := writeHunkToolConfig("/usr/local/bin/lightjj", "/tmp/spec-abc.json")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Remove(path) })
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	got := string(raw)
+
+	// Assert exact structure — if the TOML shape drifts, jj won't find the
+	// merge-tools entry and the error surfaces as a cryptic "tool not
+	// found" at runtime, not a test failure.
+	assert.Contains(t, got, "[merge-tools.lightjj-hunks]")
+	assert.Contains(t, got, `program = "/usr/local/bin/lightjj"`)
+	assert.Contains(t, got, `"--apply-hunks=/tmp/spec-abc.json"`)
+	// $left/$right are jj's placeholder literals — UNquoted inside the
+	// array would break; they must be TOML string values jj substitutes.
+	assert.Contains(t, got, `"$left"`)
+	assert.Contains(t, got, `"$right"`)
+}
+
+func TestWriteHunkToolConfig_PathEscaping(t *testing.T) {
+	// %q escapes backslashes — the one case that matters on the platforms
+	// we'd actually see (no control chars in real paths). This is the
+	// "Windows if we ever care" insurance.
+	path, err := writeHunkToolConfig(`C:\Program Files\lightjj.exe`, "/tmp/s.json")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Remove(path) })
+
+	raw, _ := os.ReadFile(path)
+	assert.Contains(t, string(raw), `"C:\\Program Files\\lightjj.exe"`)
+}
+
 // --- Resolve handler tests ---
 
 func TestHandleResolve(t *testing.T) {

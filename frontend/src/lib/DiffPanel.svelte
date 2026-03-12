@@ -38,9 +38,18 @@
     header?: Snippet
     /** When truthy, shows the file-selection panel (checkbox list). The string
      *  value drives title/count labels. `false` = normal diff view. */
-    fileSelectionMode: 'squash' | 'split' | 'review' | false
+    fileSelectionMode: 'squash' | 'split' | false
     selectedFiles: SvelteSet<string>
     ontogglefile: (path: string) => void
+    /** Hunk-level review state. When non-null the diff IS the selection UI:
+     *  hunk headers get checkboxes, rejected hunks dim, cursor shows amber
+     *  ring. FileSelectionPanel stays unmounted (mutually exclusive with
+     *  fileSelectionMode). Context-expand is gated off (expanded context
+     *  merges adjacent hunks → invalidates selection keys). Split-view is
+     *  forced to unified (the checkbox/cursor/dim DOM is only wired into
+     *  the unified branch — wiring split-view too is possible but doubles
+     *  the surface for a mode where unified is arguably clearer anyway). */
+    hunkReview?: import('./DiffFileView.svelte').HunkReviewState | null
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
      *  Returns undefined if blocked (another mutation in flight). */
@@ -56,7 +65,7 @@
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, splitView = $bindable(false), header,
-    fileSelectionMode, selectedFiles, ontogglefile,
+    fileSelectionMode, selectedFiles, ontogglefile, hunkReview = null,
     onfilesaved, onjjmutation, oncontextmenu, onopenfile,
   }: Props = $props()
 
@@ -1104,11 +1113,12 @@
             fileStats={fileStatsMap.get(filePath)}
             isCollapsed={collapsedFiles.has(filePath)}
             isExpanded={expandedDiffs.has(filePath)}
-            {splitView}
+            splitView={hunkReview ? false : splitView}
+            {hunkReview}
             highlightedLines={highlights.byFile.get(filePath) ?? EMPTY_HL}
             wordDiffs={wordDiffs.byFile.get(filePath) ?? EMPTY_WD}
             ontoggle={toggleFile}
-            onexpand={expandFile}
+            onexpand={hunkReview ? undefined : expandFile}
             searchMatches={matchesByFile.get(filePath) ?? EMPTY_MATCHES}
             {currentMatchIdx}
             editing={editingFiles.has(filePath)}

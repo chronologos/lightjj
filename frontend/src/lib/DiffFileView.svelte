@@ -4,6 +4,7 @@
   import type { WordSpan } from './word-diff'
   import type { FileChange, Annotation } from './api'
   import { findConflicts } from './conflict-parser'
+  import { hunkKey, fileSelectionState, type SelectionState } from './hunk-apply'
   import type { SearchMatch } from './DiffPanel.svelte'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
   import FileEditor from './FileEditor.svelte'
@@ -17,7 +18,7 @@
     highlightedLines: Map<string, string>
     wordDiffs: Map<string, Map<number, WordSpan[]>>
     ontoggle: (path: string) => void
-    onexpand: (path: string) => void
+    onexpand?: (path: string) => void
     onmerge?: (file: string) => void
     searchMatches?: { item: SearchMatch; index: number }[]
     currentMatchIdx?: number
@@ -45,6 +46,20 @@
      *  click event (for positioning the bubble). Also fires on left-click of
      *  an unannotated line when Alt is held — quick-annotate shortcut. */
     onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent) => void
+    /** Hunk-level review. When non-null: hunk headers grow checkboxes,
+     *  rejected hunks dim to 0.4 (the dimming IS the preview — dimmed =
+     *  what moves to the child commit), cursor hunk gets amber ring +
+     *  scrollIntoView, file header shows tri-state ◐/●/○. onexpand is
+     *  already undefined in this mode (DiffPanel gates it — context
+     *  expansion merges adjacent hunks → invalidates keys). */
+    hunkReview?: HunkReviewState | null
+  }
+
+  export interface HunkReviewState {
+    selected: ReadonlySet<string>
+    cursor: { path: string; idx: number } | null
+    toggle: (path: string, idx: number) => void
+    toggleFile: (path: string) => void
   }
 
   export interface DiffLineInfo {
@@ -52,7 +67,24 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick, hunkReview = null }: Props = $props()
+
+  // ── Hunk review derived state ────────────────────────────────────────────
+  let reviewFileState: SelectionState | null = $derived(
+    hunkReview ? fileSelectionState(file, hunkReview.selected) : null
+  )
+  const REVIEW_GLYPH = { all: '●', none: '○', some: '◐' } as const
+
+  // Cursor scrollIntoView — only fires when cursor lands on THIS file.
+  // `block: 'nearest'` keeps visible hunks from jumping; `data-hunk` queried
+  // because the hunk header element is deep in the unified-view each.
+  let fileEl: HTMLElement | undefined = $state(undefined)
+  $effect(() => {
+    if (!hunkReview?.cursor || hunkReview.cursor.path !== filePath) return
+    const idx = hunkReview.cursor.idx
+    fileEl?.querySelector(`[data-hunk="${idx}"]`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
 
   let editorRef: FileEditor | undefined = $state(undefined)
 
@@ -265,8 +297,8 @@
         : { label: onopenfile ? 'Open in editor' : 'Open in editor (not configured)', disabled: true },
       { separator: true },
     ]
-    if (!isExpanded) {
-      items.push({ label: 'Expand full context', action: () => onexpand(filePath) })
+    if (!isExpanded && onexpand) {
+      items.push({ label: 'Expand full context', action: () => onexpand?.(filePath) })
     }
     items.push({ label: isCollapsed ? 'Expand' : 'Collapse', action: () => ontoggle(filePath) })
     if (ondiscard) {
@@ -413,7 +445,7 @@
   {/if}
 {/snippet}
 
-<div class="diff-file" data-file-path={filePath}>
+<div class="diff-file" data-file-path={filePath} bind:this={fileEl} class:hunk-reviewing={!!hunkReview}>
   <div
     class="diff-file-header"
     onclick={() => ontoggle(filePath)}
@@ -424,7 +456,21 @@
     aria-label="{isCollapsed ? 'Expand' : 'Collapse'} {filePath}"
     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ontoggle(filePath) }}}
   >
-    <span class="collapse-icon" class:is-collapsed={isCollapsed} aria-hidden="true"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1L6 4L2 7z"/></svg></span>
+    {#if reviewFileState}
+      <!-- Tri-state glyph replaces collapse chevron in review mode. Click
+           toggles all↔none (some→all); stopPropagation keeps the file from
+           collapsing (default header click). -->
+      <button
+        class="review-file-glyph"
+        class:rfg-all={reviewFileState === 'all'}
+        class:rfg-none={reviewFileState === 'none'}
+        onclick={(e: MouseEvent) => { e.stopPropagation(); hunkReview?.toggleFile(filePath) }}
+        title="{reviewFileState === 'all' ? 'All accepted' : reviewFileState === 'none' ? 'All rejected' : 'Partially accepted'} — click to toggle all"
+        aria-label="Toggle all hunks in {filePath}"
+      >{REVIEW_GLYPH[reviewFileState]}</button>
+    {:else}
+      <span class="collapse-icon" class:is-collapsed={isCollapsed} aria-hidden="true"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1L6 4L2 7z"/></svg></span>
+    {/if}
     {#if fileStats}
       <span class="file-type-badge" class:badge-A={fileStats.type === 'A'} class:badge-M={fileStats.type === 'M'} class:badge-D={fileStats.type === 'D'} class:badge-R={fileStats.type === 'R'}>{fileStats.type}</span>
     {/if}
@@ -472,7 +518,7 @@
     {#if effectiveSplit}
       <!-- Split (side-by-side) view -->
       {#if !isExpanded && hasHiddenContext}
-        <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show full context for {filePath}">
+        <button class="expand-btn" onclick={() => onexpand?.(filePath)} aria-label="Show full context for {filePath}">
           <span class="expand-dots" aria-hidden="true">···</span>
           <span class="expand-label">full context</span>
         </button>
@@ -524,9 +570,11 @@
       <!-- Unified view -->
       {#each file.hunks as hunk, hunkIdx}
         {@const hunkWordDiffs = wordDiffs.get(String(hunkIdx)) ?? new Map()}
+        {@const hunkAccepted = hunkReview ? hunkReview.selected.has(hunkKey(filePath, hunkIdx)) : true}
+        {@const hunkIsCursor = hunkReview?.cursor?.path === filePath && hunkReview.cursor.idx === hunkIdx}
         {#if !isExpanded}
           {#if hunkIdx === 0 && hunk.newStart > 1}
-            <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show {hunk.newStart - 1} hidden lines above">
+            <button class="expand-btn" onclick={() => onexpand?.(filePath)} aria-label="Show {hunk.newStart - 1} hidden lines above">
               <span class="expand-dots" aria-hidden="true">···</span>
               <span class="expand-label">{hunk.newStart - 1} lines</span>
             </button>
@@ -535,20 +583,36 @@
             {@const prev = file.hunks[hunkIdx - 1]}
             {@const gap = hunk.newStart - (prev.newStart + prev.newCount)}
             {#if gap > 0}
-              <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show {gap} hidden lines">
+              <button class="expand-btn" onclick={() => onexpand?.(filePath)} aria-label="Show {gap} hidden lines">
                 <span class="expand-dots" aria-hidden="true">···</span>
                 <span class="expand-label">{gap} lines</span>
               </button>
             {/if}
           {/if}
           {@const parsed = parsedHunkHeaders[hunkIdx]}
-          <div class="diff-hunk-header">
+          <div
+            class="diff-hunk-header"
+            class:hunk-cursor={hunkIsCursor}
+            data-hunk={hunkIdx}
+          >
+            {#if hunkReview}
+              <button
+                class="hunk-check"
+                class:hunk-check-on={hunkAccepted}
+                onclick={() => hunkReview?.toggle(filePath, hunkIdx)}
+                aria-pressed={hunkAccepted}
+                aria-label="{hunkAccepted ? 'Accepted' : 'Rejected'} — hunk {hunkIdx + 1}"
+              >{hunkAccepted ? '✓' : ' '}</button>
+            {/if}
             <span class="hunk-range">{parsed.range}</span>
             {#if parsed.context}<span class="hunk-context">{parsed.context}</span>{/if}
+            {#if hunkReview && !hunkAccepted}
+              <span class="hunk-rejected-label">rejected</span>
+            {/if}
           </div>
         {/if}
         {@const lineNums = lineNumsByHunk[hunkIdx]}
-        <div class="diff-lines">
+        <div class="diff-lines" class:hunk-dim={hunkReview && !hunkAccepted}>
           {#each hunk.lines as line, lineIdx}
             {@const hlKey = `${filePath}:${hunkIdx}:${lineIdx}`}
             {@const spans = hunkWordDiffs.get(lineIdx)}
@@ -590,7 +654,7 @@
              (newStart=1) has hidden trailing lines but hasHiddenContext
              misses it. Showing the button when there IS no trailing context
              is harmless — expanded view just shows the same hunk. -->
-        <button class="expand-btn" onclick={() => onexpand(filePath)} aria-label="Show full file context">
+        <button class="expand-btn" onclick={() => onexpand?.(filePath)} aria-label="Show full file context">
           <span class="expand-dots" aria-hidden="true">···</span>
           <span class="expand-label">rest of file</span>
         </button>
@@ -646,6 +710,89 @@
   .collapse-icon.is-collapsed {
     transform: rotate(0deg);
   }
+
+  /* ── Hunk review UI ─────────────────────────────────────────────────── */
+
+  .review-file-glyph {
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--amber);
+    flex-shrink: 0;
+    transition: transform var(--anim-duration) var(--anim-ease);
+  }
+  .review-file-glyph:hover { transform: scale(1.2); }
+  .review-file-glyph.rfg-none { color: var(--overlay0); }
+  /* ◐ (some) uses default amber — "work in progress" signal */
+
+  .hunk-check {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin-right: 6px;
+    border: 1px solid var(--surface1);
+    border-radius: 3px;
+    background: var(--mantle);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    color: transparent;
+    flex-shrink: 0;
+    transition: background var(--anim-duration) var(--anim-ease),
+                border-color var(--anim-duration) var(--anim-ease),
+                color var(--anim-duration) var(--anim-ease);
+  }
+  .hunk-check:hover { border-color: var(--surface2); }
+  .hunk-check.hunk-check-on {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--base);
+  }
+
+  .diff-hunk-header.hunk-cursor {
+    /* Amber ring — mirrors RevisionGraph's selected-row left-border. sticky
+       header + scroll-margin-top keeps the cursor visible below the file
+       header when scrollIntoView fires. */
+    box-shadow: inset 2px 0 0 var(--amber), inset 0 0 0 1px var(--amber);
+    background: var(--bg-selected);
+    scroll-margin-top: 36px;
+  }
+
+  .hunk-rejected-label {
+    margin-left: auto;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--overlay0);
+    border: 1px solid var(--surface0);
+    border-radius: 3px;
+  }
+
+  /* The dimming IS the preview: 0.4 opacity = "this moves to the child
+     commit". Desaturate avoids rejected-green-add reading as accepted.
+     Transition is the one micro-interaction that sells the accept/reject —
+     Space feels like a physical gate closing. */
+  .diff-lines.hunk-dim {
+    opacity: 0.4;
+    filter: grayscale(0.5);
+    transition: opacity var(--anim-duration) var(--anim-ease),
+                filter var(--anim-duration) var(--anim-ease);
+  }
+
+  /* In review mode, expand buttons are gated off (onexpand=undefined) —
+     hide the leftover ··· button shells. Context expansion would merge
+     adjacent hunks and invalidate selectedHunks keys. */
+  .hunk-reviewing .expand-btn { display: none; }
 
   .file-type-badge {
     font-size: 10px;
