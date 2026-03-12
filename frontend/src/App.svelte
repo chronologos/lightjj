@@ -35,7 +35,8 @@
 
   import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
-  import { clearDiffCaches } from './lib/diff-cache'
+  import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
+  import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
@@ -242,6 +243,12 @@
   const divergence = createDivergenceMode()
   let selectedFiles = new SvelteSet<string>()
   let totalFileCount: number = $state(0) // snapshot of file count at entry time
+
+  // Hunk-level review state (split.review=true). Keys are hunkKey(path, idx).
+  // Lives here (not in modes.svelte.ts) same as selectedFiles — mode factories
+  // own the boolean flags, App owns the selection sets.
+  let selectedHunks = new SvelteSet<string>()
+  let hunkCursor: number = $state(0)
 
   // Runtime guard: TabState is in-memory (AppShell), not disk, so stale
   // 'operations' from before the type narrowing can only occur via HMR.
@@ -1332,26 +1339,110 @@
     }
   }
 
+  // ── Hunk-level review support ────────────────────────────────────────────
+  // parseDiffCached keys by diffContent string — same object instance as
+  // DiffPanel's parse, zero cost. Gated on split.review so normal nav never
+  // derives this. Flat list for j/k bounds + Space target.
+  let reviewParsedDiff = $derived(split.review ? parseDiffCached(diffContent) : [])
+  let allHunks = $derived(reviewParsedDiff.flatMap(f =>
+    f.hunks.map((_, i) => ({ path: f.filePath, idx: i, key: hunkKey(f.filePath, i) }))
+  ))
+
+  // Passed to DiffPanel → DiffFileView. Bundled object (not 4 loose props)
+  // follows the mode-objects convention — RevisionGraph gets {rebase,squash,split}
+  // the same way.
+  let hunkReview = $derived(split.review ? {
+    selected: selectedHunks,
+    cursor: allHunks[hunkCursor] ?? null,
+    toggle: (path: string, idx: number) => {
+      const k = hunkKey(path, idx)
+      selectedHunks.has(k) ? selectedHunks.delete(k) : selectedHunks.add(k)
+    },
+    toggleFile: (path: string) => {
+      // Tri-state cycle: all→none, none→all, some→all (gather remaining)
+      const file = reviewParsedDiff.find(f => f.filePath === path)
+      if (!file) return
+      const st = fileSelectionState(file, selectedHunks)
+      for (let i = 0; i < file.hunks.length; i++) {
+        const k = hunkKey(path, i)
+        st === 'all' ? selectedHunks.delete(k) : selectedHunks.add(k)
+      }
+    },
+  } : null)
+
+  // Swallows EVERYTHING — returning false would let unhandled keys fall
+  // through to split.handleKey (which toggles 'p' parallel — meaningless in
+  // review and confusing when the StatusBar indicator silently flips).
+  function handleReviewKey(key: string): boolean {
+    const cur = allHunks[hunkCursor]
+    switch (key) {
+      case 'j': if (hunkCursor < allHunks.length - 1) hunkCursor++; break
+      case 'k': if (hunkCursor > 0) hunkCursor--; break
+      case ' ': {
+        if (!cur) break
+        const k = cur.key
+        selectedHunks.has(k) ? selectedHunks.delete(k) : selectedHunks.add(k)
+        break
+      }
+      case 'a': case 'n': {
+        if (!cur) break
+        for (const h of allHunks) {
+          if (h.path !== cur.path) continue
+          key === 'a' ? selectedHunks.add(h.key) : selectedHunks.delete(h.key)
+        }
+        break
+      }
+      case 'A': for (const h of allHunks) selectedHunks.add(h.key); break
+      case 'N': selectedHunks.clear(); break
+    }
+    return true
+  }
+
+  // SSE-triggered diff reload during review → allHunks recomputes → keys no
+  // longer correspond to the same hunks (different hunk count, different
+  // oldStart positions). Half-complete selection against a moved target is
+  // the same footgun as "inline modes not preserved across tabs". Kick out.
+  let reviewDiffSnapshot: string = $state('')
+  $effect(() => {
+    if (!split.review) { reviewDiffSnapshot = ''; return }
+    if (reviewDiffSnapshot === '') { reviewDiffSnapshot = diffContent; return }
+    if (reviewDiffSnapshot !== diffContent) {
+      cancelInlineModes()
+      setMessage({ kind: 'warning', text: 'Review cancelled — revision changed underneath' })
+    }
+  })
+
   function enterSplitMode(asReview = false) {
     if (!selectedRevision || checkedRevisions.size > 0 || files.loading) return
     cancelInlineModes()
     if (!switchToLogView()) return
-    for (const f of changedFiles) selectedFiles.add(f.path)
-    totalFileCount = changedFiles.length
+    if (asReview) {
+      // Seed all-accepted. parseDiffCached is already warm (DiffPanel parsed
+      // this diff when the user navigated here). reviewParsedDiff isn't
+      // derived yet (split.review still false), so parse directly.
+      for (const f of parseDiffCached(diffContent)) {
+        for (let i = 0; i < f.hunks.length; i++) selectedHunks.add(hunkKey(f.filePath, i))
+      }
+      hunkCursor = 0
+    } else {
+      for (const f of changedFiles) selectedFiles.add(f.path)
+      totalFileCount = changedFiles.length
+    }
     split.enter(effectiveId(selectedRevision.commit), asReview)
   }
   const enterReviewMode = () => enterSplitMode(true)
 
   async function executeSplit() {
     if (!split.revision) return
-    const reviewing = split.review
-    // Validate: at least one file must stay (checked) and one must move (unchecked)
+    if (split.review) return executeHunkReview()
+
+    // File-level split (unchanged)
     if (selectedFiles.size === totalFileCount) {
-      setMessage({ kind: 'warning', text: reviewing ? 'Uncheck at least one file to reject' : 'Uncheck at least one file to split out' })
+      setMessage({ kind: 'warning', text: 'Uncheck at least one file to split out' })
       return
     }
     if (selectedFiles.size === 0) {
-      setMessage({ kind: 'warning', text: reviewing ? 'Accept at least one file' : 'Select at least one file to keep' })
+      setMessage({ kind: 'warning', text: 'Select at least one file to keep' })
       return
     }
     return withMutation(async () => {
@@ -1360,14 +1451,92 @@
         const revision = split.revision
         const result = await api.split(revision, files, split.parallel || undefined)
         cancelInlineModes()
-        const msg = reviewing
-          ? `Reviewed ${revision.slice(0, 8)} (${files.length} accepted)`
-          : `Split ${revision.slice(0, 8)} (${files.length} files stay)`
-        setMessage(mutationMessage(msg, result))
+        setMessage(mutationMessage(`Split ${revision.slice(0, 8)} (${files.length} files stay)`, result))
         clearChecks()
         await loadLog()
       } catch (e) {
-        // Keep split mode active so user can retry or Escape
+        showError(e)
+      }
+    })
+  }
+
+  async function executeHunkReview() {
+    const total = allHunks.length
+    if (selectedHunks.size === total) {
+      setMessage({ kind: 'warning', text: 'Reject at least one hunk (Space to toggle)' })
+      return
+    }
+    if (selectedHunks.size === 0) {
+      setMessage({ kind: 'warning', text: 'Accept at least one hunk' })
+      return
+    }
+
+    const revision = split.revision
+    const typeOf = (path: string) => normalizeFileType(
+      changedFiles.find(f => f.path === path)?.type ?? 'M'
+    )
+    const plan = planHunkSpec(reviewParsedDiff, selectedHunks, typeOf)
+
+    // No partials → every file is all-or-none → file-level split is exact
+    // AND works in SSH. Free optimization; also the only path SSH can take.
+    if (plan.partials.length === 0) {
+      const accepted = reviewParsedDiff
+        .filter(f => fileSelectionState(f, selectedHunks) === 'all')
+        .map(f => f.filePath)
+      return withMutation(async () => {
+        try {
+          const result = await api.split(revision, accepted)
+          cancelInlineModes()
+          setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${selectedHunks.size}/${total} hunks)`, result))
+          clearChecks()
+          await loadLog()
+        } catch (e) { showError(e) }
+      })
+    }
+
+    // Partials need left-content for forward-patching. For single-parent
+    // commits, jj's $left === parent tree === api.fileShow(parentId) — safe.
+    //
+    // Merge commits: jj's $left is the AUTO-MERGED tree (tree-merge of all
+    // parents, possibly with conflict markers), NOT parent[0]. Verified by
+    // probe — `jj split --tool` on a merge materializes $left with `<<<<<<<`
+    // markers when the auto-merge conflicts. api.fileShow(parents[0]) returns
+    // a DIFFERENT tree → applyHunks aligns hunks computed against an N-line
+    // auto-merge onto a K-line parent → silently corrupt output. Block it.
+    // File-level (no-partials fallback above) still works for merges.
+    const parents = selectedRevision?.commit.parent_ids ?? []
+    if (parents.length > 1) {
+      setMessage({ kind: 'warning',
+        text: "Per-hunk review on merge commits isn't supported. Use a/n to toggle whole files." })
+      return
+    }
+    const parentId = parents[0]
+    if (!parentId) {
+      setMessage({ kind: 'error', text: 'Cannot review root commit at hunk level' })
+      return
+    }
+
+    return withMutation(async () => {
+      try {
+        const lefts = new Map<string, string>()
+        await Promise.all(plan.partials
+          .filter(p => !p.leftIsEmpty)
+          .map(p => api.fileShow(parentId, p.path)
+            .then(r => lefts.set(p.path, r.content))))
+
+        const spec = resolvePlan(plan, lefts)
+        // `jj split -m X` sets the FIRST (selected=accepted) commit's
+        // description; the second keeps the original. `-m ""` would wipe the
+        // accepted commit's description → user loses their message on the
+        // half that matters. Pass what we already have loaded.
+        const result = await api.splitHunks(revision, spec, fullDescription)
+        cancelInlineModes()
+        setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${selectedHunks.size}/${total} hunks)`, result))
+        clearChecks()
+        await loadLog()
+      } catch (e) {
+        // 501 in SSH lands here with a clear backend message. User can
+        // a/n to whole-file granularity and Enter again.
         showError(e)
       }
     })
@@ -1379,8 +1548,15 @@
   })
 
   let splitFileCount = $derived.by(() => {
-    if (!split.active || totalFileCount === 0) return null
-    return { selected: selectedFiles.size, total: totalFileCount }
+    if (!split.active) return null
+    if (split.review) {
+      return allHunks.length > 0
+        ? { selected: selectedHunks.size, total: allHunks.length }
+        : null
+    }
+    return totalFileCount > 0
+      ? { selected: selectedFiles.size, total: totalFileCount }
+      : null
   })
 
   function closeModals() {
@@ -1401,6 +1577,8 @@
     divergence.cancel()
     selectedFiles.clear()
     totalFileCount = 0
+    selectedHunks.clear()
+    hunkCursor = 0
     // Restore focus to the revision list so j/k keys work immediately
     blurActiveInput()
   }
@@ -1567,6 +1745,11 @@
   // full selectRevision (diff follows — destination preview). Split has NO j/k
   // (operates on a fixed revision).
   function handleInlineNav(e: KeyboardEvent): void {
+    // Hunk-review j/k/Space/a/n/A/N take over. Routed here (not in
+    // split.handleKey) because the hunk list + selection set live in App,
+    // not the mode factory — same reason selectedFiles isn't in the factory.
+    if (split.review && handleReviewKey(e.key)) { e.preventDefault(); return }
+
     const [mode, jk] = split.active ? [split, undefined] as const
                      : squash.active ? [squash, selectRevisionCursorOnly] as const
                      : [rebase, selectRevision] as const
@@ -2011,7 +2194,8 @@
             diffTarget={loadedTarget}
             {diffLoading}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
-            fileSelectionMode={squash.active ? 'squash' : split.active ? (split.review ? 'review' : 'split') : false}
+            fileSelectionMode={squash.active ? 'squash' : (split.active && !split.review) ? 'split' : false}
+            {hunkReview}
             {selectedFiles}
             ontogglefile={toggleFileSelection}
             onfilesaved={loadLog}

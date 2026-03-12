@@ -51,10 +51,29 @@ func main() {
 	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
 	defaultRemote := flag.String("default-remote", "", "Remote name to prefer (overrides jj config git.push; defaults to origin)")
 	autoShutdown := flag.Duration("auto-shutdown", 0, "Shut down after this `duration` with no browser tabs connected (0 to disable)")
+	applyHunks := flag.String("apply-hunks", "", "Internal: diff-editor re-entry. Args: <spec.json> $left $right")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("lightjj v%s\n", resolvedVersion())
+		return
+	}
+
+	// Diff-editor re-entry. jj invokes us as:
+	//   lightjj --apply-hunks=<spec> $left $right
+	// Server flags are at their defaults — unused. flag.Args() holds the
+	// two positional dirs jj passes. Errors go to stderr (jj captures and
+	// surfaces them); nonzero exit aborts the split so jj rolls back.
+	if *applyHunks != "" {
+		args := flag.Args()
+		if len(args) != 2 {
+			fmt.Fprintf(os.Stderr, "apply-hunks: expected $left $right, got %d args\n", len(args))
+			os.Exit(1)
+		}
+		if err := applyHunkSpec(*applyHunks, args[0], args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "apply-hunks: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -110,8 +129,19 @@ func main() {
 	// the dynamic-tab factory call this — adding a new Server field here
 	// (and only here) keeps the two paths in sync. isSSH selects watcher
 	// mode: local fsnotify vs SSH op-id polling.
+	// Resolved once — all tabs share the same binary. Empty in SSH mode
+	// (where diff-editor re-entry is unavailable anyway) and on the rare
+	// Executable() failure (handleSplitHunks checks and returns 501).
+	var selfBinary string
+	if sshRunner == nil {
+		if exe, err := os.Executable(); err == nil {
+			selfBinary = exe
+		}
+	}
+
 	makeServer := func(r runner.CommandRunner, repoDir, repoPath string, isSSH bool) *api.Server {
 		s := api.NewServer(r, repoDir) // DefaultRemote = "origin"
+		s.SelfBinary = selfBinary
 		// Priority: explicit --default-remote flag > jj config git.push > "origin".
 		// jj config is per-repo, so tabs on different repos get different defaults.
 		// One extra round trip at tab-open (~20ms local, ~440ms SSH — acceptable).

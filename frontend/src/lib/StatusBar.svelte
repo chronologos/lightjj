@@ -34,8 +34,14 @@
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
       </span>
-      {#if !split.review}
-        <span class="key-divider"></span>
+      <span class="key-divider"></span>
+      {#if split.review}
+        <span class="key-group">
+          <kbd class="key">j</kbd><kbd class="key">k</kbd><span class="key-label">hunk</span>
+          <kbd class="key">Space</kbd><span class="key-label">toggle</span>
+          <kbd class="key">a</kbd><kbd class="key">n</kbd><span class="key-label">file</span>
+        </span>
+      {:else}
         <span class="key-group">
           <kbd class="key" class:key-active={split.parallel}>p</kbd><span class="key-label" class:key-label-active={split.parallel}>parallel</span>
         </span>
@@ -43,7 +49,7 @@
       {#if splitFileCount}
         <span class="key-divider"></span>
         <span class="key-group">
-          <span class="file-count">{splitFileCount.selected}/{splitFileCount.total} files {split.review ? 'accepted' : 'stay'}</span>
+          <span class="file-count">{splitFileCount.selected}/{splitFileCount.total} {split.review ? 'hunks accepted' : 'files stay'}</span>
         </span>
       {/if}
     </div>

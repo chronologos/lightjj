@@ -112,6 +112,19 @@ func Split(revision string, files []string, parallel bool, interactive bool) Com
 	return args
 }
 
+// SplitWithTool invokes `jj split` with a diff-editor tool defined in an
+// ephemeral --config-file. The tool is our own binary re-entering via
+// --apply-hunks (cmd/lightjj/apply_hunks.go). `-m` both suppresses jj's
+// description-editor (without it jj opens vim → request hangs) AND sets
+// the FIRST (selected=accepted) commit's description. The SECOND commit
+// keeps the original. Caller passes the original description so the
+// accepted hunks — the work that matters — keep the message.
+// No --parallel: hunk-review produces parent→child (reviewing ≠ forking).
+func SplitWithTool(revision, configFile, description string) CommandArgs {
+	return []string{"split", "-r", revision, "-m", description,
+		"--config-file", configFile, "--tool", "lightjj-hunks"}
+}
+
 func SetDescription(revision string, description string) (CommandArgs, string) {
 	return []string{"describe", "-r", revision, "--stdin"}, description
 }
