@@ -1,6 +1,6 @@
 # lightjj 1.0.0 Release Plan
 
-Status: **ship-blockers fixed** · Current version: `0.9.0`
+Status: **assets done — pending version bump + tag** · Current version: `0.9.0`
 
 ## Marquee features (README pitch)
 
@@ -52,10 +52,10 @@ Status: **ship-blockers fixed** · Current version: `0.9.0`
 
 ## Asset work
 
-- [ ] **README rewrite** — restructure around 5 marquee points + roadmap section
-- [ ] **Screenshot retake** — hero shot of MergePanel or branches-side-by-side
-- [ ] **tutorial-content.ts** — add 1.0.0 entries (7 features shipped since 0.9 with no entry)
-- [ ] **version.txt** → `1.0.0`
+- [x] **README rewrite** — restructure around 5 marquee points + roadmap section
+- [ ] **Screenshot retake** — hero shot of MergePanel or branches-side-by-side (manual)
+- [x] **tutorial-content.ts** — add 1.0.0 entries (7 entries added)
+- [ ] **version.txt** → `1.0.0` (do last — gates the WelcomeModal)
 
 ### Missing tutorial entries for 1.0.0
 

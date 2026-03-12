@@ -1,16 +1,20 @@
 # lightjj
 
-A fast, keyboard-driven browser UI for [Jujutsu (jj)](https://github.com/jj-vcs/jj), built for tight human–agent iteration loops. Single static binary — `go install` and open your repo.
+A fast, keyboard-driven browser UI for [Jujutsu (jj)](https://github.com/jj-vcs/jj). Single static binary — `go install` and open your repo.
 
 ![lightjj screenshot](screenshot.png)
 
 ## Why
 
-**Speed.** Every interaction is tuned: commit-id-keyed caching means `j`/`k` through history is instant, diffs are syntax-highlighted progressively so the UI never blocks, and prefetch keeps the next revision warm. No spinners on the hot path.
+**Instant.** Navigation is tuned end-to-end: `commit_id`-keyed caching means `j`/`k` through history hits no network, diffs syntax-highlight progressively so the UI never blocks, and opportunistic prefetch keeps the next revision warm. No spinners on the hot path.
 
-**Agent-native review.** Drop per-line comments on a diff, export them to your agent, and when it iterates on the same revision the comments automatically re-anchor to the new commit — or get flagged as "possibly addressed" if the line was deleted. Feedback survives the rewrite.
+**Works everywhere.** Run it locally, port-forward it from a remote dev box, or proxy it over SSH. Same UX. Auto-refresh watches `.jj/repo/op_heads` for instant reaction to CLI changes — polling fallback in SSH mode with no remote dependencies.
 
-**Keyboard-first, zero-ceremony UX.** `j`/`k` to navigate, `R` to rebase, `S` to squash, `n` for new, `Cmd+K` for everything else. No modals for common ops — rebase is inline: pick source, move cursor to destination, hit Enter.
+**Multi-repo, multi-workspace.** Tabs. Open additional repos with `+`, jj workspaces open one-click via the `◇` selector. Tab state persists across restarts; diff cache is shared across same-repo workspaces.
+
+**Complete jj coverage.** Revision graph, bookmarks panel with full sync state, op log, evolog, divergence resolution, inline rebase/squash/split with source/target mode cycling. Right-click menus everywhere. Revset filter with `?` help popover.
+
+**A real merge tool.** Conflicted files open in a 3-pane editor — `ours ← result → theirs` — with per-hunk arrow-click, arbitrary editing in the center, and undo that restores the source tag. Falls back to raw editor for >2-side or git-style conflicts.
 
 ## Quick Start
 
@@ -22,17 +26,16 @@ lightjj
 
 ## Highlights
 
-- **Revision graph** — SVG DAG, working-copy indicator, immutable markers, bookmark badges
-- **Diff viewer** — unified/split modes, Lezer syntax highlighting, word-level diffs, context expansion, conflict A/B labels
-- **Inline annotations** — per-line review comments keyed by `change_id`; auto-re-anchor when the agent rewrites; export as markdown or JSON
-- **Inline rebase** — pick source mode (`-r`/`-s`/`-b`), target mode (onto/after/before), cursor to destination, Enter
-- **Bookmarks & git** — set/move/advance/delete/track bookmarks, push/fetch with flag validation
-- **Bookmarks panel** (`2`) — sync state at a glance: ahead/behind/diverged/conflict, commit descriptions + staleness, PR badges. Enter to jump, d/f/t to delete/forget/track
-- **Multi-select** — batch abandon, squash, rebase across revisions
-- **Op log & evolog** — full operation history and per-revision evolution with inter-diffs
-- **Multi-repo tabs** — open additional repos in tabs (`+` button in the tab bar); diffs stay cached across tabs. Works over SSH too.
-- **Workspaces** — detect and switch between jj workspaces; one-click opens as a tab (same origin, shared diff cache)
-- **SSH remote** — proxy jj commands over SSH, or port-forward for local-quality performance
+- **Revision graph** — SVG DAG, working-copy `@` indicator, immutable `◆` markers, bookmark badges with PR status, conflicted-bookmark `??` markers
+- **Diff viewer** — unified/split, Lezer syntax highlighting, word-level diffs, context expansion, conflict A/B labels, open-in-$EDITOR
+- **3-pane merge** — `ours ← result → theirs`; arrow to take hunk, type to edit, undo restores source tag
+- **Divergence resolver** — stack-aware `??/N` analysis with per-column keep/abandon/squash strategies and bookmark repointing
+- **Inline rebase** — pick source (`-r`/`-s`/`-b`) and target (onto/after/before) modes, cursor to destination, Enter
+- **Bookmarks panel** (`2`) — sync state at a glance: ahead/behind/diverged/conflict, PR badges, staleness. `d`/`f`/`t` for delete/forget/track, per-remote visibility toggles
+- **Multi-select** — batch abandon, squash, rebase across revisions with `Space`
+- **Op log & evolog** — full operation history with undo/restore, per-revision evolution with inter-diffs
+- **Inline annotations** — per-line review comments keyed by `change_id`; auto-re-anchor on rewrite; export markdown/JSON
+- **Stale-WC detection** — concurrent CLI op left the working copy stale? Warning bar with one-click recovery
 - **Themes** — Catppuccin dark/light (`t` to toggle)
 
 ## Agent review loop
@@ -44,7 +47,7 @@ lightjj
 5. lightjj auto-refreshes; annotations re-anchor via inter-diff delta — unchanged lines track, deleted lines surface as "possibly addressed"
 6. Repeat until the revision is clean
 
-See [docs/ANNOTATIONS.md](docs/ANNOTATIONS.md) for the re-anchor mechanics and storage model.
+See [docs/ANNOTATIONS.md](docs/ANNOTATIONS.md) for re-anchor mechanics and storage model.
 
 ## Usage
 
@@ -69,6 +72,14 @@ ssh -L 3001:localhost:3001 user@host \
 `--remote user@host:/path` also works but adds ~400ms per command. Enable SSH ControlMaster to reduce this to ~20ms. Auto-refresh polls every `--snapshot-interval` (default 5s) — no remote dependencies.
 
 In `--remote` mode, `gh pr list` is also run over SSH — install and `gh auth login` on the remote host if you want PR badges on bookmarks.
+
+## Roadmap
+
+| | Theme | |
+|---|---|---|
+| **1.0** | Ship-ready core | ✓ |
+| **2.0** | Code editing & review | Hunk-level accept/reject (`jj split --tool` protocol), mega-file virtualization, cross-revision search, LSP-in-FileEditor |
+| **3.0** | Agentic | Annotations as a library, agent-writable API, auto-re-anchor, MCP server mode |
 
 ## Requirements
 
