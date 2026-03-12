@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { classify, refineRebaseKind, buildKeepPlan, type DivergenceGroup } from './divergence'
 import type { DivergenceEntry } from './api'
+import { entry as e } from './divergence.fixtures'
 
-// Minimal entry builder — only fields the classifier reads.
-function e(over: Partial<DivergenceEntry>): DivergenceEntry {
-  return {
-    change_id: '', commit_id: '', divergent: true,
-    parent_commit_ids: [], parent_change_ids: [],
-    wc_reachable: false, bookmarks: [], description: '', empty: false,
-    is_working_copy: false,
-    ...over,
-  }
-}
+// Hand-built DivergenceGroup builder — buildKeepPlan tests want empty-versions
+// default (override per test), unlike the shared fixture's 2-col default.
+// Shared between buildKeepPlan describe + invariant sweep describe below.
+const mkGroup = (over: Partial<DivergenceGroup>): DivergenceGroup => ({
+  rootChangeId: 'A', changeIds: ['A'], versions: [],
+  kind: 'same-parent', alignable: true, liveVersion: null,
+  descendants: [], conflictedBookmarks: [],
+  ...over,
+})
 
 describe('classify — single change', () => {
   it('same-parent: concurrent edit (--at-op case)', () => {
@@ -446,15 +446,6 @@ describe('classify — edge cases', () => {
 // Wrong-column abandon = data loss. Every invariant here corresponds to a
 // sentence in the buildKeepPlan comment block or docs/jj-divergence.md.
 describe('buildKeepPlan', () => {
-  // Hand-built DivergenceGroup — simpler than going through classify() when we
-  // want specific column/level/descendant shapes.
-  const mkGroup = (over: Partial<DivergenceGroup>): DivergenceGroup => ({
-    rootChangeId: 'A', changeIds: ['A'], versions: [],
-    kind: 'same-parent', alignable: true, liveVersion: null,
-    descendants: [], conflictedBookmarks: [],
-    ...over,
-  })
-
   it('abandons ALL levels of losing columns, keeps the keeper column', () => {
     // 3-level stack, 2 columns. Keeping column 1 → abandon {a0,b0,c0}.
     const g = mkGroup({
@@ -587,5 +578,186 @@ describe('buildKeepPlan', () => {
       descendants: [e({ commit_id: 'd', parent_commit_ids: ['x0'], divergent: false, empty: false })],
     })
     expect(buildKeepPlan(g, 1).rebaseSources).toEqual([])
+  })
+})
+
+// --- buildKeepPlan — generative invariant sweep ---
+// The hand-picked cases above document intent. This sweep proves the structural
+// invariants hold for EVERY {levels, cols, descendants, keeperIdx} combination.
+// Wrong-column abandon = data loss, so every invariant corresponds to "if this
+// fails, a Keep click destroys user work".
+describe('buildKeepPlan — invariant sweep (all shapes)', () => {
+  // Generate a group with {levels}×{cols} structure. Commit IDs are
+  // deterministic ("L{level}c{col}") so assertions can reference them.
+  // Descendants are attached by (parentLevel, parentCol, empty).
+  function genGroup(shape: {
+    levels: number; cols: number
+    descendants: Array<{ parentLevel: number; parentCol: number; empty: boolean }>
+    conflictedBookmarks?: Array<{ name: string; levelIdx: number }>
+  }): DivergenceGroup {
+    const changeIds = Array.from({ length: shape.levels }, (_, i) => `CH${i}`)
+    const versions: DivergenceEntry[][] = []
+    for (let L = 0; L < shape.levels; L++) {
+      const level: DivergenceEntry[] = []
+      for (let c = 0; c < shape.cols; c++) {
+        level.push(e({
+          change_id: changeIds[L],
+          commit_id: `L${L}c${c}`,
+          parent_commit_ids: L === 0 ? [`trunk${c}`] : [`L${L-1}c${c}`],
+          parent_change_ids: L === 0 ? ['TRUNK'] : [changeIds[L-1]],
+        }))
+      }
+      versions.push(level)
+    }
+    return mkGroup({
+      changeIds,
+      versions,
+      descendants: shape.descendants.map((d, i) => e({
+        change_id: `D${i}`, commit_id: `desc${i}`,
+        parent_commit_ids: [`L${d.parentLevel}c${d.parentCol}`],
+        parent_change_ids: [changeIds[d.parentLevel]],
+        divergent: false, empty: d.empty,
+      })),
+      conflictedBookmarks: (shape.conflictedBookmarks ?? []).map(b => ({
+        name: b.name, changeId: changeIds[b.levelIdx],
+      })),
+    })
+  }
+
+  // Shapes to sweep. Covers: single-level, multi-level, 2-col, 3-col,
+  // descendants at root/tip/mid, empty/non-empty, bookmarks at various levels.
+  const shapes = [
+    { name: '1L×2C', levels: 1, cols: 2, descendants: [] },
+    { name: '1L×3C', levels: 1, cols: 3, descendants: [] },
+    { name: '3L×2C', levels: 3, cols: 2, descendants: [] },
+    { name: '4L×2C + empty desc on loser tip', levels: 4, cols: 2,
+      descendants: [{ parentLevel: 3, parentCol: 0, empty: true }] },
+    { name: '3L×2C + non-empty desc on loser ROOT', levels: 3, cols: 2,
+      descendants: [{ parentLevel: 0, parentCol: 0, empty: false }] },
+    // Descendant on the KEEPER's root (not tip). k=1 → parent L0c1 is in
+    // keeperColumn → Invariant 4 must exclude it. The hand-picked test at
+    // "descendant of keeper ROOT (not tip)" covers 2 levels; this extends to 3.
+    { name: '3L×2C + desc on keeper ROOT (when k=1)', levels: 3, cols: 2,
+      descendants: [{ parentLevel: 0, parentCol: 1, empty: false }] },
+    { name: '2L×2C + desc on BOTH columns (one keeper one loser)', levels: 2, cols: 2,
+      descendants: [
+        { parentLevel: 1, parentCol: 0, empty: false },
+        { parentLevel: 1, parentCol: 1, empty: false },
+      ] },
+    { name: '2L×3C + desc on middle col', levels: 2, cols: 3,
+      descendants: [{ parentLevel: 1, parentCol: 1, empty: true }] },
+    { name: '3L×2C + bookmark at mid-level', levels: 3, cols: 2, descendants: [],
+      conflictedBookmarks: [{ name: 'mid', levelIdx: 1 }] },
+    { name: '4L×2C + bookmarks at root AND tip', levels: 4, cols: 2, descendants: [],
+      conflictedBookmarks: [{ name: 'r', levelIdx: 0 }, { name: 't', levelIdx: 3 }] },
+  ]
+
+  for (const shape of shapes) {
+    for (let k = 0; k < shape.cols; k++) {
+      it(`${shape.name}, keep col ${k}`, () => {
+        const g = genGroup(shape)
+        const plan = buildKeepPlan(g, k)
+        const keeperColumn = new Set(g.versions.map(l => l[k].commit_id))
+
+        // Invariant 1: keeperCommitId is the tip of column k.
+        expect(plan.keeperCommitId).toBe(g.versions[g.versions.length - 1][k].commit_id)
+
+        // Invariant 2: abandonCommitIds is DISJOINT with keeper column.
+        for (const id of plan.abandonCommitIds) {
+          expect(keeperColumn.has(id)).toBe(false)
+        }
+
+        // Invariant 3: every losing-column commit IS abandoned.
+        for (const level of g.versions) {
+          for (let i = 0; i < level.length; i++) {
+            if (i !== k) expect(plan.abandonCommitIds).toContain(level[i].commit_id)
+          }
+        }
+
+        // Invariant 4: keeper-column descendants appear NOWHERE in the plan.
+        for (const d of g.descendants) {
+          if (d.parent_commit_ids.some(p => keeperColumn.has(p))) {
+            expect(plan.abandonCommitIds).not.toContain(d.commit_id)
+            expect(plan.nonEmptyDescendants.map(n => n.commit_id)).not.toContain(d.commit_id)
+          }
+        }
+
+        // Invariant 5: loser-column descendants are EITHER abandoned (empty)
+        // OR in nonEmptyDescendants (confirm) — XOR, never both, never neither.
+        for (const d of g.descendants) {
+          if (!d.parent_commit_ids.some(p => keeperColumn.has(p))) {
+            const abandoned = plan.abandonCommitIds.includes(d.commit_id)
+            const pending = plan.nonEmptyDescendants.some(n => n.commit_id === d.commit_id)
+            expect(abandoned !== pending).toBe(true)  // XOR
+            expect(abandoned).toBe(d.empty)
+          }
+        }
+
+        // Invariant 6: bookmark repoints target SAME-LEVEL keeper (not tip).
+        for (const { name, targetCommitId } of plan.bookmarkRepoints) {
+          const bm = g.conflictedBookmarks.find(b => b.name === name)!
+          const levelIdx = g.changeIds.indexOf(bm.changeId)
+          expect(targetCommitId).toBe(g.versions[levelIdx][k].commit_id)
+        }
+
+        // Invariant 7: rebaseSources starts empty (pre-confirm).
+        expect(plan.rebaseSources).toEqual([])
+      })
+    }
+  }
+})
+
+// --- classify — merge-parent gap (docs/jj-divergence.md:87 pin tests) ---
+// findRoot walks parents[0] only. Divergent merge commits are a documented
+// gap. These tests pin CURRENT behavior so a fix is an intentional test change,
+// not a silent regression.
+describe('classify — merge-parent gap (pin current behavior)', () => {
+  it('merge with divergence on SECOND parent only: classified correctly (diff-parent)', () => {
+    // X is a merge: parents = [A, B]. X/0 and X/1 share first parent A but
+    // differ on second parent (B vs B'). classifyKind compares the full
+    // parents.join(',') → different → diff-parent. CORRECT despite the gap
+    // in findRoot (which isn't exercised here — A isn't divergent).
+    const groups = classify([
+      e({ change_id: 'X', commit_id: 'x0', parent_commit_ids: ['a', 'b0'], parent_change_ids: ['A', 'B'] }),
+      e({ change_id: 'X', commit_id: 'x1', parent_commit_ids: ['a', 'b1'], parent_change_ids: ['A', 'B'] }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].kind).toBe('diff-parent')
+    expect(groups[0].rootChangeId).toBe('X')
+  })
+
+  it('merge with divergent FIRST parent: chains via parents[0] (gap — may over-chain)', () => {
+    // A is 2-way divergent. X is a merge with A as FIRST parent; X diverged
+    // because A did. Current findRoot chains X under A via parents[0].
+    // CORRECT for this shape. The gap: if X's divergence were on its SECOND
+    // parent only (unrelated to A), findRoot would STILL chain (walks [0]
+    // only) — that case is the test above which happens to work because A
+    // isn't divergent there. Pin the happy-path behavior.
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a0', parent_commit_ids: ['t0'], parent_change_ids: ['T'] }),
+      e({ change_id: 'A', commit_id: 'a1', parent_commit_ids: ['t1'], parent_change_ids: ['T'] }),
+      e({ change_id: 'X', commit_id: 'x0', parent_commit_ids: ['a0', 'b'], parent_change_ids: ['A', 'B'] }),
+      e({ change_id: 'X', commit_id: 'x1', parent_commit_ids: ['a1', 'b'], parent_change_ids: ['A', 'B'] }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].rootChangeId).toBe('A')
+    expect(groups[0].changeIds).toEqual(['A', 'X'])
+  })
+
+  it('diamond (both B copies from same A-commit): findRoot chains but alignColumns rejects', () => {
+    // B is independently resolvable as same-parent (both from a0), but the
+    // chain→reject path shows "compound, manual only" for both. No data loss
+    // (Keep is disabled), but the user can't one-click resolve B. Future fix:
+    // findRoot could add "parent commits DISTINCT across versions" to the
+    // inherits check; for now, pin the safe-but-suboptimal behavior.
+    const groups = classify([
+      e({ change_id: 'A', commit_id: 'a0', parent_commit_ids: ['t0'], parent_change_ids: ['T'] }),
+      e({ change_id: 'A', commit_id: 'a1', parent_commit_ids: ['t1'], parent_change_ids: ['T'] }),
+      e({ change_id: 'B', commit_id: 'b0', parent_commit_ids: ['a0'], parent_change_ids: ['A'] }),
+      e({ change_id: 'B', commit_id: 'b1', parent_commit_ids: ['a0'], parent_change_ids: ['A'] }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].changeIds).toEqual(['A', 'B'])  // chained
+    expect(groups[0].alignable).toBe(false)           // but safely rejected
   })
 })

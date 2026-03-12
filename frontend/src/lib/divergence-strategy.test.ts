@@ -1,24 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { recommend } from './divergence-strategy'
-import type { DivergenceGroup } from './divergence'
-
-// Minimal group builder — only fields recommend() reads.
-function g(over: Partial<DivergenceGroup>): DivergenceGroup {
-  return {
-    rootChangeId: 'X',
-    changeIds: ['X'],
-    versions: [[
-      { change_id: 'X', commit_id: 'a', divergent: true, parent_commit_ids: ['p'], parent_change_ids: ['pc'], wc_reachable: false, bookmarks: [], description: '', empty: false, is_working_copy: false },
-      { change_id: 'X', commit_id: 'b', divergent: true, parent_commit_ids: ['p'], parent_change_ids: ['pc'], wc_reachable: false, bookmarks: [], description: '', empty: false, is_working_copy: false },
-    ]],
-    kind: 'same-parent',
-    alignable: true,
-    liveVersion: null,
-    descendants: [],
-    conflictedBookmarks: [],
-    ...over,
-  }
-}
+import { entry, group as g } from './divergence.fixtures'
 
 describe('recommend — pure-rebase', () => {
   it('high confidence keep-live when liveVersion set', () => {
@@ -86,9 +68,7 @@ describe('recommend — guards', () => {
   it('empty for 3+ copies (N-way squash is path-dependent)', () => {
     const threeWay = g({
       versions: [[
-        { change_id: 'X', commit_id: 'a', divergent: true, parent_commit_ids: ['p'], parent_change_ids: ['pc'], wc_reachable: false, bookmarks: [], description: '', empty: false, is_working_copy: false },
-        { change_id: 'X', commit_id: 'b', divergent: true, parent_commit_ids: ['p'], parent_change_ids: ['pc'], wc_reachable: false, bookmarks: [], description: '', empty: false, is_working_copy: false },
-        { change_id: 'X', commit_id: 'c', divergent: true, parent_commit_ids: ['p'], parent_change_ids: ['pc'], wc_reachable: false, bookmarks: [], description: '', empty: false, is_working_copy: false },
+        entry({ commit_id: 'a' }), entry({ commit_id: 'b' }), entry({ commit_id: 'c' }),
       ]],
     })
     expect(recommend(threeWay, 'edit-conflict')).toEqual([])
@@ -114,4 +94,65 @@ describe('recommend — guards', () => {
     const stack = g({ changeIds: ['A', 'B'], liveVersion: null })
     expect(recommend(stack, 'rebase-edit')).toEqual([])
   })
+})
+
+// Full decision-table sweep — fills the gaps between the hand-picked cases
+// above. Each row is one cell of (refined × live × isStack). Existing tests
+// above document INTENT; this table proves TOTALITY (no unhandled combinations).
+describe('recommend — decision table sweep', () => {
+  type Row = {
+    refined: Parameters<typeof recommend>[1]
+    live: number | null
+    isStack: boolean
+    expectLen: number
+    primary?: { kind: 'keep' | 'squash'; targetIdx: number | null; conf: 'high' | 'medium' | 'low' }
+  }
+
+  const table: Row[] = [
+    // ── pure-rebase ──────────────────────────────────────────────────────
+    { refined: 'pure-rebase', live: 0,    isStack: false, expectLen: 1, primary: { kind: 'keep', targetIdx: 0,    conf: 'high' } },
+    { refined: 'pure-rebase', live: null, isStack: false, expectLen: 1, primary: { kind: 'keep', targetIdx: null, conf: 'medium' } },
+    { refined: 'pure-rebase', live: 0,    isStack: true,  expectLen: 1, primary: { kind: 'keep', targetIdx: 0,    conf: 'high' } },
+    { refined: 'pure-rebase', live: null, isStack: true,  expectLen: 1, primary: { kind: 'keep', targetIdx: null, conf: 'medium' } },
+
+    // ── metadata-only ────────────────────────────────────────────────────
+    { refined: 'metadata-only', live: 0,    isStack: false, expectLen: 1, primary: { kind: 'keep', targetIdx: null, conf: 'low' } },
+    { refined: 'metadata-only', live: null, isStack: false, expectLen: 1, primary: { kind: 'keep', targetIdx: null, conf: 'low' } },
+    { refined: 'metadata-only', live: 0,    isStack: true,  expectLen: 1, primary: { kind: 'keep', targetIdx: null, conf: 'low' } },
+
+    // ── edit-conflict ────────────────────────────────────────────────────
+    { refined: 'edit-conflict', live: 0,    isStack: false, expectLen: 2, primary: { kind: 'squash', targetIdx: 0,    conf: 'medium' } },
+    { refined: 'edit-conflict', live: null, isStack: false, expectLen: 1, primary: { kind: 'squash', targetIdx: null, conf: 'medium' } },
+    { refined: 'edit-conflict', live: 0,    isStack: true,  expectLen: 1, primary: { kind: 'keep',   targetIdx: 0,    conf: 'low' } },
+    { refined: 'edit-conflict', live: null, isStack: true,  expectLen: 0 },
+
+    // ── rebase-edit ──────────────────────────────────────────────────────
+    { refined: 'rebase-edit', live: 1,    isStack: false, expectLen: 2, primary: { kind: 'keep',   targetIdx: 1,    conf: 'medium' } },
+    { refined: 'rebase-edit', live: null, isStack: false, expectLen: 1, primary: { kind: 'squash', targetIdx: null, conf: 'low' } },
+    { refined: 'rebase-edit', live: 1,    isStack: true,  expectLen: 1, primary: { kind: 'keep',   targetIdx: 1,    conf: 'medium' } },
+    { refined: 'rebase-edit', live: null, isStack: true,  expectLen: 0 },
+
+    // ── compound / pending (always empty) ────────────────────────────────
+    { refined: 'compound', live: 0,    isStack: false, expectLen: 0 },
+    { refined: 'compound', live: null, isStack: true,  expectLen: 0 },
+    { refined: 'pending',  live: 0,    isStack: false, expectLen: 0 },
+    { refined: 'pending',  live: null, isStack: true,  expectLen: 0 },
+  ]
+
+  for (const row of table) {
+    const stackTag = row.isStack ? 'stack' : 'single'
+    const liveTag = row.live === null ? 'no-live' : `live=${row.live}`
+    it(`${row.refined} × ${liveTag} × ${stackTag}`, () => {
+      const grp = g({ liveVersion: row.live, changeIds: row.isStack ? ['A', 'B'] : ['X'] })
+      const out = recommend(grp, row.refined)
+      expect(out).toHaveLength(row.expectLen)
+      if (row.primary) {
+        expect(out[0]).toMatchObject({
+          kind: row.primary.kind,
+          targetIdx: row.primary.targetIdx,
+          confidence: row.primary.conf,
+        })
+      }
+    })
+  }
 })

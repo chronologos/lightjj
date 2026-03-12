@@ -1,7 +1,8 @@
 <script lang="ts">
   import { api } from './api'
-  import { classify, refineRebaseKind, buildKeepPlan, type DivergenceGroup, type KeepPlan } from './divergence'
-  import { recommend, immutableSiblingCopy, type RefinedKind, type Strategy } from './divergence-strategy'
+  import { classify, buildKeepPlan, type DivergenceGroup, type KeepPlan } from './divergence'
+  import { computeRefinedKind, findCrossColumnMerge, type RefinedKind } from './divergence-refined'
+  import { recommend, immutableSiblingCopy, type Strategy } from './divergence-strategy'
   import { parseDiffContent } from './diff-parser'
   import DiffFileView from './DiffFileView.svelte'
 
@@ -52,24 +53,10 @@
   let parsedCrossDiff = $derived(parseDiffContent(crossDiff))
 
   // RefinedKind — full taxonomy after tree-delta lands. Feeds both the kind
-  // badge AND recommend(). The old refinedKind only refined diff-parent; this
-  // also splits same-parent into metadata-only/edit-conflict.
-  //
-  // crossDiff === '' means diffRange returned empty → trees identical.
-  // diffLoading means fetch in flight → 'pending' (recommend() waits).
-  let refinedKind = $derived.by((): RefinedKind => {
-    if (!group) return 'pending'
-    if (!group.alignable || group.kind === 'compound') return 'compound'
-    if (diffLoading) return 'pending'
-    const treeEmpty = crossDiff === ''
-    if (group.kind === 'same-parent') {
-      return treeEmpty ? 'metadata-only' : 'edit-conflict'
-    }
-    // diff-parent: refineRebaseKind subtracts fileUnion-external paths
-    // (trunk churn). Empty remainder → pure-rebase.
-    if (treeEmpty) return 'pure-rebase'
-    return refineRebaseKind(parsedCrossDiff.map(f => f.filePath), fileUnion)
-  })
+  // badge AND recommend(). Decision logic extracted to divergence-refined.ts.
+  let refinedKind = $derived(
+    computeRefinedKind(group, diffLoading, parsedCrossDiff.map(f => f.filePath), fileUnion)
+  )
 
   // Strategy recommendations — ranked list, [0] rendered as primary card.
   // Recomputes when refinedKind settles (pending→concrete). Immutable-sibling
@@ -77,17 +64,8 @@
   let strategies = $derived(group ? recommend(group, refinedKind) : [])
 
   // A descendant merging two column tips is likely the user's manual
-  // reconciliation (`jj new keeper loser`). buildPlan would silently exclude
-  // it (keeper-parent match) then abandon its OTHER input — the merge survives
-  // but against a rewritten parent. Surface it instead of silently acting.
-  let crossColumnMerge = $derived.by(() => {
-    if (!group || nVersions < 2) return null
-    const tips = group.versions[group.versions.length - 1].map(v => v.commit_id)
-    return group.descendants.find(d => {
-      const hits = tips.filter(t => d.parent_commit_ids.includes(t))
-      return hits.length >= 2
-    }) ?? null
-  })
+  // reconciliation. Extracted to divergence-refined.ts (findCrossColumnMerge).
+  let crossColumnMerge = $derived(group ? findCrossColumnMerge(group) : null)
 
   // --- Non-empty descendant confirm ---
   // When keeping a column would abandon a non-empty descendant of the loser,

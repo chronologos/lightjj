@@ -13,22 +13,12 @@
 // can't help; panel falls back to column buttons with no primary highlight.
 
 import type { DivergenceGroup } from './divergence'
+import type { RefinedKind } from './divergence-refined'
 
 // Only strategies recommend() actually emits. split-identity is
 // immutable-sibling-only and doesn't go through the Strategy[] path.
 export type StrategyKind = 'keep' | 'squash'
 export type Confidence = 'high' | 'medium' | 'low'
-
-// RefinedKind = the post-tree-delta classification. 'pending' means the
-// cross-diff hasn't landed yet; recommend() can still offer structural
-// strategies but suppresses anything that depends on delta content.
-export type RefinedKind =
-  | 'pending'        // cross-diff still loading — covers both same-parent and diff-parent initial state
-  | 'metadata-only'  // same-parent + empty tree delta → only description/author differ
-  | 'edit-conflict'  // same-parent + non-empty delta → both have real edits
-  | 'pure-rebase'    // diff-parent + empty delta (after fileUnion subtraction)
-  | 'rebase-edit'    // diff-parent + non-empty delta
-  | 'compound'       // 3+ mixed parents, or non-alignable stack
 
 export interface Strategy {
   kind: StrategyKind

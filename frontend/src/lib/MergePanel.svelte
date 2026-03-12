@@ -1,6 +1,7 @@
 <script module lang="ts">
   import { EditorView, keymap, lineNumbers, Decoration, type DecorationSet } from '@codemirror/view'
   import { EditorState, StateField, StateEffect, type Extension } from '@codemirror/state'
+  import { remapBlock, type BlockSource } from './merge-surgery'
 
   // Flank highlight — static set, computed once at mount. Read-only panes never
   // change, so a StateField with no update recomputation is fine.
@@ -23,7 +24,6 @@
   // the user edits around (not inside) a block. `source` tracks which side the
   // center content came from — 'theirs' initially (seed), 'ours' after →,
   // 'mixed' after user hand-edits inside the block.
-  type BlockSource = 'ours' | 'theirs' | 'mixed'
   // newFrom/newTo are NEW-doc positions computed by takeBlock — it knows the
   // exact surgery (leading/trailing separator, deletion extent) so it can
   // place the block range precisely. mapPos() in the tracker can't: it only
@@ -64,25 +64,11 @@
         // the change or they retain stale pre-transaction offsets. (Old code
         // gated mapPos on `result === blocks`, skipping it when applyBlock's
         // .map() created a fresh array — block 1 kept block-0's old positions.)
-        //
-        // assoc=1/-1 (right/left-leaning) keeps from/to anchored outside a
-        // mid-block replace — BUT if the user selects the ENTIRE block range
-        // and types, the asymmetric assoc inverts: from(assoc=1) jumps past
-        // the insert while to(assoc=-1) lands before it → from>to. When this
-        // happens, the user replaced the block content entirely — the tracked
-        // range should SPAN the insertion, not collapse beside it. Re-map with
-        // inverted assoc: from(assoc=-1) stays before, to(assoc=1) stays after.
-        let result: CenterBlock[] = tr.changes.empty ? blocks : blocks.map(b => {
-          const from = tr.changes.mapPos(b.from, 1)
-          const to = tr.changes.mapPos(b.to, -1)
-          if (from <= to) return { ...b, from, to }
-          // Inversion → whole-block replace. Re-map to span the inserted text.
-          return {
-            ...b,
-            from: tr.changes.mapPos(b.from, -1),
-            to: tr.changes.mapPos(b.to, 1),
-          }
-        })
+        // remapBlock() handles the whole-block-replace inversion (select-all-
+        // and-type flips assoc) — see merge-surgery.ts + tests.
+        let result: CenterBlock[] = tr.changes.empty
+          ? blocks
+          : blocks.map(b => ({ ...b, ...remapBlock(b, tr.changes) }))
         // Effects override mapped positions for the target block. applyBlock
         // carries BOTH newFrom and newTo as explicit new-doc positions —
         // mapPos() cannot derive these correctly: for a leading-\n insert at
@@ -140,6 +126,7 @@
   import { highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
   import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
   import { diffBlocks, blocksToLineSets, type ChangeBlock } from './merge-diff'
+  import { planTake, initialTrackPos } from './merge-surgery'
   import type { MergeSides } from './conflict-extract'
 
   interface Props {
@@ -239,14 +226,11 @@
     theirsView = tv
 
     // Convert 1-indexed line ranges → 0-indexed doc positions for the tracker.
-    // Center doc starts as theirs, so bFrom/bTo map directly.
-    const initialTrack: CenterBlock[] = blocks.map(b => {
-      const doc = tv.state.doc  // theirs doc (same shape as center's initial)
-      // bFrom===bTo (pure insertion) → from===to (zero-width marker at line start)
-      const from = b.bFrom <= doc.lines ? doc.line(b.bFrom).from : doc.length
-      const to = b.bTo - 1 <= doc.lines && b.bTo > b.bFrom ? doc.line(b.bTo - 1).to : from
-      return { from, to, source: 'theirs' as const }  // seeded with theirs
-    })
+    // Center doc seeds with theirs, so initialTrackPos reads bFrom/bTo directly.
+    const initialTrack: CenterBlock[] = blocks.map(b => ({
+      ...initialTrackPos(tv.state.doc, b),
+      source: 'theirs' as const,
+    }))
     const tracker = blockTracker(initialTrack)
     trackerField = tracker
 
@@ -395,86 +379,23 @@
   }
 
   /** Apply flank content for block `idx` into center at its tracked position.
-   *  No-op if center already contains that side's content (idempotent). */
+   *  No-op if center already contains that side's content (idempotent).
+   *  Position surgery lives in merge-surgery.ts (planTake) — extracted so the
+   *  separator-math cases are unit-testable without a CM6 EditorView in jsdom.
+   *  See merge-surgery.test.ts for the full round-trip invariant suite. */
   function takeBlock(idx: number, side: 'ours' | 'theirs') {
     if (!centerView || !trackerField) return
     const tracked = centerView.state.field(trackerField)
     const pos = tracked[idx]
     if (!pos) return
-    // Idempotent: clicking → twice doesn't overwrite. User feedback was
-    // "clicking multiple times shouldn't overwrite text" — they meant re-apply
-    // of the SAME side. Switching sides (→ then ←) still works.
-    if (pos.source === side) return
 
-    const blk = blocks[idx]
     const srcLines = side === 'ours' ? oursLines : theirsLines
-    const from1 = side === 'ours' ? blk.aFrom : blk.bFrom
-    const to1 = side === 'ours' ? blk.aTo : blk.bTo
-    // from1===to1 means the source side has ZERO lines for this block (pure
-    // deletion). NOT `!insert` — a single empty line slices to [''] which
-    // joins to '', falsy, but is valid content (a blank line the user wants
-    // to keep). Blank-line conflicts are common in code formatting merges.
-    const srcEmpty = from1 === to1
-    let insert = srcLines.slice(from1 - 1, to1 - 1).join('\n')
-
-    // Line-boundary surgery. pos.from is line-start, pos.to is line-end (no
-    // trailing \n — CM6's line.to excludes the line break).
-    let { from, to } = pos
-    const doc = centerView.state.doc
-    // contentOff: where insert's CONTENT starts, relative to `from` in the
-    // NEW doc. 0 normally; 1 if we prepend a \n separator (that \n is NOT
-    // block content — the tracked range must exclude it or sourceHighlight
-    // decorates the preceding line and toggle-back deletion mis-computes).
-    // contentLen: content bytes excluding any separator we add.
-    let contentOff = 0
-    let contentLen = insert.length
-    if (from === to) {
-      // Zero-width position (pure-insertion block, or prior apply deleted all).
-      // Which separator we add depends on WHERE from sits:
-      //   - line-start (lineAt(from).from === from): trailing \n pushes the
-      //     following line down. Correct for mid-doc insertions.
-      //   - line-end (from === doc.length, no trailing \n in doc): trailing \n
-      //     would concatenate the doc's last line with insert's first line.
-      //     Need a LEADING \n instead.
-      //   - EMPTY line (line-start AND line-end): the prior apply left a blank
-      //     line (source had one blank line, not zero lines — srcEmpty was
-      //     false). Don't add trailing \n (pushes the blank line down → extra
-      //     blank); instead extend `to` to REPLACE the empty line. Same for
-      //     empty doc (no \n to consume, just insert as-is).
-      if (!srcEmpty) {
-        const line = doc.lineAt(from)
-        if (line.from === from && line.to === from) {
-          // Empty line or empty doc — consume the trailing break if present.
-          if (from < doc.length) to += 1
-        } else if (line.from === from) insert += '\n'
-        else { insert = '\n' + insert; contentOff = 1 }
-      }
-    } else if (srcEmpty) {
-      // Deleting a non-empty region (flank side is empty for this block).
-      // Extend through the adjacent newline so we don't leave a blank line.
-      // Prefer the trailing one; if we're at end-of-doc (no trailing \n),
-      // consume the LEADING one instead — otherwise "a\nb\nBLOCK" deleting
-      // BLOCK leaves "a\nb\n" with a phantom trailing newline the source
-      // side never had.
-      //
-      // Verify we're actually consuming a \n. User hand-edits can move the
-      // tracked `to` off a line boundary (e.g. typing at the exact end-of-
-      // block position: mapPos(to, -1) sticks left of the insert, so `to`
-      // now sits mid-line). Consuming a non-\n char would corrupt content.
-      if (to < doc.length && doc.sliceString(to, to + 1) === '\n') to += 1
-      else if (from > 0 && doc.sliceString(from - 1, from) === '\n') from -= 1
-    }
-
-    // Compute new-doc positions for the block range. These are authoritative —
-    // the tracker's mapPos() can't derive them (it doesn't know separator
-    // semantics). newFrom skips a leading \n separator; newTo ends at the
-    // last content byte, excluding any trailing \n separator.
-    const newFrom = from + contentOff
-    const newTo = newFrom + contentLen
+    const plan = planTake(centerView.state.doc, pos, side, srcLines, blocks[idx])
+    if (!plan) return  // idempotent (pos.source === side)
 
     centerView.dispatch({
-      changes: { from, to, insert },
-      effects: applyBlock.of({ idx, side, newFrom, newTo }),
+      changes: plan.change,
+      effects: applyBlock.of({ idx, side, newFrom: plan.newTrack.from, newTo: plan.newTrack.to }),
       scrollIntoView: true,
     })
   }
