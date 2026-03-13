@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1555,6 +1556,33 @@ func TestHandleOpLog_LimitClamped(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleOpShow(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	opOut := "abc123 user@host 2026-01-01\nrebase commit\nargs: jj rebase -r x -d y\n\nChanged commits:\n+ foo\n- bar\n"
+	runner.Expect(jj.OpShow("abc123def456")).SetOutput([]byte(opOut))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/op/show?id=abc123def456", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, opOut, resp["output"])
+}
+
+func TestHandleOpShow_InvalidId(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	for _, id := range []string{"", "abc", "--config-file=/tmp/x", "ABC123DEF456", "abc123def45g"} {
+		req := httptest.NewRequest("GET", "/api/op/show?id="+url.QueryEscape(id), nil)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "id=%q should be rejected", id)
+	}
 }
 
 func TestHandleWorkspaces(t *testing.T) {

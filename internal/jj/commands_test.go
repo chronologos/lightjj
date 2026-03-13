@@ -220,6 +220,17 @@ func TestOpRestore(t *testing.T) {
 	assert.Equal(t, []string{"op", "restore", "abc123"}, OpRestore("abc123"))
 }
 
+func TestOpShow(t *testing.T) {
+	got := OpShow("abc123")
+	assert.Equal(t, "op", got[0])
+	assert.Equal(t, "show", got[1])
+	assert.Contains(t, got, "--no-graph")
+	assert.Contains(t, got, "--color")
+	assert.Contains(t, got, "never")
+	assert.Contains(t, got, "--ignore-working-copy")
+	assert.Equal(t, "abc123", got[len(got)-1])
+}
+
 func TestRestoreFromTo(t *testing.T) {
 	assert.Equal(t, []string{"restore", "--from", "abc", "--to", "def"}, RestoreFromTo("abc", "def"))
 }

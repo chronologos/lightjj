@@ -52,7 +52,7 @@
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import DivergencePanel from './lib/DivergencePanel.svelte'
   import type { KeepPlan } from './lib/divergence'
-  import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, targetModeLabel } from './lib/modes.svelte'
+  import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, createFileSelection, targetModeLabel } from './lib/modes.svelte'
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config } from './lib/config.svelte'
@@ -241,12 +241,12 @@
   const squash = createSquashMode()
   const split = createSplitMode()
   const divergence = createDivergenceMode()
-  let selectedFiles = new SvelteSet<string>()
-  let totalFileCount: number = $state(0) // snapshot of file count at entry time
+  const fileSel = createFileSelection()
 
   // Hunk-level review state (split.review=true). Keys are hunkKey(path, idx).
-  // Lives here (not in modes.svelte.ts) same as selectedFiles — mode factories
-  // own the boolean flags, App owns the selection sets.
+  // Lives here (not in modes.svelte.ts) — hunk selection needs allHunks
+  // (derived from parseDiffCached), which App owns. fileSel above is the
+  // file-level analogue; both are cleared together in cancelInlineModes.
   let selectedHunks = new SvelteSet<string>()
   let hunkCursor: number = $state(0)
 
@@ -1210,10 +1210,10 @@
   // selectRevisionCursorOnly) leaves the diff loader pointing at whatever
   // was loaded BEFORE branches view. This resyncs. Returns true if the
   // LOADED diff matches the CURSOR — enter*Mode callers gate on this to
-  // avoid initializing selectedFiles from a stale changedFiles snapshot.
+  // avoid initializing fileSel from a stale changedFiles snapshot.
   //
   // checkedRevisions guard is load-bearing: multi-check diff (what
-  // enterSquashMode needs for selectedFiles) must not be clobbered by a
+  // enterSquashMode needs for fileSel.init) must not be clobbered by a
   // single-revision reload. Returns true in that case — the loaded multi
   // diff IS the state enter*Mode wants.
   function switchToLogView(): boolean {
@@ -1277,9 +1277,7 @@
     // OLD revision's file list. User retries once the load settles (visible
     // in diff panel). Reachable via palette/context-menu from branches view.
     if (!switchToLogView()) return
-    // Initialize with all current changed files (source's files) and snapshot the count
-    for (const f of changedFiles) selectedFiles.add(f.path)
-    totalFileCount = changedFiles.length
+    fileSel.init(changedFiles)
     squash.enter(revs)
     // Move cursor to parent of first source (default squash target)
     const sourceIdx = revisions.findIndex(r => effectiveId(r.commit) === revs[0])
@@ -1299,15 +1297,15 @@
     }
     // C1: block execution when no files selected (empty array would squash ALL files).
     // Exception: empty commits have 0 total files — squash is still valid (moves metadata).
-    if (selectedFiles.size === 0 && totalFileCount > 0) {
+    if (fileSel.set.size === 0 && fileSel.total > 0) {
       setMessage({ kind: 'warning', text: 'Select at least one file to squash' })
       return
     }
     return withMutation(async () => {
       try {
         // W3: compare against snapshotted total, not live changedFiles
-        const files = selectedFiles.size < totalFileCount
-          ? [...selectedFiles]
+        const files = fileSel.set.size < fileSel.total
+          ? [...fileSel.set]
           : undefined
         const { sources, keepEmptied, useDestMsg, ignoreImmutable } = squash
         const result = await api.squash(sources, destination, {
@@ -1329,14 +1327,6 @@
         showError(e)
       }
     })
-  }
-
-  function toggleFileSelection(path: string) {
-    if (selectedFiles.has(path)) {
-      selectedFiles.delete(path)
-    } else {
-      selectedFiles.add(path)
-    }
   }
 
   // ── Hunk-level review support ────────────────────────────────────────────
@@ -1425,8 +1415,7 @@
       }
       hunkCursor = 0
     } else {
-      for (const f of changedFiles) selectedFiles.add(f.path)
-      totalFileCount = changedFiles.length
+      fileSel.init(changedFiles)
     }
     split.enter(effectiveId(selectedRevision.commit), asReview)
   }
@@ -1437,17 +1426,17 @@
     if (split.review) return executeHunkReview()
 
     // File-level split (unchanged)
-    if (selectedFiles.size === totalFileCount) {
+    if (fileSel.set.size === fileSel.total) {
       setMessage({ kind: 'warning', text: 'Uncheck at least one file to split out' })
       return
     }
-    if (selectedFiles.size === 0) {
+    if (fileSel.set.size === 0) {
       setMessage({ kind: 'warning', text: 'Select at least one file to keep' })
       return
     }
     return withMutation(async () => {
       try {
-        const files = [...selectedFiles]
+        const files = [...fileSel.set]
         const revision = split.revision
         const result = await api.split(revision, files, split.parallel || undefined)
         cancelInlineModes()
@@ -1543,8 +1532,8 @@
   }
 
   let squashFileCount = $derived.by(() => {
-    if (!squash.active || totalFileCount === 0) return null
-    return { selected: selectedFiles.size, total: totalFileCount }
+    if (!squash.active || fileSel.total === 0) return null
+    return { selected: fileSel.set.size, total: fileSel.total }
   })
 
   let splitFileCount = $derived.by(() => {
@@ -1554,8 +1543,8 @@
         ? { selected: selectedHunks.size, total: allHunks.length }
         : null
     }
-    return totalFileCount > 0
-      ? { selected: selectedFiles.size, total: totalFileCount }
+    return fileSel.total > 0
+      ? { selected: fileSel.set.size, total: fileSel.total }
       : null
   })
 
@@ -1575,8 +1564,7 @@
     squash.cancel()
     split.cancel()
     divergence.cancel()
-    selectedFiles.clear()
-    totalFileCount = 0
+    fileSel.clear()
     selectedHunks.clear()
     hunkCursor = 0
     // Restore focus to the revision list so j/k keys work immediately
@@ -1746,8 +1734,8 @@
   // (operates on a fixed revision).
   function handleInlineNav(e: KeyboardEvent): void {
     // Hunk-review j/k/Space/a/n/A/N take over. Routed here (not in
-    // split.handleKey) because the hunk list + selection set live in App,
-    // not the mode factory — same reason selectedFiles isn't in the factory.
+    // split.handleKey) because allHunks is derived from parseDiffCached
+    // (App-owned); the mode factory can't see it.
     if (split.review && handleReviewKey(e.key)) { e.preventDefault(); return }
 
     const [mode, jk] = split.active ? [split, undefined] as const
@@ -2196,8 +2184,8 @@
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
             fileSelectionMode={squash.active ? 'squash' : (split.active && !split.review) ? 'split' : false}
             {hunkReview}
-            {selectedFiles}
-            ontogglefile={toggleFileSelection}
+            selectedFiles={fileSel.set}
+            ontogglefile={fileSel.toggle}
             onfilesaved={loadLog}
             onjjmutation={withMutation}
             oncontextmenu={showContextMenu}

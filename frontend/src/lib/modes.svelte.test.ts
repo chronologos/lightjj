@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createRebaseMode, createSquashMode, createSplitMode, targetModeLabel } from './modes.svelte'
+import { createRebaseMode, createSquashMode, createSplitMode, createFileSelection, targetModeLabel } from './modes.svelte'
 
 describe('targetModeLabel', () => {
   it('maps all target modes to labels', () => {
@@ -208,5 +208,79 @@ describe('createSplitMode', () => {
     // Default enter without second arg clears review
     mode.enter('def')
     expect(mode.review).toBe(false)
+  })
+})
+
+describe('createFileSelection', () => {
+  const f = (path: string) => ({ path })
+
+  it('starts empty', () => {
+    const sel = createFileSelection()
+    expect(sel.set.size).toBe(0)
+    expect(sel.total).toBe(0)
+  })
+
+  it('init seeds set all-checked + snapshots total atomically', () => {
+    const sel = createFileSelection()
+    sel.init([f('a.ts'), f('b.ts'), f('c.ts')])
+    expect(sel.total).toBe(3)
+    expect(sel.set.size).toBe(3)
+    expect(sel.set.has('a.ts')).toBe(true)
+    expect(sel.set.has('b.ts')).toBe(true)
+    expect(sel.set.has('c.ts')).toBe(true)
+  })
+
+  it('toggle flips membership', () => {
+    const sel = createFileSelection()
+    sel.init([f('a.ts'), f('b.ts')])
+    sel.toggle('a.ts')
+    expect(sel.set.has('a.ts')).toBe(false)
+    expect(sel.set.size).toBe(1)
+    sel.toggle('a.ts')
+    expect(sel.set.has('a.ts')).toBe(true)
+    expect(sel.set.size).toBe(2)
+  })
+
+  it('toggle preserves total snapshot — total is init-time, not live', () => {
+    const sel = createFileSelection()
+    sel.init([f('a.ts'), f('b.ts')])
+    sel.toggle('a.ts')
+    sel.toggle('b.ts')
+    expect(sel.set.size).toBe(0)
+    expect(sel.total).toBe(2) // unchanged — this is what executeSquash/Split compare against
+  })
+
+  it('clear zeroes both atomically', () => {
+    const sel = createFileSelection()
+    sel.init([f('a.ts'), f('b.ts')])
+    sel.toggle('a.ts')
+    sel.clear()
+    expect(sel.set.size).toBe(0)
+    expect(sel.total).toBe(0)
+  })
+
+  // The bug class the factory prevents: squash seeds 5 files, user Escapes
+  // without execute, split entry re-seeds. Before: two loose declarations
+  // meant a forgotten .clear() left stale state. Now init() is atomic.
+  it('init after partial use fully replaces prior state (no leak)', () => {
+    const sel = createFileSelection()
+    sel.init([f('a.ts'), f('b.ts'), f('c.ts'), f('d.ts'), f('e.ts')])
+    sel.toggle('a.ts')
+    sel.toggle('b.ts')
+    // Simulate mode re-entry WITHOUT clear() — init() alone must reset both.
+    sel.init([f('x.ts'), f('y.ts')])
+    expect(sel.total).toBe(2)
+    expect(sel.set.size).toBe(2)
+    expect(sel.set.has('a.ts')).toBe(false) // not leaked
+    expect(sel.set.has('c.ts')).toBe(false) // not leaked
+    expect(sel.set.has('x.ts')).toBe(true)
+  })
+
+  it('init on empty list — the empty-commit squash case', () => {
+    const sel = createFileSelection()
+    sel.init([f('a.ts')])
+    sel.init([])
+    expect(sel.total).toBe(0)
+    expect(sel.set.size).toBe(0)
   })
 })

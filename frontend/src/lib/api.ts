@@ -812,6 +812,12 @@ export const api = {
     return request<OpEntry[]>(`/api/oplog?${params}`)
   },
 
+  // Human-formatted op-diff (`jj op show`). No template surface exists;
+  // displayed verbatim in OplogPanel's <pre> expansion. Uncached — cheap
+  // subprocess, fetch-on-Enter only.
+  opShow: (id: string) =>
+    request<{ output: string }>(`/api/op/show?${new URLSearchParams({ id })}`),
+
   // Evolog content grows with each jj operation on a change — it cannot be
   // cached by commit_id (the change_id is the subject, and the history expands
   // over time). Uncached; loadEvolog is debounced in App.svelte so rapid j/k

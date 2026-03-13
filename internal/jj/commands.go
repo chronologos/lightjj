@@ -190,6 +190,15 @@ func OpRestore(id string) CommandArgs {
 	return []string{"op", "restore", id}
 }
 
+// OpShow returns args for `jj op show` — the human-formatted operation-diff
+// (Changed commits +/-, Changed working copy, Changed bookmarks). There's no
+// template surface for this; jj renders it from the Transaction internally.
+// Returned verbatim to the frontend as a <pre> block — the one place where
+// passing human output through is correct rather than lazy.
+func OpShow(id string) CommandArgs {
+	return []string{"op", "show", "--no-graph", "--color", "never", "--ignore-working-copy", id}
+}
+
 // RestoreFromTo copies the full tree from `from` into `to` — the evolog
 // "restore this version" action. No file filter (full-tree by design);
 // file-scoped restore is Restore()'s job.

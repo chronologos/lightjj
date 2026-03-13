@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { OpEntry } from './api'
+  import { api, type OpEntry } from './api'
   import type { ContextMenuHandler } from './ContextMenu.svelte'
 
   interface Props {
@@ -18,9 +18,36 @@
   let selectedIdx = $state(-1)
   let contentEl: HTMLElement | undefined
 
+  // Single-op expansion — `jj op show` output, displayed verbatim below the
+  // selected row. Keyed by op.id (not index) so j/k away-and-back doesn't
+  // refetch; refresh (entries change) wipes it via the reset effect below.
+  let expandedId = $state('')
+  let expandedOutput = $state('')
+  let expandLoading = $state(false)
+
   // Reset selection on refresh — oplog prepends new ops at HEAD so the same
-  // index points to a different operation after undo/restore.
-  $effect(() => { void entries; selectedIdx = -1 })
+  // index points to a different operation after undo/restore. Also wipes
+  // expansion — op IDs survive refresh but the content we'd show is stale
+  // relative to what just happened.
+  $effect(() => { void entries; selectedIdx = -1; expandedId = ''; expandedOutput = '' })
+
+  async function toggleExpand(op: OpEntry) {
+    if (expandedId === op.id) { expandedId = ''; return }
+    expandedId = op.id
+    expandedOutput = ''
+    expandLoading = true
+    try {
+      const { output } = await api.opShow(op.id)
+      // Post-await guard: user j'd to another op and hit Enter during fetch.
+      if (expandedId !== op.id) return
+      expandedOutput = output
+    } catch (e) {
+      if (expandedId !== op.id) return
+      expandedOutput = `Error: ${e instanceof Error ? e.message : String(e)}`
+    } finally {
+      if (expandedId === op.id) expandLoading = false
+    }
+  }
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') { e.preventDefault(); onclose(); return }
@@ -36,10 +63,7 @@
       case 'Enter':
         if (selectedIdx < 0) return
         e.preventDefault()
-        // Open context menu at the selected row — keyboard-only path to undo/restore.
-        const row = contentEl?.querySelectorAll<HTMLElement>('.oplog-entry')[selectedIdx]
-        const r = row?.getBoundingClientRect()
-        if (r) openMenuFor(entries[selectedIdx], r.left + 20, r.top + r.height / 2)
+        toggleExpand(entries[selectedIdx])
         break
     }
   }
@@ -62,6 +86,8 @@
 
   function openMenuFor(op: OpEntry, x: number, y: number) {
     oncontextmenu?.([
+      { label: expandedId === op.id ? 'Collapse' : 'Show details', shortcut: 'Enter',
+        action: () => toggleExpand(op) },
       { label: `Copy op ID (${op.id})`, action: () => navigator.clipboard.writeText(op.id) },
       { separator: true },
       { label: 'Undo this operation', danger: true, disabled: op.is_current || !onopundo,
@@ -74,7 +100,7 @@
 
 <div class="oplog-panel">
   <div class="panel-header">
-    <span class="panel-title">Operation Log <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd></span>
+    <span class="panel-title">Operation Log <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd><kbd class="nav-hint">Enter</kbd></span>
     <div class="panel-actions">
       <button class="header-btn" onclick={onrefresh}>Refresh</button>
       <button class="header-btn" onclick={onclose}>Close</button>
@@ -100,6 +126,7 @@
           class:oplog-current={op.is_current}
           class:selected={selectedIdx === i}
           onclick={() => { selectedIdx = i }}
+          ondblclick={() => { selectedIdx = i; toggleExpand(op) }}
           oncontextmenu={(e) => { e.preventDefault(); selectedIdx = i; openMenuFor(op, e.clientX, e.clientY) }}
           role="option"
           aria-selected={selectedIdx === i}
@@ -109,6 +136,9 @@
           <span class="oplog-desc">{op.description}</span>
           <span class="oplog-time">{op.time}</span>
         </div>
+        {#if expandedId === op.id}
+          <pre class="oplog-expand">{expandLoading ? 'Loading…' : expandedOutput}</pre>
+        {/if}
       {:else}
         <div class="empty-state">No operations</div>
       {/each}
@@ -226,6 +256,21 @@
     font-size: 11px;
     flex-shrink: 0;
     white-space: nowrap;
+  }
+
+  .oplog-expand {
+    margin: 0;
+    padding: 8px 12px 8px 24px;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--subtext1);
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 300px;
+    overflow-y: auto;
   }
 
   .empty-state {

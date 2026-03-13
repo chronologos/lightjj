@@ -1,3 +1,5 @@
+import { SvelteSet } from 'svelte/reactivity'
+
 export type SourceMode = '-r' | '-s' | '-b'
 export type TargetMode = '-d' | '--insert-after' | '--insert-before'
 
@@ -148,6 +150,47 @@ export function createDivergenceMode(): DivergenceMode {
     cancel() {
       active = false
       changeId = ''
+    },
+  }
+}
+
+/** File-selection scratchpad shared by squash + split(file-level). Previously
+ *  two loose declarations in App.svelte whose correctness depended on every
+ *  caller remembering to zero both — a new entry point that seeds `set` but
+ *  not `total` leaks the prior mode's count into the next one's guard checks.
+ *  init()/clear() are atomic pairs. */
+export interface FileSelection {
+  /** Exposed raw — DiffPanel expects SvelteSet<string> for FileSelectionPanel.has() */
+  readonly set: SvelteSet<string>
+  /** File-count snapshot at init() time — compared against set.size to decide
+   *  "partial selection → pass file list" vs "all selected → pass nothing". */
+  readonly total: number
+  init(files: readonly { path: string }[]): void
+  toggle(path: string): void
+  clear(): void
+}
+
+export function createFileSelection(): FileSelection {
+  const set = new SvelteSet<string>()
+  let total = $state(0)
+
+  return {
+    set,
+    get total() { return total },
+
+    init(files) {
+      set.clear()
+      for (const f of files) set.add(f.path)
+      total = files.length
+    },
+
+    toggle(path) {
+      set.has(path) ? set.delete(path) : set.add(path)
+    },
+
+    clear() {
+      set.clear()
+      total = 0
     },
   }
 }

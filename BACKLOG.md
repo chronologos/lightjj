@@ -5,11 +5,10 @@ Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/C
 ## Active (2026-03-11)
 
 - [ ] **Smart views in key `2`** (Medium) — In addition to bookmarks, the right-column panel should offer preset revset "views" (my open PRs, trunk-diverged, recent activity, etc.). Each view computes a revset that populates the graph on the left. Bookmarks become ONE of the views rather than the whole panel. Design TBD — could be a tab strip within BookmarksPanel or a separate component.
-- [ ] **OplogPanel expansion** (Small) — j/k nav shipped. Remaining: op descriptions are truncated; no way to expand/inspect what an op actually did beyond the one-line summary. Consider: Enter to expand op details (`jj op show` equivalent), visual diff between op snapshots.
+- [ ] **OplogPanel visual diff** (Small) — Enter → `jj op show` expansion shipped. Remaining: visual diff between op snapshots (tree-at-op-A vs tree-at-op-B). `jj op show -p` gives per-change patches but comparing two arbitrary ops needs `--at-op` revset gymnastics. Defer until someone asks.
 
 ## Architecture debt
 
-- [ ] **`selectedFiles`/`totalFileCount` shared scratchpad** (Small) — App.svelte. Written by both `enterSquashMode` and `enterSplitMode`, read by both executes. Works only because `cancelInlineModes()` zeroes them — any new entry point that forgets → state leaks between modes. Either push into each mode factory (duplicate) or extract `createFileSelection()` that both compose.
 - [ ] **Revset input ownership inversion** (Small) — 4 `onrevset*` callbacks on RevisionGraph exist because the input lives inside RevisionGraph but its state (`revsetFilter`) lives in App. Move ownership into RevisionGraph or extract; removes 4 callbacks.
 - [ ] **`RepoDir == ""` overloaded sentinel** (Low) — Used as SSH-mode flag across 6+ sites. Conflates "SSH mode" / "test mode" / "no local fs". The real bit is "local filesystem access available". A `Capabilities` bitset (or just `hasLocalFS bool`) would clarify error messages but is cosmetic.
 - [ ] **`recent-actions` localStorage port loss** (Trivial) — `localhost:0` randomizes port → localStorage resets each launch → BookmarkModal "recent first" sort is always cold. config.svelte.ts already uses server-side primary (audited); only this frequency counter is affected. Either migrate to server-side or accept soft-degrade.
