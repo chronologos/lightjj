@@ -63,7 +63,6 @@
       <span class="key-divider"></span>
       <span class="key-group">
         <kbd class="key" class:key-active={squash.keepEmptied}>e</kbd><span class="key-label" class:key-label-active={squash.keepEmptied}>keep-emptied</span>
-        <kbd class="key" class:key-active={squash.useDestMsg}>d</kbd><span class="key-label" class:key-label-active={squash.useDestMsg}>use-dest-message</span>
         <kbd class="key" class:key-active={squash.ignoreImmutable}>x</kbd><span class="key-label" class:key-label-active={squash.ignoreImmutable}>ignore-immutable</span>
       </span>
       {#if squashFileCount}

@@ -94,18 +94,14 @@ func Edit(changeId string, ignoreImmutable bool) CommandArgs {
 	return args
 }
 
-func Split(revision string, files []string, parallel bool, interactive bool) CommandArgs {
+func Split(revision string, files []string, parallel bool) CommandArgs {
 	args := []string{"split", "-r", revision}
 	if parallel {
 		args = append(args, "--parallel")
 	}
-	if interactive {
-		args = append(args, "--interactive")
-	}
-	// When filesets are provided non-interactively, suppress the description
-	// editor by passing an empty message. The second commit keeps the original
-	// description automatically.
-	if !interactive && len(files) > 0 {
+	// Suppress the description editor when filesets are provided. The second
+	// commit keeps the original description automatically.
+	if len(files) > 0 {
 		args = append(args, "-m", "")
 	}
 	args = append(args, escapeFiles(files)...)
@@ -248,22 +244,19 @@ func BookmarkUntrack(name string, remote string) CommandArgs {
 	return args
 }
 
-func Squash(from SelectedRevisions, destination string, files []string, keepEmptied bool, useDestinationMessage bool, interactive bool, ignoreImmutable bool) CommandArgs {
+func Squash(from SelectedRevisions, destination string, files []string, keepEmptied bool, ignoreImmutable bool) CommandArgs {
 	args := []string{"squash"}
 	args = append(args, from.AsPrefixedArgs("--from")...)
 	args = append(args, "--into", destination)
 	if keepEmptied {
 		args = append(args, "--keep-emptied")
 	}
-	// Always pass --use-destination-message in non-interactive mode to prevent
-	// jj from opening an editor when both source and destination have descriptions.
-	// The web UI has no way to interactively compose a combined description.
-	if useDestinationMessage || !interactive {
-		args = append(args, "--use-destination-message")
-	}
-	if interactive {
-		args = append(args, "--interactive")
-	}
+	// --use-destination-message is unconditional: jj would otherwise open an
+	// editor when both source and destination have descriptions, and the web UI
+	// has no way to compose a combined one. StatusBar used to surface this as a
+	// toggle — it was a placebo (the condition here was `X || !interactive`
+	// with interactive hardcoded false).
+	args = append(args, "--use-destination-message")
 	if ignoreImmutable {
 		args = append(args, "--ignore-immutable")
 	}

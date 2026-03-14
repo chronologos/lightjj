@@ -111,15 +111,6 @@ describe('StatusBar', () => {
       expect(eKey?.classList.contains('key-active')).toBe(true)
     })
 
-    it('highlights d key when useDestMsg is toggled', () => {
-      const { container } = render(StatusBar, {
-        props: defaultProps({ squash: activeSquash('d') }),
-      })
-      const keys = container.querySelectorAll('.key:not(.action-key)')
-      const dKey = Array.from(keys).find(k => k.textContent === 'd')
-      expect(dKey?.classList.contains('key-active')).toBe(true)
-    })
-
     it('shows file count', () => {
       const { container } = render(StatusBar, {
         props: defaultProps({ squash: activeSquash(), squashFileCount: { selected: 2, total: 5 } }),

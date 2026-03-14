@@ -444,7 +444,7 @@
               {:else if isRebaseTarget}
                 <span class="rebase-preview">rebase {rebase.sourceMode} {rebase.sources.map(s => s.slice(0, 8)).join(' ')} {rebase.targetMode} {entry.commit.change_id.slice(0, 8)}</span>
               {:else if isSquashTarget}
-                <span class="rebase-preview">jj squash --from {squash.sources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squash.keepEmptied ? ' --keep-emptied' : ''}{squash.useDestMsg ? ' --use-destination-message' : ''}</span>
+                <span class="rebase-preview">jj squash --from {squash.sources.map(s => s.slice(0, 8)).join(' --from ')} --into {entry.commit.change_id.slice(0, 8)}{squash.keepEmptied ? ' --keep-emptied' : ''}</span>
               {:else}
                 {@const divOffset = divergenceOffsets.get(entry.commit.commit_id)}
                 <span class="meta-line">

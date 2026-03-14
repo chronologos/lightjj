@@ -605,12 +605,11 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 }
 
 type squashRequest struct {
-	Revisions             []string `json:"revisions"`
-	Destination           string   `json:"destination"`
-	Files                 []string `json:"files"`
-	KeepEmptied           bool     `json:"keep_emptied"`
-	UseDestinationMessage bool     `json:"use_destination_message"`
-	IgnoreImmutable       bool     `json:"ignore_immutable"`
+	Revisions       []string `json:"revisions"`
+	Destination     string   `json:"destination"`
+	Files           []string `json:"files"`
+	KeepEmptied     bool     `json:"keep_emptied"`
+	IgnoreImmutable bool     `json:"ignore_immutable"`
 }
 
 func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
@@ -628,7 +627,7 @@ func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revs := jj.FromIDs(req.Revisions)
-	s.runMutation(w, r, jj.Squash(revs, req.Destination, req.Files, req.KeepEmptied, req.UseDestinationMessage, false, req.IgnoreImmutable))
+	s.runMutation(w, r, jj.Squash(revs, req.Destination, req.Files, req.KeepEmptied, req.IgnoreImmutable))
 }
 
 func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
@@ -939,7 +938,7 @@ func (s *Server) handleSplit(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "files is required")
 		return
 	}
-	s.runMutation(w, r, jj.Split(req.Revision, req.Files, req.Parallel, false))
+	s.runMutation(w, r, jj.Split(req.Revision, req.Files, req.Parallel))
 }
 
 // hunkSpecRequest mirrors frontend's HunkSpec. The handler treats Spec as an

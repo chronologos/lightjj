@@ -90,7 +90,6 @@ describe('createSquashMode', () => {
     expect(mode.active).toBe(false)
     expect(mode.sources).toEqual([])
     expect(mode.keepEmptied).toBe(false)
-    expect(mode.useDestMsg).toBe(false)
   })
 
   it('enter activates and resets toggles', () => {
@@ -100,7 +99,6 @@ describe('createSquashMode', () => {
     expect(mode.active).toBe(true)
     expect(mode.sources).toEqual(['abc'])
     expect(mode.keepEmptied).toBe(false) // reset
-    expect(mode.useDestMsg).toBe(false)
   })
 
   it('cancel deactivates and clears sources', () => {
@@ -118,14 +116,6 @@ describe('createSquashMode', () => {
       expect(mode.keepEmptied).toBe(true)
       expect(mode.handleKey('e')).toBe(true)
       expect(mode.keepEmptied).toBe(false)
-    })
-
-    it('toggles useDestMsg with d', () => {
-      const mode = createSquashMode()
-      expect(mode.handleKey('d')).toBe(true)
-      expect(mode.useDestMsg).toBe(true)
-      expect(mode.handleKey('d')).toBe(true)
-      expect(mode.useDestMsg).toBe(false)
     })
 
     it('toggles ignoreImmutable with x', () => {

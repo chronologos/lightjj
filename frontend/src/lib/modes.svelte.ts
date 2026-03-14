@@ -27,7 +27,6 @@ export interface RebaseMode extends ModeBase {
 export interface SquashMode extends ModeBase {
   readonly sources: string[]
   readonly keepEmptied: boolean
-  readonly useDestMsg: boolean
   readonly ignoreImmutable: boolean
   enter(revisions: string[]): void
 }
@@ -91,20 +90,17 @@ export function createSquashMode(): SquashMode {
   let active = $state(false)
   let sources: string[] = $state([])
   let keepEmptied = $state(false)
-  let useDestMsg = $state(false)
   let ignoreImmutable = $state(false)
 
   return {
     get active() { return active },
     get sources() { return sources },
     get keepEmptied() { return keepEmptied },
-    get useDestMsg() { return useDestMsg },
     get ignoreImmutable() { return ignoreImmutable },
 
     enter(revisions: string[]) {
       sources = revisions
       keepEmptied = false
-      useDestMsg = false
       ignoreImmutable = false
       active = true
     },
@@ -117,7 +113,6 @@ export function createSquashMode(): SquashMode {
     handleKey(key: string): boolean {
       switch (key) {
         case 'e': keepEmptied = !keepEmptied; return true
-        case 'd': useDestMsg = !useDestMsg; return true
         case 'x': ignoreImmutable = !ignoreImmutable; return true
         default: return false
       }

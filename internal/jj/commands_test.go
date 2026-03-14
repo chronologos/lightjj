@@ -100,16 +100,15 @@ func TestDiff_WithFile(t *testing.T) {
 
 func TestSquash(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Squash(from, "def", nil, false, false, false, false)
+	got := Squash(from, "def", nil, false, false)
 	assert.Equal(t, []string{"squash", "--from", "abc", "--into", "def", "--use-destination-message"}, got)
 }
 
 func TestSquash_AllFlags(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Squash(from, "def", []string{"file.go"}, true, true, true, true)
+	got := Squash(from, "def", []string{"file.go"}, true, true)
 	assert.Contains(t, got, "--keep-emptied")
 	assert.Contains(t, got, "--use-destination-message")
-	assert.Contains(t, got, "--interactive")
 	assert.Contains(t, got, "--ignore-immutable")
 	assert.Contains(t, got, `root-file:"file.go"`)
 }
@@ -180,21 +179,14 @@ func TestSetDescription(t *testing.T) {
 }
 
 func TestSplit(t *testing.T) {
-	got := Split("abc", []string{"main.go"}, true, false)
+	got := Split("abc", []string{"main.go"}, true)
 	assert.Contains(t, got, "--parallel")
-	assert.NotContains(t, got, "--interactive")
 	assert.Contains(t, got, "-m")
 	assert.Contains(t, got, `root-file:"main.go"`)
 }
 
 func TestSplit_NoFilesNoMessage(t *testing.T) {
-	got := Split("abc", nil, false, false)
-	assert.NotContains(t, got, "-m")
-}
-
-func TestSplit_InteractiveNoMessage(t *testing.T) {
-	got := Split("abc", []string{"main.go"}, false, true)
-	assert.Contains(t, got, "--interactive")
+	got := Split("abc", nil, false)
 	assert.NotContains(t, got, "-m")
 }
 

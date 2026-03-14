@@ -584,12 +584,9 @@ func TestIntegrationSquash(t *testing.T) {
 	child := findRow(t, rows, "child with b")
 	parent := findRow(t, rows, "parent with a")
 
-	// Squash child into parent. use_destination_message avoids opening $EDITOR
-	// to combine descriptions (which would hang in a headless test).
 	w := apiPost(t, srv, "/api/squash", map[string]any{
-		"revisions":               []string{child.Commit.ChangeId},
-		"destination":             parent.Commit.ChangeId,
-		"use_destination_message": true,
+		"revisions":   []string{child.Commit.ChangeId},
+		"destination": parent.Commit.ChangeId,
 	})
 	require.Equal(t, http.StatusOK, w.Code)
 
@@ -804,11 +801,9 @@ func TestJourneySquashStack(t *testing.T) {
 	top := findRow(t, rows, "top commit")
 	middle := findRow(t, rows, "middle commit")
 
-	// Squash top into middle. use_destination_message avoids $EDITOR prompt.
 	w := apiPost(t, srv, "/api/squash", map[string]any{
-		"revisions":               []string{top.Commit.ChangeId},
-		"destination":             middle.Commit.ChangeId,
-		"use_destination_message": true,
+		"revisions":   []string{top.Commit.ChangeId},
+		"destination": middle.Commit.ChangeId,
 	})
 	require.Equal(t, http.StatusOK, w.Code)
 

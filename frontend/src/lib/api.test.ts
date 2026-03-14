@@ -426,7 +426,6 @@ describe('squash request body', () => {
     await api.squash(['src1', 'src2'], 'dest1', {
       files: ['a.go', 'b.go'],
       keepEmptied: true,
-      useDestinationMessage: true,
     })
 
     expect(mockFetch).toHaveBeenCalledTimes(1)
@@ -436,7 +435,6 @@ describe('squash request body', () => {
     expect(body.destination).toBe('dest1')
     expect(body.files).toEqual(['a.go', 'b.go'])
     expect(body.keep_emptied).toBe(true)
-    expect(body.use_destination_message).toBe(true)
   })
 
   it('omits undefined fields from request body', async () => {
@@ -452,7 +450,6 @@ describe('squash request body', () => {
     expect(body.destination).toBe('dest1')
     expect(body.files).toBeUndefined()
     expect(body.keep_emptied).toBeUndefined()
-    expect(body.use_destination_message).toBeUndefined()
   })
 })
 

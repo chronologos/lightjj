@@ -1334,11 +1334,10 @@
         const files = fileSel.set.size < fileSel.total
           ? [...fileSel.set]
           : undefined
-        const { sources, keepEmptied, useDestMsg, ignoreImmutable } = squash
+        const { sources, keepEmptied, ignoreImmutable } = squash
         const result = await api.squash(sources, destination, {
           files,
           keepEmptied: keepEmptied || undefined,
-          useDestinationMessage: useDestMsg || undefined,
           ignoreImmutable: ignoreImmutable || undefined,
         })
         // W1: only exit mode after successful API call

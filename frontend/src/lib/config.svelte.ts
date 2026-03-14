@@ -94,13 +94,19 @@ function createConfig() {
   let resolveReady: () => void
   const ready = new Promise<void>(r => { resolveReady = r })
 
+  // Per-key typed assignment — the `keyof Config` cast on Object.keys() is
+  // correct (iterating defaults, not the untrusted remote), but TS can't track
+  // that state[k] and remote[k] are compatibly typed for THIS k. The generic
+  // binds the type per key.
+  const applyKey = <K extends keyof Config>(k: K, v: Config[K]) => { state[k] = v }
+
   loadRemote().then(remote => {
     if (remote) {
       // Narrow unknown-shape remote to known keys. Backend preserves unknown
       // fields for forward-compat, but we only apply fields we understand.
       for (const k of Object.keys(defaults) as (keyof Config)[]) {
         if (k in remote && remote[k] !== undefined) {
-          (state as any)[k] = remote[k]
+          applyKey(k, remote[k] as Config[typeof k])
         }
       }
     }

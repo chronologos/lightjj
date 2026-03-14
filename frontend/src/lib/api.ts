@@ -881,12 +881,11 @@ export const api = {
     post<MutationResult>('/api/split-hunks', { revision, spec, description }),
 
   squash: (revisions: string[], destination: string, opts?: {
-    files?: string[], keepEmptied?: boolean, useDestinationMessage?: boolean, ignoreImmutable?: boolean
+    files?: string[], keepEmptied?: boolean, ignoreImmutable?: boolean
   }) =>
     post<MutationResult>('/api/squash', {
       revisions, destination,
       files: opts?.files, keep_emptied: opts?.keepEmptied,
-      use_destination_message: opts?.useDestinationMessage,
       ignore_immutable: opts?.ignoreImmutable,
     }),
 

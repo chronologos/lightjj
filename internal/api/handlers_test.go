@@ -364,7 +364,7 @@ func TestHandleRebase(t *testing.T) {
 func TestHandleSquash(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", nil, false, false, false, false)).SetOutput([]byte(""))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1693,7 +1693,7 @@ func TestHandleWorkspaces_RunnerError(t *testing.T) {
 
 func TestHandleSplit(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.Split("abc", []string{"src/main.go", "README.md"}, false, false)).SetOutput([]byte(""))
+	runner.Expect(jj.Split("abc", []string{"src/main.go", "README.md"}, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1707,7 +1707,7 @@ func TestHandleSplit(t *testing.T) {
 
 func TestHandleSplit_Parallel(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.Split("abc", []string{"src/main.go"}, true, false)).SetOutput([]byte(""))
+	runner.Expect(jj.Split("abc", []string{"src/main.go"}, true)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1721,7 +1721,7 @@ func TestHandleSplit_Parallel(t *testing.T) {
 
 func TestHandleSplit_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.Split("abc", []string{"file.go"}, false, false)).SetError(errors.New("split failed"))
+	runner.Expect(jj.Split("abc", []string{"file.go"}, false)).SetError(errors.New("split failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2041,7 +2041,7 @@ func TestHandleEdit_IgnoreImmutable(t *testing.T) {
 func TestHandleSquash_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", nil, false, false, false, false)).SetError(errors.New("squash failed"))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false)).SetError(errors.New("squash failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2059,7 +2059,7 @@ func TestHandleSquash_RunnerError(t *testing.T) {
 func TestHandleSquash_WithFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", []string{"a.go", "b.go"}, false, false, false, false)).SetOutput([]byte(""))
+	runner.Expect(jj.Squash(revs, "def", []string{"a.go", "b.go"}, false, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2074,13 +2074,13 @@ func TestHandleSquash_WithFiles(t *testing.T) {
 func TestHandleSquash_Flags(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", nil, true, true, false, true)).SetOutput([]byte(""))
+	runner.Expect(jj.Squash(revs, "def", nil, true, true)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
 	body, _ := json.Marshal(squashRequest{
 		Revisions: []string{"abc"}, Destination: "def",
-		KeepEmptied: true, UseDestinationMessage: true, IgnoreImmutable: true,
+		KeepEmptied: true, IgnoreImmutable: true,
 	})
 	req := jsonPost("/api/squash", body)
 	w := httptest.NewRecorder()
@@ -2771,15 +2771,10 @@ func TestWireTypes(t *testing.T) {
 			expect: jj.Rebase(abc, "def", "-s", "--insert-after", true, true),
 		},
 		{
-			name:  "squash: files + keep_emptied + use_destination_message + ignore_immutable",
-			route: "/api/squash",
-			body:  `{"revisions":["abc"],"destination":"def","files":["x.go"],"keep_emptied":true,"use_destination_message":true,"ignore_immutable":true}`,
-			// use_destination_message is always true in non-interactive mode
-			// regardless of the wire value, so this case only PARTIALLY covers
-			// it (a typo wouldn't change args). keep_emptied/ignore_immutable
-			// are the real signal here; files[] also checks the string-array
-			// wire shape.
-			expect: jj.Squash(abc, "def", []string{"x.go"}, true, true, false, true),
+			name:   "squash: files + keep_emptied + ignore_immutable",
+			route:  "/api/squash",
+			body:   `{"revisions":["abc"],"destination":"def","files":["x.go"],"keep_emptied":true,"ignore_immutable":true}`,
+			expect: jj.Squash(abc, "def", []string{"x.go"}, true, true),
 		},
 		{
 			name:   "edit: ignore_immutable",
