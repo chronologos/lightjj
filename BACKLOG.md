@@ -9,7 +9,7 @@ Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/C
 
 ## Architecture debt
 
-- [ ] **Revset input ownership inversion** (Small) — 4 `onrevset*` callbacks on RevisionGraph exist because the input lives inside RevisionGraph but its state (`revsetFilter`) lives in App. Move ownership into RevisionGraph or extract; removes 4 callbacks.
+- [x] **Revset input ownership inversion** (Small) — Done. Extracted filter bar from RevisionGraph into App.svelte. Removed 4 `onrevset*` callbacks + `revsetFilter` prop + `focusRevsetInput` export.
 - [ ] **`RepoDir == ""` overloaded sentinel** (Low) — Used as SSH-mode flag across 6+ sites. Conflates "SSH mode" / "test mode" / "no local fs". The real bit is "local filesystem access available". A `Capabilities` bitset (or just `hasLocalFS bool`) would clarify error messages but is cosmetic.
 - [ ] **`recent-actions` localStorage port loss** (Trivial) — `localhost:0` randomizes port → localStorage resets each launch → BookmarkModal "recent first" sort is always cold. config.svelte.ts already uses server-side primary (audited); only this frequency counter is affected. Either migrate to server-side or accept soft-degrade.
 - [ ] **No `storage` event listener in config.svelte.ts** (Trivial) — two browser tabs on same port: A writes localStorage, B's `$state` never re-reads (`loadLocal()` runs once at module eval). Diverge until reload.

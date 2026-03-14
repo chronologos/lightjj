@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, fireEvent } from '@testing-library/svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import RevisionGraph from './RevisionGraph.svelte'
 import type { LogEntry, LocalRef } from './api'
@@ -64,7 +64,6 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     checkedRevisions: new SvelteSet<string>(),
     loading: false,
     mutating: false,
-    revsetFilter: '',
     viewMode: 'log' as const,
     lastCheckedIndex: -1,
     onselect: vi.fn(),
@@ -74,10 +73,6 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     onnewfromchecked: vi.fn(),
     onabandonchecked: vi.fn(),
     onclearchecks: vi.fn(),
-    onrevsetsubmit: vi.fn(),
-    onrevsetclear: vi.fn(),
-    onrevsetchange: vi.fn(),
-    onrevsetescaped: vi.fn(),
     onbookmarkclick: vi.fn(),
     remoteVisibility: {},
     rebase: createRebaseMode(),
@@ -309,40 +304,6 @@ describe('RevisionGraph', () => {
     })
   })
 
-  describe('revset filter', () => {
-    it('input renders with placeholder', () => {
-      render(RevisionGraph, { props: defaultProps() })
-      expect(screen.getByPlaceholderText('revset filter (press / to focus)')).toBeInTheDocument()
-    })
-
-    it('Enter in input calls onrevsetsubmit', async () => {
-      const onrevsetsubmit = vi.fn()
-      render(RevisionGraph, { props: defaultProps({ onrevsetsubmit }) })
-      const input = screen.getByPlaceholderText('revset filter (press / to focus)')
-      await fireEvent.keyDown(input, { key: 'Enter' })
-      expect(onrevsetsubmit).toHaveBeenCalledTimes(1)
-    })
-
-    it('Escape in input calls onrevsetescaped', async () => {
-      const onrevsetescaped = vi.fn()
-      render(RevisionGraph, { props: defaultProps({ onrevsetescaped }) })
-      const input = screen.getByPlaceholderText('revset filter (press / to focus)')
-      await fireEvent.keyDown(input, { key: 'Escape' })
-      expect(onrevsetescaped).toHaveBeenCalledTimes(1)
-    })
-
-    it('clear button calls onrevsetclear when filter text present', async () => {
-      const onrevsetclear = vi.fn()
-      const { container } = render(RevisionGraph, {
-        props: defaultProps({ revsetFilter: 'trunk()', onrevsetclear }),
-      })
-      const clearBtn = container.querySelector('.revset-clear')
-      expect(clearBtn).toBeInTheDocument()
-      await fireEvent.click(clearBtn!)
-      expect(onrevsetclear).toHaveBeenCalledTimes(1)
-    })
-  })
-
   describe('view mode toggle', () => {
     it('no .view-btn elements render when viewMode=log', () => {
       const { container } = render(RevisionGraph, { props: defaultProps({ viewMode: 'log' }) })
@@ -352,7 +313,7 @@ describe('RevisionGraph', () => {
 
     it('a single active .view-btn with text "Custom" renders when viewMode=custom', () => {
       const { container } = render(RevisionGraph, {
-        props: defaultProps({ viewMode: 'custom', revsetFilter: 'mine()' }),
+        props: defaultProps({ viewMode: 'custom' }),
       })
       const buttons = container.querySelectorAll('.view-btn')
       expect(buttons).toHaveLength(1)
