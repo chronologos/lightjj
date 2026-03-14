@@ -139,23 +139,47 @@
   const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
   const bookmarksPanel = createLoader(() => api.bookmarks(), [] as Bookmark[])
 
-  // viewMode is a discretization of revsetFilter, not independent state — the
-  // filter is set by the visibility config effect. Typing anything else
-  // auto-surfaces a "Custom" indicator.
-  //
   // config.remoteVisibility is keyed by repo_path so tab A's toggles don't
   // bleed into tab B. repoPath arrives via loadInfo() — until then the slice
   // reads {} (no-remotes-visible) which is the feature's default anyway.
   let repoPath = $state('')
   let repoVisibility = $derived(config.remoteVisibility[repoPath] ?? {})
   let visibilityRevset = $derived(buildVisibilityRevset(repoVisibility, bookmarksPanel.value))
-  const viewMode = $derived(
-    revsetFilter === '' || revsetFilter === visibilityRevset ? 'log' : 'custom'
+
+  // Smart views — preset chips below the revset input. Click → applyRevsetExample.
+  // Module-const: zero reactive deps, viewLabel loop adds no tracking.
+  const STATIC_PRESETS = [
+    { key: 'mine',      label: 'My work',   revset: 'mine() & mutable()' },
+    { key: 'wip',       label: 'WIP',       revset: 'trunk()..@' },
+    { key: 'conflicts', label: 'Conflicts', revset: 'conflicts()' },
+    { key: 'divergent', label: 'Divergent', revset: '(divergent() & mutable())::' },
+  ] as const
+
+  // The only dynamic preset. Empty list → '' (chip hidden by {#if}, never
+  // hits jj). revsetQuote escapes revset operators in bookmark names.
+  // $derived.by thunk sidesteps TDZ (pullRequests declared at ~:286).
+  const prsRevset = $derived.by(() =>
+    pullRequests.length === 0
+      ? ''
+      : `ancestors(${pullRequests.map(p => revsetQuote(p.bookmark)).join(' | ')}, 3) | @`
   )
+
+  // Label for RevisionGraph's header badge. null = default log (no badge).
+  // Pure string-match on revsetFilter — a preset's identity IS its revset
+  // string. No separate appliedPresetKey: every revsetFilter write site
+  // (oninput, clearRevsetFilter, visibility effect, jumpToBookmark, tab-restore)
+  // would be a desync bug site. Editing the applied revset → 'Custom' is
+  // correct: user is customizing.
+  const viewLabel = $derived.by(() => {
+    if (revsetFilter === '' || revsetFilter === visibilityRevset) return null
+    for (const p of STATIC_PRESETS) if (revsetFilter === p.revset) return p.label
+    if (prsRevset !== '' && revsetFilter === prsRevset) return 'PRs'
+    return 'Custom'
+  })
   // When visibilityRevset changes and the user hasn't typed a custom filter,
   // update revsetFilter to reflect the new visibility config and reload.
   // The guard compares against prevVisibilityRevset (the value that THIS effect
-  // previously wrote), NOT viewMode — reading viewMode inside the effect lazily
+  // previously wrote), NOT viewLabel — reading viewLabel inside the effect lazily
   // recomputes it with NEW visibilityRevset + OLD revsetFilter → 'custom' →
   // guard fails on every toggle after the first. untrack() blocks dep tracking,
   // not $derived lazy recomputation.
@@ -449,6 +473,7 @@
     { label: 'Load diff', shortcut: 'Enter', category: 'Navigation', action: noop, infoOnly: true },
     { label: 'Focus revset filter', shortcut: '/', category: 'Navigation', action: () => revsetInputEl?.focus() },
     { label: 'Clear revset filter', category: 'Navigation', action: clearRevsetFilter, when: () => revsetFilter !== '' },
+    ...STATIC_PRESETS.map(p => ({ label: `View: ${p.label}`, hint: p.revset, category: 'Navigation', action: () => applyRevsetExample(p.revset) })),
     { label: 'Jump to working copy (@)', shortcut: '@', category: 'Navigation', action: () => { if (workingCopyIndex >= 0) selectRevision(workingCopyIndex) }, when: () => workingCopyIndex >= 0 },
     { label: 'Next file / Previous file', shortcut: '] / [', category: 'Navigation', action: noop, infoOnly: true },
 
@@ -516,6 +541,7 @@
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
     { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
+    { label: `View: Open PRs (${pullRequests.length})`, hint: prsRevset, category: 'Navigation', action: () => applyRevsetExample(prsRevset), when: () => pullRequests.length > 0 },
   ])
 
   let aliasCommands = $derived<PaletteCommand[]>(
@@ -2168,6 +2194,32 @@
               </div>
             {/if}
           </div>
+          <!-- Smart-view preset chips. Same mechanism as the (?) popover's
+               examples — direct revsetFilter assignment + submit. No when()
+               gates: Conflicts/Divergent always render; clicking on a clean
+               repo → empty graph is self-explanatory. A gate reading
+               `revisions.some(conflicted)` would see only what's LOADED
+               (circularly hides the chip that would find them). -->
+          <div class="preset-chips">
+            {#snippet chip(revset: string, label: string, count?: number)}
+              {@const active = revsetFilter === revset}
+              <!-- Active chip → toggle off. Re-applying the same revset would
+                   fire handleRevsetSubmit → diff.reset + clearChecks + reload,
+                   wiping nav position for a no-op. -->
+              <button
+                class="preset-chip"
+                class:active={active}
+                onclick={() => applyRevsetExample(active ? '' : revset)}
+                title={revset}
+              >{label}{#if count !== undefined} <span class="chip-count">{count}</span>{/if}</button>
+            {/snippet}
+            {#each STATIC_PRESETS as p (p.key)}
+              {@render chip(p.revset, p.label)}
+            {/each}
+            {#if pullRequests.length > 0}
+              {@render chip(prsRevset, 'PRs', pullRequests.length)}
+            {/if}
+          </div>
           <RevisionGraph
             bind:this={revisionGraphRef}
             {revisions}
@@ -2175,7 +2227,7 @@
             {checkedRevisions}
             {loading}
             {mutating}
-            {viewMode}
+            {viewLabel}
             {lastCheckedIndex}
             onselect={activeView === 'branches' ? selectRevisionCursorOnly : selectRevision}
             oncheck={toggleCheck}
@@ -2448,6 +2500,30 @@
   .revset-input::placeholder {
     color: var(--surface1);
   }
+
+  .preset-chips {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding: 0 8px 4px;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+    flex-shrink: 0;
+  }
+  .preset-chip {
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: var(--surface0);
+    color: var(--subtext0);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .preset-chip:hover { background: var(--surface1); color: var(--text); }
+  .preset-chip.active { border-color: var(--amber); color: var(--amber); background: var(--surface0); }
+  .chip-count { opacity: 0.6; margin-left: 2px; }
 
   .revset-clear {
     background: transparent;

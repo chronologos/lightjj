@@ -4,7 +4,7 @@ Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/C
 
 ## Active (2026-03-11)
 
-- [ ] **Smart views in key `2`** (Medium) — In addition to bookmarks, the right-column panel should offer preset revset "views" (my open PRs, trunk-diverged, recent activity, etc.). Each view computes a revset that populates the graph on the left. Bookmarks become ONE of the views rather than the whole panel. Design TBD — could be a tab strip within BookmarksPanel or a separate component.
+- [x] **Smart views** — Shipped as inline preset chips in the revset filter bar (not a panel). `applyRevsetExample()` reuse, no new components. Rationale in `docs/plan-smart-views.md`: the v1 tab-strip-hosting-BookmarksPanel design conflated revset-apply buttons with the bookmarks list surface; decoupling collapsed ~240 LOC → ~60. User-defined presets (config.json-backed) is the natural follow-up if asked.
 - [ ] **OplogPanel visual diff** (Small) — Enter → `jj op show` expansion shipped. Remaining: visual diff between op snapshots (tree-at-op-A vs tree-at-op-B). `jj op show -p` gives per-change patches but comparing two arbitrary ops needs `--at-op` revset gymnastics. Defer until someone asks.
 
 ## Architecture debt
@@ -30,7 +30,6 @@ Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/C
 
 ## Advanced features
 
-- [ ] **Hunk-level accept/reject** (Medium) — Per-hunk checkboxes in DiffFileView during review mode. **Via `jj split --tool` diff-editor protocol**: tool receives `$left`/`$right` directories, modifies `$right` in place, jj reads it back. lightjj binary re-enters as the tool (`--apply-hunks=<spec.json>` flag). SSH caveat: tool must exist on remote — hunk-level is local-only unless binary is shipped. ~1-2 days.
 - [ ] **No virtualization for mega-files** (Low) — manual expand of 5000-line file renders all lines. Auto-collapse at 500 + total-line collapse at 2000 mitigate; `@tanstack/virtual` on the per-hunk `{#each}` inside DiffFileView would be the full fix.
 - [ ] **Drag-and-drop rebase** (Low) — drag revision onto destination. Inline keyboard rebase already covers the CUJ.
 - [ ] **Search across revisions** (Medium) — `jj log -r 'description(glob:"*query*")'` or tree-grep. Needs design.

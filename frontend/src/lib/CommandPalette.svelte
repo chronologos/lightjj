@@ -169,7 +169,7 @@
           >
             <span class="palette-label">
               {cmd.label}
-              {#if cmd.hint}<span class="palette-badge">alias</span>{/if}
+              {#if cmd.category === 'Aliases'}<span class="palette-badge">alias</span>{/if}
             </span>
             {#if cmd.hint}<span class="palette-hint" title={cmd.hint}>{cmd.hint}</span>{/if}
             {#if cmd.shortcut}
