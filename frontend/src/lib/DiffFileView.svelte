@@ -1073,7 +1073,7 @@
 
   .conflict-glyph {
     font-size: 11px;
-    filter: drop-shadow(0 0 2px rgba(239, 83, 80, 0.4));
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--red) 40%, transparent));
   }
 
   /* Merge button — opens 3-pane editor. Compact pill matching file-header style. */

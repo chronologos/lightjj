@@ -105,8 +105,6 @@
 
   const cy = ROW_H / 2
 
-  // Contrast color for glyphs rendered on top of semantic-colored nodes
-  let contrastFill = $derived(isDark ? '#0f0f13' : '#f8f8f6')
 </script>
 
 <svg
@@ -187,9 +185,9 @@
           <!-- Conflict: semantic red, no graph opacity -->
           <circle cx={x} cy={cy} r={NODE_R} fill="var(--red)" />
           <line x1={x - 2} y1={cy - 2} x2={x + 2} y2={cy + 2}
-            stroke={contrastFill} stroke-width={1.5} />
+            stroke="var(--base)" stroke-width={1.5} />
           <line x1={x + 2} y1={cy - 2} x2={x - 2} y2={cy + 2}
-            stroke={contrastFill} stroke-width={1.5} />
+            stroke="var(--base)" stroke-width={1.5} />
 
         {:else if cell.char === '◌'}
           <!-- Hidden: subtler than normal nodes -->

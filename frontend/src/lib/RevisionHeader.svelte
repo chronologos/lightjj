@@ -165,7 +165,7 @@
   }
 
   .divergent-btn:hover {
-    background: rgba(235, 100, 100, 0.15);
+    background: var(--bg-error);
   }
 
   .desc-expand-btn {

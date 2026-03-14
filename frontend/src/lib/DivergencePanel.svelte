@@ -764,7 +764,7 @@
 
   .confirm-overlay {
     position: absolute; inset: 0; z-index: 10;
-    background: rgba(0,0,0,0.5);
+    background: var(--backdrop);
     display: flex; align-items: center; justify-content: center;
   }
   .confirm-box {
