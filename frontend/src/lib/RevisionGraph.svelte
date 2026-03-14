@@ -21,7 +21,7 @@
     checkedRevisions: SvelteSet<string>
     loading: boolean
     mutating: boolean
-    viewMode: 'log' | 'custom'
+    viewLabel: string | null
     lastCheckedIndex: number
     onselect: (index: number) => void
     oncheck: (changeId: string, index: number) => void
@@ -41,7 +41,7 @@
   }
 
   let {
-    revisions, selectedIndex, checkedRevisions, loading, mutating, viewMode, lastCheckedIndex,
+    revisions, selectedIndex, checkedRevisions, loading, mutating, viewLabel, lastCheckedIndex,
     onselect, oncheck, onrangecheck, oncontextmenu,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onbookmarkclick,
@@ -292,8 +292,8 @@
   <div class="panel-header">
     <span class="panel-title">Revisions <kbd class="nav-hint">j</kbd><kbd class="nav-hint">k</kbd></span>
     <div class="view-toggle">
-      {#if viewMode === 'custom'}
-        <span class="view-btn view-btn-active">Custom</span>
+      {#if viewLabel}
+        <span class="view-btn view-btn-active">{viewLabel}</span>
       {/if}
     </div>
     {#if revisions.length > 0}

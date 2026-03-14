@@ -64,7 +64,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     checkedRevisions: new SvelteSet<string>(),
     loading: false,
     mutating: false,
-    viewMode: 'log' as const,
+    viewLabel: null,
     lastCheckedIndex: -1,
     onselect: vi.fn(),
     oncheck: vi.fn(),
@@ -304,21 +304,17 @@ describe('RevisionGraph', () => {
     })
   })
 
-  describe('view mode toggle', () => {
-    it('no .view-btn elements render when viewMode=log', () => {
-      const { container } = render(RevisionGraph, { props: defaultProps({ viewMode: 'log' }) })
-      const buttons = container.querySelectorAll('.view-btn')
-      expect(buttons).toHaveLength(0)
+  describe('view label badge', () => {
+    it('no badge renders when viewLabel is null', () => {
+      const { container } = render(RevisionGraph, { props: defaultProps({ viewLabel: null }) })
+      expect(container.querySelectorAll('.view-btn')).toHaveLength(0)
     })
 
-    it('a single active .view-btn with text "Custom" renders when viewMode=custom', () => {
-      const { container } = render(RevisionGraph, {
-        props: defaultProps({ viewMode: 'custom' }),
-      })
-      const buttons = container.querySelectorAll('.view-btn')
-      expect(buttons).toHaveLength(1)
-      expect(buttons[0]).toHaveClass('view-btn-active')
-      expect(buttons[0]).toHaveTextContent('Custom')
+    it('renders the label string verbatim', () => {
+      const { container } = render(RevisionGraph, { props: defaultProps({ viewLabel: 'My work' }) })
+      const badge = container.querySelector('.view-btn')
+      expect(badge).toHaveClass('view-btn-active')
+      expect(badge).toHaveTextContent('My work')
     })
   })
 

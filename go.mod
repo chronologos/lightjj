@@ -1,6 +1,6 @@
 module github.com/chronologos/lightjj
 
-go 1.25.6
+go 1.25.8
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
