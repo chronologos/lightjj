@@ -5,7 +5,6 @@ import BookmarkModal from './BookmarkModal.svelte'
 vi.mock('./api', () => ({
   api: {
     bookmarks: vi.fn(),
-    remotes: vi.fn(),
   },
 }))
 
@@ -13,7 +12,6 @@ import { api } from './api'
 import type { Bookmark } from './api'
 
 const mockBookmarks = api.bookmarks as ReturnType<typeof vi.fn>
-const mockRemotes = api.remotes as ReturnType<typeof vi.fn>
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
   return {
@@ -61,8 +59,6 @@ function footer(): string {
 describe('BookmarkModal', () => {
   beforeEach(() => {
     mockBookmarks.mockReset()
-    mockRemotes.mockReset()
-    mockRemotes.mockResolvedValue(['origin'])
   })
 
   describe('rendering — one row per bookmark', () => {
@@ -300,10 +296,15 @@ describe('BookmarkModal', () => {
       expect(footer()).not.toContain('again') // never even armed
     })
 
-    it('t is no-op when no remotes exist', async () => {
+    it('t is no-op for a bookmark with no remotes entries', async () => {
+      // trackOptions only offers toggles for remotes the bookmark EXISTS on.
+      // Local-only bookmarks (never pushed) → nothing to track against. The
+      // old speculative "offer track for any configured remote" path was a
+      // lying menu entry — jj would warn "No matching remotes" and no-op.
       const onexecute = vi.fn()
-      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat' })])
-      mockRemotes.mockResolvedValue([])
+      mockBookmarks.mockResolvedValue([
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+      ])
       await renderSettled(defaultProps({ onexecute }))
 
       await fireEvent.keyDown(modal(), { key: 't' })
@@ -311,34 +312,24 @@ describe('BookmarkModal', () => {
       expect(onexecute).not.toHaveBeenCalled()
     })
 
-    it('t fires track against default remote for local-only bookmark (single remote)', async () => {
-      const onexecute = vi.fn()
-      mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
-      ])
-      mockRemotes.mockResolvedValue(['upstream']) // single remote → immediate fire
-      await renderSettled(defaultProps({ onexecute }))
-
-      await fireEvent.keyDown(modal(), { key: 't' }) // track, non-destructive, fires immediately
-      expect(onexecute).toHaveBeenCalledWith({ action: 'track', bookmark: 'feat', remote: 'upstream' })
-    })
-
-    it('t opens submenu for local-only bookmark with multiple remotes', async () => {
+    it('t opens submenu when bookmark exists on multiple remotes', async () => {
       const onexecute = vi.fn()
       const ontrackmenu = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'main', remotes: [
+          { remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: true, ahead: 0, behind: 0 },
+          { remote: 'upstream', commit_id: 'y', description: '', ago: '', tracked: false, ahead: 0, behind: 0 },
+        ] }),
       ])
-      mockRemotes.mockResolvedValue(['origin', 'upstream'])
       await renderSettled(defaultProps({ onexecute, ontrackmenu }))
 
       await fireEvent.keyDown(modal(), { key: 't' })
       expect(onexecute).not.toHaveBeenCalled()
       expect(ontrackmenu).toHaveBeenCalledTimes(1)
       const [bm, opts] = ontrackmenu.mock.calls[0]
-      expect(bm.name).toBe('feat')
+      expect(bm.name).toBe('main')
       expect(opts).toEqual([
-        { action: 'track', remote: 'origin' },
+        { action: 'untrack', remote: 'origin' },
         { action: 'track', remote: 'upstream' },
       ])
     })
@@ -542,13 +533,11 @@ describe('BookmarkModal', () => {
       await waitFor(() => expect(screen.getByText('No matching bookmarks')).toBeInTheDocument())
     })
 
-    it('remotes fetch failure does not break the modal', async () => {
+    it('t hint dimmed when selected bookmark has no track options', async () => {
       mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat' })])
-      mockRemotes.mockRejectedValue(new Error('boom'))
       await renderSettled(defaultProps())
 
       expect(items()).toHaveLength(1)
-      // t is dimmed (no trackInfo → can.track null) but modal is otherwise fine
       const tHint = [...document.querySelectorAll('.bm-footer > span')].find(s => s.textContent?.includes('track'))
       expect(tHint).toHaveClass('dim')
     })

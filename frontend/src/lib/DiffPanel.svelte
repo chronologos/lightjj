@@ -50,6 +50,9 @@
      *  the unified branch — wiring split-view too is possible but doubles
      *  the surface for a mode where unified is arguably clearer anyway). */
     hunkReview?: import('./DiffFileView.svelte').HunkReviewState | null
+    /** Called after any WC-mutating op (saveFile/saveMerge/discardFile).
+     *  Explicit refresh — onjjmutation is withMutation (lock only, no loadLog)
+     *  and the header-driven op-id fires while mutating=true so onStale drops it. */
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
      *  Returns undefined if blocked (another mutation in flight). */
@@ -252,9 +255,15 @@
         : await api.restore(revId, files)
       if (result === undefined && onjjmutation) {
         editError = 'Operation in progress — try again'
+        return
       }
-      // No manual refresh: runMutation → op-id change → SSE → log refresh →
-      // new commit_id → diff/files re-fetched. Same flow as abandon/squash.
+      if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
+      // Explicit refresh — onjjmutation is withMutation (lock only, no loadLog).
+      // The X-JJ-Op-Id header fires notifyOpId via queueMicrotask BEFORE
+      // res.json() resolves, so onStale fires while mutating=true and the
+      // !mutating guard in App's onStale handler drops it. The later SSE push
+      // dedups against lastOpId.
+      await onfilesaved?.()
     } catch (e) {
       editError = `Discard failed: ${e instanceof Error ? e.message : String(e)}`
     } finally {

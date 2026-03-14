@@ -28,7 +28,6 @@
   let modalEl: HTMLDivElement | undefined = $state(undefined)
   let inputFocused: boolean = $state(false)
   let bookmarks: Bookmark[] = $state([])
-  let remotes: string[] = $state([])
   let loading: boolean = $state(false)
   let fetchError: string | null = $state(null)
   let previousFocus: HTMLElement | null = null
@@ -46,11 +45,14 @@
     let bms = bookmarks
     if (filterBookmark) bms = bms.filter(b => b.name === filterBookmark)
     if (query) return bms.filter(b => fuzzyMatch(query, b.name))
-    // No query: recent first. Hoist counts — history.count() parses
-    // localStorage on every call; inside the sort comparator that's 2N·logN
-    // synchronous JSON.parse calls.
-    const counts = new Map(bms.map(b => [b.name, history.count(b.name)]))
-    return [...bms].sort((a, b) => counts.get(b.name)! - counts.get(a.name)!)
+    // No query: conflict > recency. Conflict-first mirrors BookmarksPanel's
+    // trouble-first syncPriority — if a bookmark is conflicted you opened this
+    // modal to resolve it. snapshot() is one JSON.parse; count() would be N.
+    const counts = history.snapshot()
+    return [...bms].sort((a, b) =>
+      (+b.conflict - +a.conflict) ||
+      ((counts[b.name] ?? 0) - (counts[a.name] ?? 0))
+    )
   })
 
   let selected = $derived(filtered[index] as Bookmark | undefined)
@@ -64,7 +66,7 @@
     return {
       move: !!currentCommitId && bm.commit_id !== currentCommitId,
       del: !!bm.local,
-      track: trackOptions(bm, remotes),
+      track: trackOptions(bm),
     }
   })
 
@@ -77,13 +79,9 @@
       loading = true
       fetchError = null
       const gen = ++fetchGen
-      api.bookmarks({ local: true }).then(async (bms) => {
+      api.bookmarks({ local: true }).then((bms) => {
         if (gen !== fetchGen) return
-        let rs: string[] = []
-        try { rs = await api.remotes() } catch { /* optional */ }
-        if (gen !== fetchGen) return // re-check: modal may have closed/reopened during remotes await
         bookmarks = bms
-        remotes = rs
         loading = false
       }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
       // {#if open} hasn't mounted yet on this tick — modalEl is undefined.

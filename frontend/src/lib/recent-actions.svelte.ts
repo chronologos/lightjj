@@ -43,6 +43,12 @@ export function recentActions(namespace: string) {
       return load()[key] ?? 0
     },
 
+    /** One-shot read of all counts. Prefer this over count() in sort
+     *  comparators — count() re-parses localStorage per call. */
+    snapshot(): Record<string, number> {
+      return load()
+    },
+
     clear() {
       try { localStorage.removeItem(storageKey) } catch {}
     },

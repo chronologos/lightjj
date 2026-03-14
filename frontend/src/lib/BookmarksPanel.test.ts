@@ -249,7 +249,11 @@ describe('BookmarksPanel — actions', () => {
 
   it('t tracks on single press (non-destructive)', async () => {
     const onexecute = vi.fn()
-    render(BookmarksPanel, { props: props({ bookmarks: withLocal, onexecute }) })
+    // Untracked remote entry → trackOptions offers {track, origin}. Local-only
+    // bookmarks (no remotes at all) no longer get speculative track entries —
+    // jj would no-op with a "No matching remotes" warning.
+    const bms = [mkBm({ name: 'feat', local: mkLocal(), remotes: [mkRemote({ tracked: false })] })]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, onexecute }) })
     await fireEvent.keyDown(list(), { key: 'j' }) // move to bookmark
     await fireEvent.keyDown(list(), { key: 't' })
     expect(onexecute).toHaveBeenCalledWith({ action: 'track', bookmark: 'feat', remote: 'origin' })
@@ -269,7 +273,12 @@ describe('BookmarksPanel — actions', () => {
   it('t with multiple remotes opens submenu instead of firing', async () => {
     const onexecute = vi.fn()
     const ontrackmenu = vi.fn()
-    const bm = mkBm({ name: 'feat', local: mkLocal(), remotes: [mkRemote({ tracked: true })] })
+    // Bookmark exists on BOTH remotes — the fork-workflow main@origin +
+    // main@upstream case. Submenu decides which to toggle.
+    const bm = mkBm({ name: 'main', local: mkLocal(), remotes: [
+      mkRemote({ remote: 'origin', tracked: true }),
+      mkRemote({ remote: 'upstream', tracked: false }),
+    ] })
     render(BookmarksPanel, { props: props({
       bookmarks: [bm], onexecute, ontrackmenu,
       allRemotes: ['origin', 'upstream'],
@@ -279,7 +288,7 @@ describe('BookmarksPanel — actions', () => {
     expect(onexecute).not.toHaveBeenCalled()
     expect(ontrackmenu).toHaveBeenCalledTimes(1)
     const [passedBm, opts] = ontrackmenu.mock.calls[0]
-    expect(passedBm.name).toBe('feat')
+    expect(passedBm.name).toBe('main')
     expect(opts).toEqual([
       { action: 'untrack', remote: 'origin' },
       { action: 'track', remote: 'upstream' },

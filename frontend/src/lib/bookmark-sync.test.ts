@@ -218,30 +218,30 @@ describe('trackOptions', () => {
       local: mkRemote({ remote: '.' }),
       remotes: [mkRemote({ remote: 'origin', tracked: true }), mkRemote({ remote: 'upstream', tracked: false })],
     })
-    expect(trackOptions(bm, ['origin', 'upstream'])).toEqual([
+    expect(trackOptions(bm)).toEqual([
       { action: 'untrack', remote: 'origin' },
       { action: 'track', remote: 'upstream' },
     ])
   })
 
-  it('offers track for remotes the bookmark is not on (local-only)', () => {
-    const bm = mkBm({ local: mkRemote({ remote: '.' }) })
-    expect(trackOptions(bm, ['origin', 'upstream'])).toEqual([
-      { action: 'track', remote: 'origin' },
-      { action: 'track', remote: 'upstream' },
-    ])
+  it('does NOT offer track for remotes the bookmark is absent from', () => {
+    // `jj bookmark track foo --remote upstream` when foo@upstream doesn't
+    // exist is a no-op with "Warning: No matching remotes". Offering it would
+    // be a lying menu entry — user clicks, warning appears, nothing changes.
+    const bm = mkBm({
+      local: mkRemote({ remote: '.' }),
+      remotes: [mkRemote({ remote: 'origin', tracked: true })],
+    })
+    expect(trackOptions(bm)).toEqual([{ action: 'untrack', remote: 'origin' }])
   })
 
-  it('does not offer track-on-absent remotes when no local ref', () => {
-    // remote-only bookmark: can only toggle the remote it's on
+  it('remote-only bookmark: toggles the one remote it exists on', () => {
     const bm = mkBm({ remotes: [mkRemote({ remote: 'origin', tracked: false })] })
-    expect(trackOptions(bm, ['origin', 'upstream'])).toEqual([
-      { action: 'track', remote: 'origin' },
-    ])
+    expect(trackOptions(bm)).toEqual([{ action: 'track', remote: 'origin' }])
   })
 
-  it('empty when no remotes at all', () => {
+  it('local-only bookmark (no remotes at all) → empty', () => {
     const bm = mkBm({ local: mkRemote({ remote: '.' }) })
-    expect(trackOptions(bm, [])).toEqual([])
+    expect(trackOptions(bm)).toEqual([])
   })
 })

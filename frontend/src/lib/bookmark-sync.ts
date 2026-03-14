@@ -102,22 +102,14 @@ export interface TrackOption {
   remote: string
 }
 
-/** All per-remote track/untrack toggles available for this bookmark.
- *  - For each remote the bookmark exists on: toggle its tracked state.
- *  - For each remote it DOESN'T exist on (and bm.local is set): offer track.
- *  Default remote sorts first (backend sorts allRemotes, bm.remotes). Empty =
- *  nothing to do (no remotes at all). */
-export function trackOptions(bm: Bookmark, allRemotes: string[]): TrackOption[] {
-  const opts: TrackOption[] = []
-  const seen = new Set<string>()
-  for (const r of bm.remotes ?? []) {
-    seen.add(r.remote)
-    opts.push({ action: r.tracked ? 'untrack' : 'track', remote: r.remote })
-  }
-  if (bm.local) {
-    for (const r of allRemotes) {
-      if (!seen.has(r)) opts.push({ action: 'track', remote: r })
-    }
-  }
-  return opts
+/** Per-remote track/untrack toggles for this bookmark — one per remote the
+ *  bookmark actually exists on. `jj bookmark track foo --remote bar` when
+ *  foo@bar doesn't exist is a no-op with a warning ("No matching remotes");
+ *  offering it would be a lying menu entry. Default remote sorts first
+ *  (backend sorts bm.remotes). */
+export function trackOptions(bm: Bookmark): TrackOption[] {
+  return (bm.remotes ?? []).map(r => ({
+    action: r.tracked ? 'untrack' : 'track',
+    remote: r.remote,
+  }))
 }

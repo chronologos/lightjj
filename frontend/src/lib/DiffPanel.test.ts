@@ -186,6 +186,51 @@ describe('DiffPanel', () => {
       resolveShow({ content: 'body' })
       await settle()
     })
+
+    // Regression: onjjmutation=withMutation holds mutating=true through
+    // res.json(), so the header-driven notifyOpId microtask hits App's
+    // !mutating guard and the later SSE push dedups. Explicit onfilesaved
+    // is the only refresh path. Same mechanism saveFile/saveMerge use.
+    it('successful discard → onfilesaved called (explicit refresh)', async () => {
+      const mockRestore = api.restore as Mock
+      mockRestore.mockResolvedValue({ warnings: '' })
+      const onfilesaved = vi.fn().mockResolvedValue(undefined)
+
+      const { container } = render(DiffPanel, { props: props({ onfilesaved }) })
+      await settle()
+
+      const discard = [...container.querySelectorAll('.edit-file-btn')]
+        .find(b => b.textContent === 'Discard') as HTMLButtonElement | undefined
+      await fireEvent.click(discard!)
+      await settle()
+
+      expect(mockRestore).toHaveBeenCalledWith('ch-A', ['a.go'])
+      expect(onfilesaved).toHaveBeenCalledOnce()
+    })
+
+    it('navigation during discard await → onfilesaved NOT called', async () => {
+      const mockRestore = api.restore as Mock
+      let resolveRestore!: (v: unknown) => void
+      mockRestore.mockReturnValue(new Promise(r => { resolveRestore = r }))
+      const onfilesaved = vi.fn().mockResolvedValue(undefined)
+
+      const { container, rerender } = render(DiffPanel, { props: props({ onfilesaved }) })
+      await settle()
+
+      const discard = [...container.querySelectorAll('.edit-file-btn')]
+        .find(b => b.textContent === 'Discard') as HTMLButtonElement | undefined
+      await fireEvent.click(discard!)
+
+      // Navigate away while restore is pending
+      await rerender(props({ diffTarget: target('co-B', 'ch-B'), onfilesaved }))
+      await settle()
+
+      resolveRestore({ warnings: '' })
+      await settle()
+
+      // Identity guard: diffTarget.changeId (ch-B) !== captured revId (ch-A)
+      expect(onfilesaved).not.toHaveBeenCalled()
+    })
   })
 
   describe('reset effect — DiffPanel.svelte:539-575', () => {

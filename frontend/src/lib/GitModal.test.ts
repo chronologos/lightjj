@@ -51,14 +51,17 @@ describe('GitModal', () => {
   })
 
   describe('buildOps via rendered output', () => {
-    it('no bookmarks, single remote → shows general push ops + fetch for that remote', async () => {
+    it('no bookmarks, single remote → general push ops + flagless fetch (respects git.fetch)', async () => {
       mockBookmarks.mockResolvedValue([])
       mockRemotes.mockResolvedValue(['origin'])
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
       expect(cmds).toContain('git push --remote origin')
-      expect(cmds).toContain('git fetch --remote origin')
+      // Flagless: jj applies git.fetch config (or origin default). Single-remote
+      // = behaviorally identical to --remote origin, so no explicit entry.
+      expect(cmds).toContain('git fetch')
+      expect(cmds).not.toContain('git fetch --remote origin')
       expect(cmds).not.toContain('git fetch --all-remotes')
     })
 
@@ -104,22 +107,27 @@ describe('GitModal', () => {
       expect(cmds.every(c => !c.includes('--change'))).toBe(true)
     })
 
-    it('multiple remotes → shows fetch --all-remotes', async () => {
+    it('multiple remotes → flagless fetch + explicit-remote fetch + all-remotes', async () => {
+      // Fork workflow: git.fetch=["upstream","origin"]. `f` (flagless) honors
+      // it. Explicit entry covers "just this one" (pill selector scopes it).
       mockBookmarks.mockResolvedValue([])
       mockRemotes.mockResolvedValue(['origin', 'upstream'])
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
+      expect(cmds).toContain('git fetch')
+      expect(cmds).toContain('git fetch --remote origin')
       expect(cmds).toContain('git fetch --all-remotes')
     })
 
-    it('single remote → no fetch --all-remotes', async () => {
+    it('single remote → flagless fetch only (no explicit, no all-remotes)', async () => {
       mockBookmarks.mockResolvedValue([])
       mockRemotes.mockResolvedValue(['origin'])
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
-      expect(cmds).not.toContain('git fetch --all-remotes')
+      const fetches = cmds.filter(c => c.startsWith('git fetch'))
+      expect(fetches).toEqual(['git fetch'])
     })
 
     it('first remote used as default, not hardcoded origin', async () => {
@@ -129,7 +137,6 @@ describe('GitModal', () => {
 
       const cmds = await waitForCmds(container)
       expect(cmds).toContain('git push --remote github')
-      expect(cmds).toContain('git fetch --remote github')
       expect(cmds.every(c => !c.includes('origin'))).toBe(true)
     })
   })

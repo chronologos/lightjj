@@ -196,7 +196,7 @@
       jump: !bm.conflict && !!bm.commit_id,
       del: !!bm.local,
       pushDelete,
-      track: trackOptions(bm, allRemotes),
+      track: trackOptions(bm),
     }
   }
 

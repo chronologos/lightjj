@@ -61,8 +61,13 @@
     ops.push({ type: 'push', title: 'Push deleted bookmarks', hotkey: 'd', scope: 'deleted', flags: ['--deleted', ...r] })
     ops.push({ type: 'push', title: 'Push tracked bookmarks (incl. deleted)', hotkey: 't', scope: 'tracked', flags: ['--tracked', ...r] })
 
-    ops.push({ type: 'fetch', title: 'Fetch', hotkey: 'f', flags: r })
+    // Flagless fetch respects git.fetch config (jj's own default-resolution:
+    // configured list, else origin). Fork workflows set git.fetch =
+    // ["upstream","origin"]; forcing --remote <selected> here would silently
+    // drop upstream. The pill selector scopes PUSH ops only.
+    ops.push({ type: 'fetch', title: 'Fetch', hotkey: 'f', flags: [] })
     if (allRemotes.length > 1) {
+      ops.push({ type: 'fetch', title: `Fetch from ${remote} only`, flags: r })
       ops.push({ type: 'fetch', title: 'Fetch from all remotes', hotkey: 'F', scope: 'all-remotes', flags: ['--all-remotes'] })
     }
 

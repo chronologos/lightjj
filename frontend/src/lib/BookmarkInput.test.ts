@@ -8,17 +8,32 @@ vi.mock('./api', () => ({
   },
 }))
 
+// jsdom's localStorage is unreliable in this env (`--localstorage-file` warning
+// → methods throw). Mock recentActions so the recency-tier sort and the
+// submit→record call are testable with controlled data.
+const mockRecord = vi.fn()
+const mockSnapshot = vi.fn<() => Record<string, number>>().mockReturnValue({})
+vi.mock('./recent-actions.svelte', () => ({
+  recentActions: () => ({
+    record: mockRecord,
+    count: (k: string) => mockSnapshot()[k] ?? 0,
+    snapshot: mockSnapshot,
+    clear: vi.fn(),
+  }),
+}))
+
 import { api } from './api'
 import type { Bookmark } from './api'
 
 const mockBookmarks = api.bookmarks as ReturnType<typeof vi.fn>
 
-function makeBookmark(name: string): Bookmark {
+function makeBookmark(name: string, overrides: Partial<Bookmark> = {}): Bookmark {
   return {
     name,
     conflict: false,
     synced: false,
     commit_id: 'aaa111',
+    ...overrides,
   }
 }
 
@@ -33,6 +48,8 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
 describe('BookmarkInput', () => {
   beforeEach(() => {
     mockBookmarks.mockReset()
+    mockRecord.mockReset()
+    mockSnapshot.mockReset().mockReturnValue({})
   })
 
   describe('rendering', () => {
@@ -236,6 +253,140 @@ describe('BookmarkInput', () => {
       // Should be the first matching suggestion
       const calledWith = onsave.mock.calls[0][0]
       expect(calledWith).toBe('feature')
+    })
+  })
+
+  describe('empty-input defaults', () => {
+    // Previously filtered returned [] when !value — nothing shown until you
+    // typed. Now it surfaces conflict > trunk > rest so the common cases
+    // (resolve a conflict, advance trunk) are one ↓ + Enter away.
+    const names = (c: HTMLElement) =>
+      [...c.querySelectorAll('.bm-set-suggestion')].map(s =>
+        s.textContent?.replace(/\s+/g, ' ').trim()
+      )
+
+    it('empty input shows suggestions (was: nothing)', async () => {
+      mockBookmarks.mockResolvedValue([makeBookmark('feature')])
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+      await waitFor(() => {
+        expect(container.querySelectorAll('.bm-set-suggestion').length).toBe(1)
+      })
+    })
+
+    it('conflicted bookmarks sort first with resolve verb + ?? badge', async () => {
+      mockBookmarks.mockResolvedValue([
+        makeBookmark('feature'),
+        makeBookmark('staging', { conflict: true, commit_id: '' }),
+        makeBookmark('other'),
+      ])
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+      await waitFor(() => {
+        const rows = names(container)
+        expect(rows[0]).toContain('resolve')
+        expect(rows[0]).toContain('staging')
+        expect(rows[0]).toContain('??')
+        // Non-conflict rows still say "move"
+        expect(rows[1]).toContain('move')
+        expect(rows[1]).not.toContain('??')
+      })
+    })
+
+    it('trunk-pattern names (main/master/trunk) sort above arbitrary names', async () => {
+      mockBookmarks.mockResolvedValue([
+        makeBookmark('zzz-feature'),
+        makeBookmark('aaa-feature'),
+        makeBookmark('master'),
+      ])
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+      await waitFor(() => {
+        const rows = names(container)
+        expect(rows[0]).toContain('master')
+      })
+    })
+
+    it('conflict outranks trunk', async () => {
+      mockBookmarks.mockResolvedValue([
+        makeBookmark('main'),
+        makeBookmark('staging', { conflict: true, commit_id: '' }),
+      ])
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+      await waitFor(() => {
+        const rows = names(container)
+        expect(rows[0]).toContain('staging')
+        expect(rows[1]).toContain('main')
+      })
+    })
+
+    it('capped at 5 when empty (8 when typing)', async () => {
+      mockBookmarks.mockResolvedValue(
+        Array.from({ length: 10 }, (_, i) => makeBookmark(`bm-${i}`))
+      )
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+      await waitFor(() => {
+        expect(container.querySelectorAll('.bm-set-suggestion').length).toBe(5)
+      })
+      const input = container.querySelector('.bm-set-input') as HTMLInputElement
+      await fireEvent.input(input, { target: { value: 'bm' } })
+      await waitFor(() => {
+        expect(container.querySelectorAll('.bm-set-suggestion').length).toBe(8)
+      })
+    })
+
+    it('↓↓ reaches second default without collapsing list (arrow does NOT write value)', async () => {
+      // Regression: arrow used to write value = filtered[i].name, which flipped
+      // filtered from default-sort to fuzzy-filter mode. fuzzyMatch('staging',
+      // 'main') is false → list collapsed to [staging] → second ↓ clamped at 0.
+      mockBookmarks.mockResolvedValue([
+        makeBookmark('staging', { conflict: true, commit_id: '' }),
+        makeBookmark('main'),
+      ])
+      const onsave = vi.fn()
+      const { container } = render(BookmarkInput, { props: defaultProps({ onsave }) })
+      await waitFor(() => {
+        expect(container.querySelectorAll('.bm-set-suggestion').length).toBe(2)
+      })
+      const input = container.querySelector('.bm-set-input') as HTMLInputElement
+      const rows = () => container.querySelectorAll('.bm-set-suggestion')
+
+      await fireEvent.keyDown(input, { key: 'ArrowDown' })
+      expect(input.value).toBe('') // highlight-only, value stays empty
+      expect(rows()[0].classList.contains('active')).toBe(true)
+      expect(rows().length).toBe(2) // list did NOT collapse
+
+      await fireEvent.keyDown(input, { key: 'ArrowDown' })
+      expect(rows()[1].classList.contains('active')).toBe(true) // reached main
+
+      await fireEvent.keyDown(input, { key: 'Enter' })
+      expect(onsave).toHaveBeenCalledWith('main')
+    })
+
+    it('recency tier: higher frequency sorts above lower (both non-conflict non-trunk)', async () => {
+      mockSnapshot.mockReturnValue({ 'used-often': 5, 'used-once': 1 })
+      mockBookmarks.mockResolvedValue([
+        makeBookmark('used-once'),
+        makeBookmark('used-often'),
+        makeBookmark('never-used'),
+      ])
+      const { container } = render(BookmarkInput, { props: defaultProps() })
+      await waitFor(() => {
+        const rows = names(container)
+        expect(rows[0]).toContain('used-often')
+        expect(rows[1]).toContain('used-once')
+        expect(rows[2]).toContain('never-used')
+      })
+    })
+
+    it('submit() records the resolved name before onsave', async () => {
+      mockBookmarks.mockResolvedValue([makeBookmark('feat')])
+      const onsave = vi.fn()
+      const { container } = render(BookmarkInput, { props: defaultProps({ onsave }) })
+      const input = container.querySelector('.bm-set-input') as HTMLInputElement
+      await fireEvent.input(input, { target: { value: 'feat' } })
+      await fireEvent.keyDown(input, { key: 'Enter' })
+      // record() fires before onsave — if onsave throws, frequency still updates.
+      expect(mockRecord).toHaveBeenCalledWith('feat')
+      expect(mockRecord.mock.invocationCallOrder[0])
+        .toBeLessThan(onsave.mock.invocationCallOrder[0])
     })
   })
 
