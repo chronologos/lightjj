@@ -76,6 +76,15 @@ describe('executeKeepPlan', () => {
     expect(mockAbandon).toHaveBeenCalledOnce()
   })
 
+  // Multi-commit abandon is the stack-divergence path buildKeepPlan exists to
+  // serve ("abandon ALL levels of losing columns"). The text assertion at the
+  // bottom reads plan.abandonCommitIds.length, NOT what's passed to the api —
+  // so a regression to abandon([ids[0]]) would still produce 'abandoned 3'.
+  it('passes full abandonCommitIds array to api.abandon', async () => {
+    await executeKeepPlan(plan({ abandonCommitIds: ['loser0', 'loser1', 'loser2'] }))
+    expect(mockAbandon).toHaveBeenCalledWith(['loser0', 'loser1', 'loser2'])
+  })
+
   it('bookmarkSet called once per repoint, serially', async () => {
     await executeKeepPlan(plan({
       bookmarkRepoints: [

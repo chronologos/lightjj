@@ -2220,7 +2220,7 @@
               changeId={divergence.changeId}
               onkeep={plan => runDivergenceResolution(() => executeKeepPlan(plan))}
               onsplit={id => runDivergenceResolution(() => splitIdentity(id))}
-              onsquash={(f, i) => runDivergenceResolution(() => squashDivergent(f, i))}
+              onsquash={(from, into) => runDivergenceResolution(() => squashDivergent(from, into))}
               onabandon={id => runDivergenceResolution(() => abandonMutable(id))}
               onclose={() => divergence.cancel()}
             />
