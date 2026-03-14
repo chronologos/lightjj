@@ -51,7 +51,7 @@
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import DivergencePanel from './lib/DivergencePanel.svelte'
-  import type { KeepPlan } from './lib/divergence'
+  import { executeKeepPlan, splitIdentity, squashDivergent, abandonMutable, type DivergenceActionResult } from './lib/divergence-actions'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, createFileSelection, targetModeLabel } from './lib/modes.svelte'
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
@@ -1145,11 +1145,11 @@
     )
   }
 
-  // Shared body for handleKeepDivergent/SplitDivergent/SquashDivergent.
-  // Wraps the mutation chunk in the same withMutation→close→log cycle
-  // and centralizes the catch-but-don't-close-panel pattern. run() returns
-  // the user-facing status line.
-  async function runDivergenceResolution(run: () => Promise<{ text: string; results: MutationResult[] }>) {
+  // Wraps divergence-actions.ts executors in App's withMutation→close→log
+  // cycle. The catch-but-don't-close-panel is why this can't be runMutation
+  // (which has no error path — it closes nothing, but divergence.cancel()
+  // on success / NOT on error is the point: user sees state and retries).
+  async function runDivergenceResolution(run: () => Promise<DivergenceActionResult>) {
     return withMutation(async () => {
       try {
         const { text, results } = await run()
@@ -1162,73 +1162,6 @@
         // Don't close panel on error — let user see state and retry
         showError(e)
         await loadLog()
-      }
-    })
-  }
-
-  async function handleKeepDivergent(plan: KeepPlan) {
-    return runDivergenceResolution(async () => {
-      // Plan computed by DivergencePanel from the classify() group. Order:
-      //   1. Rebase — moves non-empty descendants to the keeper tip first.
-      //      If abandon ran first, jj would auto-rebase D onto the loser-
-      //      stack's parent (trunk); our explicit rebase would then hit a
-      //      twice-rebased tree. -s (not -r) so D's descendants follow.
-      //   2. Abandon — losing columns + empty descendants. Stale stack now
-      //      has no children pinning it visible.
-      //   3. Bookmarks — per-change_id repoint, not stack tip.
-      // Serial throughout: concurrent jj mutations → divergent op history.
-      // Accumulate warnings from each step — divergence rebase is MORE
-      // likely than average to conflict (moving commits between stacks).
-      const results: MutationResult[] = []
-      if (plan.rebaseSources.length > 0) {
-        results.push(await api.rebase(plan.rebaseSources, plan.keeperCommitId, '-s', '-d'))
-      }
-      results.push(await api.abandon(plan.abandonCommitIds))
-      for (const { name, targetCommitId } of plan.bookmarkRepoints) {
-        results.push(await api.bookmarkSet(targetCommitId, name))
-      }
-      const parts = [`kept ${plan.keeperCommitId.slice(0, 8)}`]
-      if (plan.rebaseSources.length > 0) parts.push(`rebased ${plan.rebaseSources.length}`)
-      if (plan.abandonCommitIds.length > 1) parts.push(`abandoned ${plan.abandonCommitIds.length}`)
-      return { text: `Resolved divergence — ${parts.join(', ')}`, results }
-    })
-  }
-
-  // Split-identity (jj-guide Strategy 2): reroll one commit's change_id.
-  // Single-command resolution — no abandons, no bookmark repoint. The
-  // re-id'd commit's descendants auto-rebase (metaedit is a rewrite).
-  async function handleSplitDivergent(commitId: string) {
-    return runDivergenceResolution(async () => {
-      const result = await api.metaeditChangeId(commitId)
-      return {
-        text: `Split identity — ${commitId.slice(0, 8)} now has a new change_id`,
-        results: [result],
-      }
-    })
-  }
-
-  // Squash (Strategy 3): fold one version's content into the other. jj
-  // handles the conflict markers if trees clash; the user resolves those
-  // in the normal diff/merge flow. from-side is left emptied → abandoned
-  // automatically (not --keep-emptied).
-  async function handleSquashDivergent(fromCommitId: string, intoCommitId: string) {
-    return runDivergenceResolution(async () => {
-      const result = await api.squash([fromCommitId], intoCommitId)
-      return {
-        text: `Squashed ${fromCommitId.slice(0, 8)} → ${intoCommitId.slice(0, 8)}`,
-        results: [result],
-      }
-    })
-  }
-
-  // Immutable-sibling "accept trunk" — abandon the mutable copy.
-  // --retain-bookmarks (baked into jj.Abandon) moves any bookmarks to parent.
-  async function handleAbandonDivergent(commitId: string) {
-    return runDivergenceResolution(async () => {
-      const result = await api.abandon([commitId])
-      return {
-        text: `Abandoned mutable ${commitId.slice(0, 8)} — accepting trunk's version`,
-        results: [result],
       }
     })
   }
@@ -2285,10 +2218,10 @@
           {#key divergence.changeId}
             <DivergencePanel
               changeId={divergence.changeId}
-              onkeep={handleKeepDivergent}
-              onsplit={handleSplitDivergent}
-              onsquash={handleSquashDivergent}
-              onabandon={handleAbandonDivergent}
+              onkeep={plan => runDivergenceResolution(() => executeKeepPlan(plan))}
+              onsplit={id => runDivergenceResolution(() => splitIdentity(id))}
+              onsquash={(f, i) => runDivergenceResolution(() => squashDivergent(f, i))}
+              onabandon={id => runDivergenceResolution(() => abandonMutable(id))}
               onclose={() => divergence.cancel()}
             />
           {/key}
