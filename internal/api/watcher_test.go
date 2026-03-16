@@ -256,7 +256,7 @@ func TestServerEventsRoute_NilWatcher(t *testing.T) {
 
 // --- sshPollLoop tests ----------------------------------------------------
 //
-// sshPollLoop uses Runner.Run(CurrentOpId()) — MockRunner scripts the output
+// sshPollLoop uses Runner.Run(PollOpId()) — MockRunner scripts the output
 // sequence without any SSH. Short interval (~5ms) keeps tests fast.
 
 // seqRunner returns successive outputs from a slice, then repeats the last.
@@ -326,7 +326,7 @@ func TestSSHPollLoop_NoSubscribers_NoPolls(t *testing.T) {
 
 func TestSSHPollLoop_StopsCleanly(t *testing.T) {
 	r := testutil.NewMockRunner(t)
-	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op-x"))
+	r.Allow(jj.PollOpId()).SetOutput([]byte("op-x"))
 	w := newWatcher(NewServer(r, ""))
 	_, unsub := w.subscribe()
 	defer unsub()
@@ -348,7 +348,7 @@ func TestSSHPollLoop_ErrorsDoNotBroadcastOrExit(t *testing.T) {
 	// Poll failure → no broadcast, loop keeps running. Error-threshold
 	// logging (3x, then every 12) is shared with snapshotLoop — trusted.
 	r := testutil.NewMockRunner(t)
-	r.Allow(jj.CurrentOpId()).SetError(errors.New("ssh timeout"))
+	r.Allow(jj.PollOpId()).SetError(errors.New("ssh timeout"))
 	w := newWatcher(NewServer(r, ""))
 	ch, unsub := w.subscribe()
 	defer unsub()
@@ -367,6 +367,54 @@ func TestSSHPollLoop_ErrorsDoNotBroadcastOrExit(t *testing.T) {
 		t.Fatalf("unexpected broadcast on error: %q", v)
 	case <-time.After(30 * time.Millisecond):
 	}
+
+	close(w.stop)
+	<-done
+}
+
+func TestNewSSHWatcher_IntervalZero(t *testing.T) {
+	// --snapshot-interval 0 must not start the loop. Parity with local
+	// mode's snapshotLoop gate at watcher.go:~124. Also prevents
+	// time.NewTicker(0) panic. MockRunner has no expectations — any
+	// Run() call (from a tick) would t.Fatalf on unexpected command.
+	r := testutil.NewMockRunner(t)
+	defer r.Verify()
+	w := NewSSHWatcher(NewServer(r, ""), 0)
+	_, unsub := w.subscribe() // subscriber present → would poll if loop was running
+	defer unsub()
+	time.Sleep(20 * time.Millisecond)
+	close(w.stop)
+}
+
+func TestSSHPollLoop_StaleWCSentinel(t *testing.T) {
+	// sshPollLoop now snapshots (PollOpId without --ignore-working-copy),
+	// so it can hit stale-WC. Same sentinel routing as snapshotLoop:
+	// broadcast evStaleWC on edge, evFreshWC on recovery. seqRunner can't
+	// script errors, so use MockRunner with a stale-WC-matching string
+	// (isStaleWCError matches on message content).
+	r := testutil.NewMockRunner(t)
+	r.Allow(jj.PollOpId()).SetError(errors.New("Error: The working copy is stale (not updated since operation abc)."))
+	w := newWatcher(NewServer(r, ""))
+	ch, unsub := w.subscribe()
+	defer unsub()
+
+	done := make(chan struct{})
+	go func() { w.sshPollLoop(5 * time.Millisecond); close(done) }()
+
+	// First stale error → evStaleWC sentinel (once — Swap edge)
+	select {
+	case v := <-ch:
+		assert.Equal(t, evStaleWC, v)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("no stale sentinel")
+	}
+	// Subsequent stale errors → no re-broadcast (Swap returns true)
+	select {
+	case v := <-ch:
+		t.Fatalf("re-broadcast on repeated stale: %q", v)
+	case <-time.After(20 * time.Millisecond):
+	}
+	assert.True(t, w.stale.Load())
 
 	close(w.stop)
 	<-done

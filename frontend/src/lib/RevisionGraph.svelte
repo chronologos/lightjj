@@ -405,7 +405,13 @@
             {@const entry = revisions[line.entryIndex]}
             {@const laneColorVar = line.nodeLane != null ? `var(--graph-${line.nodeLane % GRAPH_COLORS})` : ''}
             {@const localBookmarks = entry.bookmarks ?? []}
-            {@const visibleRemoteBookmarks = (entry.remote_bookmarks ?? []).filter(r => isRemoteVisible(r, remoteVisibility))}
+            <!-- Suppress origin/foo when local foo is on THIS same commit (synced → redundant).
+                 Conflicted locals are excluded from the suppress-set: the remote badge
+                 disambiguates which side the remote agrees with. hasLabels at line ~188
+                 over-counts by the suppressed entries but the bool outcome is unchanged
+                 (suppression only happens when localBookmarks.length > 0 anyway). -->
+            {@const syncedLocal = new Set(localBookmarks.filter(b => !b.conflict).map(b => b.name))}
+            {@const visibleRemoteBookmarks = (entry.remote_bookmarks ?? []).filter(r => isRemoteVisible(r, remoteVisibility) && !syncedLocal.has(r.name))}
             <span class="bookmark-line-content">
               {#each entry.commit.working_copies ?? [] as ws}
                 <span class="workspace-badge">◇ {ws}@</span>

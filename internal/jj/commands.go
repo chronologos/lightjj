@@ -372,6 +372,16 @@ func CurrentOpId() CommandArgs {
 		"--limit", "1", "-T", `self.id().short()`}
 }
 
+// PollOpId is CurrentOpId WITHOUT --ignore-working-copy — it snapshots first.
+// SSH mode has no fs-watcher and no snapshotLoop: this IS the snapshot path.
+// Without it, remote editor saves are invisible (diff/log use
+// --ignore-working-copy, nothing else snapshots). One SSH round trip does
+// snapshot + op-id read.
+func PollOpId() CommandArgs {
+	return []string{"op", "log", "--no-graph", "--color", "never",
+		"--limit", "1", "-T", `self.id().short()`}
+}
+
 // DebugSnapshot asks jj to snapshot the working copy. Advances op_heads only
 // if the WC actually differs. Used by the filesystem watcher to catch raw file
 // edits that jj hasn't observed yet.

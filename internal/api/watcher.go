@@ -103,9 +103,15 @@ func NewWatcher(srv *Server, snapshotInterval time.Duration) *Watcher {
 // Works with any remote OS and from secondary workspaces (.jj/repo pointer
 // file — inotifywait on .jj/repo/op_heads/heads/ failed there). Trade-off:
 // worst-case interval latency vs fsnotify's ~instant notification.
+//
+// interval <= 0 disables the loop — parity with local mode's snapshotLoop
+// gate (watcher.go:~132) and avoids NewTicker(0) panic. No auto-refresh in
+// that state; user hard-refreshes manually.
 func NewSSHWatcher(srv *Server, interval time.Duration) *Watcher {
 	w := newWatcher(srv)
-	go w.sshPollLoop(interval)
+	if interval > 0 {
+		go w.sshPollLoop(interval)
+	}
 	return w
 }
 
@@ -182,8 +188,12 @@ func (w *Watcher) watchLoop() {
 // tolerance mirrors snapshotLoop: transient failures (repo lock, SSH blip)
 // are expected; persistent failure surfaces once so the user knows.
 //
-// The poll result is the authoritative op-id, so we write cachedOp directly
-// here rather than calling refreshOpId() — saves a second ~440ms round trip.
+// Uses PollOpId (no --ignore-working-copy) — SSH mode has no snapshotLoop,
+// so the implicit snapshot here is the ONLY thing that picks up remote editor
+// saves. Snapshot + op-id in one round trip. As safe as the user running
+// `jj st` — standard jj, honors snapshot.auto-update-stale. The poll result
+// is authoritative; we write cachedOp directly rather than calling
+// refreshOpId() (saves a second ~440ms round trip).
 func (w *Watcher) sshPollLoop(interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -198,14 +208,26 @@ func (w *Watcher) sshPollLoop(interval time.Duration) {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			out, err := w.srv.Runner.Run(ctx, jj.CurrentOpId())
+			out, err := w.srv.Runner.Run(ctx, jj.PollOpId())
 			cancel()
 			if err != nil {
+				// Snapshotting can hit stale-WC (same as snapshotLoop); the
+				// sentinel routing is shared.
+				if isStaleWCError(err) {
+					if !w.stale.Swap(true) {
+						w.broadcast(evStaleWC)
+					}
+					consecutiveErrors = 0
+					continue
+				}
 				consecutiveErrors++
 				if consecutiveErrors == 3 || (consecutiveErrors > 3 && consecutiveErrors%12 == 0) {
 					log.Printf("watcher: op-id poll failed %dx (%v); auto-refresh degraded", consecutiveErrors, err)
 				}
 				continue
+			}
+			if w.stale.Swap(false) {
+				w.broadcast(evFreshWC)
 			}
 			consecutiveErrors = 0
 			opId := strings.TrimSpace(string(out))

@@ -2259,6 +2259,57 @@ func TestResolveGHRepo(t *testing.T) {
 		assert.Equal(t, "", srv.resolveGHRepo())
 		assert.Equal(t, "", srv.resolveGHRepo()) // cached: MockRunner would panic on 2nd call
 	})
+
+	// Negative-glob refspec (^refs/heads/ci/*) breaks jj git remote list.
+	// The git fallback is shared by resolveGHRepo AND handleRemotes —
+	// without it, PR badges work but GitModal/BookmarksPanel 500.
+	mkFallbackServer := func(t *testing.T) *Server {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("Negative glob patterns are not allowed"))
+		runner.Expect([]string{"git", "-C", "/repo", "remote", "-v"}).
+			SetOutput([]byte("origin\tgit@github.com:a/b.git (fetch)\norigin\tgit@github.com:a/b.git (push)\n"))
+		t.Cleanup(runner.Verify)
+		srv := newTestServer(runner)
+		srv.RepoPath = "/repo"
+		return srv
+	}
+
+	t.Run("jj fails → git fallback (resolveGHRepo)", func(t *testing.T) {
+		srv := mkFallbackServer(t)
+		assert.Equal(t, "a/b", srv.resolveGHRepo())
+		assert.Equal(t, "a/b", srv.resolveGHRepo()) // cached
+	})
+
+	t.Run("jj fails → git fallback (handleRemotes)", func(t *testing.T) {
+		srv := mkFallbackServer(t)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/remotes", nil))
+		assert.Equal(t, http.StatusOK, w.Code)
+		var remotes []string
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&remotes))
+		assert.Equal(t, []string{"origin"}, remotes) // git's fetch+push lines deduped
+	})
+
+	t.Run("jj fails, RepoPath empty → no fallback (test-server default)", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("boom"))
+		defer runner.Verify()
+		srv := newTestServer(runner)
+		assert.Equal(t, "", srv.resolveGHRepo())
+	})
+
+	t.Run("jj fails AND git fails → empty, not cached", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("refspec"))
+		runner.Expect([]string{"git", "-C", "/repo", "remote", "-v"}).SetError(fmt.Errorf("not a git repo"))
+		defer runner.Verify()
+		srv := newTestServer(runner)
+		srv.RepoPath = "/repo"
+		assert.Equal(t, "", srv.resolveGHRepo())
+		// ghRepoResolved stays false → 2nd call retries both. MockRunner's
+		// Expect doesn't consume so re-matching the same expectations works.
+		assert.Equal(t, "", srv.resolveGHRepo())
+	})
 }
 
 // prTestServer wires the `jj git remote list` → `gh pr list --repo X` chain
@@ -2343,8 +2394,8 @@ func TestHandlePullRequests_NonGitHubRemote(t *testing.T) {
 }
 
 func TestHandlePullRequests_RemoteListFails(t *testing.T) {
-	// `jj git remote list` itself fails → cached as "" (no re-query) →
-	// silent empty response.
+	// Both `jj git remote list` AND the git fallback are unavailable
+	// (RepoPath="" skips the fallback) → silent empty, not cached (retries).
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("not a jj repo"))
 	defer runner.Verify()
@@ -2359,7 +2410,9 @@ func TestHandlePullRequests_RemoteListFails(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&prs))
 	assert.Empty(t, prs)
 
-	// Second request should NOT re-query (sync.Once cached "").
+	// Second request re-queries (RepoPath=="" path doesn't set ghRepoResolved).
+	// MockRunner's Expect doesn't consume — re-match is silent. This verifies
+	// not-crash, NOT cache-vs-retry.
 	w = httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/pull-requests", nil))
 	assert.Equal(t, http.StatusOK, w.Code)

@@ -36,4 +36,6 @@ export const FEATURES: TutorialFeature[] = [
   { version: '1.0.0', shortcut: '2', title: 'Branches side-by-side', description: 'Branches view now renders next to the revision graph \u2014 rows matching the graph cursor get an amber tint. j/k navigation across both. Per-remote visibility toggles (e) persist per-repo.' },
   { version: '1.0.0', shortcut: '?', title: 'Revset help popover', description: 'In the revset filter bar, press ? for a clickable cheatsheet of common expressions \u2014 trunk()..@, mine(), files(glob), bookmarks().' },
   { version: '1.0.0', shortcut: '3 / 4', title: 'Oplog & evolog keyboard nav', description: 'j/k and Escape now work in both panels. Enter in oplog opens the undo/restore menu at the selected entry.' },
+  { version: '1.1.0', shortcut: null, title: 'SSH mode catches remote edits', description: 'Auto-refresh in --remote mode now snapshots the remote working copy \u2014 editor saves on the remote host appear in the diff within --snapshot-interval (default 5s) without running jj there.' },
+  { version: '1.1.0', shortcut: null, title: 'PR badges survive git refspec quirks', description: 'Repos with refspecs jj can\'t parse (like negative globs excluding CI branches) now fall back to plain git for remote URL lookup. PR badges and the Git modal\'s remote selector both work.' },
 ]

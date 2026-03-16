@@ -218,6 +218,8 @@ func TestParseRemoteListOutput(t *testing.T) {
 		{"empty", "", "origin", []string{}},
 		{"extra spaces", "  origin   https://o.git  \n  upstream   https://u.git  \n", "origin", []string{"origin", "upstream"}},
 		{"non-origin default", "origin https://o.git\nupstream https://u.git\n", "upstream", []string{"upstream", "origin"}},
+		// git remote -v emits (fetch) and (push) lines per remote — dedup.
+		{"git remote -v dedup", "origin\tgit@h:a/b (fetch)\norigin\tgit@h:a/b (push)\nup\tu (fetch)\nup\tu (push)\n", "origin", []string{"origin", "up"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -237,6 +239,14 @@ func TestParseRemoteURLs(t *testing.T) {
 			map[string]string{"origin": "https://o.git", "upstream": "git@github.com:a/b.git"}},
 		{"extra whitespace", "  origin   https://o.git  \n\n  upstream  git@u:/p  \n",
 			map[string]string{"origin": "https://o.git", "upstream": "git@u:/p"}},
+		// git remote -v: tab separator, "(fetch)"/"(push)" suffix. Fields()
+		// ignores field[2]. First-write-wins → fetch URL (emitted first).
+		{"git remote -v format", "origin\tgit@github.com:a/b.git (fetch)\norigin\tgit@github.com:a/b.git (push)\n",
+			map[string]string{"origin": "git@github.com:a/b.git"}},
+		// git remote set-url --push can set a distinct push URL. PR badges need
+		// the fetch URL (that's where PRs live).
+		{"distinct push URL → fetch wins", "origin\tgit@github.com:a/b.git (fetch)\norigin\tgit@internal:mirror (push)\n",
+			map[string]string{"origin": "git@github.com:a/b.git"}},
 		{"empty", "", map[string]string{}},
 	}
 	for _, tt := range tests {

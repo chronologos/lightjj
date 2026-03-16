@@ -122,12 +122,16 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 	return bookmarks
 }
 
-// ParseRemoteListOutput parses `jj git remote list` output into remote names.
+// ParseRemoteListOutput parses `jj git remote list` (or `git remote -v`
+// fallback) output into remote names. git emits two lines per remote
+// (fetch+push) — seen-set dedups; jj emits one (no-op dedup).
 func ParseRemoteListOutput(output string, defaultRemote string) []string {
 	remotes := []string{}
+	seen := map[string]bool{}
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-		if name := strings.TrimSpace(line); name != "" {
-			remotes = append(remotes, strings.Fields(name)[0])
+		if f := strings.Fields(line); len(f) > 0 && !seen[f[0]] {
+			seen[f[0]] = true
+			remotes = append(remotes, f[0])
 		}
 	}
 	// Move defaultRemote to front if present
@@ -140,14 +144,22 @@ func ParseRemoteListOutput(output string, defaultRemote string) []string {
 	return remotes
 }
 
-// ParseRemoteURLs returns remote name → URL. Tolerates extra whitespace
-// and empty lines. Used by resolveGHRepo to pick a GitHub remote.
+// ParseRemoteURLs returns remote name → URL. Accepts both `jj git remote list`
+// ("name url") and `git remote -v` ("name\turl (fetch)") — Fields() splits on
+// any whitespace, the trailing "(fetch)"/"(push)" is just ignored. Used by
+// resolveGHRepo; the git form is a fallback for repos with refspecs jj can't
+// parse (negative globs like ^refs/heads/ci/*).
 func ParseRemoteURLs(output string) map[string]string {
 	m := map[string]string{}
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-		name, url, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if ok && name != "" {
-			m[name] = strings.TrimSpace(url)
+		f := strings.Fields(line)
+		// First-write-wins: git emits (fetch) before (push), and a distinct
+		// push URL (git remote set-url --push) is possible. The fetch URL is
+		// what PR badges need — that's where PRs live.
+		if len(f) >= 2 {
+			if _, seen := m[f[0]]; !seen {
+				m[f[0]] = f[1]
+			}
 		}
 	}
 	return m

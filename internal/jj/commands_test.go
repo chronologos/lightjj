@@ -240,6 +240,20 @@ func TestCurrentOpId(t *testing.T) {
 	assert.Contains(t, got, "self.id().short()")
 }
 
+func TestPollOpId(t *testing.T) {
+	// The absence of --ignore-working-copy IS the feature — it makes
+	// sshPollLoop the snapshot path in SSH mode (no snapshotLoop there).
+	got := PollOpId()
+	assert.NotContains(t, got, "--ignore-working-copy")
+	assert.Contains(t, got, "op")
+	assert.Contains(t, got, "log")
+	assert.Contains(t, got, "--no-graph")
+	assert.Contains(t, got, "--limit")
+	assert.Contains(t, got, "1")
+	assert.Contains(t, got, "-T")
+	assert.Contains(t, got, "self.id().short()")
+}
+
 func TestDebugSnapshot(t *testing.T) {
 	got := DebugSnapshot()
 	assert.Equal(t, CommandArgs{"util", "snapshot"}, got)

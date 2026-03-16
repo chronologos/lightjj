@@ -342,9 +342,25 @@ func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"description": string(output)})
 }
 
+// remoteListOutput runs `jj git remote list` with a `git remote -v` fallback.
+// jj rejects refspecs it can't parse (e.g. negative glob ^refs/heads/ci/*);
+// git doesn't validate refspecs when listing. Both parsers (ParseRemoteURLs,
+// ParseRemoteListOutput) accept either format.
+func (s *Server) remoteListOutput(ctx context.Context) ([]byte, error) {
+	out, err := s.Runner.Run(ctx, jj.GitRemoteList())
+	if err == nil || s.RepoPath == "" {
+		return out, err
+	}
+	jjErr := err
+	out, err = s.Runner.RunRaw(ctx, []string{"git", "-C", s.RepoPath, "remote", "-v"})
+	if err != nil {
+		return nil, fmt.Errorf("jj failed (%w); git fallback also failed: %v", jjErr, err)
+	}
+	return out, nil
+}
+
 func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
-	args := jj.GitRemoteList()
-	output, err := s.Runner.Run(r.Context(), args)
+	output, err := s.remoteListOutput(r.Context())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1203,9 +1219,10 @@ func (s *Server) resolveGHRepo() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := s.Runner.Run(ctx, jj.GitRemoteList())
+	out, err := s.remoteListOutput(ctx)
 	if err != nil {
-		return "" // transient — next call retries (ghRepoResolved still false)
+		log.Printf("resolveGHRepo: %v", err)
+		return "" // transient or no git — next call retries (ghRepoResolved still false)
 	}
 	urls := jj.ParseRemoteURLs(string(out))
 

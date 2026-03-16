@@ -10,6 +10,14 @@ actionable backlog is [BACKLOG.md](../BACKLOG.md).
 
 ---
 
+## SSH snapshot + PR-badge fallback (2026-03-17)
+
+- [x] **SSH mode now catches remote editor saves** — `sshPollLoop` switched from `CurrentOpId` (`--ignore-working-copy`) to new `PollOpId` builder (same args minus the flag). The implicit snapshot is the snapshot path SSH mode never had — all reads use `--ignore-working-copy` and `snapshotLoop` is local-only, so remote file edits were invisible until the user ran `jj` on the remote host. One SSH round trip does snapshot + op-id read. Stale-WC sentinel routing (`isStaleWCError` → `evStaleWC`/`evFreshWC`) copied from `snapshotLoop` since the poll can now hit it. `interval <= 0` gates the loop (parity with `snapshotLoop`'s pre-existing gate — also fixes a latent `time.NewTicker(0)` panic). No safety knob for multi-workspace — standard `jj op log` honors `snapshot.auto-update-stale`, exactly as safe as `jj st`. Defending against jj itself being broken is the wrong layer.
+- [x] **`git remote -v` fallback when jj can't parse refspecs** — `remoteListOutput()` helper in `handlers.go`: tries `jj git remote list`, falls back to `git -C <RepoPath> remote -v` (via `RunRaw` — works in SSH mode) when jj errors. Motivated by `^refs/heads/ci/*` negative-glob refspecs (common in large large repos to exclude CI branches from fetch) which jj rejects (`Negative glob patterns are not allowed`). `ParseRemoteURLs` switched `Cut(" ")` → `Fields()` + first-write-wins (`git remote -v` emits fetch before push, alphabetical by remote — verified; `set-url --push` can differ, fetch URL is what PR badges need). `ParseRemoteListOutput` gained seen-set dedup for git's two-lines-per-remote. Helper shared by `resolveGHRepo` AND `handleRemotes` — without sharing, PR badges would work but GitModal's remote pills + BookmarksPanel's per-remote groups would 500.
+- [x] **Synced-remote badge suppression** — `RevisionGraph.svelte` filters `origin/foo` when a non-conflicted local `foo` is on the same commit row. Per-remote visibility (when enabled) previously showed both badges; the remote one is noise if synced. Conflicted locals excluded from the suppress-set — the remote badge disambiguates which conflict side the remote agrees with. `hasLabels` over-count at the flatLines computation is harmless (suppression requires a non-conflicted local which itself renders → row always non-empty).
+
+---
+
 ## Architecture Review Round 3 (2026-03-06)
 
 Five-agent parallel audit (App.svelte state, backend API surface, DiffPanel, api.ts client, cross-cutting). Architecture is sound at the boundaries, sprawling in the middle — ~80% of maintainability risk lives in two god-files (App.svelte 2013L, DiffPanel.svelte 1755L). No single decision "really hampers" things; it's accretion.

@@ -47,7 +47,7 @@ func main() {
 	addr := flag.String("addr", "localhost:0", "Listen address (default: random port on localhost)")
 	noBrowser := flag.Bool("no-browser", false, "Don't open browser automatically")
 	showVersion := flag.Bool("version", false, "Print version and exit")
-	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Periodic `jj util snapshot` interval (0 to disable)")
+	snapshotInterval := flag.Duration("snapshot-interval", 5*time.Second, "Auto-refresh poll interval — jj util snapshot locally, jj op log over SSH (0 disables the loop)")
 	noWatch := flag.Bool("no-watch", false, "Disable filesystem watch + SSE auto-refresh")
 	defaultRemote := flag.String("default-remote", "", "Remote name to prefer (overrides jj config git.push; defaults to origin)")
 	autoShutdown := flag.Duration("auto-shutdown", 0, "Shut down after this `duration` with no browser tabs connected (0 to disable)")

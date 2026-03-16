@@ -69,7 +69,7 @@ ssh -L 3001:localhost:3001 user@host \
 # open http://localhost:3001 locally
 ```
 
-`--remote user@host:/path` also works but adds ~400ms per command. Enable SSH ControlMaster to reduce this to ~20ms. Auto-refresh polls every `--snapshot-interval` (default 5s) — no remote dependencies.
+`--remote user@host:/path` also works but adds ~400ms per command. Enable SSH ControlMaster to reduce this to ~20ms. Auto-refresh polls every `--snapshot-interval` (default 5s) — the poll snapshots the remote working copy, so editor saves on the remote host appear in the diff without running `jj` there. No remote dependencies.
 
 In `--remote` mode, `gh pr list` is also run over SSH — install and `gh auth login` on the remote host if you want PR badges on bookmarks.
 
