@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // LocalRunner executes jj commands as local subprocesses.
@@ -34,6 +35,15 @@ func NewLocalRunner(repoDir string) *LocalRunner {
 	}
 	return &LocalRunner{Binary: "jj", RepoDir: repoDir}
 }
+
+// waitDelay force-closes pipes when a grandchild process (SSH ControlMaster
+// mux master) inherits them — ctx expiry kills the direct child, but Wait()
+// blocks in awaitGoroutines until the pipe-copier sees EOF. Applied to every
+// exec.CommandContext path below. ResolveWorkspaceRoot is excluded: local
+// `jj workspace root` has no SSH, no ctx, no grandchild that could hold fds.
+// Observed 2026-03-17: Tailscale down → ssh hangs → 10s ctx fires → process
+// stuck 90+s at ResolveWorkspaceRoot (the SSH-mode caller of runSeparate).
+const waitDelay = 3 * time.Second
 
 // ResolveWorkspaceRoot returns the jj workspace root for dir, or an error if
 // dir is not inside a jj repository. Used for tab-open validation (fail fast
@@ -78,6 +88,7 @@ func (r *LocalRunner) RunWithInput(ctx context.Context, args []string, stdin str
 func (r *LocalRunner) runSeparate(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
+	cmd.WaitDelay = waitDelay
 	// Always set stdin (even for ""). SSHRunner.WriteFile pipes file content
 	// here; the empty-content path should go through the same machinery as
 	// non-empty rather than relying on nil→/dev/null to accidentally produce
@@ -91,6 +102,14 @@ func (r *LocalRunner) runSeparate(ctx context.Context, args []string, stdin stri
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
+	// ErrWaitDelay = process exited 0 but pipe-drain timed out. Only
+	// returned on clean exit (process killed → ExitError instead). output
+	// has everything the process wrote before exit; the copier was just
+	// waiting on a grandchild's inherited fd (SSH mux master). Normalize
+	// to nil so it falls through to the single success return below.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -137,9 +156,13 @@ func (r *LocalRunner) RunForMutation(ctx context.Context, args []string, stdin s
 func (r *LocalRunner) ReadBytes(ctx context.Context, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
+	cmd.WaitDelay = waitDelay
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // see runSeparate — clean exit, output is valid
+	}
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -201,6 +224,11 @@ func (r *LocalRunner) StreamCombined(ctx context.Context, args []string) (io.Rea
 func (r *LocalRunner) stream(ctx context.Context, args []string, mergeStderr bool) (io.ReadCloser, error) {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
+	// StdoutPipe case: the hang is in the CALLER's Scanner.Read (grandchild
+	// holds write-end → no EOF), not in Wait. WaitDelay still helps the
+	// ctx-cancel path — Go's closeDescriptors(parentIOPipes) includes
+	// StdoutPipe, so Scanner sees closed pipe after ctx-done + delay.
+	cmd.WaitDelay = waitDelay
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

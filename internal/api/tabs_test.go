@@ -224,12 +224,24 @@ func TestTabClose_Unknown(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestTabManager_IdleShutdown_NoBrowserEverConnects(t *testing.T) {
+	// Arm-at-start: timer should fire even if no browser ever connects.
+	// Old code only armed in decSub() — a browser that never connected meant
+	// the timer never ran.
+	tm := NewTabManager(nil, nil)
+	tm.SetIdleShutdown(10 * time.Millisecond)
+	select {
+	case <-tm.ShutdownCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("no shutdown — timer should arm at SetIdleShutdown, not wait for first decSub")
+	}
+}
+
 func TestTabManager_IdleShutdown_CrossTab(t *testing.T) {
 	// The core fix: switching from tab 0 to tab 1 should NOT start the idle
 	// timer. totalSubs goes 1→2 (tab 1 connects) → 1 (tab 0 disconnects).
 	// Never hits 0 until the BROWSER closes (both tabs disconnect).
 	tm := NewTabManager(nil, nil)
-	tm.SetIdleShutdown(10 * time.Millisecond)
 
 	// Two tabs, each with a Watcher (no fsnotify — just the subscribe hooks).
 	for i := 0; i < 2; i++ {
@@ -243,8 +255,11 @@ func TestTabManager_IdleShutdown_CrossTab(t *testing.T) {
 	w0 := tm.tabs["0"].srv.Watcher
 	w1 := tm.tabs["1"].srv.Watcher
 
-	// Browser opens, connects to tab 0.
+	// Browser opens, connects to tab 0 BEFORE SetIdleShutdown — avoids the
+	// arm-at-start timer racing the server-setup loop above (10ms is tight
+	// under -race). That path has its own test.
 	_, unsub0 := w0.subscribe()
+	tm.SetIdleShutdown(10 * time.Millisecond)
 	assert.Equal(t, 1, tm.totalSubs)
 
 	// User switches to tab 1: new ES connects, then old ES closes ({#key}
@@ -268,14 +283,16 @@ func TestTabManager_IdleShutdown_CrossTab(t *testing.T) {
 
 func TestTabManager_IdleShutdown_ReconnectCancels(t *testing.T) {
 	tm := NewTabManager(nil, nil)
-	tm.SetIdleShutdown(50 * time.Millisecond)
 	r := testutil.NewMockRunner(t)
 	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
 	s := NewServer(r, "")
 	s.Watcher = newWatcher(s)
 	tm.AddTab(s, "/r")
 
+	// Subscribe BEFORE SetIdleShutdown so arm-at-start doesn't race server
+	// setup above. This test is about the reconnect-cancels path.
 	_, unsub := s.Watcher.subscribe()
+	tm.SetIdleShutdown(50 * time.Millisecond)
 	unsub() // timer starts
 	require.NotNil(t, tm.idleTimer)
 
@@ -296,7 +313,6 @@ func TestTabManager_IdleShutdown_CloseOrder(t *testing.T) {
 	// if {#key} cleanup runs before the new mount's effect). totalSubs dips
 	// to 0 momentarily → timer starts → incSub cancels it.
 	tm := NewTabManager(nil, nil)
-	tm.SetIdleShutdown(50 * time.Millisecond)
 	for i := 0; i < 2; i++ {
 		r := testutil.NewMockRunner(t)
 		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
@@ -306,6 +322,7 @@ func TestTabManager_IdleShutdown_CloseOrder(t *testing.T) {
 	}
 
 	_, unsub0 := tm.tabs["0"].srv.Watcher.subscribe()
+	tm.SetIdleShutdown(50 * time.Millisecond) // totalSubs==1, arm-at-start skipped
 	unsub0() // totalSubs: 1→0, timer starts
 	require.NotNil(t, tm.idleTimer)
 

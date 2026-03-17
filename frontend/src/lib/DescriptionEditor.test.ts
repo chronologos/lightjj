@@ -16,6 +16,7 @@ function makeRevision(): LogEntry {
       conflicted: false,
       divergent: false,
       empty: false,
+      mine: true,
     },
     description: 'test commit',
     graph_lines: [],

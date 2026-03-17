@@ -954,6 +954,7 @@ func TestHandleInfo(t *testing.T) {
 	assert.Equal(t, "/home/user/repo", got["repo_path"])
 	assert.Equal(t, true, got["ssh_mode"]) // newTestServer passes RepoDir=""
 	assert.Equal(t, "origin", got["default_remote"]) // NewServer's baseline
+	assert.Equal(t, "", got["log_revset"])            // unset by newTestServer
 }
 
 func TestHandleRemotes(t *testing.T) {
@@ -1602,8 +1603,45 @@ func TestHandleWorkspaces(t *testing.T) {
 	assert.Equal(t, "base2", resp.Workspaces[0].Name)
 	assert.Equal(t, "skpssuxl", resp.Workspaces[0].ChangeId)
 	assert.Equal(t, "default", resp.Workspaces[1].Name)
-	// Current is template-derived, not path-matched — works regardless of RepoDir.
+	// Single candidate → template-derived (SSH mode's only signal).
 	assert.Equal(t, "default", resp.Current)
+}
+
+func TestPickCurrentWorkspace(t *testing.T) {
+	pathMap := map[string]string{
+		"default":         "/repo/main",
+		"ws-secondary": "/repo/ws-two",
+	}
+	tests := []struct {
+		name       string
+		candidates []string
+		repoDir    string
+		want       string
+	}{
+		{"single candidate wins (SSH mode signal)", []string{"default"}, "", "default"},
+		// The bug: two workspaces on same commit → both report Current=true.
+		// Path-match against RepoDir breaks the tie.
+		{"collision + path match picks correct", []string{"default", "ws-secondary"}, "/repo/main", "default"},
+		{"collision + path match picks other", []string{"default", "ws-secondary"}, "/repo/ws-two", "ws-secondary"},
+		{"collision + no RepoDir (SSH) → honest empty", []string{"default", "ws-secondary"}, "", ""},
+		{"collision + trailing slash normalized", []string{"default", "ws-secondary"}, "/repo/main/", "default"},
+		{"zero candidates → empty", nil, "/repo/main", ""},
+		// The index is additive-only: primary workspace (default) often has
+		// no entry. If exactly one candidate is unmapped AND no other
+		// candidate's path matches us → the unmapped one is us by elimination.
+		{"primary not in index, other paths don't match → elimination",
+			[]string{"primary", "ws-secondary"}, "/code/bigrepo", "primary"},
+		{"two unmapped → can't eliminate → honest empty",
+			[]string{"primary", "other-unmapped"}, "/code/bigrepo", ""},
+		// Edge: neither is in index. Elimination needs exactly one unmapped.
+		{"both candidates unmapped → honest empty",
+			[]string{"a", "b"}, "/code/bigrepo", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, pickCurrentWorkspace(tt.candidates, pathMap, tt.repoDir))
+		})
+	}
 }
 
 // wsStoreEntry builds a protobuf workspace_store record (jj's on-disk format).

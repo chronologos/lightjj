@@ -36,6 +36,33 @@ func TestParseGraphLog_LinearHistory(t *testing.T) {
 	assert.False(t, rows[3].Commit.IsWorkingCopy)
 }
 
+func TestParseGraphLog_MineAndAuthor(t *testing.T) {
+	// 7-part _PREFIX block (mine + author.email appended). Old 5-part
+	// fixtures still pass — parser checks len>=6/>=7 incrementally.
+	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false_PREFIX:true_PREFIX:me@x.com\x1foysoxutx\x1f20eb6a12\x1fmine\x1f\x1f\x1f\n" +
+		"○  _PREFIX:r_PREFIX:f_PREFIX:false_PREFIX:false_PREFIX:false_PREFIX:bot@x.com\x1frrrtptvx\x1ff766300c\x1fatlantis commit\x1f\x1f\x1f\n"
+
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 2)
+
+	assert.True(t, rows[0].Commit.Mine)
+	assert.Equal(t, "me@x.com", rows[0].Commit.AuthorEmail)
+
+	assert.False(t, rows[1].Commit.Mine)
+	assert.Equal(t, "bot@x.com", rows[1].Commit.AuthorEmail)
+
+	// Empty author.email (root commit, malformed import) — explicit
+	// '++ _PREFIX: ++' concat in the template guarantees the marker is
+	// present even if the value is empty. separate() would have skipped
+	// it, shifting positions.
+	emptyEmail := "○  _PREFIX:z_PREFIX:0_PREFIX:false_PREFIX:true_PREFIX:false_PREFIX:\x1fzzzzzzzz\x1f00000000\x1f\x1f\x1f\x1f\n"
+	rows2 := ParseGraphLog(emptyEmail)
+	require.Len(t, rows2, 1)
+	assert.False(t, rows2[0].Commit.Mine)
+	assert.Equal(t, "", rows2[0].Commit.AuthorEmail)
+	assert.True(t, rows2[0].Commit.Empty) // position 4 not shifted
+}
+
 func TestParseGraphLog_WithBranches(t *testing.T) {
 	output := "@  _PREFIX:o_PREFIX:20_PREFIX:false_PREFIX:false\x1foysoxutx\x1f20eb6a12\x1f\x1f\x1f\x1f\n" +
 		"│\n" +

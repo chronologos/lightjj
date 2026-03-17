@@ -129,13 +129,31 @@ func (m *TabManager) addLocked(srv *Server, path string) *Tab {
 	return t
 }
 
+// armIdleTimerLocked starts the shutdown countdown. Caller holds idleMu.
+// Shared by SetIdleShutdown (arm-at-start) and decSub (arm-on-last-disconnect);
+// any future change to the shutdown sequence would otherwise need 2 edits.
+func (m *TabManager) armIdleTimerLocked() {
+	d := m.idleShutdown
+	m.idleTimer = time.AfterFunc(d, func() {
+		m.shutdownOnce.Do(func() {
+			log.Printf("no browser connected for %v, shutting down", d)
+			close(m.ShutdownCh)
+		})
+	})
+}
+
 // SetIdleShutdown arms the idle timer. When the total SSE subscriber count
 // across all tabs drops to 0, a timer starts; if no browser reconnects before
 // it fires, ShutdownCh closes. Call before any tab can receive subscribers.
+// Arms immediately (totalSubs starts at 0) — otherwise the timer only ever
+// arms in decSub(), and a browser that never connects means no shutdown.
 func (m *TabManager) SetIdleShutdown(d time.Duration) {
 	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
 	m.idleShutdown = d
-	m.idleMu.Unlock()
+	if m.totalSubs == 0 {
+		m.armIdleTimerLocked()
+	}
 }
 
 func (m *TabManager) incSub() {
@@ -153,13 +171,7 @@ func (m *TabManager) decSub() {
 	defer m.idleMu.Unlock()
 	m.totalSubs--
 	if m.totalSubs == 0 && m.idleShutdown > 0 {
-		d := m.idleShutdown
-		m.idleTimer = time.AfterFunc(d, func() {
-			m.shutdownOnce.Do(func() {
-				log.Printf("no browser connected for %v, shutting down", d)
-				close(m.ShutdownCh)
-			})
-		})
+		m.armIdleTimerLocked()
 	}
 }
 

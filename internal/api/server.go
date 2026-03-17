@@ -26,6 +26,11 @@ type Server struct {
 	Mux           *http.ServeMux
 	RepoDir       string // absolute path to repo root (empty for SSH mode)
 	DefaultRemote string // preferred remote name for bookmark/remote sorting; main.go can override
+	// ConfiguredLogRevset is the user's revsets.log config — what `jj log`
+	// uses when no -r is passed. Shown as the filter-bar placeholder so
+	// "empty filter = what?" is visible. Empty if unset (jj uses its
+	// built-in default). main.go reads via ConfigGet at tab-open.
+	ConfiguredLogRevset string
 	Hostname      string // display hostname for tab title (local os.Hostname or SSH host); main.go sets
 	RepoPath      string // display repo path for tab title (RepoDir or SSH remote path); main.go sets
 	SSHHost       string // full user@host spec for --remote mode (empty in local mode); feeds {host} placeholder

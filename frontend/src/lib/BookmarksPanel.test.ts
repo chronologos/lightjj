@@ -128,13 +128,18 @@ describe('BookmarksPanel — navigation', () => {
     expect(rows().length).toBe(3) // bookmarks back
   })
 
-  it('Enter is no-op on conflict (no commit_id)', async () => {
+  it('Enter on conflict jumps to added_targets[0]', async () => {
+    // Realistic conflict: the backend ALWAYS populates added_targets (the "+"
+    // sides). The old fixture had conflict:true with no added_targets — that
+    // can't happen in practice. Had this fixture been realistic from day one,
+    // the 3-gate spread (computeActions + onclick + jumpToBookmark) wouldn't
+    // have survived review.
     const onjump = vi.fn()
-    const bms = [mkBm({ name: 'broken', conflict: true, commit_id: '', local: mkLocal() })]
+    const bms = [mkBm({ name: 'broken', conflict: true, commit_id: '', added_targets: ['aaa111', 'bbb222'], local: mkLocal() })]
     render(BookmarksPanel, { props: props({ bookmarks: bms, onjump }) })
-    await fireEvent.keyDown(list(), { key: 'j' }) // move to bookmark row
+    await fireEvent.keyDown(list(), { key: 'j' })
     await fireEvent.keyDown(list(), { key: 'Enter' })
-    expect(onjump).not.toHaveBeenCalled()
+    expect(onjump).toHaveBeenCalledWith(expect.objectContaining({ name: 'broken' }), 'aaa111')
   })
 
   it('Escape: tiered (disarm → clear filter → close)', async () => {

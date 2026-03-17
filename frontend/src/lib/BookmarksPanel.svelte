@@ -146,7 +146,14 @@
           const p = syncPriority(a.sync) - syncPriority(b.sync)
           return p !== 0 ? p : a.bm.name.localeCompare(b.bm.name)
         })) {
-        result.push({ kind: 'bookmark', bm: entry.bm, sync: entry.sync, remote: '.', visibleInLog: true })
+        // Conflicted bookmarks have no commit_id (the ref points at multiple
+        // commits). Jump to added_targets[0] — for 1-side conflicts (delete
+        // in one op, move in concurrent op) this is THE target; for multi-
+        // side it's at least reachable. Without this, conflict rows are
+        // dead in LOCAL group — can.jump's jumpTarget fallback was written
+        // for remote-group rows only.
+        const jumpTarget = entry.bm.conflict ? entry.bm.added_targets?.[0] : undefined
+        result.push({ kind: 'bookmark', bm: entry.bm, sync: entry.sync, remote: '.', visibleInLog: true, jumpTarget })
       }
     }
 
@@ -183,8 +190,11 @@
 
   // Per-bookmark action gates. Factored out of the keyboard-selection
   // $derived so context-menu can compute them for the RIGHT-CLICKED row
-  // (not the keyboard-selected one).
-  function computeActions(bm: Bookmark): BookmarkRowActions {
+  // (not the keyboard-selected one). jumpTarget is folded IN (not a
+  // compensating-read at each consumer) — the 3-gate spread (here +
+  // onclick + jumpToBookmark) was the failure mode that let a partial
+  // conflict-jump fix through; single source of truth prevents that.
+  function computeActions(bm: Bookmark, jumpTarget?: string): BookmarkRowActions {
     // Delete-staged: no local, but tracked remote(s) still exist. `d` pushes
     // the deletion (network op). Untracked remote-only is left alone —
     // pushing -b <name> would implicitly TRACK it, not delete. Conflicted
@@ -193,7 +203,9 @@
       ? (bm.remotes ?? []).filter(r => r.tracked).map(r => r.remote)
       : []
     return {
-      jump: !bm.conflict && !!bm.commit_id,
+      // jumpTarget covers: remote-group rows (scoped commit_id), LOCAL-group
+      // conflict rows (added_targets[0]). bm.commit_id covers LOCAL non-conflict.
+      jump: !!jumpTarget || !!bm.commit_id,
       del: !!bm.local,
       pushDelete,
       track: trackOptions(bm),
@@ -202,15 +214,12 @@
 
   // Single computeActions() call; both can and trackInfo derive from it.
   let selActions = $derived(
-    selected?.kind === 'bookmark' ? computeActions(selected.bm) : null
+    selected?.kind === 'bookmark' ? computeActions(selected.bm, selected.jumpTarget) : null
   )
   let trackInfo = $derived(selActions?.track ?? [])
 
   let can = $derived({
-    // selActions.jump checks bm.commit_id — but remote-group rows can have
-    // empty bm.commit_id (delete-staged on a non-default remote) with a valid
-    // jumpTarget. Enter/click both pass jumpTarget; the gate must honor it too.
-    jump: (selActions?.jump ?? false) || !!(selected?.kind === 'bookmark' && selected.jumpTarget),
+    jump: selActions?.jump ?? false,
     del: selActions?.del ?? false,
     pushDelete: selActions?.pushDelete ?? [],
     forget: selected?.kind === 'bookmark',
@@ -519,12 +528,12 @@
             class:bp-row-matches-graph={matchesGraph}
             class:bp-row-hidden={!row.visibleInLog && row.remote !== '.'}
             onmousemove={() => { if (index !== i) index = i }}
-            onclick={() => { if (!row.bm.conflict && (row.jumpTarget ?? row.bm.commit_id)) onjump(row.bm, row.jumpTarget) }}
+            onclick={() => { if (row.jumpTarget ?? row.bm.commit_id) onjump(row.bm, row.jumpTarget) }}
             oncontextmenu={oncontextmenu ? (e: MouseEvent) => {
               e.preventDefault()
               confirm.disarm() // right-click cancels any pending double-press confirm
               index = i        // sync keyboard selection to right-clicked row
-              oncontextmenu!(row.bm, computeActions(row.bm), e.clientX, e.clientY, row.jumpTarget)
+              oncontextmenu!(row.bm, computeActions(row.bm, row.jumpTarget), e.clientX, e.clientY, row.jumpTarget)
             } : undefined}
             role="option"
             tabindex="-1"

@@ -30,6 +30,7 @@ function mkCommit(commitId: string): LogEntry['commit'] {
     conflicted: false,
     divergent: false,
     empty: false,
+    mine: true,
   }
 }
 

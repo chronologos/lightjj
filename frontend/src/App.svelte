@@ -149,6 +149,10 @@
   // Smart views — preset chips below the revset input. Click → applyRevsetExample.
   // Module-const: zero reactive deps, viewLabel loop adds no tracking.
   const STATIC_PRESETS = [
+    // jj's built-in default (what you get with no revsets.log config).
+    // Config-independent — useful when a custom revsets.log uses mine() and
+    // a bot-authored commit holding your bookmark drops out.
+    { key: 'all',       label: 'All',       revset: 'present(@) | ancestors(immutable_heads().., 2) | present(trunk())' },
     { key: 'mine',      label: 'My work',   revset: 'mine() & mutable()' },
     { key: 'wip',       label: 'WIP',       revset: 'trunk()..@' },
     { key: 'conflicts', label: 'Conflicts', revset: 'conflicts()' },
@@ -158,10 +162,13 @@
   // The only dynamic preset. Empty list → '' (chip hidden by {#if}, never
   // hits jj). revsetQuote escapes revset operators in bookmark names.
   // $derived.by thunk sidesteps TDZ (pullRequests declared at ~:286).
+  // present() wraps each — a PR can outlive its local bookmark (deleted
+  // after merge, or the bookmark only exists @origin). Without present(),
+  // one missing bookmark → "Revision X doesn't exist" → whole chip errors.
   const prsRevset = $derived.by(() =>
     pullRequests.length === 0
       ? ''
-      : `ancestors(${pullRequests.map(p => revsetQuote(p.bookmark)).join(' | ')}, 3) | @`
+      : `ancestors(${pullRequests.map(p => `present(${revsetQuote(p.bookmark)})`).join(' | ')}, 3) | @`
   )
 
   // Label for RevisionGraph's header badge. null = default log (no badge).
@@ -563,17 +570,21 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path, editor_configured, default_remote } = await api.info()
+      const { hostname, repo_path, editor_configured, default_remote, log_revset } = await api.info()
       document.title = formatTitle(hostname, repo_path)
       editorConfigured = editor_configured
       defaultRemote = default_remote
       repoPath = repo_path
+      configuredLogRevset = log_revset
     } catch { /* static <title> fallback + editorConfigured stays false (fail-safe) */ }
   }
 
   // Backend resolves this per-tab from --default-remote flag > jj config
   // git.push > "origin". Pre-load fallback until loadInfo() completes.
   let defaultRemote: string = $state('origin')
+  // User's revsets.log config — empty filter bar applies this. Shown in the
+  // placeholder so "why is X missing" is visible without opening jj config.
+  let configuredLogRevset: string = $state('')
   // Full remote list — session-memoized. Used by BookmarksPanel/Modal for
   // multi-remote track/untrack submenus.
   let allRemotes: string[] = $state([])
@@ -790,7 +801,7 @@
       ? `Push delete → ${pd[0]}${pd.length > 1 ? ` (+${pd.length - 1})` : ''}`
       : 'Delete'
     const items: ContextMenuItem[] = [
-      { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump && !jumpTarget,
+      { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump,
         action: () => jumpToBookmark(bm, jumpTarget) },
       { separator: true },
       { label: delLabel, shortcut: 'd', danger: true, disabled: !actions.del && !pd[0],
@@ -834,7 +845,10 @@
   // branches view, skip diff load (panel occupies the diff slot).
   function jumpToBookmark(bm: Bookmark, overrideCommitId?: string) {
     const commitId = overrideCommitId ?? bm.commit_id
-    if (bm.conflict || !commitId) return
+    // Conflict gate dropped — BookmarksPanel now supplies overrideCommitId
+    // (= added_targets[0]) for conflicted rows. !commitId alone catches the
+    // unjumpable case (no override passed AND no bm.commit_id).
+    if (!commitId) return
     const select = activeView === 'branches' ? selectRevisionCursorOnly : selectRevision
     const idx = revisions.findIndex(r => r.commit.commit_id === commitId)
     if (idx >= 0) { select(idx); return }
@@ -2096,7 +2110,7 @@
               oninput={(e: Event) => { revsetFilter = (e.target as HTMLInputElement).value }}
               class="revset-input"
               type="text"
-              placeholder="revset filter (press / to focus)"
+              placeholder={configuredLogRevset || "revset filter (press / to focus)"}
               onkeydown={(e: KeyboardEvent) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()

@@ -807,7 +807,7 @@ describe('computeConnectedCommitIds', () => {
       commit_id: cid, parent_ids: parents, change_id: cid,
       change_prefix: 1, commit_prefix: 1,
       is_working_copy: false, hidden: false, immutable: false,
-      conflicted: false, divergent: false, empty: false,
+      conflicted: false, divergent: false, empty: false, mine: true,
     },
     description: '', graph_lines: [],
   })

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,24 @@ func TestLocalRunner_Run_Success(t *testing.T) {
 	out, err := r.Run(context.Background(), []string{"-c", "echo hello"})
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(out))
+}
+
+func TestLocalRunner_Run_GrandchildHoldsPipe_WaitDelaySwallowed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("3s WaitDelay wall time")
+	}
+	// sh exits 0 immediately; backgrounded sleep inherits stdout fd → Wait()
+	// hangs on pipe drain. WaitDelay force-closes after 3s → ErrWaitDelay.
+	// This is the SSH ControlMaster scenario: mux master inherits pipe fds
+	// after ssh client exits. Without the errors.Is(ErrWaitDelay) normalization
+	// in runSeparate, valid output is discarded with a spurious error.
+	r := shRunner()
+	start := time.Now()
+	out, err := r.Run(context.Background(), []string{"-c", "echo ok; sleep 30 &"})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", string(out))
+	// Bounded by WaitDelay (~3s), not sleep 30.
+	assert.Less(t, time.Since(start), 5*time.Second)
 }
 
 func TestLocalRunner_Run_SuccessWithStderrOnly(t *testing.T) {

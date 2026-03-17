@@ -151,6 +151,13 @@ func main() {
 				s.DefaultRemote = v
 			}
 		}
+		// Second config read — same ctx budget (both are fast even over SSH;
+		// config-get doesn't touch the working copy). Empty = jj's built-in
+		// default; frontend shows generic placeholder. Non-empty = user's
+		// custom revset; frontend shows it so "why is X missing" is visible.
+		if out, err := r.Run(ctx, jj.ConfigGet("revsets.log")); err == nil {
+			s.ConfiguredLogRevset = strings.TrimSpace(string(out))
+		}
 		cancel()
 		if *defaultRemote != "" {
 			s.DefaultRemote = *defaultRemote

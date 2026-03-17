@@ -28,6 +28,9 @@ func TestLogGraph(t *testing.T) {
 	assert.Contains(t, joined, JJUIPrefix)
 	assert.Contains(t, joined, "divergent")
 	assert.Contains(t, joined, "empty")
+	// Outside separate() — explicit concat so empty email doesn't shift positions.
+	assert.Contains(t, joined, "stringify(mine)")
+	assert.Contains(t, joined, "author.email()")
 	assert.Contains(t, joined, "parents")
 	// local_bookmarks + remote_bookmarks concatenated — `bookmarks` alone
 	// collapses tracked-and-synced remotes into the local form.

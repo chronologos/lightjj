@@ -11,6 +11,10 @@ type Commit struct {
 	Conflicted     bool     `json:"conflicted"`
 	Divergent      bool     `json:"divergent"`
 	Empty          bool     `json:"empty"`
+	// Mine: author.email matches user.email config. Drives the author-chip:
+	// shown only when false (bot commits like atlantis, teammates' work).
+	Mine        bool   `json:"mine"`
+	AuthorEmail string `json:"author_email,omitempty"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
 	ParentIds      []string `json:"parent_ids,omitempty"`
 }

@@ -18,6 +18,8 @@ export interface LogEntry {
     conflicted: boolean
     divergent: boolean
     empty: boolean
+    mine: boolean
+    author_email?: string
     working_copies?: string[]
     parent_ids?: string[]
   }
@@ -598,6 +600,7 @@ export interface InfoResponse {
   ssh_mode: boolean
   editor_configured: boolean
   default_remote: string
+  log_revset: string  // user's revsets.log config; empty = jj's built-in default
 }
 
 export interface FileChange {

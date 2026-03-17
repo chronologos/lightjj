@@ -30,6 +30,8 @@ function makeEntry(overrides: Partial<{
   conflicted: boolean
   divergent: boolean
   empty: boolean
+  mine: boolean
+  author_email: string
   working_copies: string[]
   parent_ids: string[]
   bookmarks: LocalRef[]
@@ -48,6 +50,8 @@ function makeEntry(overrides: Partial<{
       conflicted: overrides.conflicted ?? false,
       divergent: overrides.divergent ?? false,
       empty: overrides.empty ?? false,
+      mine: overrides.mine ?? true,
+      author_email: overrides.author_email,
       working_copies: overrides.working_copies,
       parent_ids: overrides.parent_ids ?? [],
     },

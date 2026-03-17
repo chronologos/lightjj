@@ -392,6 +392,14 @@
               {#if entry.commit.is_working_copy}
                 <span class="wc-badge">@</span>
               {/if}
+              <!-- Chip only when NOT mine — the absence is the "yours" signal.
+                   Local-part only (atlantis-bot@x → atlantis-bot); full email
+                   on hover. Immutable commits skip this: trunk is ALL not-mine
+                   and the dimming already signals that. Single condition — row
+                   snippet is perf-hot (shared by virtual/eager paths). -->
+              {#if !entry.commit.mine && !entry.commit.immutable && entry.commit.author_email}
+                <span class="author-chip" title={entry.commit.author_email}>{entry.commit.author_email.split('@')[0]}</span>
+              {/if}
               {#if entry.commit.empty}
                 <span class="desc-placeholder">(empty)</span>
               {/if}
@@ -960,6 +968,19 @@
   .pr-number {
     color: var(--overlay0);
     font-weight: 400;
+  }
+
+  .author-chip {
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface0);
+    color: var(--subtext0);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    line-height: 1.15;
+    margin-right: 4px;
+    vertical-align: baseline;
   }
 
   .workspace-badge {

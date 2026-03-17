@@ -402,6 +402,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"ssh_mode":          s.RepoDir == "",
 		"editor_configured": len(tmpl) > 0,
 		"default_remote":    s.DefaultRemote,
+		"log_revset":        s.ConfiguredLogRevset,
 	})
 }
 
@@ -417,6 +418,41 @@ type workspaceWithPath struct {
 	Path     string `json:"path,omitempty"`
 }
 
+// pickCurrentWorkspace resolves which ws.Current=true candidate is actually
+// us. One candidate → trust it (SSH mode's only signal). Multiple → the
+// collision case: break the tie by path-matching against repoDir. The
+// workspace_store index is additive-only (server.go: readWorkspaceStore) —
+// the primary workspace (created at jj git init) often predates it and has
+// no path entry. If exactly one candidate is missing from the index and no
+// other candidate's path matches us, the missing one is us by elimination.
+func pickCurrentWorkspace(candidates []string, pathMap map[string]string, repoDir string) string {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	if repoDir == "" {
+		return "" // SSH + collision: no reliable tiebreaker
+	}
+	clean := filepath.Clean(repoDir)
+	var unmapped []string
+	for _, name := range candidates {
+		p := pathMap[name]
+		if p == "" {
+			unmapped = append(unmapped, name)
+			continue
+		}
+		if filepath.Clean(p) == clean {
+			return name // exact match wins
+		}
+	}
+	// No path matched. If exactly one candidate was missing from the index,
+	// it's the primary (predates the index) and we're it by elimination —
+	// every OTHER candidate has a path that ISN'T us.
+	if len(unmapped) == 1 {
+		return unmapped[0]
+	}
+	return ""
+}
+
 func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	args := jj.WorkspaceList()
 	output, err := s.Runner.Run(r.Context(), args)
@@ -429,7 +465,14 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// Enrich with paths from workspace store (best-effort — for tab-open)
 	pathMap, _ := s.readWorkspaceStore(r.Context())
 
-	current := ""
+	// ws.Current = target.current_working_copy() = "is this workspace's target
+	// commit MY @?" — wrong question when two workspaces point at the same
+	// commit (both answer true, last-in-loop wins). Path-matching is reliable
+	// in local mode (RepoDir is canonical via ResolveWorkspaceRoot) but breaks
+	// in SSH mode (user-typed --remote path may not be canonical). Hybrid:
+	// ws.Current narrows candidates; path-match breaks ties. See commands.go
+	// WorkspaceList comment for the history.
+	var candidates []string
 	resp := workspacesResponse{Workspaces: make([]workspaceWithPath, len(workspaces))}
 	for i, ws := range workspaces {
 		resp.Workspaces[i] = workspaceWithPath{
@@ -439,10 +482,10 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 			Path:     pathMap[ws.Name],
 		}
 		if ws.Current {
-			current = ws.Name
+			candidates = append(candidates, ws.Name)
 		}
 	}
-	resp.Current = current
+	resp.Current = pickCurrentWorkspace(candidates, pathMap, s.RepoDir)
 	s.writeJSON(w, r, http.StatusOK, resp)
 }
 

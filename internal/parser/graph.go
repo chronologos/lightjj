@@ -149,6 +149,12 @@ func parseNodeLine(line string) GraphRow {
 	if len(prefixParts) >= 5 {
 		row.Commit.Empty, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[4]))
 	}
+	if len(prefixParts) >= 6 {
+		row.Commit.Mine, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[5]))
+	}
+	if len(prefixParts) >= 7 {
+		row.Commit.AuthorEmail = strings.TrimSpace(prefixParts[6])
+	}
 
 	// Full IDs and content fields override the shortest prefix fallbacks
 	if len(parts) >= 4 {
