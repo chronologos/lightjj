@@ -392,13 +392,6 @@
               {#if entry.commit.is_working_copy}
                 <span class="wc-badge">@</span>
               {/if}
-              <!-- Chip only when NOT mine — the absence is the "yours" signal.
-                   Local-part only (atlantis-bot@x → atlantis-bot); full email
-                   on hover. !mine alone handles both large repo (trunk = others,
-                   chips useful) and personal-repo (trunk = you, no chips). -->
-              {#if !entry.commit.mine && entry.commit.author_email}
-                <span class="author-chip" title={entry.commit.author_email}>{entry.commit.author_email.split('@')[0]}</span>
-              {/if}
               {#if entry.commit.empty}
                 <span class="desc-placeholder">(empty)</span>
               {/if}
@@ -463,6 +456,12 @@
                 <span class="meta-line">
                   <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span>{#if divOffset}<span class="div-offset">{divOffset}</span>{/if}</span>
                   <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}<span class="id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix, 12)}</span></span>
+                  <!-- !mine alone handles large repo (trunk = others, chip useful)
+                       AND personal-repo (trunk = you, no chip). Local-part only;
+                       full email on hover. -->
+                  {#if !entry.commit.mine && entry.commit.author_email}
+                    <span class="author-chip" title={entry.commit.author_email}>{entry.commit.author_email.split('@')[0]}</span>
+                  {/if}
                 </span>
               {/if}
             </span>
@@ -978,8 +977,6 @@
     border-radius: 3px;
     font-size: 10px;
     line-height: 1.15;
-    margin-right: 4px;
-    vertical-align: baseline;
   }
 
   .workspace-badge {
