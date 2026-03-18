@@ -51,6 +51,27 @@
 
   let anyModeActive = $derived(rebase.active || squash.active || split.active)
 
+  /** Format jj timestamp ("2026-03-17 22:05:32.000 -07:00") as compact relative age. */
+  function relativeTime(ts: string): string {
+    // jj format: "YYYY-MM-DD HH:MM:SS.mmm ±HH:MM"
+    // Convert to ISO 8601 for Date parsing: replace space with T, drop millis timezone space
+    const isoish = ts.replace(' ', 'T').replace(/\.(\d{3})\s+([+-])/, '.$1$2')
+    const date = new Date(isoish)
+    if (isNaN(date.getTime())) return ''
+    const secs = Math.floor((Date.now() - date.getTime()) / 1000)
+    if (secs < 60) return 'now' // also covers clock skew (negative secs)
+    const mins = Math.floor(secs / 60)
+    if (mins < 60) return `${mins}m`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) return `${hrs}h`
+    const days = Math.floor(hrs / 24)
+    if (days < 30) return `${days}d`
+    const months = Math.floor(days / 30)
+    if (months < 12) return `${months}mo`
+    const years = Math.floor(days / 365)
+    return `${years}y`
+  }
+
   // Stale-while-revalidate: when we already have revisions, don't blank the
   // list during reloads — dim it and show a thin progress bar instead.
   // Covers both post-mutation reloads (mutating=true) and the log fetch
@@ -456,11 +477,12 @@
                 <span class="meta-line">
                   <span class="change-id">{entry.commit.change_id.slice(0, entry.commit.change_prefix)}<span class="id-rest">{entry.commit.change_id.slice(entry.commit.change_prefix, 12)}</span>{#if divOffset}<span class="div-offset">{divOffset}</span>{/if}</span>
                   <span class="commit-id">{entry.commit.commit_id.slice(0, entry.commit.commit_prefix)}<span class="id-rest">{entry.commit.commit_id.slice(entry.commit.commit_prefix, 12)}</span></span>
-                  <!-- !mine alone handles large repo (trunk = others, chip useful)
-                       AND personal-repo (trunk = you, no chip). Local-part only;
-                       full email on hover. -->
                   {#if !entry.commit.mine && entry.commit.author_email}
                     <span class="author-chip" title={entry.commit.author_email}>{entry.commit.author_email.split('@')[0]}</span>
+                  {/if}
+                  {#if entry.commit.timestamp}
+                    {@const age = relativeTime(entry.commit.timestamp)}
+                    {#if age}<span class="timestamp-chip" title={entry.commit.timestamp}>{age}</span>{/if}
                   {/if}
                 </span>
               {/if}
@@ -975,6 +997,12 @@
     color: var(--subtext0);
     padding: 0 5px;
     border-radius: 3px;
+    font-size: 10px;
+    line-height: 1.15;
+  }
+
+  .timestamp-chip {
+    color: var(--overlay0);
     font-size: 10px;
     line-height: 1.15;
   }

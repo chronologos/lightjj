@@ -20,6 +20,7 @@ export interface LogEntry {
     empty: boolean
     mine: boolean
     author_email?: string
+    timestamp?: string
     working_copies?: string[]
     parent_ids?: string[]
   }

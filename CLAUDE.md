@@ -24,7 +24,7 @@ internal/
   jj/                     — Command builders + data models (PURE — no I/O, no side effects)
     commands.go            — Functions that return []string args for jj subcommands
     commands_test.go       — Command builder tests
-    commit.go              — Commit model with ChangePrefix/CommitPrefix, Immutable, Divergent, WorkingCopies
+    commit.go              — Commit model with ChangePrefix/CommitPrefix, Immutable, Divergent, WorkingCopies, Mine, AuthorEmail, Timestamp
     commit_test.go         — Commit model tests
     bookmark.go            — Bookmark model + output parsers; ParseBookmarkListOutput/ParseRemoteListOutput take defaultRemote param for sort order
     bookmark_test.go       — Bookmark parser tests

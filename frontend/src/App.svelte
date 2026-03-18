@@ -194,12 +194,18 @@
   // prev=undefined skips the FIRST fire: loadLog() at mount handles the initial
   // load; firing handleRevsetSubmit here too is a wasted request. Subsequent
   // fires (repoPath arriving with saved visibility, user toggle) work normally.
+  //
+  // Guard is ONLY `revsetFilter === prevVisibilityRevset` — NOT `=== ''`. The
+  // empty case is covered: when no visibility was set, prev starts as '' after
+  // the first fire, so '' === '' passes on the first toggle. The old `=== ''`
+  // branch caused a bug: user clears the filter → '' → bookmarks reload triggers
+  // recompute → effect sees '' and re-applies the visibility revset.
   let prevVisibilityRevset: string | undefined = undefined
   $effect(() => {
     const vr = visibilityRevset
     untrack(() => {
       if (prevVisibilityRevset === undefined) { prevVisibilityRevset = vr; return }
-      if (revsetFilter === '' || revsetFilter === prevVisibilityRevset) {
+      if (revsetFilter === prevVisibilityRevset) {
         revsetFilter = vr
         handleRevsetSubmit()
       }

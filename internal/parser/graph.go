@@ -155,6 +155,9 @@ func parseNodeLine(line string) GraphRow {
 	if len(prefixParts) >= 7 {
 		row.Commit.AuthorEmail = strings.TrimSpace(prefixParts[6])
 	}
+	if len(prefixParts) >= 8 {
+		row.Commit.Timestamp = strings.TrimSpace(prefixParts[7])
+	}
 
 	// Full IDs and content fields override the shortest prefix fallbacks
 	if len(parts) >= 4 {

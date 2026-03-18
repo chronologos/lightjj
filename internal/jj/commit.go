@@ -15,6 +15,7 @@ type Commit struct {
 	// shown only when false (bot commits like atlantis, teammates' work).
 	Mine        bool   `json:"mine"`
 	AuthorEmail string `json:"author_email,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
 	WorkingCopies  []string `json:"working_copies,omitempty"`
 	ParentIds      []string `json:"parent_ids,omitempty"`
 }
