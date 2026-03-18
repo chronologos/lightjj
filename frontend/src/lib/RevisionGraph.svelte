@@ -394,10 +394,9 @@
               {/if}
               <!-- Chip only when NOT mine — the absence is the "yours" signal.
                    Local-part only (atlantis-bot@x → atlantis-bot); full email
-                   on hover. Immutable commits skip this: trunk is ALL not-mine
-                   and the dimming already signals that. Single condition — row
-                   snippet is perf-hot (shared by virtual/eager paths). -->
-              {#if !entry.commit.mine && !entry.commit.immutable && entry.commit.author_email}
+                   on hover. !mine alone handles both large repo (trunk = others,
+                   chips useful) and personal-repo (trunk = you, no chips). -->
+              {#if !entry.commit.mine && entry.commit.author_email}
                 <span class="author-chip" title={entry.commit.author_email}>{entry.commit.author_email.split('@')[0]}</span>
               {/if}
               {#if entry.commit.empty}
