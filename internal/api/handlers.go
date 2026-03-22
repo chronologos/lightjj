@@ -341,6 +341,22 @@ func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, jj.ParseConflictList(string(output)))
 }
 
+// handleFileHistory is handleLog scoped to commits touching one file.
+// Separate endpoint so EscapeFileName's root-file: escaping stays server-side.
+func (s *Server) handleFileHistory(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		s.writeError(w, http.StatusBadRequest, "path query param required")
+		return
+	}
+	output, err := s.Runner.Run(r.Context(), jj.FileLog(path, 100))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, parser.ParseGraphLog(string(output)))
+}
+
 func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {

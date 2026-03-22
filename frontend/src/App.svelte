@@ -62,6 +62,7 @@
   import { buildVisibilityRevset, revsetQuote, syncVisibility } from './lib/remote-visibility'
   import ConflictQueue from './lib/ConflictQueue.svelte'
   import MergePanel from './lib/MergePanel.svelte'
+  import FileHistoryPanel from './lib/FileHistoryPanel.svelte'
   import { reconstructSides, type MergeSides } from './lib/conflict-extract'
 
   // --- Global state ---
@@ -295,6 +296,11 @@
   let mergeSides: MergeSides | null = $state(null)
   let mergeBusy = $state(false)
 
+  // File history overlay — right-click file → "View history". Null = closed.
+  // {#key fileHistoryPath} remounts the panel per path (fresh cursors free).
+  let fileHistoryPath: string | null = $state(null)
+  let fileHistoryRef: FileHistoryPanel | undefined = $state()
+
   let currentWorkspace: string = $state('')
   let workspaceList: Workspace[] = $state([])
   let aliases: Alias[] = $state([])
@@ -312,7 +318,7 @@
   // feature that 400s on click. See docs/CONFIG.md for the invariant.
   let editorConfigured = $state(false)
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || !!contextMenu || divergence.active || welcomeOpen)
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || !!contextMenu || divergence.active || welcomeOpen || !!fileHistoryPath)
   let inlineMode = $derived(rebase.active || squash.active || split.active)
   // Which mode (if any). `inlineMode` answers "is ANY mode active?" for
   // toolbar gates; `activeInlineMode.diffFollows` answers the per-mode
@@ -1597,6 +1603,7 @@
   })
 
   function closeModals() {
+    fileHistoryPath = null
     paletteOpen = false
     bookmarkModalOpen = false
     bookmarkInputOpen = false
@@ -1740,6 +1747,9 @@
     if (handleInlineCommit(e, target)) return
     if (isInInput(target)) return
     if (e.metaKey || e.ctrlKey) return
+    // File-history overlay handles j/k/Space/Escape; anyModalOpen below blocks
+    // the rest while open (so log-view j/k doesn't fire beneath the overlay).
+    if (fileHistoryPath && fileHistoryRef?.handleKeydown(e)) { e.preventDefault(); return }
     if (anyModalOpen) return
     if (inlineMode) return handleInlineNav(e)
     // Branches panel is focus-independent: delegate directly via bind:this
@@ -1782,9 +1792,12 @@
       paletteOpen = true
       return true
     }
-    // Gate preventDefault on diffPanelRef — otherwise branches view eats
-    // the browser's native find shortcut without opening any search UI.
-    if (e.key === 'f' && diffPanelRef) {
+    // Gate preventDefault on diffPanelRef + !overlay — otherwise branches view
+    // eats the browser's native find shortcut without opening any search UI,
+    // and file-history overlay would open DiffPanel's search BEHIND itself
+    // (bug_030 — steals focus, invisible input). Falling through to native
+    // Cmd+F lets the user search the overlay's visible diff text.
+    if (e.key === 'f' && diffPanelRef && !fileHistoryPath) {
       e.preventDefault()
       diffPanelRef.openSearch()
       return true
@@ -2385,6 +2398,7 @@
             onjjmutation={withMutation}
             oncontextmenu={showContextMenu}
             onopenfile={editorConfigured ? handleOpenFile : undefined}
+            onfilehistory={path => fileHistoryPath = path}
           >
             {#snippet header()}
               <!-- {#key} resets RevisionHeader local state (descExpanded) on nav.
@@ -2502,6 +2516,18 @@
 
   {#if welcomeOpen}
     <WelcomeModal version={APP_VERSION} features={welcomeFeatures} title={welcomeTitle} onclose={dismissWelcome} />
+  {/if}
+
+  {#if fileHistoryPath}
+    <div class="file-history-overlay">
+      {#key fileHistoryPath}
+        <FileHistoryPanel
+          bind:this={fileHistoryRef}
+          path={fileHistoryPath}
+          onclose={() => fileHistoryPath = null}
+        />
+      {/key}
+    </div>
   {/if}
 </div>
 
@@ -2972,6 +2998,14 @@
     align-items: center;
     justify-content: center;
     color: var(--subtext0);
+  }
+
+  .file-history-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--base);
+    z-index: 20;
+    display: flex;
   }
 
 </style>

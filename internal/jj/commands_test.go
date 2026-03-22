@@ -667,6 +667,25 @@ func TestParseConflictList(t *testing.T) {
 	assert.Len(t, got[1].Files, 1)
 }
 
+func TestFileLog(t *testing.T) {
+	args := FileLog("src/main.go", 50)
+	joined := strings.Join(args, " ")
+	// Must use root-file: (not file:) — file: is cwd-relative, breaks in SSH
+	// mode + secondary workspaces per CLAUDE.md.
+	assert.Contains(t, joined, `files(root-file:"src/main.go")`)
+	assert.Contains(t, joined, "--limit 50")
+	// Reuses LogGraph's template — same prefix markers, same parse path.
+	assert.Contains(t, joined, JJUIPrefix)
+}
+
+func TestFileLog_EscapesQuotes(t *testing.T) {
+	// Paths with " must be escaped to not break the revset string literal.
+	args := FileLog(`weird"name.go`, 10)
+	joined := strings.Join(args, " ")
+	assert.Contains(t, joined, `root-file:`)
+	assert.NotContains(t, joined, `weird"name.go")`) // unescaped would close early
+}
+
 func TestParseConflictList_EmptyAndMalformed(t *testing.T) {
 	// Parsers must return empty slices, not nil (JSON serializes [] not null).
 	assert.Equal(t, []*ConflictEntry{}, ParseConflictList(""))

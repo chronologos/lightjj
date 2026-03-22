@@ -857,6 +857,11 @@ export const api = {
     return request<ConflictEntry[]>(`/api/conflicts${q}`)
   },
 
+  // Commits touching a file — same LogEntry[] shape as log(), powers the
+  // file-history panel's revision list. Server-side does root-file: escaping.
+  fileHistory: (path: string) =>
+    request<LogEntry[]>(`/api/file-history?path=${encodeURIComponent(path)}`),
+
   staleImmutable: () => request<StaleImmutableGroup[]>('/api/stale-immutable'),
 
   diffRange: (from: string, to: string, files?: string[]) => {

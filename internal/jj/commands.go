@@ -533,6 +533,13 @@ func Resolve(revision string, file string, tool string) CommandArgs {
 	return []string{"resolve", "--tool", tool, "-r", revision, EscapeFileName(file)}
 }
 
+// FileLog returns LogGraph args scoped to commits touching path. Thin wrapper
+// — the revset does all the work. Kept server-side so EscapeFileName's quote
+// handling stays the single source of truth (paths can contain " and \).
+func FileLog(path string, limit int) CommandArgs {
+	return LogGraph("files("+EscapeFileName(path)+")", limit)
+}
+
 // ConflictList returns args for a jj log call emitting every conflicted
 // commit in revset with its conflicted-files list + side counts. Used by
 // the merge-mode conflict queue to show all conflicts in one fetch.

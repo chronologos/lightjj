@@ -64,13 +64,15 @@
     /** Open a repo-relative path in the user's $EDITOR. undefined = disabled
      *  (SSH mode, no local fs). Used by file-header + diff-line menus. */
     onopenfile?: (path: string, line?: number) => void
+    /** Open the file-history overlay for a path. */
+    onfilehistory?: (path: string) => void
   }
 
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, splitView = $bindable(false), header,
     fileSelectionMode, selectedFiles, ontogglefile, hunkReview = null,
-    onfilesaved, onjjmutation, oncontextmenu, onopenfile,
+    onfilesaved, onjjmutation, oncontextmenu, onopenfile, onfilehistory,
   }: Props = $props()
 
   // Stable string key for derivedCache + lastActiveRevId tracking.
@@ -159,6 +161,7 @@
       onopenfile
         ? { label: 'Open in editor', action: () => onopenfile(info.filePath, start ?? undefined) }
         : { label: 'Open in editor (not configured)', disabled: true },
+      ...(onfilehistory ? [{ label: 'View history', action: () => onfilehistory(info.filePath) }] : []),
       { separator: true },
       { label: 'Copy reference', action: () => navigator.clipboard.writeText(fullRef) },
     ]

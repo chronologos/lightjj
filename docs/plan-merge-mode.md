@@ -125,16 +125,11 @@ Current headers show only `sides.oursLabel` (the quoted commit description from 
 
 Kaleidoscope's headline feature: "browse and compare all revisions of a file."
 
-### 3.1 Entry point
+### 3.1 Entry point ✅
 
-- Right-click any file in DiffPanel → "View history"
-- `api.fileHistory(path)` → `GET /api/file-history?path=X&limit=50`
-- Backend: `jj log <path> --template <LogGraph template>` — jj already supports path-filtered log natively. Wrap in `commands.go`:
-  ```go
-  func FileLog(path string, limit int) CommandArgs {
-    return append(LogGraph("", limit), EscapeFileName(path))
-  }
-  ```
+- Right-click any diff line in DiffPanel → "View history" context-menu item (`onfilehistory` callback prop)
+- `api.fileHistory(path)` → `GET /api/file-history?path=X`
+- Backend: `FileLog(path, limit)` is a **thin wrapper** — `LogGraph("files("+EscapeFileName(path)+")", limit)`. Zero new template/parser logic; `root-file:` escaping stays server-side (single source of truth for paths with `"` / `\`).
 
 ### 3.2 Layout
 
@@ -161,10 +156,12 @@ Kaleidoscope's headline feature: "browse and compare all revisions of a file."
 - Default: A = newest revision, B = cursor. Moving j/k walks backward through history showing "what changed in this commit".
 - **Diff source:** `api.diffRange(commitA, commitB, [path])` — already exists, already cached by `diffRange` LRU.
 
-### 3.4 Component reuse
+### 3.2-3.4 FileHistoryPanel ✅
 
-- `FileHistoryPanel.svelte` — new. Left rail = mini `RevisionGraph` (same 18px rows, same GraphSvg gutter, but filtered commit list). Right = `DiffFileView` fed from `diffRange`.
-- `RevisionGraph` is too heavy (virtualizer, graph parsing). Extract a `RevisionList.svelte` that renders `Commit[]` without graph gutter — or pass a `compact` prop to RevisionGraph that skips the SVG gutter and forces eager rendering (file history is typically <50 entries, under `VIRTUALIZE_THRESHOLD`).
+- **Component:** `FileHistoryPanel.svelte` — custom left rail (RevisionGraph was too heavy; inline 18px rows with change_id + description + timestamp). Right = A/B header cards + `DiffFileView` fed from `api.diffRange(A, B, [path])` via `createLoader`.
+- **Two-cursor compare:** `cursorB` moves with j/k, `pinnedA` set by Space. Both default to 0 → empty-state prompt on mount. `{#key fileHistoryPath}` remount gives fresh cursors free on path change.
+- **Layout:** Full-screen overlay (`position: fixed; inset: 0`). Added to `anyModalOpen` so log j/k doesn't fire beneath. Keyboard delegated BEFORE the modal gate so overlay's j/k/Space/Escape work.
+- **Duplicated `relativeTime` helper** from RevisionGraph (15 LOC) — DRY candidate if a third copy appears.
 
 ### 3.5 "Open this revision in merge" bridge
 
