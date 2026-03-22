@@ -326,6 +326,21 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, result)
 }
 
+// handleConflicts returns every conflicted commit in revset with its
+// conflicted-files list + side counts. Feeds the merge-mode queue.
+//
+// Query: ?revset=X (optional; defaults to conflicts())
+// Response: [{commit_id, change_id, description, files: [{path, sides}]}]
+func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
+	revset := r.URL.Query().Get("revset")
+	output, err := s.Runner.Run(r.Context(), jj.ConflictList(revset))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, jj.ParseConflictList(string(output)))
+}
+
 func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {

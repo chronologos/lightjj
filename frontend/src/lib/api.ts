@@ -83,6 +83,15 @@ export interface StaleImmutableGroup {
   keeper: { commit_id: string; description: string; local_bookmarks: string[]; remote_bookmarks: string[] }
 }
 
+// Mirrors internal/jj/commands.go ConflictEntry. One conflicted commit in the
+// merge-mode queue with its conflicted-files list + N-way side counts.
+export interface ConflictEntry {
+  commit_id: string
+  change_id: string
+  description: string
+  files: { path: string; sides: number }[]
+}
+
 export interface BookmarkRemote {
   remote: string
   commit_id: string
@@ -840,6 +849,13 @@ export const api = {
   // without changing any commit_id the panel already holds). Fetched on panel
   // open + after any mutation — same cadence as evolog.
   divergence: () => request<DivergenceEntry[]>('/api/divergence'),
+
+  // Uncached: same reasoning as divergence — any mutation can resolve/create
+  // conflicts without changing commit_ids the merge-mode queue already holds.
+  conflicts: (revset?: string) => {
+    const q = revset ? `?revset=${encodeURIComponent(revset)}` : ''
+    return request<ConflictEntry[]>(`/api/conflicts${q}`)
+  },
 
   staleImmutable: () => request<StaleImmutableGroup[]>('/api/stale-immutable'),
 

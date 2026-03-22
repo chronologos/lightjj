@@ -82,6 +82,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/description", s.handleGetDescription)
 	s.Mux.HandleFunc("GET /api/revision", s.handleRevision)
 	s.Mux.HandleFunc("GET /api/files-batch", s.handleFilesBatch)
+	s.Mux.HandleFunc("GET /api/conflicts", s.handleConflicts)
 	s.Mux.HandleFunc("GET /api/remotes", s.handleRemotes)
 	s.Mux.HandleFunc("GET /api/oplog", s.handleOpLog)
 	s.Mux.HandleFunc("GET /api/op/show", s.handleOpShow)

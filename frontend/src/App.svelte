@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type ConflictEntry } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
@@ -60,6 +60,9 @@
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
   import WelcomeModal from './lib/WelcomeModal.svelte'
   import { buildVisibilityRevset, revsetQuote, syncVisibility } from './lib/remote-visibility'
+  import ConflictQueue from './lib/ConflictQueue.svelte'
+  import MergePanel from './lib/MergePanel.svelte'
+  import { reconstructSides, type MergeSides } from './lib/conflict-extract'
 
   // --- Global state ---
   // initialState-hydrated vars: restored on tab-switch-back via AppShell's
@@ -276,9 +279,21 @@
   // Runtime guard: TabState is in-memory (AppShell), not disk, so stale
   // 'operations' from before the type narrowing can only occur via HMR.
   // The === check costs nothing and prevents an invalid union value.
-  let activeView: 'log' | 'branches' = $state(
+  let activeView: 'log' | 'branches' | 'merge' = $state(
     init?.activeView === 'branches' ? 'branches' : 'log'
   )
+
+  // Merge mode — conflict resolution queue + 3-pane editor. State mirrors the
+  // ConflictQueue→MergePanel bridge pattern. mergeCurrent is the selected
+  // queue item; mergeSides is the reconstructed conflict (null = loading or
+  // unsupported format). mergeResolved tracks session-local progress for the
+  // queue's ●/○ dots.
+  let conflictQueue: ConflictEntry[] = $state([])
+  let conflictQueueRef: ConflictQueue | undefined = $state()
+  let mergeCurrent: { commitId: string; changeId: string; path: string; sides: number } | null = $state(null)
+  let mergeResolved = $state(new Set<string>())
+  let mergeSides: MergeSides | null = $state(null)
+  let mergeBusy = $state(false)
 
   let currentWorkspace: string = $state('')
   let workspaceList: Workspace[] = $state([])
@@ -1194,6 +1209,77 @@
     activeView = 'branches'
   }
 
+  async function switchToMergeView() {
+    descriptionEditing = false
+    // bug_039: reset stale panel state from a prior merge session. Keep
+    // mergeResolved — resolved-dots persisting across view switches is the
+    // intended resume-where-you-left-off behavior.
+    mergeCurrent = null
+    mergeSides = null
+    activeView = 'merge'
+    try {
+      conflictQueue = await api.conflicts()
+    } catch (e) {
+      setMessage(errorMessage(e))
+      // bug_013: user may have navigated away during the await (pressed 1/2).
+      // Only reset if still in merge view — otherwise we clobber their nav.
+      if (activeView === 'merge') activeView = 'log'
+    }
+  }
+
+  // Generation counter guards loadMergeFile + saveMergeResult against rapid j/k
+  // nav: await is a nav window; stale resolves bounce. Same pattern as revGen.
+  let mergeGen = 0
+
+  async function loadMergeFile(item: typeof mergeCurrent) {
+    if (!item) { mergeSides = null; return }
+    const gen = ++mergeGen
+    // bug_047: clear before await so {#key} remount shows "Loading…", not
+    // stale file A's MergePanel during the fileShow(B) round-trip.
+    mergeSides = null
+    mergeBusy = true
+    try {
+      const { content } = await api.fileShow(item.commitId, item.path)
+      if (gen !== mergeGen) return
+      mergeSides = reconstructSides(content)
+      if (!mergeSides) {
+        setMessage({ kind: 'warning', text: `${item.path}: unsupported conflict format (N-way or git-style)` })
+      }
+    } catch (e) {
+      if (gen !== mergeGen) return
+      setMessage(errorMessage(e))
+    } finally {
+      if (gen === mergeGen) mergeBusy = false
+    }
+  }
+
+  function saveMergeResult(content: string) {
+    const cur = mergeCurrent
+    if (!cur) return
+    // v1: @-only. Non-@ via jj resolve --tool is phase-2 follow-up.
+    // bug_040: compare change_id, NOT commit_id — fileWrite snapshots @ → new
+    // commit_id, but conflictQueue still has the pre-snapshot commitId. The
+    // change_id is stable across snapshots (same logical revision).
+    if (cur.changeId !== workingCopyEntry?.commit.change_id) {
+      setMessage({ kind: 'warning', text: 'Merge mode currently only resolves @ conflicts. Use `jj edit` to move @ first.' })
+      return
+    }
+    // bug_048/051: participate in mergeGen (so nav during save doesn't race
+    // mergeBusy) + use withMutation mutex (every other mutation does).
+    const gen = ++mergeGen
+    return withMutation(async () => {
+      mergeBusy = true
+      try {
+        await api.fileWrite(cur.path, content)
+        if (gen !== mergeGen) return
+        mergeResolved = new Set([...mergeResolved, `${cur.commitId}:${cur.path}`])
+        await loadLog()
+      } finally {
+        if (gen === mergeGen) mergeBusy = false
+      }
+    })
+  }
+
   function enterRebaseMode() {
     const revs = effectiveRevisions
     if (revs.length === 0) return
@@ -1669,6 +1755,16 @@
       handleGlobalKeys(e)
       return
     }
+    if (activeView === 'merge') {
+      if (e.defaultPrevented) return
+      // bug_005: Escape exits merge view. MergePanel's swallowKeydown handles
+      // its own Escape (confirm-if-dirty) when focused; defaultPrevented above
+      // gates that. This catches the no-panel-mounted / queue-focused cases.
+      if (e.key === 'Escape') { switchToLogView(); e.preventDefault(); return }
+      if (conflictQueueRef?.handleKeydown(e)) { e.preventDefault(); return }
+      handleGlobalKeys(e)
+      return
+    }
     if (e.key === 'Escape') return handleEscapeStack()
     if (handleGlobalKeys(e)) return
     if (activeView !== 'log') return
@@ -1776,6 +1872,7 @@
       // vertical space from the bookmarks panel otherwise).
       case '3': e.preventDefault(); switchToLogView(); toggleOplog(); return true
       case '4': e.preventDefault(); switchToLogView(); toggleEvolog(); return true
+      case '5': e.preventDefault(); switchToMergeView(); return true
     }
     return false
   }
@@ -1884,7 +1981,9 @@
     return {
       selectedIndex,
       revsetFilter,
-      activeView,
+      // Merge mode is NOT preserved across tabs — half-done conflict resolution
+      // across tab-switch is a footgun (same reasoning as inline modes).
+      activeView: activeView === 'merge' ? 'log' : activeView,
       diffScrollTop: diffPanelRef?.getScrollTop() ?? 0,
     }
   }
@@ -2028,6 +2127,12 @@
             onclick={() => { if (!inlineMode) switchToBranchesView() }}
             disabled={inlineMode}
           >⑂ Branches <kbd class="nav-hint">2</kbd></button>
+          <button
+            class="toolbar-nav-btn"
+            class:toolbar-nav-active={activeView === 'merge'}
+            onclick={() => { if (!inlineMode) switchToMergeView() }}
+            disabled={inlineMode}
+          >⧉ Merge <kbd class="nav-hint">5</kbd></button>
         </nav>
         <span class="toolbar-divider"></span>
         <!-- Drawer toggles — semantically distinct from the nav tabs above
@@ -2085,6 +2190,11 @@
     {@render tabBar?.()}
 
     <div class="workspace">
+      {#if activeView !== 'merge'}
+        <!-- Merge mode hides the graph entirely — ConflictQueue + 3-pane
+             MergePanel need the full width. Branches keeps the graph (it's a
+             right-column sibling that references graph selection via the
+             graphCommitId amber tint). -->
         <div class="revision-panel-wrapper" style="width: {config.revisionPanelWidth}px">
           <!-- Revset filter input — owned by App so programmatic revset changes
                (bookmark click, visibility toggle, smart views) are direct assignments.
@@ -2163,7 +2273,7 @@
             {mutating}
             {viewLabel}
             {lastCheckedIndex}
-            onselect={diffFrozen || activeView === 'branches' ? selectRevisionCursorOnly : selectRevision}
+            onselect={diffFrozen || activeView !== 'log' ? selectRevisionCursorOnly : selectRevision}
             onrangecheck={rangeCheck}
             oncontextmenu={openRevisionContextMenu}
             onnewfromchecked={handleNewFromChecked}
@@ -2182,6 +2292,7 @@
 
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="panel-divider" class:divider-active={draggingDivider} onmousedown={startDividerDrag}></div>
+      {/if}
 
         {#if activeView === 'branches'}
           <!-- Branches view: graph stays visible on the left so clicking a
@@ -2211,6 +2322,38 @@
             oncontextmenu={showBookmarkContextMenu}
             ontrackmenu={showTrackMenu}
           />
+        {:else if activeView === 'merge'}
+          <div class="merge-mode-layout">
+            <ConflictQueue
+              bind:this={conflictQueueRef}
+              entries={conflictQueue}
+              resolved={mergeResolved}
+              current={mergeCurrent}
+              onselect={item => { mergeCurrent = item; loadMergeFile(item) }}
+            />
+            {#if mergeSides && mergeCurrent}
+              {#key `${mergeCurrent.commitId}:${mergeCurrent.path}`}
+                <MergePanel
+                  sides={mergeSides}
+                  filePath={mergeCurrent.path}
+                  busy={mergeBusy}
+                  onsave={saveMergeResult}
+                  oncancel={() => switchToLogView()}
+                />
+              {/key}
+            {:else if mergeCurrent && mergeBusy}
+              <div class="merge-mode-empty">Loading conflict…</div>
+            {:else if mergeCurrent}
+              <!-- bug_049: mergeSides null + not busy = reconstructSides returned null -->
+              <div class="merge-mode-empty">
+                {mergeCurrent.path}<br>
+                Unsupported conflict format ({mergeCurrent.sides}-way or git-style).<br>
+                Edit the file directly or use <code>jj resolve</code>.
+              </div>
+            {:else}
+              <div class="merge-mode-empty">Select a conflict from the queue.</div>
+            {/if}
+          </div>
         {:else if divergence.active}
           <!-- {#key} enforces what DivergencePanel assumes: changeId never
                changes in-place. createDivergenceMode.enter() doesn't guard
@@ -2810,6 +2953,25 @@
     border: 1px solid var(--surface1);
     padding: 0 4px;
     border-radius: 3px;
+  }
+
+  .merge-mode-layout {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  .merge-mode-layout > :global(.merge-panel) {
+    flex: 1;
+    min-width: 0;
+  }
+  .merge-mode-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--subtext0);
   }
 
 </style>

@@ -8,7 +8,7 @@
     squashFileCount: { selected: number, total: number } | null
     split: SplitMode
     splitFileCount: { selected: number, total: number } | null
-    activeView: 'log' | 'branches'
+    activeView: 'log' | 'branches' | 'merge'
   }
 
   let { statusText, rebase, squash, squashFileCount, split, splitFileCount, activeView }: Props = $props()
@@ -120,6 +120,13 @@
           <kbd>f</kbd> forget
           <kbd>t</kbd> track
           <kbd>/</kbd> filter
+        </span>
+      {:else if activeView === 'merge'}
+        <span class="key-hints">
+          <kbd>j</kbd>/<kbd>k</kbd> file
+          <kbd>[</kbd>/<kbd>]</kbd> block
+          <kbd>⌘S</kbd> save
+          <kbd>Esc</kbd> exit
         </span>
       {/if}
     </div>

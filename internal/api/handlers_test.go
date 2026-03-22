@@ -703,6 +703,39 @@ func TestHandleFilesBatch_TooMany(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandleConflicts(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.ConflictList("")).SetOutput([]byte(
+		"abc12345\x1Ewlykovwr\x1Erebase\x1Esrc/a.go\x1F2\x1D"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/conflicts", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp []*jj.ConflictEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp, 1)
+	assert.Equal(t, "wlykovwr", resp[0].ChangeId)
+	assert.Equal(t, &jj.ConflictFile{Path: "src/a.go", Sides: 2}, resp[0].Files[0])
+}
+
+func TestHandleConflicts_CustomRevset(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.ConflictList("conflicts() & ::@")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/conflicts?revset="+url.QueryEscape("conflicts() & ::@"), nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	// Empty revset result → empty array, not null (parsers-return-empty-slices invariant).
+	assert.Equal(t, "[]\n", w.Body.String())
+}
+
 func TestHandleRevision(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("M\x1Fsrc/main.go\x1F2\x1F1\x1E\x1D"))

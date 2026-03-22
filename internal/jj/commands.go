@@ -533,6 +533,76 @@ func Resolve(revision string, file string, tool string) CommandArgs {
 	return []string{"resolve", "--tool", tool, "-r", revision, EscapeFileName(file)}
 }
 
+// ConflictList returns args for a jj log call emitting every conflicted
+// commit in revset with its conflicted-files list + side counts. Used by
+// the merge-mode conflict queue to show all conflicts in one fetch.
+//
+// Output per commit: commit_id\x1Echange_id\x1Edescription\x1Efiles\x1D
+// Files: path\x1Fside_count\n (joined)
+//
+// Unlike FilesBatch this omits diff stats (additions/deletions) — the queue
+// only needs path + side_count for the list UI.
+func ConflictList(revset string) CommandArgs {
+	if revset == "" {
+		revset = "conflicts()"
+	}
+	tmpl := `self.commit_id().short() ++ "\x1E" ++ ` +
+		`self.change_id().short() ++ "\x1E" ++ ` +
+		`self.description().first_line() ++ "\x1E" ++ ` +
+		`conflicted_files.map(|f| f.path() ++ "\x1F" ++ ` +
+		`stringify(f.conflict_side_count())).join("\n") ++ "\x1D"`
+	return []string{"log", "-r", revset,
+		"--no-graph", "--color", "never", "--ignore-working-copy", "-T", tmpl}
+}
+
+// ConflictEntry is one commit's conflicted files from ConflictList.
+type ConflictEntry struct {
+	CommitId    string          `json:"commit_id"`
+	ChangeId    string          `json:"change_id"`
+	Description string          `json:"description"`
+	Files       []*ConflictFile `json:"files"`
+}
+
+// ConflictFile is a single conflicted file with its N-way side count.
+type ConflictFile struct {
+	Path  string `json:"path"`
+	Sides int    `json:"sides"`
+}
+
+// ParseConflictList parses ConflictList template output into an ordered slice.
+// Order preserves jj log emission order (topological, descendants-first).
+func ParseConflictList(output string) []*ConflictEntry {
+	entries := []*ConflictEntry{}
+	for record := range strings.SplitSeq(output, "\x1D") {
+		if record == "" {
+			continue
+		}
+		parts := strings.SplitN(record, "\x1E", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		files := []*ConflictFile{}
+		for line := range strings.SplitSeq(parts[3], "\n") {
+			if line == "" {
+				continue
+			}
+			kv := strings.SplitN(line, "\x1F", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			sides, _ := strconv.Atoi(kv[1])
+			files = append(files, &ConflictFile{Path: kv[0], Sides: sides})
+		}
+		entries = append(entries, &ConflictEntry{
+			CommitId:    parts[0],
+			ChangeId:    parts[1],
+			Description: parts[2],
+			Files:       files,
+		})
+	}
+	return entries
+}
+
 // WorkspaceUpdateStale returns args for `jj workspace update-stale`.
 // Recovers a workspace whose working-copy commit was rewritten by another
 // workspace. jj snapshots any uncommitted edits into a new commit first, then

@@ -86,26 +86,40 @@ Current headers show only `sides.oursLabel` (the quoted commit description from 
 └──────────────┴──────────────────────────────────────────────┘
 ```
 
-### 2.1 Conflict queue (left rail)
+### 2.1 Conflict queue (left rail) ✅
 
-A `ConflictQueue.svelte` component — thin list of `{path, sides, resolved}` entries.
+`ConflictQueue.svelte` + backend `GET /api/conflicts`.
 
-- **Data source:** `changedFiles.filter(f => f.conflict)` is already in App via the `files` loader. But that's per-selected-revision. For merge mode we want: **all conflicted files in the `conflicts()` revset**, or just the selected revision if one is picked.
-- **Backend:** New endpoint `GET /api/conflicts?revset=X` → returns `[{commitId, changeId, files: [{path, sides}]}]`. Template: `self.commit_id() ++ self.change_id() ++ conflicted_files.map(|f| f.path() ++ f.conflict_side_count())`. Essentially `FilesBatch` filtered to conflict-only.
-- **Navigation:** j/k in the queue → `currentFile` → MergePanel remounts via `{#key currentFile.path}`. Saving auto-advances to next unresolved. `[` / `]` also work here (file-level, distinct from in-file `[` / `]`).
-- **Resolved tracking:** In-memory per-session. `Set<path>` of saved files. Render ○/● dots. "3/5 done" footer.
+- **Backend:** `ConflictList(revset)` (commands.go:536) builds a `jj log -T` template emitting `commit_id\x1Echange_id\x1Edesc\x1Econflicted_files.map(path\x1Fsides)\x1D`. `ParseConflictList` returns `[]*ConflictEntry` (never nil → JSON `[]`). Handler at `/api/conflicts?revset=X` defaults to `conflicts()`.
+- **Frontend:** `api.conflicts(revset?)` + `ConflictQueue.svelte`. Flattens commit-grouped entries into a navigable list, renders ○/● resolved dots from a `Set<commitId:path>`, exports `handleKeydown` for App delegation (BookmarksPanel pattern). j/k clamp at bounds (no wrap — unlike in-file `[`/`]` which wraps). N-way badge (red) when `sides > 2`.
+- **Auto-select on mount** so MergePanel immediately has content.
 
-### 2.2 Merge mode entry points
+### 2.2 Merge mode entry points ✅
 
-- **Toolbar tab** — `5` key (or `m`), always visible when `conflicts()` is non-empty (cheap: `GET /api/log?revset=conflicts()&limit=1` on the same cadence as the existing conflict badge in StatusBar).
-- **From DiffPanel** — "Resolve all conflicts" button in the diff header when `conflictCount > 0` → `switchToMergeView()` pre-filtered to the displayed revision.
-- **From a conflict badge in RevisionGraph** — click the `⚠ 3` badge → merge mode filtered to that commit.
+- **Toolbar tab** `⧉ Merge [5]` — always visible (simpler than conditional; empty queue shows "No conflicts").
+- Keyboard: `5` key → `switchToMergeView()`.
+- **Deferred:** DiffPanel "Resolve all" button + RevisionGraph badge click — both are additive entry points, add on demand.
 
-### 2.3 Keeping App.svelte sane
+### 2.3 Keeping App.svelte sane ✅
 
-`activeView='merge'` follows the `branches` pattern: right-column takeover, RevisionGraph hidden. `switchToMergeView()` helper mirroring `switchToLogView()`. `ModeBase.diffFollows` is N/A (merge doesn't use the diff loader) — merge mode gets its own `mergeQueueIndex` + `currentMergeFile` state, not overloaded onto `selectedIndex`.
+`activeView='merge'` follows `branches` pattern: full-right-column takeover. State block (`conflictQueue`, `mergeCurrent`, `mergeResolved`, `mergeSides`, `mergeBusy`) separate from `selectedIndex`/diff loader. `switchToMergeView()` async-loads `api.conflicts()`; queue `onselect` → `loadMergeFile()` → `reconstructSides()` → `{#key commitId:path}` remounts MergePanel.
 
-**One footgun:** MergePanel currently swallows ALL keydown (`swallowKeydown`). Merge-mode keyboard (queue j/k, file nav) needs to reach App. Narrow the swallow to only when center CM6 has focus, or flip to an explicit allow-list (Escape, tab-switch keys pass through).
+**Save path (v1, @-only):** `saveMergeResult()` guards `mergeCurrent.commitId === workingCopyEntry.commit_id`; non-`@` shows a "use `jj edit` first" warning. The `jj resolve --tool` path for arbitrary revisions is the next increment.
+
+**Keyboard:** `activeView === 'merge'` delegates j/k to `conflictQueueRef.handleKeydown()` (same gate level as branches→bookmarksPanel). MergePanel's own `swallowKeydown` still handles `[`/`]`/Escape within the panel — no refactor needed since the queue sits OUTSIDE `.merge-panel`.
+
+**Layout:** RevisionGraph hidden entirely in merge view (`{#if activeView !== 'merge'}` around `.revision-panel-wrapper`) — ConflictQueue + 3-pane MergePanel need the full width. The earlier `!== 'log'` onselect gate is now moot (graph isn't rendered).
+
+**TabState intentionally excludes `'merge'`** — `getState()` coerces to `'log'`. Half-done conflict resolution across tabs is the same footgun as half-done rebase.
+
+### Bughunter round 4 (full Phase 2 diff) — 6 confirmed, all fixed
+
+- **bug_040** (most subtle): `@`-guard compared `commit_id`, but `fileWrite` snapshots `@` → new commit_id → second save of the session fails. Fix: compare `change_id` (stable across snapshots).
+- **bug_047**: `loadMergeFile` didn't clear `mergeSides` before await → MergePanel remounted (new `{#key}`) with stale file A's sides during `fileShow(B)` round-trip. Fix: `mergeSides = null` at entry.
+- **bug_048/051**: `saveMergeResult` bypassed `withMutation()` (every other mutation uses it) and didn't participate in `mergeGen` (nav during save raced `mergeBusy`). Fix: wrap in `withMutation`, bump `mergeGen`.
+- **bug_049**: Unsupported-format (N-way, git-style) showed "Loading conflict…" forever after `reconstructSides()` returned null. Fix: three-way template branch (`mergeBusy` vs not).
+- **bug_039**: Re-entering merge view showed stale `mergeSides` from the prior session. Fix: reset `mergeCurrent`/`mergeSides` (NOT `mergeResolved` — resolved-dots persist intentionally) in `switchToMergeView`.
+- **bug_014**: StatusBar had no key hints for merge. Fix: added `j/k file · [/] block · ⌘S save · Esc exit`.
 
 ## Phase 3 — File History Mode
 

@@ -627,3 +627,52 @@ func TestConfigGet(t *testing.T) {
 	assert.Equal(t, []string{"config", "get", "git.push", "--color", "never", "--ignore-working-copy"}, got)
 }
 
+func TestConflictList(t *testing.T) {
+	t.Run("default revset", func(t *testing.T) {
+		args := ConflictList("")
+		assert.Equal(t, "log", args[0])
+		assert.Contains(t, args, "-r")
+		assert.Contains(t, args, "conflicts()")
+		assert.Contains(t, args, "--ignore-working-copy")
+		assert.Contains(t, args, "--no-graph")
+		joined := strings.Join(args, " ")
+		assert.Contains(t, joined, "conflicted_files")
+		assert.Contains(t, joined, "conflict_side_count")
+	})
+
+	t.Run("custom revset", func(t *testing.T) {
+		args := ConflictList("conflicts() & ::@")
+		assert.Contains(t, args, "conflicts() & ::@")
+	})
+}
+
+func TestParseConflictList(t *testing.T) {
+	// Two commits, first with 2 conflicted files (one 3-way), second with 1.
+	raw := "abc12345\x1Ewlykovwr\x1Erebase stack\x1E" +
+		"src/a.go\x1F2\nsrc/b.go\x1F3\x1D" +
+		"def67890\x1Exyzmnopq\x1Efix\x1E" +
+		"README.md\x1F2\x1D"
+
+	got := ParseConflictList(raw)
+	assert.Len(t, got, 2)
+
+	assert.Equal(t, "abc12345", got[0].CommitId)
+	assert.Equal(t, "wlykovwr", got[0].ChangeId)
+	assert.Equal(t, "rebase stack", got[0].Description)
+	assert.Len(t, got[0].Files, 2)
+	assert.Equal(t, &ConflictFile{Path: "src/a.go", Sides: 2}, got[0].Files[0])
+	assert.Equal(t, &ConflictFile{Path: "src/b.go", Sides: 3}, got[0].Files[1])
+
+	assert.Equal(t, "def67890", got[1].CommitId)
+	assert.Len(t, got[1].Files, 1)
+}
+
+func TestParseConflictList_EmptyAndMalformed(t *testing.T) {
+	// Parsers must return empty slices, not nil (JSON serializes [] not null).
+	assert.Equal(t, []*ConflictEntry{}, ParseConflictList(""))
+	// Trailing \x1D + malformed record → skipped, good record preserved.
+	got := ParseConflictList("abc\x1Ewlyk\x1Edesc\x1E\x1Dmalformed\x1D")
+	assert.Len(t, got, 1)
+	assert.Equal(t, []*ConflictFile{}, got[0].Files)
+}
+
