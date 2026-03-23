@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type ConflictEntry } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
@@ -61,9 +61,8 @@
   import WelcomeModal from './lib/WelcomeModal.svelte'
   import { buildVisibilityRevset, revsetQuote, syncVisibility } from './lib/remote-visibility'
   import ConflictQueue from './lib/ConflictQueue.svelte'
-  import MergePanel from './lib/MergePanel.svelte'
   import FileHistoryPanel from './lib/FileHistoryPanel.svelte'
-  import { reconstructSides, type MergeSides } from './lib/conflict-extract'
+  import { createMergeController } from './lib/merge-controller.svelte'
 
   // --- Global state ---
   // initialState-hydrated vars: restored on tab-switch-back via AppShell's
@@ -284,18 +283,17 @@
     init?.activeView === 'branches' ? 'branches' : 'log'
   )
 
-  // Merge mode — conflict resolution queue + 3-pane editor. State mirrors the
-  // ConflictQueue→MergePanel bridge pattern. mergeCurrent is the selected
-  // queue item; mergeSides is the reconstructed conflict (null = loading or
-  // unsupported format). mergeResolved tracks session-local progress for the
-  // queue's ●/○ dots.
-  let conflictQueue: ConflictEntry[] = $state([])
+  // Merge mode — extracted to merge-controller.svelte.ts so the gen-counter
+  // race invariants (bug_009/013/039/040/047/048/051) are unit-testable.
+  // conflictQueueRef stays here: bind:this needs direct write access.
   let conflictQueueRef: ConflictQueue | undefined = $state()
-  let mergeCurrent: { commitId: string; changeId: string; path: string; sides: number } | null = $state(null)
-  let mergeResolved = $state(new Set<string>())
-  let mergeSides: MergeSides | null = $state(null)
-  let mergeBusy = $state(false)
-  let mergeQueueLoading = $state(false)
+  const merge = createMergeController({
+    onError: e => setMessage(errorMessage(e)),
+    onWarning: text => setMessage({ kind: 'warning', text }),
+    withMutation,
+    reload: loadLog,
+    getWorkingCopyChangeId: () => workingCopyEntry?.commit.change_id,
+  })
 
   // File history overlay — right-click file → "View history". Null = closed.
   // {#key fileHistoryPath} remounts the panel per path (fresh cursors free).
@@ -1216,86 +1214,12 @@
     activeView = 'branches'
   }
 
-  // Generation counter guards switchToMergeView + loadMergeFile + saveMergeResult
-  // against rapid re-entry: await is a nav window; stale resolves bounce.
-  let mergeGen = 0
-
   async function switchToMergeView() {
     descriptionEditing = false
-    // bug_039: reset stale panel state from a prior merge session. Keep
-    // mergeResolved — resolved-dots persisting across view switches is the
-    // intended resume-where-you-left-off behavior.
-    mergeCurrent = null
-    mergeSides = null
     activeView = 'merge'
-    // Stale-while-revalidate: keep the old queue visible during re-fetch so
-    // re-entry doesn't flash empty. Loading flag drives the empty-state text.
-    // bug_009: double-press `3` → first fetch's finally would clear
-    // mergeQueueLoading while second is still in flight.
-    const gen = ++mergeGen
-    mergeQueueLoading = true
-    try {
-      const q = await api.conflicts()
-      if (gen !== mergeGen) return
-      conflictQueue = q
-    } catch (e) {
-      if (gen !== mergeGen) return
-      setMessage(errorMessage(e))
-      // bug_013: user may have navigated away during the await (pressed 1/2).
-      // Only reset if still in merge view — otherwise we clobber their nav.
-      if (activeView === 'merge') activeView = 'log'
-    } finally {
-      if (gen === mergeGen) mergeQueueLoading = false
-    }
-  }
-
-  async function loadMergeFile(item: typeof mergeCurrent) {
-    if (!item) { mergeSides = null; return }
-    const gen = ++mergeGen
-    // bug_047: clear before await so {#key} remount shows "Loading…", not
-    // stale file A's MergePanel during the fileShow(B) round-trip.
-    mergeSides = null
-    mergeBusy = true
-    try {
-      const { content } = await api.fileShow(item.commitId, item.path)
-      if (gen !== mergeGen) return
-      mergeSides = reconstructSides(content)
-      if (!mergeSides) {
-        setMessage({ kind: 'warning', text: `${item.path}: unsupported conflict format (N-way or git-style)` })
-      }
-    } catch (e) {
-      if (gen !== mergeGen) return
-      setMessage(errorMessage(e))
-    } finally {
-      if (gen === mergeGen) mergeBusy = false
-    }
-  }
-
-  function saveMergeResult(content: string) {
-    const cur = mergeCurrent
-    if (!cur) return
-    // v1: @-only. Non-@ via jj resolve --tool is phase-2 follow-up.
-    // bug_040: compare change_id, NOT commit_id — fileWrite snapshots @ → new
-    // commit_id, but conflictQueue still has the pre-snapshot commitId. The
-    // change_id is stable across snapshots (same logical revision).
-    if (cur.changeId !== workingCopyEntry?.commit.change_id) {
-      setMessage({ kind: 'warning', text: 'Merge mode currently only resolves @ conflicts. Use `jj edit` to move @ first.' })
-      return
-    }
-    // bug_048/051: participate in mergeGen (so nav during save doesn't race
-    // mergeBusy) + use withMutation mutex (every other mutation does).
-    const gen = ++mergeGen
-    return withMutation(async () => {
-      mergeBusy = true
-      try {
-        await api.fileWrite(cur.path, content)
-        if (gen !== mergeGen) return
-        mergeResolved = new Set([...mergeResolved, `${cur.commitId}:${cur.path}`])
-        await loadLog()
-      } finally {
-        if (gen === mergeGen) mergeBusy = false
-      }
-    })
+    const ok = await merge.enter()
+    // bug_013: only bounce if user is STILL in merge (didn't nav away mid-await)
+    if (!ok && activeView === 'merge') activeView = 'log'
   }
 
   function enterRebaseMode() {
@@ -2351,35 +2275,39 @@
           <div class="merge-mode-layout">
             <ConflictQueue
               bind:this={conflictQueueRef}
-              entries={conflictQueue}
-              loading={mergeQueueLoading}
-              resolved={mergeResolved}
-              current={mergeCurrent}
-              onselect={item => { mergeCurrent = item; loadMergeFile(item) }}
+              entries={merge.queue}
+              loading={merge.queueLoading}
+              resolved={merge.resolved}
+              current={merge.current}
+              onselect={merge.selectFile}
               oncontextmenu={showContextMenu}
               onopenfile={editorConfigured ? handleOpenFile : undefined}
             />
-            {#if mergeSides && mergeCurrent}
-              {#key `${mergeCurrent.commitId}:${mergeCurrent.path}`}
-                <MergePanel
-                  sides={mergeSides}
-                  filePath={mergeCurrent.path}
-                  busy={mergeBusy}
-                  onsave={saveMergeResult}
-                  oncancel={() => switchToLogView()}
-                />
+            {#if merge.sides && merge.current}
+              {#key `${merge.current.commitId}:${merge.current.path}`}
+                <!-- No :catch — chunks are //go:embed'd in the binary, served
+                     same-origin. The only failure is server-down = whole UI dead. -->
+                {#await import('./lib/MergePanel.svelte') then { default: MergePanel }}
+                  <MergePanel
+                    sides={merge.sides}
+                    filePath={merge.current.path}
+                    busy={merge.busy}
+                    onsave={merge.save}
+                    oncancel={() => switchToLogView()}
+                  />
+                {/await}
               {/key}
-            {:else if mergeCurrent && mergeBusy}
+            {:else if merge.current && merge.busy}
               <div class="merge-mode-empty">Loading conflict…</div>
-            {:else if mergeCurrent}
-              <!-- bug_049: mergeSides null + not busy = reconstructSides returned null.
+            {:else if merge.current}
+              <!-- bug_049: sides null + not busy = reconstructSides returned null.
                    Inner <div> because .merge-mode-empty is display:flex (centering) —
                    inline text + <br> + <code> get flex-item-ified and reorder. -->
               <div class="merge-mode-empty">
                 <div>
-                  <code>{mergeCurrent.path}</code>
-                  {#if mergeCurrent.sides > 2}
-                    <p><strong>{mergeCurrent.sides}-way conflict</strong> — the 3-pane editor only handles 2-sided conflicts.</p>
+                  <code>{merge.current.path}</code>
+                  {#if merge.current.sides > 2}
+                    <p><strong>{merge.current.sides}-way conflict</strong> — the 3-pane editor only handles 2-sided conflicts.</p>
                     <p>This usually means an unresolved 2-way conflict earlier in the stack propagated here. Resolve it at the <em>earliest</em> conflicted commit — descendants often auto-resolve.</p>
                   {:else}
                     <p><strong>Unsupported marker format</strong> — this 2-sided conflict uses git-style markers (<code>=======</code>) rather than jj's native format.</p>

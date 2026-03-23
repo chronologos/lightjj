@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectLanguage, highlightLines } from './highlighter'
+import { detectLanguage, highlightLines, ensureLegacyParsers } from './highlighter'
 
 describe('detectLanguage', () => {
   it('maps common extensions', () => {
@@ -119,14 +119,24 @@ describe('highlightLines', () => {
     expect(out[0]).toContain('{foo}')
   })
 
-  it('bash via StreamLanguage (legacy-mode wrapper emits Lezer tree)', () => {
+  it('bash via StreamLanguage (legacy-mode wrapper emits Lezer tree)', async () => {
+    await ensureLegacyParsers()
     const out = highlightLines(['echo "hello"'], 'bash')
     expect(out[0]).toContain('tok-string')
   })
 
-  it('toml via StreamLanguage', () => {
+  it('toml via StreamLanguage', async () => {
+    await ensureLegacyParsers()
     const out = highlightLines(['name = "foo"'], 'toml')
     expect(out[0]).toContain('tok-string')
+  })
+
+  it('unknown language falls back to escaped plain text', () => {
+    // The bash/toml-before-lazy-load case flows through the same path
+    // (PARSERS[lang] undefined → escapeHtml), but testing it directly would
+    // require test-order dependence (run before the awaits above).
+    const out = highlightLines(['<script>'], 'unregistered')
+    expect(out[0]).toBe('&lt;script&gt;')
   })
 
   it('typescript dialect recognizes type annotations', () => {

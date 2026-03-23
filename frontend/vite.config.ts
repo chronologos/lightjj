@@ -22,8 +22,10 @@ export default defineConfig({
     // Output to a directory the Go binary will embed
     outDir: '../cmd/lightjj/frontend-dist',
     emptyOutDir: true,
-    // Single-bundle app (no dynamic imports), shipped embedded in a Go binary —
-    // code-splitting buys nothing. Silence the 500kB warning.
+    // Main chunk ~600K after lazy-loading CodeMirror editor + markdown stack.
+    // Shipped embedded in a Go binary so chunk count doesn't matter for
+    // deployment; the split is purely for initial-parse latency. See
+    // bundle.test.ts for the regression assertion.
     chunkSizeWarningLimit: 1000,
   },
   test: {

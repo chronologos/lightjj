@@ -7,8 +7,8 @@
   import { hunkKey, fileSelectionState, type SelectionState } from './hunk-apply'
   import type { SearchMatch } from './DiffPanel.svelte'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
-  import FileEditor from './FileEditor.svelte'
-  import MarkdownPreview from './MarkdownPreview.svelte'
+  // import type: erased at build — keeps editorRef typed without bundling CM6.
+  import type FileEditor from './FileEditor.svelte'
   import { escapeHtml } from './highlighter'
 
   interface Props {
@@ -527,7 +527,9 @@
   </div>
   {#if !isCollapsed}
     {#if previewContent !== undefined}
-      <MarkdownPreview content={previewContent} />
+      {#await import('./MarkdownPreview.svelte') then { default: MarkdownPreview }}
+        <MarkdownPreview content={previewContent} />
+      {/await}
     {:else if effectiveSplit}
       <!-- Split (side-by-side) view -->
       {#if !isExpanded && hasHiddenContext}
@@ -555,14 +557,16 @@
         </div>
         {#if editing && editContent !== undefined}
           <div class="split-col split-right split-editor">
-            <FileEditor
-              bind:this={editorRef}
-              content={editContent}
-              {filePath}
-              {changedRanges}
-              onsave={(c) => onsavefile?.(filePath, c)}
-              oncancel={() => oncanceledit?.(filePath)}
-            />
+            {#await import('./FileEditor.svelte') then { default: FileEditor }}
+              <FileEditor
+                bind:this={editorRef}
+                content={editContent}
+                {filePath}
+                {changedRanges}
+                onsave={(c) => onsavefile?.(filePath, c)}
+                oncancel={() => oncanceledit?.(filePath)}
+              />
+            {/await}
           </div>
         {:else}
         <div class="split-col split-right">

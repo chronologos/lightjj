@@ -8,9 +8,6 @@ import { parser as cssParser } from '@lezer/css'
 import { parser as htmlParser } from '@lezer/html'
 import { parser as jsonParser } from '@lezer/json'
 import { parser as yamlParser } from '@lezer/yaml'
-import { StreamLanguage } from '@codemirror/language'
-import { shell } from '@codemirror/legacy-modes/mode/shell'
-import { toml } from '@codemirror/legacy-modes/mode/toml'
 
 // Lezer parser registry. highlightCode is synchronous and ~30× faster than
 // Shiki (500 lines ≈ 9ms vs ~250ms) — no chunking, no yield, no isStale.
@@ -29,10 +26,29 @@ const PARSERS: Record<string, Parser> = {
   // No @lezer/svelte. HTML parser handles tags/attrs/strings; {interpolations}
   // and <script> bodies stay plain. Good enough for a diff view.
   svelte: htmlParser,
-  // No first-party @lezer grammars for these — StreamLanguage wraps the
-  // legacy-mode tokenizer in a Parser that emits a Lezer Tree.
-  bash: StreamLanguage.define(shell).parser,
-  toml: StreamLanguage.define(toml).parser,
+  // bash/toml registered lazily via ensureLegacyParsers() — StreamLanguage
+  // pulls in @codemirror/language (~100K) that the main bundle doesn't need.
+}
+
+// No first-party @lezer grammars for bash/toml — StreamLanguage wraps the
+// legacy-mode tokenizer in a Parser that emits a Lezer Tree. Lazy-loaded so
+// @codemirror/language stays out of the main bundle. Callers that need
+// .sh/.toml highlighting await this before highlightLines; unhighlighted
+// (escaped-plain) output is returned in the interim.
+const LEGACY_LANGS = new Set(['bash', 'toml'])
+export const needsLegacyParser = (lang: string) => LEGACY_LANGS.has(lang) && !(lang in PARSERS)
+
+let legacyPromise: Promise<void> | undefined
+export function ensureLegacyParsers(): Promise<void> {
+  return legacyPromise ??= (async () => {
+    const [{ StreamLanguage }, { shell }, { toml }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/shell'),
+      import('@codemirror/legacy-modes/mode/toml'),
+    ])
+    PARSERS.bash = StreamLanguage.define(shell).parser
+    PARSERS.toml = StreamLanguage.define(toml).parser
+  })().catch(e => { legacyPromise = undefined; throw e })
 }
 
 const EXTENSION_LANGUAGES: Record<string, string> = {

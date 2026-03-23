@@ -11,11 +11,10 @@
   } from './diff-cache'
   import { groupByWithIndex } from './group-by'
   import { computeWordDiffs } from './word-diff'
-  import { highlightLines, detectLanguage } from './highlighter'
+  import { highlightLines, detectLanguage, needsLegacyParser, ensureLegacyParsers } from './highlighter'
   import { createDiffDerivation } from './diff-derivation.svelte'
   import { createLoader } from './loader.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
-  import MergePanel from './MergePanel.svelte'
   import { reconstructSides, type MergeSides } from './conflict-extract'
   import FileSelectionPanel from './FileSelectionPanel.svelte'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
@@ -667,8 +666,14 @@
   // ` type Foo struct {\n- X int\n+ X string\n}` as one block → `X` parses as
   // tok-propertyName, `int` as tok-typeName. Same lines grouped by type →
   // orphan `X int` → `X` is tok-variableName, `int` unstyled.
-  function highlightFile(file: DiffFile): Map<string, string> {
+  function highlightFile(file: DiffFile): Map<string, string> | Promise<Map<string, string>> {
     const lang = detectLanguage(file.filePath)
+    // bash/toml parsers are lazy-loaded (keeps @codemirror/language out of the
+    // main bundle). First .sh/.toml diff pays a one-time chunk fetch; run()
+    // already handles Promise-returning compute.
+    if (needsLegacyParser(lang)) {
+      return ensureLegacyParsers().then(() => highlightFile(file) as Map<string, string>)
+    }
     const fileMap = new Map<string, string>()
     for (let hunkIdx = 0; hunkIdx < file.hunks.length; hunkIdx++) {
       const hunk = file.hunks[hunkIdx]
@@ -1187,9 +1192,11 @@
       <!-- {#key} enforces fresh-mount per file — MergePanel's $effect has no
            centerView guard and relies on this for props-never-change-mid-mount. -->
       {#key mergingPath}
-        <MergePanel sides={mergeSides} filePath={mergingPath}
-          busy={editBusy.has(mergingPath)} error={editError}
-          onsave={saveMerge} oncancel={closeMerge} />
+        {#await import('./MergePanel.svelte') then { default: MergePanel }}
+          <MergePanel sides={mergeSides} filePath={mergingPath}
+            busy={editBusy.has(mergingPath)} error={editError}
+            onsave={saveMerge} oncancel={closeMerge} />
+        {/await}
       {/key}
     {:else if diffLoading && parsedDiff.length === 0}
       <!-- Spinner only on INITIAL load. For refreshes (parsedDiff populated),
