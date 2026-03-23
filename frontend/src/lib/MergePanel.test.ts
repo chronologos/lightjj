@@ -318,6 +318,39 @@ describe('MergePanel — takeAll', () => {
   })
 })
 
+describe('MergePanel — takeBoth', () => {
+  // Dueling-imports scenario: both sides add a different line at the same spot.
+  const dueling = sides('A\nimport X\nC', 'A\nimport Y\nC')
+
+  it('b key concatenates ours+theirs at current block', async () => {
+    const onsave = vi.fn()
+    const { container } = render(MergePanel, { props: { ...props({ onsave }), sides: dueling } })
+    const panel = container.querySelector('.merge-panel')!
+    await fireEvent.keyDown(panel, { key: 'b' })
+    await fireEvent.click(container.querySelector('.merge-save')!)
+    // Invariant: save emits ours-line + theirs-line at the block position.
+    expect(onsave).toHaveBeenCalledWith('A\nimport X\nimport Y\nC')
+  })
+
+  it('b key is a no-op inside center editor (valid identifier char)', async () => {
+    const onsave = vi.fn()
+    const { container } = render(MergePanel, { props: { ...props({ onsave }), sides: dueling } })
+    const center = container.querySelector('.merge-center')!
+    await fireEvent.keyDown(center, { key: 'b' })
+    await fireEvent.click(container.querySelector('.merge-save')!)
+    // Still theirs (seeded) — b was swallowed as editing, not takeBoth.
+    expect(onsave).toHaveBeenCalledWith('A\nimport Y\nC')
+  })
+
+  it('minimap chip turns both-gradient after takeBoth', async () => {
+    const { container } = render(MergePanel, { props: { ...props(), sides: dueling } })
+    const panel = container.querySelector('.merge-panel')!
+    await fireEvent.keyDown(panel, { key: 'b' })
+    const chip = container.querySelector('.merge-minimap-chip')!
+    expect(chip.classList.contains('merge-minimap-both')).toBe(true)
+  })
+})
+
 describe('MergePanel — headers', () => {
   it('shows ours/theirs labels from sides', () => {
     const { container } = render(MergePanel, { props: props({

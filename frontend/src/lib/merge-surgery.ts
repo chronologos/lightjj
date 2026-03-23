@@ -11,7 +11,7 @@ import type { Text, ChangeDesc } from '@codemirror/state'
 import type { ChangeBlock } from './merge-diff'
 
 /** Which side the center content came from. Drives highlight color + idempotence. */
-export type BlockSource = 'ours' | 'theirs' | 'mixed'
+export type BlockSource = 'ours' | 'theirs' | 'mixed' | 'both'
 
 export interface TrackedBlock {
   /** 0-based char offset of block start in center doc. */
@@ -122,6 +122,27 @@ export function planTake(
   return {
     change: { from, to, insert },
     newTrack: { from: newFrom, to: newFrom + contentLen },
+  }
+}
+
+/** Concatenate ours + theirs for additive conflicts (dueling imports, new list
+ *  entries). Returns null if either side is empty (degenerates to regular
+ *  planTake) or if already 'both' (idempotent). No separator-math needed: both
+ *  sides non-empty ⇒ center has content ⇒ tracked range is non-zero-width. */
+export function planTakeBoth(
+  tracked: TrackedBlock,
+  oursLines: string[],
+  theirsLines: string[],
+  blk: ChangeBlock,
+): TakePlan | null {
+  if (tracked.source === 'both') return null
+  if (blk.aFrom === blk.aTo || blk.bFrom === blk.bTo) return null
+  const ours = oursLines.slice(blk.aFrom - 1, blk.aTo - 1).join('\n')
+  const theirs = theirsLines.slice(blk.bFrom - 1, blk.bTo - 1).join('\n')
+  const insert = ours + '\n' + theirs
+  return {
+    change: { from: tracked.from, to: tracked.to, insert },
+    newTrack: { from: tracked.from, to: tracked.from + insert.length },
   }
 }
 

@@ -125,6 +125,7 @@
         <span class="key-hints">
           <kbd>j</kbd>/<kbd>k</kbd> file
           <kbd>[</kbd>/<kbd>]</kbd> block
+          <kbd>b</kbd> both
           <kbd>⌘S</kbd> save
           <kbd>Esc</kbd> exit
         </span>

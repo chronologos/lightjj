@@ -29,7 +29,7 @@
   // place the block range precisely. mapPos() in the tracker can't: it only
   // knows old positions and change deltas, not semantics like "the leading
   // \n is a separator, not block content".
-  interface ApplyBlockEffect { idx: number; side: 'ours' | 'theirs'; newFrom: number; newTo: number }
+  interface ApplyBlockEffect { idx: number; side: 'ours' | 'theirs' | 'both'; newFrom: number; newTo: number }
   const applyBlock = StateEffect.define<ApplyBlockEffect>()
   const editInside = StateEffect.define<number>()  // block index → mark mixed
   // Undo inverse: restores {source, from, to} snapshot captured pre-apply.
@@ -106,6 +106,7 @@
         if (b.from >= b.to) continue  // empty/collapsed
         const cls = b.source === 'ours' ? 'merge-from-ours'
                   : b.source === 'theirs' ? 'merge-from-theirs'
+                  : b.source === 'both' ? 'merge-from-both'
                   : 'merge-from-mixed'
         // Decorate each line in the range
         const startLine = state.doc.lineAt(b.from).number
@@ -126,7 +127,7 @@
   import { highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
   import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
   import { diffBlocks, blocksToLineSets, type ChangeBlock } from './merge-diff'
-  import { planTake, initialTrackPos } from './merge-surgery'
+  import { planTake, planTakeBoth, initialTrackPos } from './merge-surgery'
   import type { MergeSides } from './conflict-extract'
 
   interface Props {
@@ -441,6 +442,24 @@
     for (let i = 0; i < blocks.length; i++) takeBlock(i, side)
   }
 
+  /** Concatenate ours+theirs for the current block. For additive conflicts
+   *  (dueling imports, new list entries) where you want BOTH changes. No-op
+   *  if either side is empty (degenerates to regular take). */
+  function takeBoth(idx: number) {
+    if (!centerView || !trackerField) return
+    const tracked = centerView.state.field(trackerField)
+    const pos = tracked[idx]
+    if (!pos) return
+    const plan = planTakeBoth(pos, oursLines, theirsLines, blocks[idx])
+    if (!plan) return  // idempotent or one side empty
+    centerView.dispatch({
+      changes: plan.change,
+      effects: applyBlock.of({ idx, side: 'both', newFrom: plan.newTrack.from, newTo: plan.newTrack.to }),
+      scrollIntoView: true,
+    })
+    currentBlockIdx = idx
+  }
+
   function save() {
     if (centerView && !busy) onsave(centerView.state.doc.toString())
   }
@@ -490,6 +509,7 @@
     if (!centerEl?.contains(e.target as Node)) {
       if (e.key === ']') { navBlock(1); e.preventDefault(); e.stopPropagation(); return }
       if (e.key === '[') { navBlock(-1); e.preventDefault(); e.stopPropagation(); return }
+      if (e.key === 'b') { takeBoth(currentBlockIdx); e.preventDefault(); e.stopPropagation(); return }
     }
     e.stopPropagation()
   }
@@ -878,6 +898,7 @@
   /* Colors mirror .merge-from-* so the eye maps minimap → center highlight. */
   .merge-minimap-theirs { background: var(--blue); opacity: 0.5; }
   .merge-minimap-ours   { background: var(--green); opacity: 0.5; }
+  .merge-minimap-both   { background: linear-gradient(var(--green), var(--blue)); opacity: 0.5; }
   .merge-minimap-mixed  { background: var(--amber); opacity: 0.5; }
   .merge-minimap-chip:hover { opacity: 0.8; }
   /* bug_015: :hover (0,1,1) beat .current (0,1,0) — two-class selector wins. */
@@ -905,6 +926,12 @@
   .merge-panes :global(.merge-from-theirs) {
     background: color-mix(in srgb, var(--blue) 12%, transparent);
     box-shadow: inset -3px 0 0 color-mix(in srgb, var(--blue) 40%, transparent);
+  }
+  .merge-panes :global(.merge-from-both) {
+    /* Both sides concatenated — gradient showing green-top (ours) + blue-bottom (theirs). */
+    background: linear-gradient(
+      color-mix(in srgb, var(--green) 10%, transparent),
+      color-mix(in srgb, var(--blue) 10%, transparent));
   }
   .merge-panes :global(.merge-from-mixed) {
     /* User hand-edited — neutral amber, no side indicator. */

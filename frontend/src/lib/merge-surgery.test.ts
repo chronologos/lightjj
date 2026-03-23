@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Text, ChangeSet } from '@codemirror/state'
-import { planTake, remapBlock, initialTrackPos, type TrackedBlock } from './merge-surgery'
+import { planTake, planTakeBoth, remapBlock, initialTrackPos, type TrackedBlock } from './merge-surgery'
 import { diffBlocks } from './merge-diff'
 import { reconstructSides } from './conflict-extract'
 import type { ChangeBlock } from './merge-diff'
@@ -660,5 +660,40 @@ describe('initialTrackPos', () => {
     const d = doc('AAA\nBBB')
     const r = initialTrackPos(d, blk(0, 0, 1, 2))
     expect(r).toEqual({ from: 0, to: 3 })
+  })
+})
+
+describe('planTakeBoth — concatenate additive conflicts', () => {
+  // Center seeded with theirs. Block at line 2: ours='OURS', theirs='THEIRS'.
+  const ours = ['A', 'OURS', 'C']
+  const theirs = ['A', 'THEIRS', 'C']
+  const centerDoc = 'A\nTHEIRS\nC'
+  const tracked: TrackedBlock = { from: 2, to: 8, source: 'theirs' }  // 'THEIRS'
+  const block = blk(2, 3, 2, 3)
+
+  it('concatenates ours\\ntheirs, replacing center content', () => {
+    const plan = planTakeBoth(tracked, ours, theirs, block)!
+    expect(apply(centerDoc, plan.change)).toBe('A\nOURS\nTHEIRS\nC')
+    // newTrack covers the full concatenation.
+    expect(plan.newTrack).toEqual({ from: 2, to: 13 })  // 'OURS\nTHEIRS'.length = 11
+  })
+
+  it('returns null when already both (idempotent)', () => {
+    expect(planTakeBoth({ ...tracked, source: 'both' }, ours, theirs, block)).toBeNull()
+  })
+
+  it.each([
+    ['ours empty',   blk(2, 2, 2, 3)],
+    ['theirs empty', blk(2, 3, 2, 2)],
+  ])('returns null when %s — degenerates to regular take', (_, b) => {
+    expect(planTakeBoth(tracked, ours, theirs, b)).toBeNull()
+  })
+
+  it('multi-line blocks: preserves line order within each side', () => {
+    const o = ['A', 'O1', 'O2', 'D']
+    const t = ['A', 'T1', 'T2', 'D']
+    const tr: TrackedBlock = { from: 2, to: 7, source: 'theirs' }  // 'T1\nT2'
+    const plan = planTakeBoth(tr, o, t, blk(2, 4, 2, 4))!
+    expect(apply('A\nT1\nT2\nD', plan.change)).toBe('A\nO1\nO2\nT1\nT2\nD')
   })
 })

@@ -185,12 +185,13 @@ Kaleidoscope's "BASE vs B" floating panel — shows what the base looked like vs
 - **UI:** Hover a block arrow for >500ms (or click a `ⓘ` icon) → floating popup with a mini 2-col diff of `base` vs `side` for JUST that block's line range. Reuses `diffBlocks()` + the highlight classes.
 - **Value:** Medium. Helps answer "why did this side change this?" — particularly for rebase conflicts where "theirs" is your own stale commit.
 
-### 4.3 Per-block "both" action
+### 4.3 Per-block "both" action ✅
 
-jj's conflict model supports "take both" (concatenate) for additive conflicts (e.g., two new imports, two new list entries).
+For additive conflicts (dueling imports, new list entries) where you want both changes kept.
 
-- **UI:** Third arrow `⇅` on blocks where both sides are pure-add relative to base (`blk.aFrom !== blk.aTo && blk.bFrom !== blk.bTo` AND base has zero lines in that region — needs base-relative LCS, one more `diffBlocks(base, ours)` pass).
-- **Impl:** `planTakeBoth()` in merge-surgery.ts — insert `ours + '\n' + theirs` at the tracked position. Source tag = `'both'` (new `BlockSource` variant).
+- **Impl:** `planTakeBoth()` in merge-surgery.ts — simpler than `planTake` since "both" only applies when both sides have content (the empty-source/zero-width edge cases that complicate `planTake` degenerate to regular take, so return null). Replaces tracked range with `ours + '\n' + theirs`. `BlockSource` gains `'both'` variant.
+- **UI:** `b` key at current block (same focus gate as `[`/`]` — outside center editor only). Green→blue gradient highlight + minimap chip. No gutter arrow (YAGNI — keyboard suffices for v1).
+- **Invariant test:** `takeBoth → save() === A\n${ours}\n${theirs}\nC` round-trips through the position math.
 
 ### 4.4 Auto-resolve trivial conflicts
 
