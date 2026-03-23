@@ -1,0 +1,9 @@
+{
+  "name": "lightjj-bombadil-spec",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@antithesishq/bombadil": "^0.3.2",
+    "typescript": "^5.6.0"
+  }
+}
