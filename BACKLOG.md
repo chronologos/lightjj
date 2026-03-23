@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-03-22** v1.3.0 — markdown preview with mermaid diagrams (zoom/pan). marked+dompurify eager (~32KB), beautiful-mermaid+panzoom lazy (~1.5MB chunk, only on first preview). CSS-var theming means diagrams recolor on theme toggle with zero re-render. See archive for the 6 bughunter-found bugs fixed in-session.
+Last shipped: **2026-03-22** v1.4.0 — merge mode (`3` key) with ConflictQueue + SVG ribbons + minimap + take-all + take-both; file-history overlay (right-click → "View history", two-cursor compare). `conflicts()` and `files()` revsets intersected with `mutable()` for instant large-repo queries. 8 bughunter rounds, ~20 confirmed bugs fixed in-session.
 
 ## Divergence deferred (low-impact, from 2026-03-18 bughunt)
 
@@ -39,7 +39,7 @@ The only non-trivial carryover from the 2026-03-20 fix cluster:
 ## Advanced features (roadmap 2.0)
 
 - [ ] **N-way (3+) conflict handling in merge mode** (Medium) — Currently `reconstructSides()` returns null for >2 sides → "unsupported" message. The jj-idiomatic guidance is "resolve at earliest commit, descendants auto-resolve" (now shown in the empty-state). Actual N-way UI options: (a) sequential 2-at-a-time resolution, (b) `jj resolve --tool` round-trip which gives us `$base`+N sides as real files, (c) queue smart-sort that surfaces the EARLIEST occurrence of each file first so users naturally fix the propagation root. Option (c) is cheapest and most jj-native.
-- [ ] **Merge mode + file history** (Large, phased v1.4→1.7) — Kaleidoscope-inspired: promote conflict resolution to `activeView='merge'` with a cross-file conflict queue, add per-file revision history browser with two-cursor compare. Key unlock: `jj resolve -r <rev> --tool` + `merge-args $base/$left/$right/$output` solves non-`@` resolution AND deprecates `reconstructSides()` marker parsing (pattern proven at `writeHunkToolConfig`). Full plan: [docs/plan-merge-mode.md](docs/plan-merge-mode.md).
+- [ ] **Merge mode Phase 2.x: non-`@` resolution** (Medium) — Current save path is `@`-only via `api.fileWrite`. Next: `jj resolve -r <rev> --tool` + `merge-args $base/$left/$right/$output` lets us resolve any revision AND deprecates `reconstructSides()` marker parsing (pattern proven at `writeHunkToolConfig`). See [docs/plan-merge-mode.md](docs/plan-merge-mode.md) §2.x.
 - [ ] **Mega-file virtualization** (Low) — manual expand of 5000-line file renders all lines. Auto-collapse at 500 + total-line collapse at 2000 mitigate; `@tanstack/virtual` on the per-hunk `{#each}` inside DiffFileView would be the full fix.
 - [ ] **Search across revisions** (Medium) — `jj log -r 'description(glob:"*query*")'` or tree-grep. Needs design.
 - [ ] **SSH remote repo browser** (Low) — discover repos on remote host, open as tabs.

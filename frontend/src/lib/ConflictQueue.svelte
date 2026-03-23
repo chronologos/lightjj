@@ -101,8 +101,11 @@
   function openContextMenu(e: MouseEvent, i: number) {
     if (!oncontextmenu) return
     e.preventDefault()
-    // Sync keyboard index to right-clicked row (BookmarksPanel pattern).
-    select(i)
+    // bug_017: DON'T call select() — it fires onselect → loadMergeFile →
+    // {#key} remounts MergePanel → destroys unsaved edits. Right-click on a
+    // different item should just show the menu; Copy/Open use flat[i].path
+    // directly. Sync idx only so subsequent j/k continues from here.
+    idx = i
     const path = flat[i].path
     const items: ContextMenuItem[] = [
       { label: 'Copy file path', action: () => navigator.clipboard.writeText(path) },

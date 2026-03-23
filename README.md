@@ -14,7 +14,9 @@ A fast, keyboard-driven browser UI for [Jujutsu (jj)](https://github.com/jj-vcs/
 
 **Complete jj coverage.** Revision graph, bookmarks panel with full sync state, op log, evolog, divergence resolution, inline rebase/squash/split with source/target mode cycling. Right-click menus everywhere. Revset filter with `?` help popover.
 
-**A real merge tool.** Conflicted files open in a 3-pane editor — `ours ← result → theirs` — with per-hunk arrow-click, arbitrary editing in the center, and undo that restores the source tag. Falls back to raw editor for >2-side or git-style conflicts.
+**A real merge tool.** Press `3` for the dedicated Merge view: all conflicted files in a navigable queue, resolved-state tracked per session. Each file opens in a 3-pane editor — `ours ← result → theirs` — with SVG ribbons connecting aligned blocks, per-hunk arrow-click, `[`/`]` block nav, minimap, and "take all" bulk actions. Arbitrary editing in the center with undo that restores source tags. N-way conflicts get a "resolve at the earliest commit" hint since jj propagates.
+
+**File history.** Right-click any diff line → "View history" opens a two-cursor compare: j/k to move the B cursor, Space to pin A, the diff between them renders on the right. Scoped to `mutable()` by default so it's instant on large repos.
 
 ## Install
 

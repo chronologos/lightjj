@@ -160,6 +160,12 @@
   interface ArrowSlot {
     /** pixel y-offset within the scroll area (0 = top of line 1) */
     y: number
+    /** Block height in pixels on the flank side. */
+    h: number
+    /** Center pane block position (from trackerField doc positions). */
+    cy: number
+    /** Center pane block height. */
+    ch: number
     /** Which side the center currently has. Arrow dims when it matches THIS side. */
     source: BlockSource
     /** true for pure insertions on the flank side (no content to pull) */
@@ -174,6 +180,9 @@
   // scrollTop — explicit nav is more predictable than viewport-nearest when
   // multiple blocks fit on screen.
   let currentBlockIdx = $state(0)
+  // Hover index lights up the corresponding ribbon so the connection reads
+  // on mouseover. -1 = no hover. Driven by arrow + minimap-chip mouseenter.
+  let hoveredBlockIdx = $state(-1)
 
   // Immutable at mount (parent uses {#key mergingPath}). Flank content never
   // changes; only center edits matter and those are tracked via StateField.
@@ -190,6 +199,22 @@
   let trackerField: StateField<CenterBlock[]> | undefined
 
   const ROW_H = 18  // matches cmTheme .cm-line lineHeight
+  // 40px gives bezier ribbons enough horizontal span to read as curves.
+  // 22px compressed them into unreadable vertical smudges.
+  const GUTTER_W = 40
+
+  /** SVG path for a Kaleidoscope-style ribbon: bezier-smoothed quad connecting
+   *  flank-block-region (one edge) → center-block-region (other edge). Empty
+   *  blocks collapse to a 2px-high slit so the connection is still visible.
+   *  flip=true swaps edges for the theirs gutter (center on left). */
+  function ribbonPath(s: ArrowSlot, flip: boolean): string {
+    const fy = s.y, fh = Math.max(2, s.h)
+    const cy = s.cy, ch = Math.max(2, s.ch)
+    const [l, r] = flip ? [GUTTER_W, 0] : [0, GUTTER_W]
+    const m = GUTTER_W / 2
+    return `M ${l} ${fy} C ${m} ${fy} ${m} ${cy} ${r} ${cy}` +
+           ` L ${r} ${cy + ch} C ${m} ${cy + ch} ${m} ${fy + fh} ${l} ${fy + fh} Z`
+  }
 
   // Props mount-invariant via {#key} — effect runs once. No centerView guard.
   $effect(() => {
@@ -369,24 +394,34 @@
   })
 
   /** Read current block positions from center's StateField → arrow slots.
-   *  Arrow Y = pixel offset of the block's first line in the FLANK pane
-   *  (flanks are read-only → stable line positions). */
+   *  Flank Y/H from static line ranges (read-only panes). Center Y/H from the
+   *  tracked doc positions (changes as user edits). Both needed for the SVG
+   *  ribbon paths that connect flank-block-region → center-block-region. */
   function refreshArrows() {
     if (!centerView || !trackerField) return
     const tracked = centerView.state.field(trackerField)
-    // Empty range (from===to) means the flank side DELETED here — no content
-    // to pull, so hide that arrow. Anchor it to the line before the gap.
-    const slot = (from: number, to: number, source: BlockSource): ArrowSlot => ({
+    const doc = centerView.state.doc
+    // Center position: convert doc char-offset → line number → pixel Y.
+    const centerYH = (from: number, to: number): [number, number] => {
+      const startLine = doc.lineAt(Math.min(from, doc.length)).number
+      if (from >= to) return [(startLine - 1) * ROW_H, 0]
+      const endLine = doc.lineAt(Math.min(to - 1, doc.length)).number
+      return [(startLine - 1) * ROW_H, (endLine - startLine + 1) * ROW_H]
+    }
+    const slot = (from: number, to: number, src: BlockSource, cy: number, ch: number): ArrowSlot => ({
       y: ((from < to ? from : Math.max(1, from - 1)) - 1) * ROW_H,
+      h: Math.max(0, to - from) * ROW_H,
+      cy, ch,
       empty: from === to,
-      source,
+      source: src,
     })
     const o: ArrowSlot[] = []
     const t: ArrowSlot[] = []
     for (let i = 0; i < blocks.length; i++) {
       const src = tracked[i].source
-      o.push(slot(blocks[i].aFrom, blocks[i].aTo, src))
-      t.push(slot(blocks[i].bFrom, blocks[i].bTo, src))
+      const [cy, ch] = centerYH(tracked[i].from, tracked[i].to)
+      o.push(slot(blocks[i].aFrom, blocks[i].aTo, src, cy, ch))
+      t.push(slot(blocks[i].bFrom, blocks[i].bTo, src, cy, ch))
     }
     oursArrows = o
     theirsArrows = t
@@ -578,16 +613,24 @@
     <div class="merge-pane" class:merge-hidden={hiddenFlank === 'ours'} bind:this={oursEl}></div>
     <!-- Ours gutter: arrows point → (content flows ours → center) -->
     <div class="merge-gutter merge-gutter-ours" class:merge-hidden={hiddenFlank === 'ours'}>
+      <svg class="merge-ribbons" style="transform: translateY({-scrollTop}px)">
+        {#each oursArrows as slot, i (i)}
+          <path class="merge-ribbon-ours"
+                class:merge-ribbon-applied={slot.source === 'ours'}
+                class:merge-ribbon-current={i === currentBlockIdx}
+                class:merge-ribbon-hovered={i === hoveredBlockIdx}
+                d={ribbonPath(slot, false)} />
+        {/each}
+      </svg>
       {#each oursArrows as slot, i (i)}
         {#if !slot.empty}
-          <div class="merge-ribbon merge-ribbon-ours"
-               class:merge-ribbon-applied={slot.source === 'ours'}
-               style="transform: translateY({slot.y - scrollTop + 9}px)"></div>
           <button
             class="merge-arrow merge-arrow-ours"
             class:merge-arrow-applied={slot.source === 'ours'}
             class:merge-arrow-current={i === currentBlockIdx}
             style="transform: translateY({slot.y - scrollTop}px)"
+            onmouseenter={() => hoveredBlockIdx = i}
+            onmouseleave={() => hoveredBlockIdx = -1}
             onclick={() => takeBlock(i, 'ours')}
             title={slot.source === 'ours' ? 'Already using ours' : 'Take ours for this hunk'}
             aria-label="Take ours for hunk {i + 1}"
@@ -598,16 +641,24 @@
     <div class="merge-pane merge-center" bind:this={centerEl}></div>
     <!-- Theirs gutter: arrows point ← (content flows theirs → center) -->
     <div class="merge-gutter merge-gutter-theirs" class:merge-hidden={hiddenFlank === 'theirs'}>
+      <svg class="merge-ribbons" style="transform: translateY({-scrollTop}px)">
+        {#each theirsArrows as slot, i (i)}
+          <path class="merge-ribbon-theirs"
+                class:merge-ribbon-applied={slot.source === 'theirs'}
+                class:merge-ribbon-current={i === currentBlockIdx}
+                class:merge-ribbon-hovered={i === hoveredBlockIdx}
+                d={ribbonPath(slot, true)} />
+        {/each}
+      </svg>
       {#each theirsArrows as slot, i (i)}
         {#if !slot.empty}
-          <div class="merge-ribbon merge-ribbon-theirs"
-               class:merge-ribbon-applied={slot.source === 'theirs'}
-               style="transform: translateY({slot.y - scrollTop + 9}px)"></div>
           <button
             class="merge-arrow merge-arrow-theirs"
             class:merge-arrow-applied={slot.source === 'theirs'}
             class:merge-arrow-current={i === currentBlockIdx}
             style="transform: translateY({slot.y - scrollTop}px)"
+            onmouseenter={() => hoveredBlockIdx = i}
+            onmouseleave={() => hoveredBlockIdx = -1}
             onclick={() => takeBlock(i, 'theirs')}
             title={slot.source === 'theirs' ? 'Already using theirs' : 'Take theirs for this hunk'}
             aria-label="Take theirs for hunk {i + 1}"
@@ -792,9 +843,6 @@
     display: flex;
     flex: 1;
     min-height: 0;
-    /* Clip arrows/ribbons that translateY beyond top/bottom — gutter itself
-       is overflow:visible so ribbons can extend horizontally into panes. */
-    overflow: hidden;
   }
   .merge-pane {
     flex: 1;
@@ -813,12 +861,9 @@
 
   .merge-gutter {
     position: relative;
-    width: 22px;
+    width: 40px;
     flex-shrink: 0;
-    /* overflow:visible — ribbons extend ±40px into adjacent panes. Arrows
-       are translateY()'d and clipped vertically by .merge-panes (min-height:0
-       flex child). */
-    overflow: visible;
+    overflow: hidden;
     background: var(--crust);
   }
   .merge-gutter-ours {
@@ -839,7 +884,7 @@
   .merge-arrow {
     position: absolute;
     top: 0;
-    left: 2px;
+    left: 11px;  /* centered in 40px gutter */
     width: 18px;
     height: 18px;
     padding: 0;
@@ -889,31 +934,35 @@
      and becomes near-invisible. Keep the ring readable when both classes apply. */
   .merge-arrow-current.merge-arrow-applied { opacity: 0.6; }
 
-  /* Ribbons: horizontal lines connecting each block across panes so the eye
-     can follow which hunks align. Sibling of .merge-arrow at same translateY
-     (+9px centers on the 18px arrow). Each side extends TOWARD center — they
-     meet in the middle to form a bridge. Large fixed extension (600px) relies
-     on .merge-panes overflow:hidden to clip at container edge; actual visible
-     length = adjacent pane width. */
-  .merge-ribbon {
+  /* Ribbons: Kaleidoscope-style bezier quads in the gutter connecting
+     flank-block-region → center-block-region. SVG spans the full doc height
+     (translateY scrolls it); each <path> is one ribbon. Subtle fill + stroke
+     outline — the shape shows where misaligned blocks connect. */
+  .merge-ribbons {
     position: absolute;
     top: 0;
-    height: 1px;
+    left: 0;
+    width: 40px;
+    height: 100000px;  /* tall enough for any doc; clipped by gutter */
     pointer-events: none;
-    opacity: 0.4;
-    transition: opacity 120ms ease;
   }
   .merge-ribbon-ours {
-    left: 11px;      /* gutter center */
-    right: -600px;   /* extend right into center pane */
-    background: linear-gradient(90deg, var(--green), transparent);
+    fill: var(--green);
+    fill-opacity: 0.12;
+    stroke: var(--green);
+    stroke-opacity: 0.4;
+    stroke-width: 1;
   }
   .merge-ribbon-theirs {
-    left: -600px;    /* extend left into center pane */
-    right: 11px;
-    background: linear-gradient(-90deg, var(--blue), transparent);
+    fill: var(--blue);
+    fill-opacity: 0.12;
+    stroke: var(--blue);
+    stroke-opacity: 0.4;
+    stroke-width: 1;
   }
-  .merge-ribbon-applied { opacity: 0.12; }
+  .merge-ribbon-applied { fill-opacity: 0.04; stroke-opacity: 0.15; }
+  .merge-ribbon-current { fill-opacity: 0.25; stroke-opacity: 0.7; }
+  .merge-ribbon-hovered { fill-opacity: 0.3; stroke-opacity: 0.9; }
 
   /* ── Minimap ─────────────────────────────────────────────────────────── */
 

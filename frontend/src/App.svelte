@@ -1216,6 +1216,10 @@
     activeView = 'branches'
   }
 
+  // Generation counter guards switchToMergeView + loadMergeFile + saveMergeResult
+  // against rapid re-entry: await is a nav window; stale resolves bounce.
+  let mergeGen = 0
+
   async function switchToMergeView() {
     descriptionEditing = false
     // bug_039: reset stale panel state from a prior merge session. Keep
@@ -1226,22 +1230,24 @@
     activeView = 'merge'
     // Stale-while-revalidate: keep the old queue visible during re-fetch so
     // re-entry doesn't flash empty. Loading flag drives the empty-state text.
+    // bug_009: double-press `3` → first fetch's finally would clear
+    // mergeQueueLoading while second is still in flight.
+    const gen = ++mergeGen
     mergeQueueLoading = true
     try {
-      conflictQueue = await api.conflicts()
+      const q = await api.conflicts()
+      if (gen !== mergeGen) return
+      conflictQueue = q
     } catch (e) {
+      if (gen !== mergeGen) return
       setMessage(errorMessage(e))
       // bug_013: user may have navigated away during the await (pressed 1/2).
       // Only reset if still in merge view — otherwise we clobber their nav.
       if (activeView === 'merge') activeView = 'log'
     } finally {
-      mergeQueueLoading = false
+      if (gen === mergeGen) mergeQueueLoading = false
     }
   }
-
-  // Generation counter guards loadMergeFile + saveMergeResult against rapid j/k
-  // nav: await is a nav window; stale resolves bounce. Same pattern as revGen.
-  let mergeGen = 0
 
   async function loadMergeFile(item: typeof mergeCurrent) {
     if (!item) { mergeSides = null; return }
