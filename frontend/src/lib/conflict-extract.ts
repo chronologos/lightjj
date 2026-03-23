@@ -12,6 +12,7 @@
 // which scans DiffLine[] where every line is prefixed with `+` (diff addition).
 
 import { extractSideLabel } from './conflict-parser'
+import type { ChangeBlock } from './merge-diff'
 
 /** Commit refs parsed from a conflict-marker label. Present when jj emits
  *  `changeId commitId "description"` format; absent for the generic
@@ -26,6 +27,13 @@ export interface MergeSides {
   theirsLabel: string
   oursRef?: SideRef
   theirsRef?: SideRef
+  /** One block per jj conflict region — known at parse time (the `inRegion`
+   *  state machine toggles at every <<<<<<< / >>>>>>>). MergePanel reads this
+   *  instead of running LCS over the full file, which for a 1400-line file
+   *  with three 20-line conflicts is ~2M cells of re-discovering that the
+   *  out-of-region lines are identical. 1-indexed, half-open, matches
+   *  ChangeBlock exactly so it drops into blocksToLineSets/planTake. */
+  blocks: ChangeBlock[]
 }
 
 // jj's label format after optional "diff from:"/"diff to:" prefix:
@@ -86,6 +94,8 @@ export function reconstructSides(raw: string): MergeSides | null {
   const base: string[] = []
   const ours: string[] = []
   const theirs: string[] = []
+  const blocks: ChangeBlock[] = []
+  let blockStart = { a: 0, b: 0 }
   let oursLabel = ''
   let theirsLabel = ''
   let oursRef: SideRef | undefined
@@ -134,6 +144,7 @@ export function reconstructSides(raw: string): MergeSides | null {
         mode = 'out'
         sideNum = 0
         baseDoneThisRegion = false
+        blockStart = { a: ours.length + 1, b: theirs.length + 1 }
         continue
       }
     }
@@ -142,6 +153,10 @@ export function reconstructSides(raw: string): MergeSides | null {
     // it'd accept a 0-length match. Guard with inRegion explicitly).
     if (inRegion && matchMarker(line, '>', mLen) !== null) {
       if (sideNum !== 2) return null // saw <2 sides — not a 2-way conflict
+      blocks.push({
+        aFrom: blockStart.a, aTo: ours.length + 1,
+        bFrom: blockStart.b, bTo: theirs.length + 1,
+      })
       inRegion = false
       mLen = 0
       mode = 'out'
@@ -245,5 +260,6 @@ export function reconstructSides(raw: string): MergeSides | null {
     theirsLabel,
     oursRef,
     theirsRef,
+    blocks,
   }
 }

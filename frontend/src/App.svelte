@@ -53,6 +53,7 @@
   import DivergencePanel from './lib/DivergencePanel.svelte'
   import { executeKeepPlan, splitIdentity, squashDivergent, abandonMutable, type DivergenceActionResult } from './lib/divergence-actions'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, createFileSelection, targetModeLabel } from './lib/modes.svelte'
+  import { routeKeydown, type ActiveView } from './lib/keyboard-gate'
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config } from './lib/config.svelte'
@@ -279,7 +280,7 @@
   // Runtime guard: TabState is in-memory (AppShell), not disk, so stale
   // 'operations' from before the type narrowing can only occur via HMR.
   // The === check costs nothing and prevents an invalid union value.
-  let activeView: 'log' | 'branches' | 'merge' = $state(
+  let activeView: ActiveView = $state(
     init?.activeView === 'branches' ? 'branches' : 'log'
   )
 
@@ -1662,16 +1663,10 @@
 
   // --- Keyboard shortcuts ---
   //
-  // Dispatcher reads as policy:
-  //   globalOverrides → inlineCommit → isInInput → modifier → modal →
-  //   inlineNav → escape → global → logView
-  //
-  // Ordering is load-bearing. Each gate's placement is deliberate:
-  //   - globalOverrides (Cmd+K/F) BEFORE isInInput: work inside text fields.
-  //   - inlineCommit BEFORE isInInput: FileSelectionPanel holds focus during
-  //     squash/split; Enter still executes. (cm-editor sub-filter inside.)
-  //   - modifier AFTER globalOverrides: Cmd+C etc. pass through to browser.
-  //   - inlineNav swallows EVERYTHING: no normal-mode keys leak into modes.
+  // Gate priority lives in keyboard-gate.ts (routeKeydown) so the ORDER can
+  // be table-tested — gate placement has been the highest-regression surface.
+  // Handlers below encode their own entry conditions; routeKeydown encodes
+  // only the try-then-fall-through sequence.
 
   function isInInput(t: HTMLElement) {
     return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || !!t.closest('.cm-editor')
@@ -1679,42 +1674,47 @@
 
   function handleKeydown(e: KeyboardEvent) {
     const target = e.target as HTMLElement
-    if (handleGlobalOverrides(e)) return
-    if (handleInlineCommit(e, target)) return
-    if (isInInput(target)) return
-    if (e.metaKey || e.ctrlKey) return
-    // File-history overlay handles j/k/Space/Escape; anyModalOpen below blocks
-    // the rest while open (so log-view j/k doesn't fire beneath the overlay).
-    if (fileHistoryPath && fileHistoryRef?.handleKeydown(e)) { e.preventDefault(); return }
-    if (anyModalOpen) return
-    if (inlineMode) return handleInlineNav(e)
-    // Branches panel is focus-independent: delegate directly via bind:this
-    // ref (not element onkeydown, which silently breaks when focus drifts
-    // to toolbar → d/f/t fall through to global → t=theme-toggle).
-    // defaultPrevented catches element-level dispatch if focus IS in-panel
-    // (avoids double-handling). handleEscapeStack is below this block so
-    // panel's own Escape tiering (disarm → clear filter → close) wins.
-    if (activeView === 'branches') {
-      if (e.defaultPrevented) return
-      bookmarksPanelRef?.handleKeydown(e)
-      if (e.defaultPrevented) return
-      handleGlobalKeys(e)
-      return
-    }
-    if (activeView === 'merge') {
-      if (e.defaultPrevented) return
-      // bug_005: Escape exits merge view. MergePanel's swallowKeydown handles
-      // its own Escape (confirm-if-dirty) when focused; defaultPrevented above
-      // gates that. This catches the no-panel-mounted / queue-focused cases.
-      if (e.key === 'Escape') { switchToLogView(); e.preventDefault(); return }
-      if (conflictQueueRef?.handleKeydown(e)) { e.preventDefault(); return }
-      handleGlobalKeys(e)
-      return
-    }
-    if (e.key === 'Escape') return handleEscapeStack()
-    if (handleGlobalKeys(e)) return
-    if (activeView !== 'log') return
-    handleLogKeys(e)
+    routeKeydown(
+      {
+        key: e.key,
+        hasModifier: e.metaKey || e.ctrlKey,
+        inInput: isInInput(target),
+        defaultPrevented: e.defaultPrevented,
+        fileHistoryOpen: !!fileHistoryPath,
+        anyModalOpen,
+        inlineMode,
+        activeView,
+      },
+      {
+        globalOverrides: () => handleGlobalOverrides(e),
+        inlineCommit: () => handleInlineCommit(e, target),
+        delegateFileHistory: () => {
+          if (fileHistoryRef?.handleKeydown(e)) { e.preventDefault(); return true }
+          return false
+        },
+        inlineNav: () => handleInlineNav(e),
+        // Branches panel is focus-independent: delegate via bind:this ref
+        // (not element onkeydown, which silently breaks when focus drifts to
+        // toolbar → d/f/t fall through to global → t=theme-toggle). Panel's
+        // own Escape tiering (disarm → clear filter → close) wins because
+        // routeKeydown's escapeStack gate is below the branches block.
+        delegateBranches: () => {
+          bookmarksPanelRef?.handleKeydown(e)
+          return e.defaultPrevented
+        },
+        // bug_005: MergePanel's swallowKeydown handles its own Escape
+        // (confirm-if-dirty) when focused — routeKeydown's defaultPrevented
+        // pre-check gates that. This catches no-panel / queue-focused cases.
+        mergeEscape: () => { switchToLogView(); e.preventDefault() },
+        delegateConflictQueue: () => {
+          if (conflictQueueRef?.handleKeydown(e)) { e.preventDefault(); return true }
+          return false
+        },
+        escapeStack: handleEscapeStack,
+        globalKeys: () => handleGlobalKeys(e),
+        logKeys: () => handleLogKeys(e),
+      },
+    )
   }
 
   // Cmd+K / Cmd+F — fire regardless of input focus, mode, or open modals.
@@ -1746,8 +1746,9 @@
   // text inputs handle their own Enter/Escape, so sub-filter on those.
   function handleInlineCommit(e: KeyboardEvent, target: HTMLElement): boolean {
     if (!inlineMode || (e.key !== 'Enter' && e.key !== 'Escape')) return false
-    // Stop the dispatcher — input handles natively. Returning true here also
-    // dedups the isInInput call the dispatcher would make next.
+    // Stop the dispatcher — input handles natively. routeKeydown already
+    // computed ctx.inInput, but this path reads `target` directly (the ctx
+    // isn't plumbed through). Duplicate-but-cheap; unified if it matters.
     if (isInInput(target)) return true
     e.preventDefault()
     if (e.key === 'Enter') {

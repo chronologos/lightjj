@@ -13,11 +13,13 @@
 
   let html = $derived((void mermaidReady, renderMarkdown(content)))
 
-  // Re-wire panzoom after every html change — {@html} replaces the subtree,
-  // so prior listeners are gone with the old nodes.
+  // Re-wire panzoom after every html change. Returned cleanup calls
+  // pz.destroy() on the prior batch — panzoom attaches document-level
+  // pointermove/up that survive {@html} subtree replacement.
   $effect(() => {
     void html
-    if (container) wirePanzoom(container)
+    if (!container) return
+    return wirePanzoom(container)
   })
 </script>
 

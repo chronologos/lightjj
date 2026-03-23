@@ -2,14 +2,22 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import MergePanel from './MergePanel.svelte'
 import type { MergeSides } from './conflict-extract'
+import { diffBlocks } from './merge-diff'
 
 // Thin component tests — wire-up only. The position-surgery logic lives in
 // merge-surgery.ts and has its own dedicated test file (50 tests including
 // round-trip invariants). CM6's EditorView works in jsdom for basic rendering
 // but scroll/measurement is unreliable; we test around that.
 
+// In production, blocks come from conflict-extract's region-boundary tracking
+// (no LCS). Test fixtures construct ours/theirs directly without markers, so
+// compute blocks via diffBlocks — same semantic result for these small inputs,
+// and keeps existing assertions valid.
 function sides(ours: string, theirs: string, base = ''): MergeSides {
-  return { ours, theirs, base, oursLabel: 'Ours', theirsLabel: 'Theirs' }
+  return {
+    ours, theirs, base, oursLabel: 'Ours', theirsLabel: 'Theirs',
+    blocks: diffBlocks(ours.split('\n'), theirs.split('\n')),
+  }
 }
 
 function props(over: Record<string, unknown> = {}) {

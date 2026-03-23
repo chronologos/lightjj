@@ -336,11 +336,12 @@ describe('planTake — round-trip (take-ours → take-theirs = identity)', () =>
   })
 })
 
-// Full-pipeline round-trip: reconstructSides → diffBlocks → planTake × all
-// blocks → take-ours-then-theirs-back = identity. This composes every layer
-// the 3-pane merge editor depends on. Covers shapes the single-block
-// roundTrip above misses (adjacent blocks, crossing diffs, empty-line runs).
-describe('planTake — full-pipeline round-trip (every block ours→theirs = identity)', () => {
+// Multi-block round-trip through diffBlocks → planTake. Covers shapes the
+// single-block roundTrip above misses (adjacent blocks, crossing diffs,
+// empty-line runs). NOT the MergePanel pipeline (that uses sides.blocks from
+// reconstructSides — see the fixture-driven describe below); this is the
+// diffBlocks→planTake composition lock, kept since diffLineSets still ships.
+describe('planTake — diffBlocks multi-block round-trip (every block ours→theirs = identity)', () => {
   // Apply ALL blocks take-ours, then ALL blocks take-theirs-back. Position
   // remapping via remapBlock between each dispatch. This is what MergePanel
   // does when the user clicks every ← arrow then every → arrow.
@@ -450,7 +451,9 @@ describe('remapBlock', () => {
   })
 })
 
-// --- End-to-end: conflict-extract → diffBlocks → planTake → apply ---
+// --- End-to-end: conflict-extract (sides.blocks) → planTake → apply ---
+// The MergePanel pipeline. Blocks come from the parser's region-boundary
+// tracking, NOT from re-running LCS over the reconstructed sides.
 // The pipeline that powers MergePanel, tested from jj-format conflict markers
 // through to final doc strings. This is the SEMANTIC test: "does clicking the
 // → arrow actually produce ours?" — proved by pure-function composition.
@@ -575,7 +578,7 @@ describe('merge pipeline — conflict → diff → take → result', () => {
       const sides = reconstructSides(raw)!
       const oursLines = sides.ours.split('\n')
       const theirsLines = sides.theirs.split('\n')
-      const blocks = diffBlocks(oursLines, theirsLines)
+      const blocks = sides.blocks
 
       it('take-all-ours produces exactly ours', () => {
         const result = takeAllOurs(sides.theirs, oursLines, blocks)

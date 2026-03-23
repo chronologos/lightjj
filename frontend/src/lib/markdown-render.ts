@@ -19,7 +19,7 @@ export const ensureMermaidLoaded = () =>
 
 // Sync render blocks the main thread via elkjs FakeWorker. README-scale
 // diagrams (<200 lines) are sub-frame; huge architecture diagrams fall through
-// to raw <pre>. Same mitigation shape as word-diff's 500k-cell LCS bail.
+// to raw <pre>.
 const DIAGRAM_LINE_LIMIT = 200
 
 // Direct CSS-var references — SVG contains `fill="var(--base)"` which resolves
@@ -86,13 +86,18 @@ export function renderMarkdown(src: string): string {
 }
 
 // Called post-mount from MarkdownPreview's $effect. Wires wheel-zoom +
-// drag-pan + dblclick-reset on each rendered SVG. No-op if not loaded yet
-// (first-render raw-fallback path).
-export function wirePanzoom(container: HTMLElement): void {
-  if (!panzoom) return
+// drag-pan + dblclick-reset on each rendered SVG. Returns cleanup that calls
+// pz.destroy() — panzoom attaches pointermove/pointerup at DOCUMENT level
+// (panzoom.es.js bind()), so {@html} subtree replacement alone doesn't release
+// them. No-op cleanup if not loaded yet (first-render raw-fallback path).
+export function wirePanzoom(container: HTMLElement): () => void {
+  if (!panzoom) return () => {}
+  const instances: ReturnType<Panzoom>[] = []
   for (const svg of container.querySelectorAll<SVGSVGElement>('.mermaid-block > svg')) {
     const pz = panzoom(svg, { maxScale: 5, minScale: 0.3, canvas: true })
     svg.parentElement!.addEventListener('wheel', pz.zoomWithWheel, { passive: false })
     svg.addEventListener('dblclick', () => pz.reset())
+    instances.push(pz)
   }
+  return () => instances.forEach(pz => pz.destroy())
 }

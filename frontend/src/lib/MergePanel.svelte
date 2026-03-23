@@ -126,7 +126,7 @@
   import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language'
   import { highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
   import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
-  import { diffBlocks, blocksToLineSets, type ChangeBlock } from './merge-diff'
+  import { blocksToLineSets, type ChangeBlock } from './merge-diff'
   import { planTake, planTakeBoth, initialTrackPos } from './merge-surgery'
   import type { MergeSides } from './conflict-extract'
 
@@ -193,7 +193,11 @@
 
   // blocks[i] is the merge unit for arrow i. aFrom/aTo = ours lines,
   // bFrom/bTo = theirs (= initial center) lines. Both 1-indexed half-open.
-  const blocks: ChangeBlock[] = diffBlocks(oursLines, theirsLines)
+  // Emitted by conflict-extract at parse time (one block per jj conflict
+  // region) — no LCS needed. Parse already knows where <<<<<<< / >>>>>>>
+  // bound each conflict; re-deriving via diffBlocks was O(fileLines²) of
+  // re-discovering that out-of-region lines are identical.
+  const blocks: ChangeBlock[] = untrack(() => sides.blocks)
 
   // StateField instance — retained so we can read .state.field(trackerField).
   let trackerField: StateField<CenterBlock[]> | undefined

@@ -25,6 +25,38 @@ describe('reconstructSides', () => {
     expect(r.theirs).toBe(['shared header', 'theirs A', 'theirs B', 'shared footer'].join('\n'))
     expect(r.oursLabel).toBe('Changes from base to side #1')
     expect(r.theirsLabel).toBe('Contents of side #2')
+    // Block spans the conflict-region content in ours/theirs (1-indexed, half-open).
+    // ours[2..4) = 'context line','ours only'; theirs[2..4) = 'theirs A','theirs B'.
+    expect(r.blocks).toEqual([{ aFrom: 2, aTo: 4, bFrom: 2, bTo: 4 }])
+  })
+
+  it('emits one block per conflict region', () => {
+    // Two regions → two blocks, each bounded exactly at <<<<<<< / >>>>>>> in
+    // ours/theirs coordinates. MergePanel reads these instead of running LCS.
+    const raw = [
+      'A',
+      '<<<<<<<',
+      '+++++++ s1',
+      'ours1',
+      '+++++++ s2',
+      'theirs1',
+      '>>>>>>>',
+      'B',
+      '<<<<<<<',
+      '+++++++ s1',
+      'ours2a',
+      'ours2b',
+      '+++++++ s2',
+      'theirs2',
+      '>>>>>>>',
+      'C',
+    ].join('\n')
+    const r = reconstructSides(raw)!
+    // ours = A,ours1,B,ours2a,ours2b,C ; theirs = A,theirs1,B,theirs2,C
+    expect(r.blocks).toEqual([
+      { aFrom: 2, aTo: 3, bFrom: 2, bTo: 3 },
+      { aFrom: 4, aTo: 6, bFrom: 4, bTo: 5 },
+    ])
   })
 
   it('extracts from DiffExperimental-style (two %%%%%%% sections) — base NOT doubled', () => {
