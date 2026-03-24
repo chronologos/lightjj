@@ -2116,6 +2116,101 @@ func TestHandleFileShow_RunnerError(t *testing.T) {
 	assert.Equal(t, "file not found", resp["error"])
 }
 
+func TestHandleFileRaw_Image(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FileShow("abc", "docs/logo.png")).SetOutput([]byte("\x89PNG..."))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/file-raw?revision=abc&path=docs/logo.png", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "image/png", w.Header().Get("Content-Type"))
+	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+	assert.Empty(t, w.Header().Get("Content-Disposition"))
+	assert.Equal(t, "\x89PNG...", w.Body.String())
+}
+
+func TestHandleFileRaw_NonImage_ForcesDownload(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	// .html is the XSS case — serving it with text/html would execute scripts
+	runner.Expect(jj.FileShow("abc", "evil.html")).SetOutput([]byte("<script>alert(1)</script>"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/file-raw?revision=abc&path=evil.html", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/octet-stream", w.Header().Get("Content-Type"))
+	assert.Equal(t, "attachment", w.Header().Get("Content-Disposition"))
+}
+
+func TestHandleFileRaw_SVG_CSPNeutersScript(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FileShow("abc", "evil.svg")).SetOutput([]byte("<svg><script>fetch('/api/abandon')</script></svg>"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/file-raw?revision=abc&path=evil.svg", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	// SVG is image/* so it's served inline (no attachment) — the CSP is what
+	// blocks script execution on direct nav. <img> embed path was never at risk.
+	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
+	assert.Empty(t, w.Header().Get("Content-Disposition"))
+	assert.Contains(t, w.Header().Get("Content-Security-Policy"), "default-src 'none'")
+}
+
+func TestHandleFileRaw_CacheControl(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	for _, tt := range []struct {
+		name, rev string
+		cached    bool
+	}{
+		{"commit_id", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true},
+		{"symbolic @", "@", false},
+		{"bookmark", "main", false},
+		{"short hex", "a1b2c3", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := testutil.NewMockRunner(t)
+			runner.Expect(jj.FileShow(tt.rev, "x.png")).SetOutput([]byte("png"))
+			srv.Runner = runner
+			req := httptest.NewRequest("GET", "/api/file-raw?revision="+url.QueryEscape(tt.rev)+"&path=x.png", nil)
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, req)
+			if tt.cached {
+				assert.Contains(t, w.Header().Get("Cache-Control"), "immutable")
+			} else {
+				assert.Empty(t, w.Header().Get("Cache-Control"))
+			}
+		})
+	}
+}
+
+func TestHandleFileRaw_PathValidation(t *testing.T) {
+	srv := newTestServer(testutil.NewMockRunner(t))
+	for _, tt := range []struct{ name, path string }{
+		{"traversal", "../etc/passwd"},
+		{"absolute", "/etc/passwd"},
+		{"jj dir", ".jj/repo/config.toml"},
+		{"empty", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/file-raw?revision=abc&path="+url.QueryEscape(tt.path), nil)
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
 // parseLogOutput tests moved to internal/parser/graph_test.go
 
 // --- Edit handler tests ---

@@ -813,6 +813,11 @@ export const api = {
     return request<{ content: string }>(`/api/file-show?${params}`)
   },
 
+  // Tab-scoped URL for raw file bytes — feeds <img src> in markdown preview
+  // so SSH-mode images load. Not a fetch wrapper (the browser loads it).
+  fileRawUrl: (revision: string, path: string) =>
+    tabScoped(`/api/file-raw?${new URLSearchParams({ revision, path })}`),
+
   fileWrite: (path: string, content: string) =>
     post<{ ok: boolean }>('/api/file-write', { path, content }),
 

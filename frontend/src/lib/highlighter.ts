@@ -101,3 +101,10 @@ export function highlightLines(lines: string[], lang: string): string[] {
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
+
+// Attribute-value context needs quote escaping too — `alt="x" onerror=...`
+// breakout. escapeHtml alone is a text-node escaper; using it for attr values
+// leaves quotes as-is.
+export function escapeAttr(s: string): string {
+  return escapeHtml(s).replace(/"/g, '&quot;')
+}

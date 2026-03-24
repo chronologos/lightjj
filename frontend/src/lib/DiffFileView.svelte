@@ -32,6 +32,8 @@
      *  on .md extension at the render site. */
     onpreview?: (path: string) => void
     previewContent?: string
+    /** Commit id for image-src resolution in markdown preview. */
+    previewRevision?: string
     ondiscard?: (path: string, sourcePath?: string) => void
     onsavefile?: (path: string, content: string) => void
     oncanceledit?: (path: string) => void
@@ -73,7 +75,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick, hunkReview = null }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, annotationsForLine, onannotationclick, hunkReview = null }: Props = $props()
 
   // ── Hunk review derived state ────────────────────────────────────────────
   let reviewFileState: SelectionState | null = $derived(
@@ -528,7 +530,12 @@
   {#if !isCollapsed}
     {#if previewContent !== undefined}
       {#await import('./MarkdownPreview.svelte') then { default: MarkdownPreview }}
-        <MarkdownPreview content={previewContent} />
+        <MarkdownPreview
+          content={previewContent}
+          ctx={previewRevision
+            ? { revision: previewRevision, baseDir: filePath.split('/').slice(0, -1).join('/') }
+            : undefined}
+        />
       {/await}
     {:else if effectiveSplit}
       <!-- Split (side-by-side) view -->

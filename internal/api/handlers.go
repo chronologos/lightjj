@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -421,6 +422,53 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
+}
+
+// commitIdRe matches 40+ lowercase hex — the frontend passes diffTarget.commitId
+// (content hash, immutable). Shorter values are change_ids or symbolic refs
+// which CAN move, so those skip the aggressive cache.
+var commitIdRe = regexp.MustCompile(`^[a-f0-9]{40,}$`)
+
+// handleFileRaw serves file bytes at a revision with a browser-usable
+// Content-Type. Feeds <img src> in markdown preview so images work in SSH
+// mode (browser can't reach the remote filesystem; jj can).
+//
+// XSS defenses layered — belt-and-suspenders since repo content is untrusted:
+//   - non-image → attachment + octet-stream (direct-nav downloads, doesn't render)
+//   - CSP default-src 'none' neuters SVG <script> on direct nav; <img> rendering
+//     is unaffected (a resource's CSP governs it-as-document, not the embedder)
+//   - nosniff prevents content-sniffing a .png-with-HTML-body into text/html
+func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
+	revision := r.URL.Query().Get("revision")
+	if revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	cleaned, err := validateRepoRelativePath(r.URL.Query().Get("path"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(revision, filepath.ToSlash(cleaned)))
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	ct := mime.TypeByExtension(filepath.Ext(cleaned))
+	if strings.HasPrefix(ct, "image/") {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment")
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// style-src for SVG's internal <style> (beautiful-mermaid emits one);
+	// everything else denied — scripts, frames, connects, objects.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	if commitIdRe.MatchString(revision) {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	}
+	w.Write(output)
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {

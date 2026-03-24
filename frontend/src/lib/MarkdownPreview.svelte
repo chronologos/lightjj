@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { renderMarkdown, ensureMermaidLoaded, wirePanzoom } from './markdown-render'
+  import { renderMarkdown, ensureMermaidLoaded, wirePanzoom, type PreviewContext } from './markdown-render'
 
-  let { content }: { content: string } = $props()
+  let { content, ctx }: { content: string, ctx?: PreviewContext } = $props()
   let container: HTMLElement | undefined = $state()
 
   // Mermaid chunk lazy-loads on first preview. `mermaidReady` is a dep of
@@ -11,7 +11,7 @@
   let mermaidReady = $state(false)
   $effect(() => { ensureMermaidLoaded().then(() => mermaidReady = true) })
 
-  let html = $derived((void mermaidReady, renderMarkdown(content)))
+  let html = $derived((void mermaidReady, renderMarkdown(content, ctx)))
 
   // Re-wire pan/zoom after every html change. Returned cleanup removes
   // the prior batch's listeners — they survive {@html} subtree replacement.
@@ -26,12 +26,15 @@
 
 <style>
   .md-preview {
-    padding: 12px 16px;
+    padding: 12px 24px;
     font-family: system-ui, -apple-system, sans-serif;
     font-size: 14px;
     line-height: 1.6;
     color: var(--text);
-    max-width: 900px;
+    /* 1100px ≈ 90ch at 14px — upper bound of readable prose. Code blocks
+       and mermaid get the full width; margin:auto centers on wider panes. */
+    max-width: 1100px;
+    margin: 0 auto;
     /* Containing block for fixed-position descendants — neutralizes the
        <div style="position:fixed;..."> phishing-overlay vector without
        stripping inline style (which mermaid SVG may use). */

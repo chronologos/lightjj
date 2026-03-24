@@ -1255,6 +1255,7 @@
             onedit={canMutateFiles ? startEdit : undefined}
             onpreview={diffTarget?.kind === 'single' && !hunkReview ? togglePreview : undefined}
             previewContent={previewContents.get(filePath)}
+            previewRevision={diffTarget?.kind === 'single' ? diffTarget.commitId : undefined}
             onmerge={canMutateFiles ? startMerge : undefined}
             ondiscard={canMutateFiles ? discardFile : undefined}
             onsavefile={saveFile}

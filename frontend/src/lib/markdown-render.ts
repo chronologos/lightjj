@@ -1,6 +1,7 @@
 import { marked, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
-import { escapeHtml } from './highlighter'
+import { escapeHtml, escapeAttr } from './highlighter'
+import { api } from './api'
 
 // beautiful-mermaid lazy-loaded — ~300KB chunk (mostly elkjs), only fetched
 // on first preview. Subsequent previews hit module cache. Promise-memoized
@@ -56,6 +57,41 @@ function tryRenderDiagram(src: string): string | null {
 // placeholder indirection. renderMarkdown is sync so module-level is safe.
 let pendingDiagrams: string[] = []
 
+// Per-call context for the image renderer hook. Module-level (same pattern
+// as pendingDiagrams) — marked.use is configured once at module load so hooks
+// can't receive call-time params directly. Set in renderMarkdown, read in
+// the image hook, never read outside the sync parse call.
+let imgCtx: { revision: string, baseDir: string } | null = null
+let imgCount = 0
+
+// Cap proxied images per preview. Each is a jj subprocess (SSH mode: a full
+// round trip). A malicious README with 1000 images would queue 1000 requests.
+const MAX_PROXIED_IMAGES = 50
+
+// Allowlisted schemes pass through. Relative paths resolve against baseDir
+// then route through /api/file-raw so SSH-mode images load. DOMPurify's
+// ALLOWED_URI_REGEXP is the actual filter for dangerous schemes (javascript:,
+// vbscript:); this allowlist is belt-and-suspenders so resolveImgSrc is
+// self-contained if the sanitize step ever moves.
+const SCHEME_RE = /^(https?:|data:image\/|\/\/|#)/i
+
+// Safe decode — malformed %-sequences (e.g., `%ZZ`) throw; falling back to
+// the raw href means a harmless 404 rather than crashing the render.
+const tryDecode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
+
+function resolveImgSrc(href: string): string {
+  if (!imgCtx || SCHEME_RE.test(href)) return href
+  if (++imgCount > MAX_PROXIED_IMAGES) return ''
+  // Strip ?query/#fragment — browser applies those client-side; server needs
+  // bare file path. Decode before URLSearchParams re-encodes (avoids %20→%2520).
+  const clean = tryDecode(href.replace(/[?#].*$/, ''))
+  // Leading `/` = repo-root-relative (common in docs); strip it, skip baseDir.
+  const path = clean.startsWith('/')
+    ? clean.slice(1)
+    : imgCtx.baseDir ? `${imgCtx.baseDir}/${clean}` : clean
+  return api.fileRawUrl(imgCtx.revision, path)
+}
+
 marked.use({
   gfm: true,
   renderer: {
@@ -71,6 +107,11 @@ marked.use({
       // mermaidReady flips and this path re-tries.
       return `<pre class="mermaid-fallback"><code>${escapeHtml(text)}</code></pre>`
     },
+    image({ href, title, text }: Tokens.Image) {
+      const src = resolveImgSrc(href)
+      const t = title ? ` title="${escapeAttr(title)}"` : ''
+      return `<img src="${escapeAttr(src)}" alt="${escapeAttr(text)}"${t}>`
+    },
   },
 })
 
@@ -83,9 +124,19 @@ const SANITIZE_CFG = {
   FORBID_TAGS: ['style', 'link', 'form'],
 }
 
-export function renderMarkdown(src: string): string {
+export interface PreviewContext {
+  revision: string
+  // Directory of the markdown file (for resolving relative img src).
+  // Empty string = repo root.
+  baseDir: string
+}
+
+export function renderMarkdown(src: string, ctx?: PreviewContext): string {
   pendingDiagrams = []
+  imgCtx = ctx ?? null
+  imgCount = 0
   const html = DOMPurify.sanitize(marked.parse(src) as string, SANITIZE_CFG)
+  imgCtx = null
   return html.replace(
     /<i data-mermaid="(\d+)"><\/i>/g,
     (_, i) => `<div class="mermaid-block">${pendingDiagrams[+i]}</div>`,

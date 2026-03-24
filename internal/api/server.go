@@ -92,6 +92,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/stale-immutable", s.handleStaleImmutable)
 	s.Mux.HandleFunc("GET /api/diff-range", s.handleDiffRange)
 	s.Mux.HandleFunc("GET /api/file-show", s.handleFileShow)
+	s.Mux.HandleFunc("GET /api/file-raw", s.handleFileRaw)
 	s.Mux.HandleFunc("GET /api/info", s.handleInfo)
 	s.Mux.HandleFunc("GET /api/workspaces", s.handleWorkspaces)
 

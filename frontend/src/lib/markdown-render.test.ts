@@ -101,6 +101,65 @@ describe('renderMarkdown', () => {
       expect(html).not.toContain('mermaid')
     })
   })
+
+  describe('image src rewriting', () => {
+    const ctx = { revision: 'abc123', baseDir: 'docs' }
+
+    it('rewrites relative src through /api/file-raw', () => {
+      const html = renderMarkdown('![logo](img/logo.png)', ctx)
+      expect(html).toContain('/api/file-raw?')
+      expect(html).toContain('path=docs%2Fimg%2Flogo.png')
+    })
+
+    it('leaves http(s) and data:image/ unchanged', () => {
+      for (const src of ['https://example.com/x.png', 'data:image/png;base64,AAA']) {
+        const html = renderMarkdown(`![x](${src})`, ctx)
+        expect(html).not.toContain('/api/file-raw')
+      }
+    })
+
+    it('escapes quotes in alt — attribute breakout defense', () => {
+      const html = renderMarkdown('![x" onerror="alert(1)](foo.png)', ctx)
+      // Breakout = unescaped " closes alt then opens new attr. Escaped quote
+      // means `onerror=...` stays as literal TEXT inside alt="...".
+      expect(html).not.toMatch(/"\s*onerror\s*=/)
+      expect(html).toContain('&quot;')
+    })
+
+    it('caps at MAX_PROXIED_IMAGES', () => {
+      const md = Array.from({ length: 60 }, (_, i) => `![${i}](img${i}.png)`).join('\n')
+      const html = renderMarkdown(md, ctx)
+      const matches = html.match(/\/api\/file-raw/g) ?? []
+      expect(matches.length).toBe(50)
+    })
+
+    it('no rewriting without ctx', () => {
+      const html = renderMarkdown('![x](foo.png)')
+      expect(html).not.toContain('/api/file-raw')
+      expect(html).toContain('src="foo.png"')
+    })
+
+    it('root-relative paths skip baseDir', () => {
+      const html = renderMarkdown('![x](/images/logo.png)', ctx)
+      expect(html).toContain('path=images%2Flogo.png')
+      expect(html).not.toContain('docs')  // baseDir not prepended
+    })
+
+    it('strips fragment and query from path', () => {
+      const html = renderMarkdown('![x](flow.svg#layer1) ![y](logo.png?v=2)', ctx)
+      expect(html).toContain('path=docs%2Fflow.svg')
+      expect(html).toContain('path=docs%2Flogo.png')
+      expect(html).not.toContain('%23')  // no encoded #
+      expect(html).not.toContain('v%3D2')  // no encoded ?v=2
+    })
+
+    it('decodes percent-encoded paths (avoids double-encoding)', () => {
+      const html = renderMarkdown('![x](my%20image.png)', ctx)
+      // %20 decoded → space → URLSearchParams encodes as + → server gets space
+      expect(html).toContain('path=docs%2Fmy+image.png')
+      expect(html).not.toContain('%2520')  // NOT double-encoded
+    })
+  })
 })
 
 describe('wirePanzoom', () => {
