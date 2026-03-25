@@ -540,6 +540,7 @@
     { label: 'Show welcome / keyboard shortcuts', category: 'Help', showInCheatsheet: true, action: () => { welcomeTitle = `Welcome to lightjj v${APP_VERSION}`; welcomeFeatures = FEATURES; welcomeOpen = true } },
     { label: `Changelog for v${APP_VERSION}`, category: 'Help', showInCheatsheet: true, action: () => window.open(CURRENT_RELEASE_URL, '_blank', 'noopener') },
     { label: 'Full changelog (all releases)', category: 'Help', showInCheatsheet: true, action: () => window.open(RELEASES_URL, '_blank', 'noopener') },
+    { label: `About lightjj v${APP_VERSION}`, category: 'Help', showInCheatsheet: true, action: () => { welcomeTitle = `lightjj v${APP_VERSION}`; welcomeFeatures = FEATURES; welcomeOpen = true } },
 
     // Actions
     { label: 'Undo last operation', shortcut: 'u', category: 'Actions', action: handleUndo, when: () => !inlineMode },
