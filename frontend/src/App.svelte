@@ -2758,13 +2758,13 @@
 
   .update-dot {
     position: absolute;
-    top: -2px;
-    right: -2px;
-    width: 6px;
-    height: 6px;
+    top: -3px;
+    right: -3px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    background: var(--peach);
-    border: 1px solid var(--base);
+    background: var(--red);
+    border: 1.5px solid var(--base);
   }
 
   .toolbar-logo-text {
