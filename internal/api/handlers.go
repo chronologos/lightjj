@@ -344,6 +344,8 @@ func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
 
 // handleFileHistory is handleLog scoped to commits touching one file.
 // Separate endpoint so EscapeFileName's root-file: escaping stays server-side.
+// full=1 assumes the changed-path index is built (via /api/index-paths) —
+// without it files() is O(commits×tree-diff) and can exceed the read timeout.
 func (s *Server) handleFileHistory(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
@@ -351,12 +353,23 @@ func (s *Server) handleFileHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := r.URL.Query().Get("full") == "1"
-	output, err := s.Runner.Run(r.Context(), jj.FileLog(path, 100, full))
+	output, err := s.Runner.Run(r.Context(), jj.FileLog(path, 500, full))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, parser.ParseGraphLog(string(output)))
+}
+
+// handleIndexPaths builds jj's changed-path index. Streams since first-build
+// can take minutes (the inline-in-handleFileHistory approach hit the 30s read
+// timeout → context cancel → exit -1). Not a true mutation (op-log unchanged),
+// but streamMutation's no-timeout path is what we need; the trailing op-id
+// refresh is a harmless no-op. Unbounded — for monorepo-scale repos (1M+
+// commits, 10+min build) the frontend recommends running the CLI directly
+// where jj's TTY-gated progress bar works.
+func (s *Server) handleIndexPaths(w http.ResponseWriter, r *http.Request) {
+	s.streamMutation(w, r, jj.IndexChangedPaths(0))
 }
 
 func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {

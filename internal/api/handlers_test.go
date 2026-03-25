@@ -739,11 +739,23 @@ func TestHandleConflicts_CustomRevset(t *testing.T) {
 func TestHandleFileHistory(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	// Verify the handler builds the files() revset with root-file: escaping.
-	runner.Expect(jj.FileLog("src/main.go", 100, false)).SetOutput([]byte(""))
+	runner.Expect(jj.FileLog("src/main.go", 500, false)).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/file-history?path="+url.QueryEscape("src/main.go"), nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleFileHistory_Full(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FileLog("src/main.go", 500, true)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/file-history?full=1&path="+url.QueryEscape("src/main.go"), nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)

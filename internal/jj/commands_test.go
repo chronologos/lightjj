@@ -697,6 +697,11 @@ func TestFileLog_EscapesQuotes(t *testing.T) {
 	assert.NotContains(t, joined, `weird"name.go")`) // unescaped would close early
 }
 
+func TestIndexChangedPaths(t *testing.T) {
+	assert.Equal(t, []string{"debug", "index-changed-paths"}, IndexChangedPaths(0))
+	assert.Equal(t, []string{"debug", "index-changed-paths", "-n", "50000"}, IndexChangedPaths(50000))
+}
+
 func TestParseConflictList_EmptyAndMalformed(t *testing.T) {
 	// Parsers must return empty slices, not nil (JSON serializes [] not null).
 	assert.Equal(t, []*ConflictEntry{}, ParseConflictList(""))

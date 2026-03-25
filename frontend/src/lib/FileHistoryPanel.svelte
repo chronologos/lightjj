@@ -13,14 +13,38 @@
 
   // ── Revision list ────────────────────────────────────────────────────────
   // Two-tier: mutable-only is instant but shows only your WIP. full=true drops
-  // the scope — complete history but slow on large repos (files() has no index,
-  // 20+s on repos with 100k+ commits). User opts in via "Load full" button.
+  // the scope — fast once jj's changed-path index is built (jj#7250). Index
+  // build is a separate streaming call (no timeout) so first-build on large
+  // repos doesn't hit the 30s read ceiling.
   let full = $state(false)
+  let indexProgress = $state('')
   const history = createLoader(
     ([p, f]: [string, boolean]) => api.fileHistory(p, f),
     [] as LogEntry[],
   )
   $effect(() => { history.load([path, full]) })
+
+  async function loadFull() {
+    // jj's progress is TTY-gated — through our pipe we get zero output until
+    // the final line. A ticking elapsed counter is the only "alive" signal.
+    const started = Date.now()
+    const tick = () => {
+      indexProgress = `Building path index… ${Math.floor((Date.now() - started) / 1000)}s`
+    }
+    tick()
+    const timer = setInterval(tick, 1000)
+    try {
+      await api.indexPaths(line => { indexProgress = line })
+    } catch (e) {
+      // Non-fatal — old jj or unsupported backend. files() falls back to
+      // slow scan; may still time out on huge repos but worth the attempt.
+      console.warn('index-changed-paths failed:', e)
+    } finally {
+      clearInterval(timer)
+    }
+    indexProgress = ''
+    full = true
+  }
 
   let revisions = $derived(history.value)
   // Sparse = mutable-only found few commits; prompt the user to load full.
@@ -145,14 +169,20 @@
       }}
       onmouseleave={() => hoveredIdx = -1}
     >
-      {#if history.loading && revisions.length === 0}
-        <div class="fh-empty">Loading {full ? 'full ' : ''}history…{#if full}<br><small>This can take a while on large repos.</small>{/if}</div>
+      {#if indexProgress}
+        <div class="fh-empty">
+          {indexProgress}
+          <br><small>First run per repo builds jj's changed-path index (one-time). Subsequent loads are instant.</small>
+          <br><small>Large repo? Run <code>jj debug index-changed-paths</code> in a terminal for a live progress bar.</small>
+        </div>
+      {:else if history.loading && revisions.length === 0}
+        <div class="fh-empty">Loading…</div>
       {:else if history.error}
         <div class="fh-empty fh-error">{history.error}</div>
       {:else if revisions.length === 0}
         <div class="fh-empty">
           No mutable revisions touch this file.
-          {#if !full}<br><button class="fh-load-full" onclick={() => full = true}>Load full history</button>{/if}
+          {#if !full}<br><button class="fh-load-full" onclick={loadFull}>Load full history</button>{/if}
         </div>
       {:else}
         {#each revisions as rev, i (rev.commit.commit_id)}
@@ -175,7 +205,7 @@
         {#if sparse}
           <div class="fh-sparse">
             <small>Only {revisions.length} mutable commit{revisions.length === 1 ? '' : 's'} — showing your WIP only.</small>
-            <button class="fh-load-full" onclick={() => full = true}>Load full history</button>
+            <button class="fh-load-full" onclick={loadFull}>Load full history</button>
           </div>
         {/if}
       {/if}

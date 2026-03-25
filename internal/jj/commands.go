@@ -537,17 +537,36 @@ func Resolve(revision string, file string, tool string) CommandArgs {
 // — the revset does all the work. Kept server-side so EscapeFileName's quote
 // handling stays the single source of truth (paths can contain " and \).
 //
-// The mutable() intersection is a large repo-scale speedup: files() alone is
-// O(commits×tree-diff) with no index — 20+ seconds on large repos. mutable()
-// evaluates first (cheap set check), then files() only runs on those commits.
-// Trade-off: shows only the user's own mutable history by default. Callers
-// wanting full history pass full=true (accepts the slow scan).
+// The mutable() intersection is a fallback for repos where the changed-path
+// index hasn't been built: files() without the index is O(commits×tree-diff),
+// 20+s on large repos. mutable() evaluates first (cheap) so files() only runs
+// on those commits. full=true drops the scope — caller must ensure the index
+// is built first (frontend hits /api/index-paths separately; handleFileHistory
+// does NOT build inline — that exceeds the 30s read timeout on large repos).
 func FileLog(path string, limit int, full bool) CommandArgs {
 	revset := "files(" + EscapeFileName(path) + ")"
 	if !full {
 		revset = "mutable() & " + revset
 	}
 	return LogGraph(revset, limit)
+}
+
+// IndexChangedPaths builds jj's changed-path index (per-commit path Bloom
+// filter, .jj/repo/index/changed_paths/). Once built, files() revsets use it
+// automatically — ~70× speedup on merge-heavy repos per jj#4674. The index is
+// segment-based and persists; re-running appends new commits only. Under
+// `debug` because jj hasn't promoted it to stable yet (jj#7250).
+//
+// limit bounds commits to index (0 = unlimited). Partial indexes still
+// accelerate files() for the covered range. The handler passes 0 — for
+// monorepo-scale repos the frontend suggests running the CLI directly
+// where jj's TTY-gated progress bar shows.
+func IndexChangedPaths(limit int) CommandArgs {
+	args := []string{"debug", "index-changed-paths"}
+	if limit > 0 {
+		args = append(args, "-n", strconv.Itoa(limit))
+	}
+	return args
 }
 
 // ConflictList returns args for a jj log call emitting every conflicted

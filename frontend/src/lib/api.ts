@@ -866,10 +866,21 @@ export const api = {
 
   // Commits touching a file — same LogEntry[] shape as log(), powers the
   // file-history panel's revision list. Server-side does root-file: escaping.
-  // Default scopes to mutable() (instant); full=true drops the scope (slow on
-  // large repos — jj's files() predicate has no index, scans every commit).
+  // Default scopes to mutable() (instant); full=true drops the scope — call
+  // indexPaths() first so the files() revset has the changed-path index to
+  // consult, otherwise it's O(commits×tree-diff) and times out on large repos.
   fileHistory: (path: string, full = false) =>
     request<LogEntry[]>(`/api/file-history?path=${encodeURIComponent(path)}${full ? '&full=1' : ''}`),
+
+  // Build jj's changed-path index (jj#7250). Streaming because first build on
+  // a large repo can take minutes (the 30s read timeout would kill it).
+  // Segment-based: subsequent calls only append new commits. jj's progress
+  // writer is TTY-gated — through our pipe capture onLine fires ONCE at the
+  // end with "Finished indexing N..M commits.", not per-commit. The streaming
+  // buys timeout-freedom, not live feedback; callers should show their own
+  // indeterminate indicator.
+  indexPaths: (onLine: (line: string) => void) =>
+    streamPost('/api/index-paths', {}, onLine),
 
   staleImmutable: () => request<StaleImmutableGroup[]>('/api/stale-immutable'),
 

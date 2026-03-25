@@ -34,6 +34,7 @@ The only non-trivial carryover from the 2026-03-20 fix cluster:
 
 ## Small features
 
+- [ ] **jj version detection at startup** (Small) — Parse `jj --version` on server init (both local and SSH — `Runner.Run` handles both), warn via MessageBar if below minimum. Motivated by file-history's `debug index-changed-paths` dependency (jj ≥ 0.30, PR #7250). Current failure mode: old jj silently errors on the index build, falls through to slow scan. A version-gated feature table (`minJJ = {indexChangedPaths: "0.30", ...}`) would let handlers skip unsupported calls instead of logging errors.
 - [ ] **`git push --option` / `-o`** (Trivial) — Add to `allowedGitPushFlags`. Gerrit reviewers, GitLab merge options. Low demand; wait for a request.
 - [ ] **`--simplify-parents` on rebase** (Trivial) — Add to `Rebase()` builder signature, wire a checkbox in rebase mode. Useful when rebasing onto a descendant of the old parent.
 - [ ] **Double-slice per diff line** (Trivial) — DiffFileView.svelte slices `line.content` twice per render. One alloc.
