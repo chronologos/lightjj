@@ -17,3 +17,37 @@ export function parseSemver(s: string): Semver | null {
 export function semverMinorGt(a: Semver, b: Semver): boolean {
   return a.major > b.major || (a.major === b.major && a.minor > b.minor)
 }
+
+export function semverGt(a: Semver, b: Semver): boolean {
+  if (a.major !== b.major) return a.major > b.major
+  if (a.minor !== b.minor) return a.minor > b.minor
+  return a.patch > b.patch
+}
+
+export interface UpdateInfo { latest: string; url: string }
+
+let updatePromise: Promise<UpdateInfo | null> | null = null
+
+export function checkForUpdate(): Promise<UpdateInfo | null> {
+  if (updatePromise) return updatePromise
+  updatePromise = (async () => {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+        headers: { 'Accept': 'application/vnd.github.v3+json' },
+      })
+      if (!res.ok) return null
+      const data = await res.json()
+      const tag: string = data.tag_name ?? ''
+      const latest = parseSemver(tag.replace(/^v/, ''))
+      const current = parseSemver(APP_VERSION)
+      if (!latest || !current) return null
+      if (semverGt(latest, current)) {
+        return { latest: tag.replace(/^v/, ''), url: `${RELEASES_URL}/tag/${tag}` }
+      }
+      return null
+    } catch {
+      return null
+    }
+  })()
+  return updatePromise
+}

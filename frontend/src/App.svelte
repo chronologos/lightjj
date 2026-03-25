@@ -57,7 +57,7 @@
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config } from './lib/config.svelte'
-  import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt } from './lib/version'
+  import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt, checkForUpdate, type UpdateInfo } from './lib/version'
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
   import WelcomeModal from './lib/WelcomeModal.svelte'
   import { buildVisibilityRevset, revsetQuote, syncVisibility } from './lib/remote-visibility'
@@ -86,6 +86,9 @@
   // Stale immutable detection — force-push leftovers. Set after git fetch/push,
   // cleared after cleanup or if resolved externally.
   let staleImmutableGroups = $state<StaleImmutableGroup[]>([])
+
+  let updateInfo: UpdateInfo | null = $state(null)
+  checkForUpdate().then(info => { updateInfo = info })
 
   let descriptionEditing: boolean = $state(false)
   let descriptionDraft: string = $state('')
@@ -2003,15 +2006,22 @@
     <!-- Top toolbar: replaces sidebar -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <span class="toolbar-logo">
-          <img
-            src={darkMode ? '/logo.svg' : '/logo-light.svg'}
-            alt=""
-            width="16"
-            height="16"
-          />
-          <span class="toolbar-logo-text">lightjj</span>
-        </span>
+        {#if updateInfo}
+          <a class="toolbar-logo" href={updateInfo.url} target="_blank" rel="noopener" title="v{updateInfo.latest} available">
+            <span class="logo-icon">
+              <img src={darkMode ? '/logo.svg' : '/logo-light.svg'} alt="" width="16" height="16" />
+              <span class="update-dot"></span>
+            </span>
+            <span class="toolbar-logo-text">lightjj</span>
+          </a>
+        {:else}
+          <span class="toolbar-logo">
+            <span class="logo-icon">
+              <img src={darkMode ? '/logo.svg' : '/logo-light.svg'} alt="" width="16" height="16" />
+            </span>
+            <span class="toolbar-logo-text">lightjj</span>
+          </span>
+        {/if}
         {#if currentWorkspace}
           <span class="toolbar-divider"></span>
           <div class="toolbar-workspace" bind:this={wsSelectorEl}>
@@ -2734,6 +2744,27 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    text-decoration: none;
+  }
+
+  a.toolbar-logo:hover .toolbar-logo-text {
+    color: var(--text);
+  }
+
+  .logo-icon {
+    position: relative;
+    display: flex;
+  }
+
+  .update-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--peach);
+    border: 1px solid var(--base);
   }
 
   .toolbar-logo-text {

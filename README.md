@@ -1,6 +1,6 @@
 # lightjj
 
-A fast, powerful, single-binary jj client.
+A fast, powerful, single-binary [Jujutsu](https://docs.jj-vcs.dev/latest/community_tools/#lightjj) client.
 
 ![lightjj screenshot](screenshot.png)
 
