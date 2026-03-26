@@ -616,6 +616,17 @@ export interface InfoResponse {
   editor_configured: boolean
   default_remote: string
   log_revset: string  // user's revsets.log config; empty = jj's built-in default
+  jj_version: string  // `jj --version` output, e.g. "jj 0.39.0"; empty on failure
+}
+
+/** Minimum jj version for feature-gating. `debug index-changed-paths`
+ *  (file history) needs 0.30. */
+export const MIN_JJ_VERSION = [0, 30] as const
+
+/** Parse `jj 0.39.0` → [0, 39, 0]. Returns null on unparseable. */
+export function parseJJVersion(s: string): number[] | null {
+  const m = s.match(/(\d+)\.(\d+)(?:\.(\d+))?/)
+  return m ? [parseInt(m[1]), parseInt(m[2]), parseInt(m[3] ?? '0')] : null
 }
 
 export interface FileChange {

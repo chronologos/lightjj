@@ -4,6 +4,7 @@
   import { classifyBookmark, syncPriority, syncLabel, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
   import { fuzzyMatch } from './fuzzy'
   import { createConfirmGate } from './confirm-gate.svelte'
+  import { scrollIdxIntoView } from './scroll-into-view'
   import type { BookmarkOp } from './BookmarkModal.svelte'
 
   /** Gates for context-menu items — same source of truth as the d/f/t keys.
@@ -273,9 +274,7 @@
   })
 
   function scrollActiveIntoView() {
-    requestAnimationFrame(() => {
-      listEl?.querySelector('.bp-row-active')?.scrollIntoView({ block: 'nearest' })
-    })
+    scrollIdxIntoView(listEl, index)
   }
 
   function fire(op: BookmarkOp) {
@@ -482,6 +481,7 @@
             id="bp-row-{i}"
             class="bp-group-row"
             class:bp-row-active={i === index}
+            data-idx={i}
             onmousemove={() => { if (index !== i) index = i }}
             onclick={() => {
               const next = new Set(expandedGroups)
@@ -527,6 +527,7 @@
             class:bp-row-active={i === index}
             class:bp-row-matches-graph={matchesGraph}
             class:bp-row-hidden={!row.visibleInLog && row.remote !== '.'}
+            data-idx={i}
             onmousemove={() => { if (index !== i) index = i }}
             onclick={() => { if (row.jumpTarget ?? row.bm.commit_id) onjump(row.bm, row.jumpTarget) }}
             oncontextmenu={oncontextmenu ? (e: MouseEvent) => {

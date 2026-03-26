@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ConflictEntry } from './api'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
+  import { scrollIdxIntoView } from './scroll-into-view'
 
   interface QueueItem {
     commitId: string
@@ -44,7 +45,7 @@
   let listEl: HTMLElement | undefined = $state()
 
   function scrollTo(i: number) {
-    listEl?.querySelector(`[data-idx="${i}"]`)?.scrollIntoView({ block: 'nearest' })
+    scrollIdxIntoView(listEl, i)
   }
 
   // Keep idx synced with parent's current (for external jumps e.g. from DiffPanel).

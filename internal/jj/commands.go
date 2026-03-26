@@ -17,6 +17,11 @@ const (
 
 type CommandArgs = []string
 
+// Version returns args for `jj --version`. Output format: `jj 0.39.0`.
+func Version() CommandArgs {
+	return []string{"--version"}
+}
+
 // EscapeFileName wraps a path as a jj fileset pattern. Uses root-file: (not
 // file:) — callers pass paths from diff/template output, which are workspace-
 // root-relative. file: is cwd-relative and breaks in secondary workspaces AND

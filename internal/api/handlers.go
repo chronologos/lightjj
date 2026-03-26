@@ -496,7 +496,26 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"editor_configured": len(tmpl) > 0,
 		"default_remote":    s.DefaultRemote,
 		"log_revset":        s.ConfiguredLogRevset,
+		"jj_version":        s.resolveJJVersion(r.Context()),
 	})
+}
+
+// resolveJJVersion runs `jj --version` once and caches. Mutex+bool (not
+// sync.Once) so a transient failure (SSH slow-start) retries on next call
+// instead of caching "" forever.
+func (s *Server) resolveJJVersion(ctx context.Context) string {
+	s.jjVersionMu.Lock()
+	defer s.jjVersionMu.Unlock()
+	if s.jjVersionResolved {
+		return s.jjVersion
+	}
+	out, err := s.Runner.Run(ctx, jj.Version())
+	if err != nil {
+		return "" // don't set resolved — retry next time
+	}
+	s.jjVersion = strings.TrimSpace(string(out))
+	s.jjVersionResolved = true
+	return s.jjVersion
 }
 
 type workspacesResponse struct {

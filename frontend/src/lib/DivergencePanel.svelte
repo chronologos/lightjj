@@ -409,15 +409,15 @@
             {/each}
             <div class="confirm-hint">Rebase moves them (and their descendants) onto the keeper. Abandon discards their content.</div>
             <div class="confirm-actions">
-              <button class="btn-primary" onclick={confirmRebaseDescendants}
+              <button class="dp-btn-confirm" onclick={confirmRebaseDescendants}
                 title="jj rebase -s onto {pendingPlan.keeperCommitId.slice(0, 8)} — keeps their content, moves them to the winning stack">
                 Rebase onto keeper
               </button>
-              <button class="btn-danger" onclick={confirmAbandonDescendants}
+              <button class="dp-btn-abandon" onclick={confirmAbandonDescendants}
                 title="Discards their content">
                 Abandon anyway
               </button>
-              <button class="btn-secondary" onclick={() => pendingPlan = null}>Cancel</button>
+              <button class="dp-btn-cancel" onclick={() => pendingPlan = null}>Cancel</button>
             </div>
           </div>
         </div>
@@ -810,15 +810,15 @@
   .confirm-desc { color: var(--text); }
   .confirm-hint { margin-top: 10px; font-size: 11px; color: var(--overlay0); }
   .confirm-actions { display: flex; gap: 8px; margin-top: 14px; }
-  .btn-primary {
+  .dp-btn-confirm {
     padding: 4px 12px; background: var(--green); color: var(--crust);
     border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600;
   }
-  .btn-danger {
+  .dp-btn-abandon {
     padding: 4px 12px; background: var(--red); color: var(--crust);
     border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600;
   }
-  .btn-secondary {
+  .dp-btn-cancel {
     padding: 4px 12px; background: transparent; color: var(--subtext0);
     border: 1px solid var(--surface1); border-radius: 3px; cursor: pointer; font-size: 11px;
   }

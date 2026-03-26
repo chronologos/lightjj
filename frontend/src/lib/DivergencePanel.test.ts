@@ -175,7 +175,7 @@ describe('DivergencePanel — confirm flow', () => {
     const { container } = render(DivergencePanel, { props: { changeId: 'X', ...h } })
     await settle()
     await fireEvent.click(container.querySelectorAll('.keep-btn')[1])
-    await fireEvent.click(container.querySelector('.btn-danger')!)  // "Abandon anyway"
+    await fireEvent.click(container.querySelector('.dp-btn-abandon')!)  // "Abandon anyway"
     expect(h.onkeep).toHaveBeenCalledOnce()
     const plan = h.onkeep.mock.calls[0][0]
     expect(plan.abandonCommitIds).toContain('desc')
@@ -189,7 +189,7 @@ describe('DivergencePanel — confirm flow', () => {
     const { container } = render(DivergencePanel, { props: { changeId: 'X', ...h } })
     await settle()
     await fireEvent.click(container.querySelectorAll('.keep-btn')[1])
-    await fireEvent.click(container.querySelector('.btn-primary')!)  // "Rebase onto keeper"
+    await fireEvent.click(container.querySelector('.dp-btn-confirm')!)  // "Rebase onto keeper"
     expect(h.onkeep).toHaveBeenCalledOnce()
     const plan = h.onkeep.mock.calls[0][0]
     expect(plan.rebaseSources).toEqual(['desc'])
@@ -203,7 +203,7 @@ describe('DivergencePanel — confirm flow', () => {
     const { container } = render(DivergencePanel, { props: { changeId: 'X', ...h } })
     await settle()
     await fireEvent.click(container.querySelectorAll('.keep-btn')[1])
-    await fireEvent.click(container.querySelector('.btn-secondary')!)  // "Cancel"
+    await fireEvent.click(container.querySelector('.dp-btn-cancel')!)  // "Cancel"
     expect(h.onkeep).not.toHaveBeenCalled()
     expect(container.querySelector('.confirm-overlay')).toBeNull()
   })

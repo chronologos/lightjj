@@ -2,6 +2,7 @@
   import { api, type LogEntry } from './api'
   import { createLoader } from './loader.svelte'
   import { relativeTime, firstLine } from './time-format'
+  import { scrollIdxIntoView } from './scroll-into-view'
 
   interface Props {
     path: string
@@ -66,9 +67,7 @@
   let listEl: HTMLElement | undefined = $state()
 
   function scrollTo(i: number) {
-    // Query by data-idx (static attr) — the $state write hasn't re-rendered
-    // yet when this runs synchronously. Same pattern as ConflictQueue bug_008.
-    listEl?.querySelector(`[data-idx="${i}"]`)?.scrollIntoView({ block: 'nearest' })
+    scrollIdxIntoView(listEl, i)
   }
 
   export function moveCursor(i: number) {

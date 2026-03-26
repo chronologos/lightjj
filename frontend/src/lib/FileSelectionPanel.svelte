@@ -2,6 +2,7 @@
   import type { SvelteSet } from 'svelte/reactivity'
   import { FILE_TYPE_LABELS, type FileChange } from './api'
   import type { ContextMenuHandler } from './ContextMenu.svelte'
+  import { scrollIdxIntoView } from './scroll-into-view'
 
   interface Props {
     /** Drives title + count-suffix labels. All three modes use identical
@@ -26,9 +27,7 @@
   }
 
   function scrollCursorIntoView() {
-    requestAnimationFrame(() => {
-      listEl?.querySelector('.file-select-active')?.scrollIntoView({ block: 'nearest' })
-    })
+    scrollIdxIntoView(listEl, cursorIdx)
   }
 
   function selectAll() {
@@ -109,6 +108,7 @@
         class="file-select-row"
         class:file-select-active={i === cursorIdx}
         class:file-checked={selected.has(file.path)}
+        data-idx={i}
         onclick={() => { cursorIdx = i; ontoggle(file.path) }}
         oncontextmenu={(e) => handleRowContextMenu(e, i, file.path)}
         onmouseenter={() => { cursorIdx = i }}

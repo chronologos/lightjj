@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, wireAutoRefresh, clearAllCaches, parseJJVersion, MIN_JJ_VERSION, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
@@ -606,12 +606,17 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path, editor_configured, default_remote, log_revset } = await api.info()
+      const { hostname, repo_path, editor_configured, default_remote, log_revset, jj_version } = await api.info()
       document.title = formatTitle(hostname, repo_path)
       editorConfigured = editor_configured
       defaultRemote = default_remote
       repoPath = repo_path
       configuredLogRevset = log_revset
+      const v = parseJJVersion(jj_version)
+      if (v && (v[0] < MIN_JJ_VERSION[0] || (v[0] === MIN_JJ_VERSION[0] && v[1] < MIN_JJ_VERSION[1]))) {
+        setMessage({ kind: 'warning',
+          text: `jj ${v[0]}.${v[1]} detected — some features need ≥${MIN_JJ_VERSION[0]}.${MIN_JJ_VERSION[1]} (file history, changed-path index)` })
+      }
     } catch { /* static <title> fallback + editorConfigured stays false (fail-safe) */ }
   }
 
@@ -1469,6 +1474,12 @@
     }
 
     const revision = split.revision
+    // Look up the source commit by split.revision (frozen at mode entry).
+    // selectedRevision tracks the CURSOR, which mouse clicks can move during
+    // split mode (diffFrozen → selectRevisionCursorOnly) — reading its
+    // parent_ids or description here would use the wrong commit's data.
+    const sourceEntry = revisions.find(r => effectiveId(r.commit) === revision)
+    const sourceDesc = fullDescription
     const typeOf = (path: string) => normalizeFileType(
       changedFiles.find(f => f.path === path)?.type ?? 'M'
     )
@@ -1501,7 +1512,7 @@
     // a DIFFERENT tree → applyHunks aligns hunks computed against an N-line
     // auto-merge onto a K-line parent → silently corrupt output. Block it.
     // File-level (no-partials fallback above) still works for merges.
-    const parents = selectedRevision?.commit.parent_ids ?? []
+    const parents = sourceEntry?.commit.parent_ids ?? []
     if (parents.length > 1) {
       setMessage({ kind: 'warning',
         text: "Per-hunk review on merge commits isn't supported. Use a/n to toggle whole files." })
@@ -1526,7 +1537,7 @@
         // description; the second keeps the original. `-m ""` would wipe the
         // accepted commit's description → user loses their message on the
         // half that matters. Pass what we already have loaded.
-        const result = await api.splitHunks(revision, spec, fullDescription)
+        const result = await api.splitHunks(revision, spec, sourceDesc)
         cancelInlineModes()
         setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${accepted}/${total} hunks)`, result))
         clearChecks()

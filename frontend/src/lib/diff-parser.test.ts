@@ -113,13 +113,16 @@ Binary file differs`
   })
 
   it('parses hunk line numbers from @@ header', () => {
+    // newCount is reconciled from actual parsed lines (not the header's
+    // claimed count) — context-expand uses newStart+newCount for gap bounds.
     const raw = `Modified regular file src/main.go:
-@@ -10,5 +12,8 @@
+@@ -10,5 +12,3 @@
  context
-+added`
++added
+ trailing`
     const files = parseDiffContent(raw)
     expect(files[0].hunks[0].newStart).toBe(12)
-    expect(files[0].hunks[0].newCount).toBe(8)
+    expect(files[0].hunks[0].newCount).toBe(3)
   })
 
   it('parses hunk line numbers without count (defaults to 1)', () => {

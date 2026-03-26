@@ -81,6 +81,12 @@ export function parseDiffContent(raw: string): DiffFile[] {
     if (!file.filePath) {
       file.filePath = filePathFromHeader(file.header)
     }
+    // Reconcile newCount with actual parsed lines. context-expand.ts uses
+    // newStart+newCount for gap boundaries; a header/content mismatch
+    // (truncated diff, malformed input) would duplicate lines on expand.
+    for (const h of file.hunks) {
+      h.newCount = h.lines.filter(l => l.type !== 'remove').length
+    }
   }
 
   return files

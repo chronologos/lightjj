@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type LogEntry } from './api'
-  import { createLoader } from './loader.svelte'
+  import { createLoader, DIFF_LOAD_DEBOUNCE_MS } from './loader.svelte'
   import { parseDiffContent } from './diff-parser'
   import { relativeTime, firstLine } from './time-format'
   import { tick } from 'svelte'
@@ -49,7 +49,7 @@
     if (!selectedId || isSelf) { diff.reset(); return }
     const id = selectedId
     clearTimeout(debounce)
-    debounce = setTimeout(() => diff.load(id), 50)
+    debounce = setTimeout(() => diff.load(id), DIFF_LOAD_DEBOUNCE_MS)
     return () => clearTimeout(debounce)
   })
 

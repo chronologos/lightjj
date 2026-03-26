@@ -2,6 +2,7 @@
   import { tick } from 'svelte'
   import { api, type Bookmark } from './api'
   import { fuzzyMatch } from './fuzzy'
+  import { scrollIdxIntoView } from './scroll-into-view'
 
   // Structured op — presentation decided in template, not here.
   // Raw command line is derived: `git ${type} ${flags.join(' ')}`
@@ -142,9 +143,7 @@
   }
 
   function scrollActiveIntoView() {
-    requestAnimationFrame(() => {
-      modalEl?.querySelector('.git-item-active')?.scrollIntoView({ block: 'nearest' })
-    })
+    scrollIdxIntoView(modalEl, index)
   }
 
   function cycleRemote(delta: 1 | -1) {
@@ -279,6 +278,7 @@
               id="git-opt-{globalIndex}"
               class="git-item"
               class:git-item-active={globalIndex === index}
+              data-idx={globalIndex}
               onmousemove={() => { if (index !== globalIndex) index = globalIndex }}
               onclick={() => execute(op)}
               role="option"

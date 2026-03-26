@@ -108,10 +108,12 @@ type StaleImmutableEntry struct {
 // Full commit_id (not .short()) — these IDs flow into jj abandon -r via the
 // cleanup path. Short prefixes risk ambiguity in large repos. change_id stays
 // .short() since it's display-only (the grouping key, never used in commands).
+// Bookmarks join on \x1E — same rationale as divergenceTemplate (commas are
+// valid in git refs; join(",") would split `fix,bug` into phantoms).
 const staleImmutableTemplate = `change_id.short() ++ "\x1F" ++ ` +
 	`commit_id ++ "\x1F" ++ ` +
-	`local_bookmarks.map(|b| b.name()).join(",") ++ "\x1F" ++ ` +
-	`remote_bookmarks.map(|b| b.name() ++ "@" ++ b.remote()).join(",") ++ "\x1F" ++ ` +
+	`local_bookmarks.map(|b| b.name()).join("\x1E") ++ "\x1F" ++ ` +
+	`remote_bookmarks.map(|b| b.name() ++ "@" ++ b.remote()).join("\x1E") ++ "\x1F" ++ ` +
 	`description.first_line() ++ "\n"`
 
 // StaleImmutable returns args for the stale-immutable detection log call.
@@ -141,8 +143,8 @@ func ParseStaleImmutable(output string) []StaleImmutableEntry {
 		entries = append(entries, StaleImmutableEntry{
 			ChangeId:        f[0],
 			CommitId:        f[1],
-			LocalBookmarks:  splitNonEmpty(f[2], ","),
-			RemoteBookmarks: splitNonEmpty(f[3], ","),
+			LocalBookmarks:  splitNonEmpty(f[2], "\x1E"),
+			RemoteBookmarks: splitNonEmpty(f[3], "\x1E"),
 			Description:     f[4],
 		})
 	}

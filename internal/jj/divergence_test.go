@@ -120,6 +120,13 @@ func TestParseStaleImmutable_Empty(t *testing.T) {
 	assert.Equal(t, []StaleImmutableEntry{}, got)
 }
 
+func TestParseStaleImmutable_CommaInBookmarkName(t *testing.T) {
+	// Commas are valid in git refs. \x1E delimiter keeps `fix,bug` intact.
+	output := "spzmpxnu\x1Fabc\x1Ffix,bug\x1Emain\x1F\x1Fdesc\n"
+	got := ParseStaleImmutable(output)
+	assert.Equal(t, []string{"fix,bug", "main"}, got[0].LocalBookmarks)
+}
+
 func TestParseStaleImmutable_MalformedLine(t *testing.T) {
 	got := ParseStaleImmutable("only\x1Ftwo-fields\n")
 	assert.Equal(t, []StaleImmutableEntry{}, got)

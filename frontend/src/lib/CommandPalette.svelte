@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fuzzyMatch } from './fuzzy'
+  import { scrollIdxIntoView } from './scroll-into-view'
 
   export interface PaletteCommand {
     label: string
@@ -23,6 +24,7 @@
   let query: string = $state('')
   let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
+  let resultsEl: HTMLElement | undefined = $state(undefined)
 
   let availableCommands = $derived.by(() => {
     if (!open) return []
@@ -72,10 +74,7 @@
   }
 
   function scrollActiveIntoView() {
-    requestAnimationFrame(() => {
-      const el = document.querySelector('.palette-item-active')
-      el?.scrollIntoView({ block: 'nearest' })
-    })
+    scrollIdxIntoView(resultsEl, index)
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -159,11 +158,12 @@
         {/if}
       </div>
     {:else}
-      <div class="palette-results">
+      <div class="palette-results" bind:this={resultsEl}>
         {#each filteredCommands as cmd, i}
           <button
             class="palette-item"
             class:palette-item-active={i === index}
+            data-idx={i}
             onclick={() => execute(cmd)}
             onmouseenter={() => { index = i }}
           >

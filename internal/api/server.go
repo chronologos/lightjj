@@ -50,6 +50,13 @@ type Server struct {
 	// Watcher provides SSE auto-refresh. Nil only on --no-watch or constructor
 	// failure. Set by main.go after NewServer; routes() tolerates nil.
 	Watcher *Watcher
+
+	// jjVersion is the `jj --version` output (e.g. "jj 0.39.0"). Lazy-resolved
+	// on first handleInfo. Mutex+bool (not sync.Once) so a transient failure
+	// retries — same pattern as ghRepo.
+	jjVersion         string
+	jjVersionResolved bool
+	jjVersionMu       sync.Mutex
 }
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {

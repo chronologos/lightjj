@@ -4,6 +4,7 @@
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
   import { createConfirmGate } from './confirm-gate.svelte'
+  import { scrollIdxIntoView } from './scroll-into-view'
   import { trackOptions, type TrackOption } from './bookmark-sync'
 
   export interface BookmarkOp {
@@ -115,9 +116,7 @@
   }
 
   function scrollActiveIntoView() {
-    requestAnimationFrame(() => {
-      modalEl?.querySelector('.bm-item-active')?.scrollIntoView({ block: 'nearest' })
-    })
+    scrollIdxIntoView(modalEl, index)
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -271,6 +270,7 @@
             id="bm-opt-{i}"
             class="bm-item"
             class:bm-item-active={i === index}
+            data-idx={i}
             onmousemove={() => { if (index !== i) { index = i; disarm() } }}
             onclick={() => moveSelected(bm)}
             role="option"

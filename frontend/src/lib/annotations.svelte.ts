@@ -71,14 +71,21 @@ export function reanchor(
     } else if (h.oldStart <= ann.lineNum) {
       // Hunk spans the annotation's line — it may have been deleted or
       // rewritten. Check for exact content within this hunk's new-side.
+      // Duplicated content (blank lines, `}`, `return null`) can match at
+      // multiple positions; prefer the one closest to the delta-adjusted
+      // line so positionally-correct matches win over first-match.
       let n = h.newStart
+      let best = -1
       for (const l of h.lines) {
         if (l.type === 'remove') continue
         if (l.content.slice(1) === ann.lineContent) {
-          return { lineNum: n, status: 'open' }
+          if (best < 0 || Math.abs(n - adjusted) < Math.abs(best - adjusted)) {
+            best = n
+          }
         }
         n++
       }
+      if (best >= 0) return { lineNum: best, status: 'open' }
       // Not found in the spanning hunk → likely deleted.
       return { lineNum: adjusted, status: 'orphaned' }
     }
@@ -303,8 +310,9 @@ export function createAnnotationStore(): AnnotationStore {
   async function clear() {
     if (!loadedChangeId) return
     return withBusy(async () => {
-      bumpGen()
+      const gen = bumpGen()
       await api.clearAnnotations(loadedChangeId!)
+      if (gen !== loadGen) return
       list = []
     })
   }

@@ -1023,7 +1023,11 @@ func TestHandleGetDescription_MissingRevision(t *testing.T) {
 }
 
 func TestHandleInfo(t *testing.T) {
-	srv := newTestServer(testutil.NewMockRunner(t))
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.Version()).SetOutput([]byte("jj 0.39.0\n"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
 	srv.Hostname = "myhost"
 	srv.RepoPath = "/home/user/repo"
 
@@ -1039,6 +1043,7 @@ func TestHandleInfo(t *testing.T) {
 	assert.Equal(t, true, got["ssh_mode"]) // newTestServer passes RepoDir=""
 	assert.Equal(t, "origin", got["default_remote"]) // NewServer's baseline
 	assert.Equal(t, "", got["log_revset"])            // unset by newTestServer
+	assert.Equal(t, "jj 0.39.0", got["jj_version"])
 }
 
 func TestHandleRemotes(t *testing.T) {

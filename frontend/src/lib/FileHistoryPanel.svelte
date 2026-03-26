@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type LogEntry } from './api'
-  import { createLoader } from './loader.svelte'
+  import { createLoader, DIFF_LOAD_DEBOUNCE_MS } from './loader.svelte'
   import { parseDiffContent } from './diff-parser'
   import { relativeTime, firstLine } from './time-format'
   import DiffFileView from './DiffFileView.svelte'
@@ -62,7 +62,7 @@
     const a = revA.commit.commit_id
     const b = revB.commit.commit_id
     clearTimeout(debounce)
-    debounce = setTimeout(() => diff.load(b, a), 50)
+    debounce = setTimeout(() => diff.load(b, a), DIFF_LOAD_DEBOUNCE_MS)
     return () => clearTimeout(debounce)
   })
 

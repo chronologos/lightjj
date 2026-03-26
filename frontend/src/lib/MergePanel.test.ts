@@ -213,11 +213,11 @@ describe('MergePanel — block navigation', () => {
     const { container } = render(MergePanel, { props: threeBlocks() })
     const panel = container.querySelector('.merge-panel')!
     const rings = () => container.querySelectorAll('.merge-arrow-current')
-    // Initially block 0: 2 arrows (ours + theirs) have the ring.
-    expect(rings().length).toBe(2)
+    // Initially block 0: 3 arrows (ours + theirs + both) have the ring.
+    expect(rings().length).toBe(3)
     await fireEvent.keyDown(panel, { key: ']' })
-    // Still 2 — ring moved to block 1's pair.
-    expect(rings().length).toBe(2)
+    // Still 3 — ring moved to block 1's trio.
+    expect(rings().length).toBe(3)
     const oursArrows = container.querySelectorAll('.merge-arrow-ours')
     expect(oursArrows[1].classList.contains('merge-arrow-current')).toBe(true)
     expect(oursArrows[0].classList.contains('merge-arrow-current')).toBe(false)

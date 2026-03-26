@@ -3,6 +3,9 @@
 // latest-started load's result is ever applied. Resolves the "stale fetch
 // overwrites fresh state" problem once, testably.
 
+/** Shared debounce for diff-load-on-nav (FileHistoryPanel, FileComparePicker). */
+export const DIFF_LOAD_DEBOUNCE_MS = 50
+
 export interface Loader<T, A extends unknown[]> {
   /** Current loaded value. Starts at `initial`, resets to `initial` on error. */
   readonly value: T
