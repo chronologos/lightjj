@@ -668,6 +668,20 @@
             title={slot.source === 'theirs' ? 'Already using theirs' : 'Take theirs for this hunk'}
             aria-label="Take theirs for hunk {i + 1}"
           >←</button>
+          {#if !oursArrows[i]?.empty}
+            <!-- Both-sides non-empty is planTakeBoth's precondition; hide otherwise. -->
+            <button
+              class="merge-arrow merge-arrow-both"
+              class:merge-arrow-applied={slot.source === 'both'}
+              class:merge-arrow-current={i === currentBlockIdx}
+              style="transform: translateY({slot.y - scrollTop + 20}px)"
+              onmouseenter={() => hoveredBlockIdx = i}
+              onmouseleave={() => hoveredBlockIdx = -1}
+              onclick={() => takeBoth(i)}
+              title={slot.source === 'both' ? 'Already has both' : 'Take both (ours + theirs, b)'}
+              aria-label="Take both for hunk {i + 1}"
+            >⇄</button>
+          {/if}
         {/if}
       {/each}
     </div>
@@ -920,6 +934,16 @@
   }
   .merge-arrow-theirs:hover:not(.merge-arrow-applied) {
     background: var(--blue);
+    color: var(--base);
+  }
+  .merge-arrow-both {
+    background: linear-gradient(135deg,
+      color-mix(in srgb, var(--green) 25%, var(--surface0)),
+      color-mix(in srgb, var(--blue) 25%, var(--surface0)));
+    color: var(--text);
+  }
+  .merge-arrow-both:hover:not(.merge-arrow-applied) {
+    background: linear-gradient(135deg, var(--green), var(--blue));
     color: var(--base);
   }
   .merge-arrow-applied {
