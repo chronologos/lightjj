@@ -1,6 +1,7 @@
 # Merge Mode & File History — Design Plan
 
-**Status:** Proposed
+> **STATUS**: Shipped across v1.4.0–v1.7.1. Phase 1 (MergePanel polish) → v1.4.0; Phase 2 (merge mode + ConflictQueue) → v1.5.x; Phase 3 (FileHistoryPanel) → v1.6.x–v1.7.0; Phase 4.3 (take-both) → v1.7.1. Open items (4.1 ribbons, 4.2 base popup, 4.4 auto-resolve trivial, 3.5 merge↔history bridge) remain in [BACKLOG.md](../../../BACKLOG.md).
+
 **Inspired by:** Kaleidoscope (file history + commit context + intuitive merge UI)
 
 ## Problem Statement

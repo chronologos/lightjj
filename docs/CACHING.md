@@ -26,7 +26,7 @@ stay valid across arbitrary operations.
 
 | # | Cache | Location | Key format | Keyed by | Size | Invalidation |
 |---|---|---|---|---|---|---|
-| 1 | `cache` (response) | api.ts module | `diff:${cid}` · `files:${cid}` · `desc:${cid}` · `diff:${id}:${file}:ctx${n}` | commit_id | `MAX_CACHE_SIZE` | self-invalidating |
+| 1 | `cache` (response) | api.ts module | `diff:${cid}` · `files:${cid}` · `desc:${cid}` · `diff:${id}:${file}:ctx${n}` · `range:${from}\x1F${to}\x1F${sortedFiles}` | commit_id | `MAX_CACHE_SIZE` | self-invalidating |
 | 2 | `_remotes`/`_aliases`/`_info` | api.ts module | promise memo | repo identity | single-slot | `clearSessionMemos()` on tab-switch / hard-refresh |
 | 3 | Browser HTTP disk cache | browser | `/api/revision?...&immutable=1` URL | commit_id | browser-managed | `Cache-Control: immutable` — never |
 | 4 | `derivedCache` | diff-cache.ts | `diffTargetKey(t)` = commit_id OR `connected(a\|b\|c)` | commit_id-embedding | `DERIVED_CACHE_SIZE` | self-invalidating · `clearDiffCaches()` on hard-refresh |
@@ -36,9 +36,10 @@ stay valid across arbitrary operations.
 **Explicitly uncached:** `api.evolog()`, `api.divergence()`, `api.annotations()`,
 `api.log()` — see the code comment above each for why.
 
-**Out of scope:** `config.svelte.ts` (user prefs, localStorage + `/api/config`)
-and `recent-actions.svelte.ts` (localStorage frequency counter) are preference
-stores, not revision caches — no coherence relationship with commit_id/op-id.
+**Out of scope:** `config.svelte.ts` (user prefs, `/api/config` + localStorage
+write-through + `storage` event cross-tab sync) and `recent-actions.svelte.ts`
+(frequency counter, stored in `config.recentActions`) are preference stores,
+not revision caches — no coherence relationship with commit_id/op-id.
 
 ---
 
@@ -54,6 +55,7 @@ callers**:
 | `diff:${cid}` | `api.diff()`, `fetchRevision()` batch |
 | `files:${cid}` | `api.files()`, `fetchRevision()`, `prefetchFilesBatch()` |
 | `desc:${cid}` | `api.description()`, `fetchRevision()` |
+| `range:${from}\x1F${to}\x1F...` | `api.diffRange()` — uses `\x1F` delimiter since paths can contain `:`; file list sorted via `[...files].sort()` so caller argument order doesn't matter |
 
 **Batch-vs-individual shape coherence.** `fetchRevision()` must seed each key
 with a shape byte-identical to what the individual endpoint returns. If
@@ -192,4 +194,4 @@ commit_id-keyed data is valid regardless of which tab fetched it.
 
 ## Gaps
 
-None currently open. See BACKLOG.md ("Cache coherence") for the audit trail.
+None currently open.

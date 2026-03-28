@@ -63,6 +63,48 @@ The revision graph uses multiple colors to distinguish parallel branches:
 
 ---
 
+## Component Primitives
+
+Shared UI primitives live in `theme.css` (global scope, not Svelte-scoped). Component CSS adds only layout/positioning overrides. Don't redefine these per-component.
+
+### Buttons
+
+| Class | Look | Use |
+|---|---|---|
+| `.btn` | Ghost (border-only, fills on hover) | Default action |
+| `.btn.btn-sm` | Compact padding | Toolbars, inline actions |
+| `.btn.btn-primary` | Filled amber | Primary/confirm action |
+| `.btn.btn-danger` | Red outline → fill on hover | Destructive action |
+
+### Segmented toggle
+
+`.seg` container + `.seg-btn` children + `.active` modifier. Amber active state.
+
+### Panel & modal chrome
+
+| Class | |
+|---|---|
+| `.panel-header` | Top bar of a panel (flex, border-bottom) |
+| `.panel-title` | Panel header text |
+| `.modal-backdrop` | Full-screen dimmer |
+| `.modal` | Centered dialog box |
+| `.modal-header` | Modal title bar |
+| `.modal-input` | Text input inside a modal |
+
+### Misc
+
+| Class | |
+|---|---|
+| `.close-btn` | Borderless × dismiss button |
+| `.placeholder-text` | Dimmed italic "(no description)" |
+| `.nav-hint` | `<kbd>` badge for keyboard shortcuts |
+
+### Known collisions (deferred)
+
+`StatusBar .mode-badge` and `RevisionGraph .mode-badge` share a class name with different semantics (amber-filled vs base+modifiers). Rename one before any global extraction.
+
+---
+
 ## Conflicts: Both sides red
 
 Both conflict sides use **red** — because conflict = needs attention = red.

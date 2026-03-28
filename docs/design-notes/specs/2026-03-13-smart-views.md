@@ -1,5 +1,7 @@
 # Plan: Smart Views (revised)
 
+> **STATUS**: Shipped. `STATIC_PRESETS` + `prsRevset` + `viewLabel` + `.preset-chip` all live in `App.svelte`; `RevisionGraph` takes `viewLabel: string | null`.
+
 ## What changed from v1
 
 Three reviewers converged on the same conclusion: the original plan conflated two unrelated things under "views" — (a) revset-apply buttons and (b) the bookmarks list surface. `BACKLOG:7` says "bookmarks becomes one of the views" — that's a MEANS dressed up as an END. The END is "one-click revset access".

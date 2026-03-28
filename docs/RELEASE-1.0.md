@@ -71,13 +71,13 @@ Status: **released** · Version: `1.0.0`
 
 ---
 
-## Punted to 1.x
+## Punted to 1.x (historical — several have since shipped)
 
-| Item | Why |
+| Item | Status |
 |---|---|
-| `recent-actions` localStorage port loss | Soft degrade (alphabetical instead of recent-first in BookmarkModal). Config already server-side. |
-| `selectedFiles` scratchpad / revset input ownership / `RepoDir == ""` sentinel | Internal debt, zero user impact |
-| `storage` event listener | Two tabs same port is rare; random-port default makes it rarer |
+| `recent-actions` localStorage port loss | **Shipped v1.7.3** — moved to `config.recentActions` (server-side) |
+| `storage` event listener | **Shipped v1.7.3** — cross-tab config sync via `storage` event |
+| `selectedFiles` scratchpad / revset input ownership / `RepoDir == ""` sentinel | Still open (internal debt, see BACKLOG.md) |
 
 ---
 

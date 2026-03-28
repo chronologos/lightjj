@@ -1,5 +1,7 @@
 # Plan: extract divergence actions from App.svelte
 
+> **STATUS**: Shipped. `frontend/src/lib/divergence-actions.ts` + `divergence-actions.test.ts` exist; App.svelte call sites inlined as designed.
+
 ## Goal
 
 First bite of the 2882-line App.svelte that doesn't touch the mode-state hairball. Drops ~65 lines. Also gets the rebase→abandon→bookmark **ORDER** (which the comment at `:1172-1179` says is load-bearing) under test — it currently isn't.

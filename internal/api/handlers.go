@@ -372,7 +372,7 @@ func (s *Server) handleFileHistory(w http.ResponseWriter, r *http.Request) {
 // can take minutes (the inline-in-handleFileHistory approach hit the 30s read
 // timeout → context cancel → exit -1). Not a true mutation (op-log unchanged),
 // but streamMutation's no-timeout path is what we need; the trailing op-id
-// refresh is a harmless no-op. Unbounded — for monorepo-scale repos (1M+
+// refresh is a harmless no-op. Unbounded — for very large repos (1M+
 // commits, 10+min build) the frontend recommends running the CLI directly
 // where jj's TTY-gated progress bar works.
 func (s *Server) handleIndexPaths(w http.ResponseWriter, r *http.Request) {
