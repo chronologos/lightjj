@@ -59,7 +59,11 @@ export function routeKeydown(c: GateCtx, h: GateHandlers): void {
   if (c.activeView === 'branches') {
     if (c.defaultPrevented) return
     if (h.delegateBranches()) return
-    h.globalKeys()
+    if (h.globalKeys()) return
+    // Fall through to logKeys so Space/@/n etc work on the still-visible
+    // RevisionGraph. j/k conflict is moot — BookmarksPanel claims those via
+    // preventDefault() so they never reach here.
+    h.logKeys()
     return
   }
   if (c.activeView === 'merge') {

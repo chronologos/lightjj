@@ -1891,8 +1891,8 @@
       case ']': e.preventDefault(); diffPanelRef?.stepFile(1); break
       case '[': e.preventDefault(); diffPanelRef?.stepFile(-1); break
       case 'm': e.preventDefault(); diffPanelRef?.togglePreviewActive(); break
-      case 'E': e.preventDefault(); toggleEvolog(); break
-      case 'O': e.preventDefault(); toggleOplog(); break
+      case 'E': e.preventDefault(); switchToLogView(); toggleEvolog(); break
+      case 'O': e.preventDefault(); switchToLogView(); toggleOplog(); break
       case '@': e.preventDefault(); if (workingCopyIndex >= 0) selectRevision(workingCopyIndex); break
       case 'n':
         e.preventDefault()
@@ -2264,6 +2264,7 @@
             {viewLabel}
             {lastCheckedIndex}
             onselect={diffFrozen || activeView !== 'log' ? selectRevisionCursorOnly : selectRevision}
+            ontogglecheck={toggleCheck}
             onrangecheck={rangeCheck}
             oncontextmenu={openRevisionContextMenu}
             onresolvedivergence={(cid) => divergence.enter(cid)}

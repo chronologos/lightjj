@@ -35,7 +35,7 @@ describe('routeKeydown — gate priority', () => {
   // LAST handler called — earlier handlers in the chain return false (default).
   it.each<[string, Partial<GateCtx>, keyof GateHandlers]>([
     ['plain j in log view → logKeys', {}, 'logKeys'],
-    ['j in branches → globalKeys (after delegate falls through)', { activeView: 'branches' }, 'globalKeys'],
+    ['j in branches → logKeys (delegate + globalKeys fall through)', { activeView: 'branches' }, 'logKeys'],
     ['j in merge → globalKeys (after delegate falls through)', { activeView: 'merge' }, 'globalKeys'],
     ['Escape in log → escapeStack', { key: 'Escape' }, 'escapeStack'],
     ['Escape in merge → mergeEscape (NOT escapeStack)', { key: 'Escape', activeView: 'merge' }, 'mergeEscape'],
@@ -122,10 +122,17 @@ describe('routeKeydown — gate priority', () => {
       expect(calls).not.toContain('logKeys')
     })
 
-    it('branches: delegate falls through → globalKeys terminal (no logKeys)', () => {
+    it('branches: delegate falls through → globalKeys → logKeys (Space on visible graph)', () => {
       const { h, calls } = harness()
       routeKeydown(ctx({ activeView: 'branches' }), h)
-      expect(calls).toEqual(['globalOverrides', 'inlineCommit', 'delegateBranches', 'globalKeys'])
+      expect(calls).toEqual(['globalOverrides', 'inlineCommit', 'delegateBranches', 'globalKeys', 'logKeys'])
+    })
+
+    it('branches: globalKeys handles → logKeys NOT called', () => {
+      const { h, calls } = harness({ globalKeys: true })
+      routeKeydown(ctx({ key: '2', activeView: 'branches' }), h)
+      expect(calls.at(-1)).toBe('globalKeys')
+      expect(calls).not.toContain('logKeys')
     })
 
     it('merge: delegate falls through → globalKeys terminal', () => {

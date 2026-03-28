@@ -24,6 +24,7 @@
     viewLabel: string | null
     lastCheckedIndex: number
     onselect: (index: number) => void
+    ontogglecheck: (changeId: string, index: number) => void
     onrangecheck: (from: number, to: number) => void
     oncontextmenu: (changeId: string, x: number, y: number) => void
     onresolvedivergence: (changeId: string) => void
@@ -42,7 +43,7 @@
 
   let {
     revisions, selectedIndex, checkedRevisions, loading, mutating, viewLabel, lastCheckedIndex,
-    onselect, onrangecheck, oncontextmenu, onresolvedivergence,
+    onselect, ontogglecheck, onrangecheck, oncontextmenu, onresolvedivergence,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onbookmarkclick,
     rebase, squash, split,
@@ -325,11 +326,19 @@
           class:hidden-rev={line.isHidden}
           class:immutable={line.isImmutable}
           onclick={(e: MouseEvent) => {
-            if (e.shiftKey && line.isNode && lastCheckedIndex >= 0) {
-              e.preventDefault()
-              onrangecheck(lastCheckedIndex, line.entryIndex)
-            } else {
+            const modifier = e.metaKey || e.ctrlKey || e.shiftKey
+            if (!line.isNode || !modifier || anyModeActive || isRefreshing) {
               onselect(line.entryIndex)
+              return
+            }
+            e.preventDefault()
+            if (e.metaKey || e.ctrlKey) {
+              ontogglecheck(line.eid, line.entryIndex)
+            } else {
+              // Shift: anchor from last check, else cursor (click A → shift-click B = range A..B).
+              const anchor = lastCheckedIndex >= 0 ? lastCheckedIndex : selectedIndex
+              if (anchor >= 0) onrangecheck(anchor, line.entryIndex)
+              else ontogglecheck(line.eid, line.entryIndex)
             }
           }}
           oncontextmenu={(e: MouseEvent) => {
