@@ -2107,18 +2107,21 @@
             class:active={activeView === 'log'}
             onclick={() => { if (!inlineMode) switchToLogView() }}
             disabled={inlineMode}
+            title="Revision graph — main working view (1)"
           >◉ Revisions <kbd class="nav-hint">1</kbd></button>
           <button
             class="seg-btn"
             class:active={activeView === 'branches'}
             onclick={() => { if (!inlineMode) switchToBranchesView() }}
             disabled={inlineMode}
+            title="Bookmarks panel — sync state at a glance (2)"
           >⑂ Branches <kbd class="nav-hint">2</kbd></button>
           <button
             class="seg-btn"
             class:active={activeView === 'merge'}
             onclick={() => { if (!inlineMode) switchToMergeView() }}
             disabled={inlineMode}
+            title="Merge view — 3-pane conflict resolver (3)"
           >⧉ Merge <kbd class="nav-hint">3</kbd></button>
         </nav>
         <span class="toolbar-divider"></span>
@@ -2130,6 +2133,7 @@
           class:toolbar-nav-active={oplogOpen}
           onclick={() => { if (!inlineMode) { switchToLogView(); toggleOplog() } }}
           disabled={inlineMode}
+          title="Operation log — undo/restore any op (4)"
         >⟲ Oplog <kbd class="nav-hint">4</kbd></button>
         <!-- Not gated on selectedRevision — toggleEvolog already handles the
              null case (panel opens empty, populates once a revision is
@@ -2139,6 +2143,7 @@
           class:toolbar-nav-active={evologOpen}
           onclick={() => { if (!inlineMode) { switchToLogView(); toggleEvolog() } }}
           disabled={inlineMode}
+          title="Evolution log — how this change evolved (5)"
         >◐ Evolog <kbd class="nav-hint">5</kbd></button>
         <span class="toolbar-divider"></span>
         <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">
