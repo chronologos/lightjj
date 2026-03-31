@@ -24,6 +24,56 @@
   const NODE_GAP = 7
 
   const NODE_CHARS = new Set(['@', '○', '◆', '×', '◌'])
+  const HORIZ_CHARS = new Set(['─', '├', '┤', '╮', '╯', '╭', '╰'])
+
+  interface GutterCell {
+    char: string
+    col: number
+    lane: number
+  }
+
+  // Measured: 263 graph lines → 6 unique gutters on linear history (43×).
+  // Virtualized scroll mounts fresh instances; without this memo each runs
+  // parseGutter on the same few strings repeatedly.
+  const gutterCache = new Map<string, GutterCell[]>()
+
+  function parseGutter(g: string): GutterCell[] {
+    const cached = gutterCache.get(g)
+    if (cached) return cached
+    const cells: GutterCell[] = []
+    let col = 0
+    for (const char of g) {
+      cells.push({ char, col, lane: Math.floor(col / 2) })
+      col++
+    }
+    // Post-process: assign ─ chars the highest lane from their horizontal run.
+    // Horizontal connectors always connect a lower lane to a higher lane
+    // (branch), so we use the max lane found in the run for consistent coloring.
+    let runStart = -1
+    for (let i = 0; i < cells.length; i++) {
+      if (cells[i].char === '─') {
+        if (runStart < 0) runStart = i
+      } else if (runStart >= 0) {
+        closeRun(cells, runStart, i)
+        runStart = -1
+      }
+    }
+    // Trailing run (padGutter can truncate mid-connector at MAX_GUTTER)
+    if (runStart >= 0) closeRun(cells, runStart, cells.length)
+    gutterCache.set(g, cells)
+    return cells
+  }
+
+  function closeRun(cells: GutterCell[], runStart: number, end: number) {
+    let maxLane = cells[runStart].lane
+    if (runStart > 0 && HORIZ_CHARS.has(cells[runStart - 1].char)) {
+      maxLane = Math.max(maxLane, cells[runStart - 1].lane)
+    }
+    if (end < cells.length && HORIZ_CHARS.has(cells[end].char)) {
+      maxLane = Math.max(maxLane, cells[end].lane)
+    }
+    for (let j = runStart; j < end; j++) cells[j].lane = maxLane
+  }
 
   let palette: string[] = $state(Array(GRAPH_COLORS).fill('#888'))
   let paletteDark: boolean | undefined // sentinel: undefined = never read
@@ -60,49 +110,6 @@
 
   function laneColor(lane: number): string {
     return palette[lane % GRAPH_COLORS]
-  }
-
-  interface GutterCell {
-    char: string
-    col: number
-    lane: number
-  }
-
-  const HORIZ_CHARS = new Set(['─', '├', '┤', '╮', '╯', '╭', '╰'])
-
-  function parseGutter(g: string): GutterCell[] {
-    const cells: GutterCell[] = []
-    let col = 0
-    for (const char of g) {
-      cells.push({ char, col, lane: Math.floor(col / 2) })
-      col++
-    }
-    // Post-process: assign ─ chars the highest lane from their horizontal run.
-    // Horizontal connectors always connect a lower lane to a higher lane
-    // (branch), so we use the max lane found in the run for consistent coloring.
-    let runStart = -1
-    for (let i = 0; i < cells.length; i++) {
-      if (cells[i].char === '─') {
-        if (runStart < 0) runStart = i
-      } else if (runStart >= 0) {
-        closeRun(cells, runStart, i)
-        runStart = -1
-      }
-    }
-    // Trailing run (padGutter can truncate mid-connector at MAX_GUTTER)
-    if (runStart >= 0) closeRun(cells, runStart, cells.length)
-    return cells
-  }
-
-  function closeRun(cells: GutterCell[], runStart: number, end: number) {
-    let maxLane = cells[runStart].lane
-    if (runStart > 0 && HORIZ_CHARS.has(cells[runStart - 1].char)) {
-      maxLane = Math.max(maxLane, cells[runStart - 1].lane)
-    }
-    if (end < cells.length && HORIZ_CHARS.has(cells[end].char)) {
-      maxLane = Math.max(maxLane, cells[end].lane)
-    }
-    for (let j = runStart; j < end; j++) cells[j].lane = maxLane
   }
 
   let cells = $derived(parseGutter(gutter))
@@ -195,12 +202,13 @@
             transform="rotate(45 {x} {cy})" />
 
         {:else if cell.char === '×'}
-          <!-- Conflict: semantic red, no graph opacity -->
-          <circle cx={x} cy={cy} r={NODE_R} fill="var(--red)" />
+          <!-- Conflict: semantic red, no graph opacity. r=WC_R makes it stand
+               out over normal ○ nodes (NODE_R) without dominating @ (WC_R+1). -->
+          <circle cx={x} cy={cy} r={WC_R} fill="var(--red)" />
           <!-- Diagonals opt out of crispEdges (would stair-step) -->
-          <line x1={x - 2} y1={cy - 2} x2={x + 2} y2={cy + 2}
+          <line x1={x - 2.5} y1={cy - 2.5} x2={x + 2.5} y2={cy + 2.5}
             stroke="var(--base)" stroke-width={1.5} shape-rendering="auto" />
-          <line x1={x + 2} y1={cy - 2} x2={x - 2} y2={cy + 2}
+          <line x1={x + 2.5} y1={cy - 2.5} x2={x - 2.5} y2={cy + 2.5}
             stroke="var(--base)" stroke-width={1.5} shape-rendering="auto" />
 
         {:else if cell.char === '◌'}

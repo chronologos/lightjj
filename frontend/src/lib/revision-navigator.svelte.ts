@@ -4,35 +4,38 @@
 // App.svelte wires selectedIndex/checkedRevisions/debounce around it.
 
 import { createLoader, type Loader } from './loader.svelte'
-import { api, effectiveId, diffTargetKey, type LogEntry, type FileChange, type DiffTarget } from './api'
+import { api, effectiveId, diffTargetKey, fetchRevisionMeta, type LogEntry, type FileChange, type DiffTarget } from './api'
 
 type Commit = LogEntry['commit']
 type CacheHit = { diff: string; files: FileChange[]; description: string }
 
-// diff loader carries its DiffTarget alongside the content so identity and
-// value land in one $state write — structurally in phase. loadedTarget (what
-// DiffPanel renders) is derived from here, not from the cursor position.
-// Closes the "identity changes 50ms before content" edge that every timing
-// bug in the diff view traces back to.
-export type LoadedDiff = { target: DiffTarget | undefined; diff: string }
-
 export interface RevisionNavigator {
-  readonly diff: Loader<LoadedDiff, [DiffTarget]>
+  readonly diff: Loader<string, [DiffTarget]>
   readonly files: Loader<FileChange[], [string]>
   readonly description: Loader<string, [string]>
+  /** What's rendered in DiffPanel. Decoupled from diff content for progressive
+   *  rendering: set SYNCHRONOUSLY at navigate-time, before any fetch resolves.
+   *  The diff loader holds content only — it lags loadedTarget during fetch. */
+  readonly loadedTarget: DiffTarget | undefined
+  /** True from navigate until diff.load() resolves. Explicit signal for the
+   *  spinner gate — diff.loading alone has a one-macrotask gap (setTimeout 0
+   *  defer in loader.svelte.ts, which is correct for cache-hit flicker). */
+  readonly diffPending: boolean
   singleTarget(c: Commit): DiffTarget
   /**
-   * Batch fetch diff+files+description, seeding the api.ts cache, then fire
-   * the individual loaders (cache hits). `shouldAbort` is re-checked after
-   * the await — e.g. "user checked a revision while we were fetching, the
-   * multi-check effect already fired, don't clobber".
+   * Progressive load: sets loadedTarget + diffPending SYNC (header renders,
+   * spinner shows), fires diff.load eager (long pole), awaits meta (~20ms),
+   * then fires files/description (cache hits — file list renders). `shouldAbort`
+   * re-checked after the meta await — e.g. "user checked a revision while we
+   * were fetching, the multi-check effect already fired, don't clobber".
    */
   loadDiffAndFiles(commit: Commit, shouldAbort: () => boolean): Promise<void>
   /**
    * Synchronous cache-hit application. Bumps revGen so any suspended
-   * loadDiffAndFiles bails before firing its `diff.load()` — without this,
-   * the resumed call's `diff.load(stale)` would bump loader.generation PAST
-   * the `diff.set()` here and win. See docs/CACHING.md "revGen await-gap race".
+   * loadDiffAndFiles bails before firing its `files.load()` — without this,
+   * the resumed call's `files.load(stale)` would bump loader.generation PAST
+   * the `files.set()` here and win. diff races handled by loader.generation
+   * directly (diff.load fires eager, before the await). See docs/CACHING.md.
    */
   applyCacheHit(commit: Commit, hit: CacheHit): void
   /**
@@ -67,16 +70,19 @@ export function createRevisionNavigator(opts: {
   onError: (e: unknown) => void
 }): RevisionNavigator {
   const diff = createLoader(
-    (t: DiffTarget) => api.diff(diffTargetKey(t)).then(r => ({ target: t, diff: r.diff })),
-    { target: undefined, diff: '' } as LoadedDiff,
+    (t: DiffTarget) => api.diff(diffTargetKey(t)).then(r => r.diff),
+    '',
     opts.onError,
   )
   const files = createLoader((id: string) => api.files(id), [] as FileChange[], opts.onError)
   const description = createLoader((id: string) => api.description(id).then(r => r.description), '')
 
-  // revGen guards the gap between `await api.revision()` and `diff.load()`.
+  let loadedTarget: DiffTarget | undefined = $state(undefined)
+  let diffPending = $state(false)
+
+  // revGen guards the gap between the meta await and files/description.load().
   // loader.generation alone isn't enough: it invalidates in-flight load()
-  // calls, but a suspended loadDiffAndFiles hasn't CALLED diff.load() yet —
+  // calls, but a suspended loadDiffAndFiles hasn't CALLED files.load() yet —
   // when it resumes and calls it, that call bumps loader.generation past any
   // intervening set()/load() and wins. revGen catches it before the call.
   let revGen = 0
@@ -93,20 +99,39 @@ export function createRevisionNavigator(opts: {
 
   async function loadDiffAndFiles(commit: Commit, shouldAbort: () => boolean): Promise<void> {
     const gen = ++revGen
-    let batchFailed = false
-    await api.revision(commit.commit_id).catch(() => { batchFailed = true })
+    const target = singleTarget(commit)
+    // Refresh (post-mutation loadLog, same commit_id): keep stale content
+    // visible — no spinner, no reset, scroll preserved via DiffFileView key
+    // stability. New target: spinner + reset so the wrong revision's data
+    // doesn't sit under the new changeId during the ~440ms SSH meta wait.
+    const isRefresh = loadedTarget?.kind === 'single' && loadedTarget.commitId === commit.commit_id
+    loadedTarget = target
+    if (!isRefresh) {
+      diffPending = true
+      files.reset()
+      description.reset()
+    }
+    // Diff is the long pole (~200ms+ for large commits). Fire independently;
+    // template shows spinner until this resolves.
+    diff.load(target).finally(() => {
+      if (gen === revGen) diffPending = false
+    })
+    // Meta (~20ms) resolves first → file list + description render while
+    // spinner covers the diff area. Error-silent: diff.load's error handling
+    // already surfaces the visible toast, and meta failing alone is rare.
+    try {
+      await fetchRevisionMeta(commit.commit_id)
+    } catch { return }
     if (gen !== revGen || shouldAbort()) return
-    diff.load(singleTarget(commit))
-    // On batch failure, only diff.load fires — one error toast, not three.
-    if (batchFailed) return
     files.load(commit.commit_id)
     description.load(commit.commit_id)
   }
 
   function applyCacheHit(commit: Commit, hit: CacheHit): void {
     revGen++
-    // target + diff in one $state write → DiffPanel sees them together.
-    diff.set({ target: singleTarget(commit), diff: hit.diff })
+    loadedTarget = singleTarget(commit)
+    diffPending = false
+    diff.set(hit.diff)
     files.set(hit.files)
     description.set(hit.description)
   }
@@ -124,10 +149,9 @@ export function createRevisionNavigator(opts: {
 
   function navigateCached(commit: Commit, hit: CacheHit, abort: () => boolean): void {
     clearSchedule()
-    // revGen bump NOW: a loadDiffAndFiles suspended at its await would
-    // otherwise resume AFTER the rAF fires below, call diff.load(stale),
-    // and bump the loader generation past applyCacheHit's set(). Bumping
-    // here invalidates it before it can race.
+    // revGen bump NOW: a loadDiffAndFiles suspended at its meta await could
+    // resume after the rAF fires, call files.load(stale), clobbering
+    // applyCacheHit's files.set(). Bump here invalidates it before it races.
     revGen++
     navRafId = requestAnimationFrame(() => {
       navRafId = requestAnimationFrame(() => {
@@ -141,9 +165,7 @@ export function createRevisionNavigator(opts: {
     clearSchedule()
     // Same entry-time bump as navigateCached: a suspended loadDiffAndFiles
     // could otherwise resume during the 50ms window, pass its revGen check,
-    // and fire diff.load(stale). Loader gen eventually discards the stale
-    // result, but the fetch itself is wasted. Bumping here stops it before
-    // diff.load is ever called.
+    // and fire files.load(stale). Bumping here stops it before it fires.
     revGen++
     navDebounceTimer = setTimeout(() => {
       const commit = getCommit()
@@ -155,10 +177,16 @@ export function createRevisionNavigator(opts: {
   function cancel(): void {
     clearSchedule()
     revGen++
+    // diffPending deliberately NOT cleared: switchToLogView uses it to detect
+    // "loadedTarget set but content still in flight" (returns false → caller
+    // retries after load settles). All cancel() callers follow with either
+    // unmount or a fresh loadDiffAndFiles, so spinner never actually sticks.
   }
 
   return {
     diff, files, description, singleTarget,
+    get loadedTarget() { return loadedTarget },
+    get diffPending() { return diffPending },
     loadDiffAndFiles, applyCacheHit, cancel,
     navigateCached, navigateDeferred,
   }

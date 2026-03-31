@@ -39,14 +39,32 @@ type FileChange struct {
 // {#each} keys; Type and counts are approximate for files touched in multiple
 // commits.
 func FilesTemplate(revision string) CommandArgs {
-	tmpl := `self.diff().stat(200).files().map(|f| ` +
-		`f.status_char() ++ "\x1F" ++ f.path() ++ "\x1F" ++ ` +
-		`stringify(f.lines_added()) ++ "\x1F" ++ stringify(f.lines_removed())` +
-		`).join("\n") ++ "\x1E" ++ ` +
-		`conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count())).join("\n") ++ "\x1D"`
 	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
-		"--ignore-working-copy", "-T", tmpl}
+		"--ignore-working-copy", "-T", filesTemplateBody}
 }
+
+// RevisionMeta prepends description to FilesTemplate for handleRevision's
+// 3→2 subprocess merge. \x1C (file separator — unused elsewhere in the
+// \x1D/\x1E/\x1F hierarchy) splits description from the files chunk.
+// Single-revision only: multi-rev revsets emit per-commit \x1D chunks
+// which would interleave with \x1C and break strings.Cut.
+func RevisionMeta(revision string) CommandArgs {
+	return []string{"log", "-r", revision, "--no-graph", "--color", "never",
+		"--ignore-working-copy", "-T", `description ++ "\x1C" ++ ` + filesTemplateBody}
+}
+
+// ParseRevisionMeta parses RevisionMeta output — co-located so the \x1C
+// constant stays next to the template that emits it.
+func ParseRevisionMeta(output string) (desc string, files []FileChange) {
+	desc, filesChunk, _ := strings.Cut(output, "\x1C")
+	return desc, ParseFilesTemplate(filesChunk)
+}
+
+const filesTemplateBody = `self.diff().stat(200).files().map(|f| ` +
+	`f.status_char() ++ "\x1F" ++ f.path() ++ "\x1F" ++ ` +
+	`stringify(f.lines_added()) ++ "\x1F" ++ stringify(f.lines_removed())` +
+	`).join("\n") ++ "\x1E" ++ ` +
+	`conflicted_files.map(|f| f.path() ++ "\x1F" ++ stringify(f.conflict_side_count())).join("\n") ++ "\x1D"`
 
 // ParseFilesTemplate parses FilesTemplate output into a []FileChange.
 // Conflict-only files (in conflicted_files but not in the diff — merge commits

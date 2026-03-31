@@ -27,11 +27,15 @@
   interface Props {
     diffContent: string
     changedFiles: FileChange[]
-    /** What's LOADED — derived from diff.value.target in App, in phase with
-     *  diffContent by construction (same $state write). Not the cursor position.
+    /** What's LOADED — nav.loadedTarget in App, set SYNCHRONOUSLY at navigate
+     *  (leads diffContent — that's progressive rendering). Not the cursor position.
      *  During squash mode the cursor moves but this stays frozen, by design. */
     diffTarget: DiffTarget | undefined
     diffLoading: boolean
+    /** True from navigate until diff content resolves. Set SYNCHRONOUSLY at
+     *  navigate-time so the spinner shows with no gap — diffLoading alone has
+     *  a one-macrotask delay (setTimeout 0 defer in loader.svelte.ts). */
+    diffPending?: boolean
     splitView: boolean
     /** Revision metadata header (change_id, description, bookmarks, describe
      *  editor). Rendered in single-rev mode; multi-check shows a simpler
@@ -71,7 +75,7 @@
 
   let {
     diffContent, changedFiles, diffTarget,
-    diffLoading, splitView = $bindable(false), header,
+    diffLoading, diffPending = false, splitView = $bindable(false), header,
     fileSelectionMode, selectedFiles, ontogglefile, hunkReview = null,
     onfilesaved, onjjmutation, oncontextmenu, onopenfile, onfilehistory,
   }: Props = $props()
@@ -599,6 +603,10 @@
   // AUTO_COLLAPSE_LINE_LIMIT misses. Collapsed files render header-only
   // (~1 DOM subtree vs ~lines×2 nodes each). Expand-all is one click.
   const AUTO_COLLAPSE_TOTAL_LINES = 2000
+  // Above this, don't even render file headers — show a single placeholder.
+  // Bundle-churn diffs (1.4MB) with 20+ files make j/k sluggish even with
+  // all headers collapsed; N file-header subtrees is still N mount work.
+  const HIDE_DIFF_TOTAL_LINES = 1000
   // Per-file char limit — catches huge one-liners (minified JS, lock files
   // with one 800k-char line). Line-count triggers miss these entirely.
   // ~100 screen-widths of content is the threshold.
@@ -752,8 +760,10 @@
   // selection highlight before any sync work runs. Less critical post-Lezer
   // (~9ms vs Shiki's ~200ms) but still guarantees selection-first paint.
   // Word-diff isn't deferred — LCS is cheaper and has no immediate phase.
-  // activeRevisionId is derived from diffTarget which is in phase with
-  // diffContent (same $state write in App) — reading it here is safe.
+  // activeRevisionId is derived from diffTarget (= nav.loadedTarget, set sync
+  // at navigate). It LEADS diffContent during progressive render — this effect
+  // fires with new cacheKey + stale effectiveFiles, but the files.length===0
+  // early-return below catches that (files.reset() → effectiveFiles = []).
   // Context-expansion handling: expandGap mutates revealedGaps →
   // expandedByPath → effectiveFiles recomputes with one substituted entry →
   // call update() for that file only, preserving all other entries.
@@ -829,6 +839,7 @@
     // changeId (not commitId) — collapse preferences should survive rewrites.
     lastCollapseCacheKey = diffTarget?.kind === 'single' ? diffTarget.changeId : null
 
+    forceShowLargeDiff = false
     collapsedFiles.clear()
     resetExpandState()
     editingFiles.clear()
@@ -852,28 +863,49 @@
     const saved = lastCollapseCacheKey ? collapseStateCache.get(lastCollapseCacheKey) : null
     if (saved) {
       for (const path of saved) collapsedFiles.add(path)
-      // Suppress auto-collapse — user's manual choices are in the cache
-      lastAutoCollapseDiff = diffContent
+      // Suppress auto-collapse — user's manual choices are in the cache.
+      // Boolean flag, NOT lastAutoCollapseDiff=diffContent: diffTarget (=
+      // nav.loadedTarget) is set SYNC at navigate, diffContent lags during
+      // fetch. On cache-miss nav (describe → new commit_id → diff miss, same
+      // change_id → collapse hit), this effect fires with diffContent=OLD;
+      // capturing it would let auto-collapse stomp the restore when NEW arrives.
+      suppressNextAutoCollapse = true
     }
   })
 
+  // Total diff line count — drives both the auto-collapse effect and the
+  // hide-entirely gate. Derived so it's stable for the template check.
+  let totalDiffLines = $derived.by(() => {
+    let n = 0
+    for (const f of parsedDiff) n += fileLineCount(f)
+    return n
+  })
+
+  // One-shot force-show for the current diff. Reset in the per-identity reset
+  // effect so each new revision gets a fresh gate. Cmd+F search also forces
+  // show — searchMatches walks parsedDiff regardless, broken if nothing renders.
+  let forceShowLargeDiff = $state(false)
+  // searchOpen declared with the search cluster below — forward ref is safe
+  // ($state hoists) but moving that block here would scatter search state.
+  let diffHidden = $derived(totalDiffLines > HIDE_DIFF_TOTAL_LINES && !forceShowLargeDiff && !searchOpen)
+
   // Auto-collapse large files to prevent DOM flooding
   let lastAutoCollapseDiff = ''
+  let suppressNextAutoCollapse = false
   $effect(() => {
     if (!diffContent || diffContent === lastAutoCollapseDiff) return
     lastAutoCollapseDiff = diffContent
-    let total = 0
+    if (suppressNextAutoCollapse) {
+      suppressNextAutoCollapse = false
+      return
+    }
     for (const file of parsedDiff) {
-      const n = fileLineCount(file)
-      total += n
-      if (n > AUTO_COLLAPSE_LINE_LIMIT || isOversize(file)) {
+      if (fileLineCount(file) > AUTO_COLLAPSE_LINE_LIMIT || isOversize(file)) {
         collapsedFiles.add(file.filePath)
       }
     }
     // Many-moderate-files flooding: collapse everything, let user expand.
-    // The per-file check above is now redundant when this fires, but it runs
-    // first so we don't compute total when a single early file already trips it.
-    if (total > AUTO_COLLAPSE_TOTAL_LINES) {
+    if (totalDiffLines > AUTO_COLLAPSE_TOTAL_LINES) {
       for (const file of parsedDiff) collapsedFiles.add(file.filePath)
     }
   })
@@ -1272,11 +1304,12 @@
             onsave={saveMerge} oncancel={closeMerge} />
         {/await}
       {/key}
-    {:else if diffLoading && parsedDiff.length === 0}
-      <!-- Spinner only on INITIAL load. For refreshes (parsedDiff populated),
-           keep showing stale content until fresh arrives — prevents scroll
-           jump from unmounting all DiffFileViews. The keyed {#each} preserves
-           component instances across the content swap. -->
+    {:else if diffPending || (diffLoading && parsedDiff.length === 0)}
+      <!-- Spinner when: (a) diffPending (target set sync, content in flight —
+           progressive render path; header+file-list already visible above),
+           or (b) initial load (no prior content). For refreshes where neither
+           is true, keep showing stale content until fresh arrives — prevents
+           scroll jump from unmounting all DiffFileViews. -->
       <div class="empty-state">
         <div class="spinner"></div>
         <span>Loading diff...</span>
@@ -1289,6 +1322,12 @@
     {:else if parsedDiff.length === 0 && changedFiles.length === 0 && conflictOnlyFiles.length === 0}
       <div class="empty-state">
         <span class="empty-hint">No changes in this revision</span>
+      </div>
+    {:else if diffHidden}
+      <div class="empty-state">
+        <span class="empty-hint">Large diff — {parsedDiff.length} file{parsedDiff.length === 1 ? '' : 's'}, {totalDiffLines.toLocaleString()} lines</span>
+        <span class="empty-subhint">Rendering is skipped above {HIDE_DIFF_TOTAL_LINES.toLocaleString()} lines to keep navigation responsive.</span>
+        <button class="btn" onclick={() => forceShowLargeDiff = true}>Show anyway</button>
       </div>
     {:else}
       {#if editError}

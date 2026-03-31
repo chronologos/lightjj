@@ -245,14 +245,9 @@ type revisionResponse struct {
 }
 
 // handleRevision batches diff + files + description into a single response.
-// Three underlying jj commands run in parallel. Over SSH this turns three
-// ~440ms round-trips into one HTTP round-trip (goroutines share the TCP/SSH
-// setup cost only on LocalRunner; for SSHRunner each is still a separate
-// ssh exec).
-//
-// Error policy: diff/files failures are hard errors (the revision likely
-// doesn't exist). Description failure is soft — not load-bearing for the
-// diff panel.
+// Two underlying jj commands: Diff (async) and RevisionMeta (description +
+// FilesTemplate merged via \x1C — both were `jj log -r X -T ...` differing
+// only in template). Over SSH this saves one ~440ms ssh exec per uncached nav.
 func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {
@@ -262,16 +257,15 @@ func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	diffCh := s.runAsync(ctx, jj.Diff(revision, "", "never", "--tool", ":git"))
-	descCh := s.runAsync(ctx, jj.GetDescription(revision))
 
-	// Files template runs on the request goroutine — gives an early hard-error
-	// signal if the revision doesn't exist, before we bother parsing the rest.
-	filesOutput, err := s.Runner.Run(ctx, jj.FilesTemplate(revision))
+	// Meta runs on the request goroutine — gives an early hard-error signal
+	// if the revision doesn't exist, before we bother joining on the diff.
+	metaOutput, err := s.Runner.Run(ctx, jj.RevisionMeta(revision))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	files := jj.ParseFilesTemplate(string(filesOutput))
+	desc, files := jj.ParseRevisionMeta(string(metaOutput))
 
 	dr := <-diffCh
 	if dr.err != nil {
@@ -279,21 +273,38 @@ func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var desc string
-	descR := <-descCh
-	if descR.err == nil {
-		desc = string(descR.output)
-		maybeCacheForever(w, r)
-	} else {
-		// Degraded response — don't cache forever. A transient failure would
-		// otherwise bake description:"" into the browser disk cache for a year.
-		log.Printf("handleRevision: GetDescription failed for %s: %v", revision, descR.err)
-	}
+	maybeCacheForever(w, r)
 	s.writeJSON(w, r, http.StatusOK, revisionResponse{
 		Diff:        string(dr.output),
 		Files:       files,
 		Description: desc,
 	})
+}
+
+type revisionMetaResponse struct {
+	Files       []jj.FileChange `json:"files"`
+	Description string          `json:"description"`
+}
+
+// handleRevisionMeta returns files + description WITHOUT the diff. One jj call
+// (RevisionMeta), ~20ms local. For progressive rendering: frontend fires this
+// plus /api/diff in parallel; meta resolves first → header + file list render
+// with a spinner in the diff area; diff fills in later. /api/revision (the
+// all-three batch) stays for prefetch where progressive rendering doesn't apply.
+func (s *Server) handleRevisionMeta(w http.ResponseWriter, r *http.Request) {
+	revision := r.URL.Query().Get("revision")
+	if revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	output, err := s.Runner.Run(r.Context(), jj.RevisionMeta(revision))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	desc, files := jj.ParseRevisionMeta(string(output))
+	maybeCacheForever(w, r)
+	s.writeJSON(w, r, http.StatusOK, revisionMetaResponse{Files: files, Description: desc})
 }
 
 // handleFilesBatch returns file stats for multiple commits in a single jj
@@ -399,17 +410,26 @@ func (s *Server) handleGetDescription(w http.ResponseWriter, r *http.Request) {
 // jj rejects refspecs it can't parse (e.g. negative glob ^refs/heads/ci/*);
 // git doesn't validate refspecs when listing. Both parsers (ParseRemoteURLs,
 // ParseRemoteListOutput) accept either format.
+//
+// Two git fallback attempts: -C for colocated repos (.git at root), then
+// --git-dir for non-colocated (jj-native storage, .git inside .jj/repo/store).
+// Secondary workspaces where .jj/repo is a pointer file fail both — that's
+// rare and the combined error surfaces it.
 func (s *Server) remoteListOutput(ctx context.Context) ([]byte, error) {
 	out, err := s.Runner.Run(ctx, jj.GitRemoteList())
 	if err == nil || s.RepoPath == "" {
 		return out, err
 	}
 	jjErr := err
-	out, err = s.Runner.RunRaw(ctx, []string{"git", "-C", s.RepoPath, "remote", "-v"})
-	if err != nil {
-		return nil, fmt.Errorf("jj failed (%w); git fallback also failed: %v", jjErr, err)
+	if out, err = s.Runner.RunRaw(ctx, []string{"git", "-C", s.RepoPath, "remote", "-v"}); err == nil {
+		return out, nil
 	}
-	return out, nil
+	// RepoPath is canonical (jj workspace root), no trailing slash; remote is POSIX.
+	gitDir := s.RepoPath + "/.jj/repo/store/git"
+	if out, err = s.Runner.RunRaw(ctx, []string{"git", "--git-dir", gitDir, "remote", "-v"}); err == nil {
+		return out, nil
+	}
+	return nil, fmt.Errorf("jj failed (%w); git fallback also failed: %v", jjErr, err)
 }
 
 func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {

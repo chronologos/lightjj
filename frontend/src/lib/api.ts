@@ -549,15 +549,20 @@ async function fetchRevision(commitId: string): Promise<RevisionResponse> {
   const result = await request<RevisionResponse>(`/api/revision?revision=${encodeURIComponent(commitId)}&immutable=1`)
   storeInCache(`diff:${commitId}`, { diff: result.diff })
   storeInCache(`files:${commitId}`, result.files)
-  // Backend returns description:"" when GetDescription fails (degraded mode,
-  // no Cache-Control:immutable header). Don't poison the in-memory LRU with
-  // a blank — let the next navigation retry. Empty-description revisions are
-  // real (jj new), but the backend includes the header in that case, so the
-  // browser HTTP cache catches the duplicate fetch.
-  if (result.description !== '') {
-    storeInCache(`desc:${commitId}`, { description: result.description })
-  }
+  storeInCache(`desc:${commitId}`, { description: result.description })
   return result
+}
+
+/** Meta-only endpoint (files + description, NO diff) — seeds two cache keys.
+ *  For progressive rendering: loadDiffAndFiles fires this plus diff.load() in
+ *  parallel; meta resolves ~20ms → header + file list render; diff fills in. */
+export async function fetchRevisionMeta(commitId: string): Promise<void> {
+  if (cache.has(`files:${commitId}`) && cache.has(`desc:${commitId}`)) return
+  const result = await request<{ files: FileChange[]; description: string }>(
+    `/api/revision-meta?revision=${encodeURIComponent(commitId)}&immutable=1`
+  )
+  storeInCache(`files:${commitId}`, result.files)
+  storeInCache(`desc:${commitId}`, { description: result.description })
 }
 
 /** Warm the cache for a revision's diff/files/description without applying
@@ -823,7 +828,7 @@ export const api = {
 
   fileShow: (revision: string, path: string) => {
     const params = new URLSearchParams({ revision, path })
-    return request<{ content: string }>(`/api/file-show?${params}`)
+    return cachedRequest<{ content: string }>('fileshow:' + revision + ':' + path, `/api/file-show?${params}`)
   },
 
   // Tab-scoped URL for raw file bytes — feeds <img src> in markdown preview

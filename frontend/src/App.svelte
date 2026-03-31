@@ -213,11 +213,12 @@
 
   let revisions = $derived(log.value)
   let loading = $derived(log.loading)
-  let diffContent = $derived(diff.value.diff)
+  let diffContent = $derived(diff.value)
   let diffLoading = $derived(diff.loading)
   // What's LOADED, not what's selected. Passed to DiffPanel as diffTarget.
-  // Lags the cursor during cache-miss fetches — that's the point.
-  let loadedTarget = $derived(diff.value.target)
+  // Set SYNCHRONOUSLY at navigate — leads the diff content (progressive render).
+  let loadedTarget = $derived(nav.loadedTarget)
+  let diffPending = $derived(nav.diffPending)
   let changedFiles = $derived(files.value)
   let fullDescription = $derived(description.value)
   let oplogEntries = $derived(oplog.value)
@@ -1224,8 +1225,12 @@
     nav.cancel()
     const sel = revisions[selectedIndex]
     if (!sel || checkedRevisions.size > 0) return true
-    const loaded = diff.value.target
-    if (loaded?.kind === 'single' && loaded.commitId === sel.commit.commit_id) return true
+    const loaded = nav.loadedTarget
+    // diffPending = "loadedTarget set sync but content still fetching". Without
+    // this check, enterSquashMode during the ~440ms SSH meta wait would init
+    // fileSel from files.value=[] (reset at navigate) → executeSquash's
+    // empty-commit exception (total===0) → undefined file filter → squash ALL.
+    if (loaded?.kind === 'single' && loaded.commitId === sel.commit.commit_id && !nav.diffPending) return true
     nav.loadDiffAndFiles(sel.commit, hasChecked)
     return false
   }
@@ -1921,9 +1926,9 @@
     return onStale(() => {
       if (!loading && !mutating && !anyModalOpen && !inlineMode) loadLog()
       else if (inlineMode || anyModalOpen) staleWhileSuppressed = true
-      // Panel's stale data is harmless during mutation (rows just look one op
-      // behind); no need for the loadLog guards. Fire-and-forget.
-      if (activeView === 'branches') bookmarksPanel.load()
+      // loadLog at :721 already calls bookmarksPanel.load() when branches is
+      // active. Only fire here when loadLog was gated (loading/mutating true).
+      else if (activeView === 'branches') bookmarksPanel.load()
     })
   })
   // Load on view entry. Covers key '2' + toolbar click + any future path.
@@ -2368,6 +2373,7 @@
             {diffContent}
             {changedFiles}
             diffTarget={loadedTarget}
+            {diffPending}
             {diffLoading}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
             fileSelectionMode={squash.active ? 'squash' : (split.active && !split.review) ? 'split' : false}

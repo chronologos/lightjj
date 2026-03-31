@@ -87,24 +87,40 @@
   const nodeChars = new Set(['@', '○', '◆', '×', '◌'])
   const GRAPH_COLORS = 8
 
+  // Gutter transforms are pure over ~6-20 unique strings per log. flatLines
+  // rebuilds on every loadLog (SSE refresh, mutation), calling these per row.
+  // Memo survives across log reloads — same revision → same gutter.
+  const nodeLaneMemo = new Map<string, number>()
+  const continuationMemo = new Map<string, string>()
+
   /** Find the lane of the node character in a gutter string. */
   function findNodeLane(gutter: string): number {
+    const cached = nodeLaneMemo.get(gutter)
+    if (cached !== undefined) return cached
     let col = 0
     for (const ch of gutter) {
-      if (nodeChars.has(ch)) return Math.floor(col / 2)
+      if (nodeChars.has(ch)) {
+        const lane = Math.floor(col / 2)
+        nodeLaneMemo.set(gutter, lane)
+        return lane
+      }
       col++
     }
+    nodeLaneMemo.set(gutter, 0)
     return 0
   }
   const branchChars = new Set(['─', '╮', '╯', '╭', '╰', '├', '┤'])
 
   function continuationGutter(gutter: string): string {
+    const cached = continuationMemo.get(gutter)
+    if (cached !== undefined) return cached
     let result = ''
     for (const ch of gutter) {
       if (nodeChars.has(ch)) result += '│'
       else if (branchChars.has(ch)) result += ' '
       else result += ch
     }
+    continuationMemo.set(gutter, result)
     return result
   }
 
@@ -388,11 +404,8 @@
               <span class="alert-badge">conflict</span>
             {/if}
             <span class="node-line-content">
-              {#if entry.commit.is_working_copy}
-                <span class="wc-badge">@</span>
-              {/if}
               {#if entry.commit.empty}
-                <span class="desc-placeholder">(empty)</span>
+                <span class="empty-chip">(empty)</span>
               {/if}
               {#if entry.description}
                 <span class="description-text">{entry.description}</span>
@@ -672,6 +685,11 @@
   .graph-row {
     display: flex;
     align-items: center;
+    /* Below VIRTUALIZE_THRESHOLD the entire list renders eagerly; this lets
+       the browser skip offscreen paint. contain-intrinsic-size is EXACT
+       (matches the fixed height below) so no scroll jank. */
+    content-visibility: auto;
+    contain-intrinsic-size: 18px;
     height: 18px;
     line-height: 18px;
     font-size: 13px;
@@ -760,20 +778,6 @@
     gap: 4px;
   }
 
-  .wc-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--amber);
-    color: var(--crust);
-    font-size: 9px;
-    font-weight: 800;
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    flex-shrink: 0;
-    line-height: 1;
-  }
 
   .change-id {
     font-family: var(--font-mono);
@@ -997,6 +1001,7 @@
     background: var(--badge-danger-bg, rgba(235, 100, 100, 0.15));
     color: var(--red);
     border: 1px solid var(--red);
+    margin-right: 4px;
   }
   .alert-badge-click {
     font-family: inherit;
@@ -1008,15 +1013,22 @@
     color: var(--base);
   }
 
-  /* Shared treatment for "(empty)" and "(no description)" — both annotate absence.
+  /* "(no description)" annotates absence — dimmed placeholder text.
    * No italic: the --font-ui stack's synthesized oblique reads heavier at 12px,
    * inverting the hierarchy (meta-text should recede, not advance). */
   .desc-placeholder {
     color: var(--overlay0);
     font-size: 12px;
   }
-  .desc-placeholder + .description-text {
-    margin-left: 6px;
+  /* "(empty)" is distinct: jj shows it as a LABEL alongside the description on
+   * empty merge commits (PR merge via rebase — empty commit, real title).
+   * Chip styling reads as metadata, not a mistaken placeholder. */
+  .empty-chip {
+    color: var(--overlay1);
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--surface1);
   }
 
   .rebase-preview {

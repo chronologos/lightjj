@@ -493,17 +493,14 @@ describe('fileShow', () => {
     expect(url).toContain('path=src%2Fmain.go')
   })
 
-  it('does not cache responses (always fetches fresh)', async () => {
+  it('caches by commit_id+path (content invariant for a given commit)', async () => {
     const result = { content: 'file contents' }
-    mockFetch
-      .mockResolvedValueOnce(mockResponse(result, 'op1'))
-      .mockResolvedValueOnce(mockResponse(result, 'op1'))
+    mockFetch.mockResolvedValueOnce(mockResponse(result, 'op1'))
 
     await api.fileShow('abc', 'src/main.go')
     await api.fileShow('abc', 'src/main.go')
 
-    // fileShow uses request() not cachedRequest(), so both calls hit fetch
-    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(mockFetch).toHaveBeenCalledTimes(1)  // second is cache hit
   })
 })
 

@@ -418,6 +418,10 @@
        instead of re-slicing. Conflict-diff lines need one more char off. -->
   {@const displayContent = isMarker ? '' : innerType ? rawContent.slice(1) : rawContent}
   {@const displayPrefix = getDisplayPrefix(isMarker, innerType, inConflict, line.content)}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions --
+    Alt+click is a mouse-only quick-add gesture by design (handleAltClick no-ops
+    unless e.altKey). Keyboard users get the annotation bubble; this is the
+    fast-path for mouse users. -->
   {#if isMarker}
     <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
   {:else if lm && lm.length > 0}

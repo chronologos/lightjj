@@ -175,18 +175,20 @@ describe('RevisionGraph', () => {
       expect(container.querySelector('.description-text')).toBeNull()
     })
 
-    it('shows (empty) only — not "(empty) (no description)" — for empty undescribed revisions', () => {
+    it('shows (empty) chip only — not "(empty) (no description)" — for empty undescribed revisions', () => {
       const entry = makeEntry({ description: '', empty: true })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
-      const placeholders = container.querySelectorAll('.desc-placeholder')
-      expect(placeholders).toHaveLength(1)
-      expect(placeholders[0].textContent).toBe('(empty)')
+      expect(container.querySelector('.empty-chip')?.textContent).toBe('(empty)')
+      expect(container.querySelector('.desc-placeholder')).toBeNull()
     })
 
-    it('shows (empty) before description when both present', () => {
+    it('shows (empty) chip before description when both present (empty merge commit)', () => {
+      // PR merge via rebase → empty commit with real title. jj log shows
+      // "(empty)" as a LABEL here, not a placeholder. Chip styling reads as
+      // metadata (like timestamp/author chips), not a mistaken placeholder.
       const entry = makeEntry({ description: 'merge main', empty: true })
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
-      expect(container.querySelector('.desc-placeholder')?.textContent).toBe('(empty)')
+      expect(container.querySelector('.empty-chip')?.textContent).toBe('(empty)')
       expect(container.querySelector('.description-text')?.textContent).toBe('merge main')
     })
   })

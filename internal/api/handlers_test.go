@@ -120,9 +120,8 @@ func TestHandleDiff(t *testing.T) {
 
 func TestHandleRevision_CacheControl(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Allow(jj.FilesTemplate("abc")).SetOutput([]byte(""))
+	runner.Allow(jj.RevisionMeta("abc")).SetOutput([]byte("msg\x1C\x1E\x1D"))
 	runner.Allow(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+x"))
-	runner.Allow(jj.GetDescription("abc")).SetOutput([]byte("msg"))
 	srv := newTestServer(runner)
 	srv.cachedOp = "op123" // seed so we can assert suppression
 
@@ -138,23 +137,6 @@ func TestHandleRevision_CacheControl(t *testing.T) {
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc&immutable=1", nil))
 	assert.Equal(t, "max-age=31536000, immutable", w.Header().Get("Cache-Control"))
 	assert.Empty(t, w.Header().Get("X-JJ-Op-Id"))
-}
-
-func TestHandleRevision_DegradedNotCached(t *testing.T) {
-	// Transient GetDescription failure → degraded 200 response must NOT be
-	// cached forever (would bake description:"" into browser disk cache).
-	runner := testutil.NewMockRunner(t)
-	runner.Allow(jj.FilesTemplate("abc")).SetOutput([]byte(""))
-	runner.Allow(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("+x"))
-	runner.Allow(jj.GetDescription("abc")).SetError(fmt.Errorf("ssh blip"))
-	srv := newTestServer(runner)
-
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/revision?revision=abc&immutable=1", nil))
-	assert.Equal(t, http.StatusOK, w.Code)
-	// Degraded response gets no-store (not forever-cacheable) — a transient
-	// description failure must not be baked into browser disk cache.
-	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 }
 
 func TestHandleDiff_MissingRevision(t *testing.T) {
@@ -771,9 +753,8 @@ func TestHandleFileHistory_RequiresPath(t *testing.T) {
 
 func TestHandleRevision(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("M\x1Fsrc/main.go\x1F2\x1F1\x1E\x1D"))
+	runner.Expect(jj.RevisionMeta("abc")).SetOutput([]byte("Fix the thing\n\x1CM\x1Fsrc/main.go\x1F2\x1F1\x1E\x1D"))
 	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte("diff --git a/src/main.go b/src/main.go\n"))
-	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("Fix the thing\n"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -801,12 +782,29 @@ func TestHandleRevision_MissingRevision(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestHandleRevision_FilesError(t *testing.T) {
+func TestHandleRevisionMeta(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FilesTemplate("bad")).SetError(fmt.Errorf("no such revision"))
-	// Parallel goroutines still fire; Allow() so Verify() doesn't fail on them.
+	runner.Expect(jj.RevisionMeta("abc")).SetOutput([]byte("Fix the thing\n\x1CM\x1Fsrc/main.go\x1F2\x1F1\x1E\x1D"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	req := httptest.NewRequest("GET", "/api/revision-meta?revision=abc", nil)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp revisionMetaResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Fix the thing\n", resp.Description)
+	require.Len(t, resp.Files, 1)
+	assert.Equal(t, "src/main.go", resp.Files[0].Path)
+}
+
+func TestHandleRevision_MetaError(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.RevisionMeta("bad")).SetError(fmt.Errorf("no such revision"))
+	// Diff goroutine still fires; Allow() so Verify() doesn't fail on it.
 	runner.Allow(jj.Diff("bad", "", "never", "--tool", ":git")).SetOutput([]byte(""))
-	runner.Allow(jj.GetDescription("bad")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -814,24 +812,6 @@ func TestHandleRevision_FilesError(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-func TestHandleRevision_DescriptionErrorIsSoft(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FilesTemplate("abc")).SetOutput([]byte("\x1E\x1D"))
-	runner.Expect(jj.Diff("abc", "", "never", "--tool", ":git")).SetOutput([]byte(""))
-	runner.Expect(jj.GetDescription("abc")).SetError(fmt.Errorf("template error"))
-	defer runner.Verify()
-
-	srv := newTestServer(runner)
-	req := httptest.NewRequest("GET", "/api/revision?revision=abc", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp revisionResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "", resp.Description) // soft-failed, not a 500
 }
 
 func TestHandleBookmarkMove(t *testing.T) {
@@ -2520,17 +2500,29 @@ func TestResolveGHRepo(t *testing.T) {
 		assert.Equal(t, "", srv.resolveGHRepo())
 	})
 
-	t.Run("jj fails AND git fails → empty, not cached", func(t *testing.T) {
+	t.Run("jj fails AND both git fallbacks fail → empty, not cached", func(t *testing.T) {
 		runner := testutil.NewMockRunner(t)
 		runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("refspec"))
 		runner.Expect([]string{"git", "-C", "/repo", "remote", "-v"}).SetError(fmt.Errorf("not a git repo"))
+		runner.Expect([]string{"git", "--git-dir", "/repo/.jj/repo/store/git", "remote", "-v"}).SetError(fmt.Errorf("not a git repo"))
 		defer runner.Verify()
 		srv := newTestServer(runner)
 		srv.RepoPath = "/repo"
 		assert.Equal(t, "", srv.resolveGHRepo())
-		// ghRepoResolved stays false → 2nd call retries both. MockRunner's
-		// Expect doesn't consume so re-matching the same expectations works.
+		// ghRepoResolved stays false → 2nd call retries all three.
 		assert.Equal(t, "", srv.resolveGHRepo())
+	})
+
+	t.Run("jj fails, colocated git fails, non-colocated --git-dir succeeds", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect(jj.GitRemoteList()).SetError(fmt.Errorf("refspec"))
+		runner.Expect([]string{"git", "-C", "/repo", "remote", "-v"}).SetError(fmt.Errorf("not a git repo"))
+		runner.Expect([]string{"git", "--git-dir", "/repo/.jj/repo/store/git", "remote", "-v"}).
+			SetOutput([]byte("origin\thttps://github.com/owner/repo.git (fetch)\n"))
+		defer runner.Verify()
+		srv := newTestServer(runner)
+		srv.RepoPath = "/repo"
+		assert.Equal(t, "owner/repo", srv.resolveGHRepo())
 	})
 }
 

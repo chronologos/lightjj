@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-03-31** v1.8.4 — divergence mid-stack fixes (per-level rebase targets + column display), `commit_id.short()` TOCTOU, `hasLocalFS`/`isSSHMode` helpers.
+Last shipped: **2026-03-31** v1.8.5 — progressive rendering (loadedTarget/diffPending decoupled, /api/revision-meta), perf batch (RevisionMeta subprocess merge, gutter memos, fileShow cached, knownEmpty Set), UI polish (conflict marker size, empty-chip, @ badge removed), bughunt fixes (switchToLogView diffPending check, isRefresh gate, collapse-restore suppression flag), resolveGHRepo --git-dir fallback, HIDE_DIFF_TOTAL_LINES=1000 hard gate.
 
 ## Active
 
