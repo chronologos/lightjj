@@ -58,7 +58,7 @@ describe('executeKeepPlan', () => {
     mockBookmarkSet.mockImplementation(async () => { order.push('bookmark'); return ok() })
 
     await executeKeepPlan(plan({
-      rebaseSources: ['desc0000'],
+      rebaseSources: [{ source: 'desc0000', dest: 'keeper00aabbccdd' }],
       bookmarkRepoints: [{ name: 'feat', targetCommitId: 'keeper00aabbccdd' }],
     }))
 
@@ -66,8 +66,28 @@ describe('executeKeepPlan', () => {
   })
 
   it('rebase passes -s (not -r) so descendants follow', async () => {
-    await executeKeepPlan(plan({ rebaseSources: ['desc0000', 'desc1111'] }))
+    await executeKeepPlan(plan({
+      rebaseSources: [
+        { source: 'desc0000', dest: 'keeper00aabbccdd' },
+        { source: 'desc1111', dest: 'keeper00aabbccdd' },
+      ],
+    }))
     expect(mockRebase).toHaveBeenCalledWith(['desc0000', 'desc1111'], 'keeper00aabbccdd', '-s', '-d')
+  })
+
+  it('per-dest grouping: mid-stack + tip descendants get separate rebases', async () => {
+    // The per-level-target fix. Two dests → two api.rebase calls.
+    // Serial (for-of over Map), not parallel — concurrent jj mutations diverge.
+    await executeKeepPlan(plan({
+      rebaseSources: [
+        { source: 'd_root', dest: 'keeper_level0' },
+        { source: 'd_tip',  dest: 'keeper_level2' },
+        { source: 'd_mid',  dest: 'keeper_level0' },  // same dest as d_root → batched
+      ],
+    }))
+    expect(mockRebase).toHaveBeenCalledTimes(2)
+    expect(mockRebase).toHaveBeenCalledWith(['d_root', 'd_mid'], 'keeper_level0', '-s', '-d')
+    expect(mockRebase).toHaveBeenCalledWith(['d_tip'], 'keeper_level2', '-s', '-d')
   })
 
   it('skips rebase when rebaseSources is empty', async () => {
@@ -106,7 +126,7 @@ describe('executeKeepPlan', () => {
     mockBookmarkSet.mockResolvedValue(ok('moved'))
 
     const { results } = await executeKeepPlan(plan({
-      rebaseSources: ['desc'],
+      rebaseSources: [{ source: 'desc', dest: 'keeper00aabbccdd' }],
       bookmarkRepoints: [{ name: 'feat', targetCommitId: 't' }],
     }))
 
@@ -121,7 +141,7 @@ describe('executeKeepPlan', () => {
     expect(minimal).toBe('Resolved divergence — kept keeper00')
 
     const { text: full } = await executeKeepPlan(plan({
-      rebaseSources: ['a', 'b'],
+      rebaseSources: [{ source: 'a', dest: 'k' }, { source: 'b', dest: 'k' }],
       abandonCommitIds: ['x', 'y', 'z'],
     }))
     expect(full).toBe('Resolved divergence — kept keeper00, rebased 2, abandoned 3')

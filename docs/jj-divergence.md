@@ -101,7 +101,7 @@ Fix (`divergence.ts:56-78`): require `vs.length >= 2` (single-copy entries aren'
 Revset: `(stale_root::):: ~ ::keeper_tip ~ divergent()` — finds them correctly. But **do not silently abandon**:
 
 - If all found descendants are `empty` → abandon without prompt (warm-merge noise)
-- If ANY is non-empty → enumerate in a confirm modal: `"This will also abandon: abc12345 'fix the thing' (+340/-12)"` with [Abandon anyway] / [Rebase onto keeper tip instead]. The latter is usually what the user wants — `jj rebase -s <descendant> -d <keeper_tip>` before the abandon.
+- If ANY is non-empty → enumerate in a confirm modal: `"This will also abandon: abc12345 'fix the thing' (+340/-12)"` with [Abandon anyway] / [Rebase onto keeper instead]. The latter is usually what the user wants — `jj rebase -s <descendant> -d <keeper_at_same_level>` before the abandon. **Same level, not tip** — a branch-off from the stack's root rebases onto the keeper's root; landing on the tip would add the intermediate levels' changes to its base. Same pattern as bookmark repoint below.
 
 ### 2. Conflicted bookmarks
 

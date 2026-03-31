@@ -562,6 +562,48 @@ describe('buildKeepPlan', () => {
     expect(plan.nonEmptyDescendants.map(d => d.commit_id)).toEqual(['d_loser'])
   })
 
+  it('mid-stack descendant → rebaseTarget is keeper at SAME level, not tip', () => {
+    // 3-level stack, 2 columns. D branches off level-0 of the loser column.
+    // Old behavior: D rebased onto c1 (tip) — wrong, adds b+c's changes to D's base.
+    // Correct: D rebases onto a1 (keeper's level 0).
+    const g = mkGroup({
+      changeIds: ['A', 'B', 'C'],
+      versions: [
+        [e({ change_id: 'A', commit_id: 'a0' }), e({ change_id: 'A', commit_id: 'a1' })],
+        [e({ change_id: 'B', commit_id: 'b0' }), e({ change_id: 'B', commit_id: 'b1' })],
+        [e({ change_id: 'C', commit_id: 'c0' }), e({ change_id: 'C', commit_id: 'c1' })],
+      ],
+      descendants: [
+        e({ commit_id: 'd_root', parent_commit_ids: ['a0'], divergent: false, empty: false }),
+        e({ commit_id: 'd_mid',  parent_commit_ids: ['b0'], divergent: false, empty: false }),
+        e({ commit_id: 'd_tip',  parent_commit_ids: ['c0'], divergent: false, empty: false }),
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    const targets = Object.fromEntries(plan.nonEmptyDescendants.map(d => [d.commit_id, d.rebaseTarget]))
+    expect(targets.d_root).toBe('a1')  // keeper's level 0
+    expect(targets.d_mid).toBe('b1')   // keeper's level 1
+    expect(targets.d_tip).toBe('c1')   // keeper's level 2 (= tip — old behavior was correct here)
+  })
+
+  it('merge descendant (parents at level 0 AND 2) → rebaseTarget is keeper at MAX level', () => {
+    // D merges a0 (level 0) and c0 (level 2). Its base includes a+b+c's content.
+    // Rebasing onto keeper[2] preserves that; keeper[0] would drop b+c from D's base.
+    const g = mkGroup({
+      changeIds: ['A', 'B', 'C'],
+      versions: [
+        [e({ change_id: 'A', commit_id: 'a0' }), e({ change_id: 'A', commit_id: 'a1' })],
+        [e({ change_id: 'B', commit_id: 'b0' }), e({ change_id: 'B', commit_id: 'b1' })],
+        [e({ change_id: 'C', commit_id: 'c0' }), e({ change_id: 'C', commit_id: 'c1' })],
+      ],
+      descendants: [
+        e({ commit_id: 'd_merge', parent_commit_ids: ['a0', 'c0'], divergent: false, empty: false }),
+      ],
+    })
+    const plan = buildKeepPlan(g, 1)
+    expect(plan.nonEmptyDescendants[0].rebaseTarget).toBe('c1')  // MAX(0,2)=2 → keeper[2]
+  })
+
   it('descendant of keeper ROOT (not tip) → ALSO excluded (multi-level stack)', () => {
     // 2-level stack [[a0,a1],[b0,b1]], keeperIdx=1 keeps a1+b1. A branch off
     // a1 (keeper's ROOT, not tip b1) has parent=a1 which is being KEPT — it
@@ -739,6 +781,17 @@ describe('buildKeepPlan — invariant sweep (all shapes)', () => {
 
         // Invariant 7: rebaseSources starts empty (pre-confirm).
         expect(plan.rebaseSources).toEqual([])
+
+        // Invariant 8: nonEmptyDescendants rebaseTarget is keeper at the
+        // descendant's parent level (NOT always tip). This is what makes
+        // mid-stack branch-offs land at the right height.
+        for (let di = 0; di < shape.descendants.length; di++) {
+          const sd = shape.descendants[di]
+          if (sd.parentCol === k || sd.empty) continue  // keeper-col or empty → not in nonEmptyDescendants
+          const d = plan.nonEmptyDescendants.find(n => n.commit_id === `desc${di}`)
+          expect(d).toBeDefined()
+          expect(d!.rebaseTarget).toBe(`L${sd.parentLevel}c${k}`)
+        }
       })
     }
   }

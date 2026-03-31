@@ -32,8 +32,16 @@ export interface DivergenceActionResult {
 // than average to conflict (moving commits between stacks).
 export async function executeKeepPlan(plan: KeepPlan): Promise<DivergenceActionResult> {
   const results: MutationResult[] = []
-  if (plan.rebaseSources.length > 0) {
-    results.push(await api.rebase(plan.rebaseSources, plan.keeperCommitId, '-s', '-d'))
+  // Group by dest — one rebase per distinct target. Common case (tip-only
+  // descendants) degenerates to one rebase; mid-stack branches get their own.
+  const byDest = new Map<string, string[]>()
+  for (const { source, dest } of plan.rebaseSources) {
+    const sources = byDest.get(dest)
+    if (sources) sources.push(source)
+    else byDest.set(dest, [source])
+  }
+  for (const [dest, sources] of byDest) {
+    results.push(await api.rebase(sources, dest, '-s', '-d'))
   }
   results.push(await api.abandon(plan.abandonCommitIds))
   for (const { name, targetCommitId } of plan.bookmarkRepoints) {

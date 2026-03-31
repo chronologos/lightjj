@@ -257,12 +257,15 @@ export interface KeepPlan {
   // confirm first. Confirm resolves them into EITHER abandonCommitIds
   // OR rebaseSources (never both). A plan with nonEmptyDescendants still
   // populated never reaches onkeep — execute() is only called post-confirm.
-  nonEmptyDescendants: DivergenceEntry[]
-  // Descendants to rebase onto keeperCommitId BEFORE the abandon. Rebase
-  // first: if abandon ran first, jj would auto-rebase D onto the loser-
-  // stack's parent (trunk), and then our explicit rebase would hit a
-  // twice-rebased tree. -s mode (not -r) so D's own descendants follow.
-  rebaseSources: string[]
+  // rebaseTarget is per-descendant: a mid-stack branch-off rebases onto
+  // the keeper's SAME level, not the tip (same pattern as bookmark repoint).
+  nonEmptyDescendants: (DivergenceEntry & { rebaseTarget: string })[]
+  // Descendants to rebase BEFORE the abandon. Rebase first: if abandon ran
+  // first, jj would auto-rebase D onto the loser-stack's parent (trunk), and
+  // then our explicit rebase would hit a twice-rebased tree. -s mode (not -r)
+  // so D's own descendants follow. dest is per-source — for the common
+  // tip-only case all dests match; mid-stack branches have their own level.
+  rebaseSources: { source: string; dest: string }[]
 }
 
 // Compute the execution plan for "keep column keeperIdx, abandon the rest".
@@ -284,8 +287,28 @@ export function buildKeepPlan(g: DivergenceGroup, keeperIdx: number): KeepPlan {
   // from the keeper's ROOT (not tip) would otherwise be miscounted as collateral.
   const keeperCommitIds = new Set(g.versions.map(level => level[keeperIdx].commit_id))
   const keeperTip = g.versions[g.versions.length - 1][keeperIdx].commit_id
+  // commit_id → level index, for per-descendant rebase targeting. Same pattern
+  // as bookmark repoint (keeperAtLevel below): a mid-stack branch-off rebases
+  // onto the keeper's SAME level, not the tip.
+  const commitIdToLevel = new Map<string, number>()
+  for (let li = 0; li < g.versions.length; li++) {
+    for (const v of g.versions[li]) commitIdToLevel.set(v.commit_id, li)
+  }
   const collateral = g.descendants.filter(d => !d.parent_commit_ids.some(p => keeperCommitIds.has(p)))
-  const nonEmptyDescendants = collateral.filter(d => !d.empty)
+  const nonEmptyDescendants = collateral.filter(d => !d.empty).map(d => {
+    // MAX level for merge descendants: if D merges level-0 and level-2, D's
+    // base already includes level-0+1+2's content. Rebasing onto keeper[2]
+    // preserves that; keeper[0] would drop levels 1+2 from D's base.
+    // undefined level = parent outside the divergent set (edge of the classifier
+    // filter) → falls through to 0 = root level, which is what keeperTip used to
+    // give for single-level groups anyway.
+    let maxLevel = 0
+    for (const p of d.parent_commit_ids) {
+      const li = commitIdToLevel.get(p)
+      if (li !== undefined && li > maxLevel) maxLevel = li
+    }
+    return { ...d, rebaseTarget: g.versions[maxLevel][keeperIdx].commit_id }
+  })
   for (const d of collateral.filter(d => d.empty)) abandonCommitIds.push(d.commit_id)
 
   // Bookmarks: repoint to the keeper at the SAME change_id level. Not the

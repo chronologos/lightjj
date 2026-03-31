@@ -301,12 +301,16 @@
 
   function confirmRebaseDescendants() {
     if (!pendingPlan) return
-    // Descendants move to the keeper's tip; the stale stack is then abandoned
-    // with no children pinning it visible. App.svelte runs the rebase BEFORE
-    // the abandon (single batched `jj rebase -s D1 -s D2 -d tip`).
+    // Descendants move to the keeper at their ORIGINAL parent's level; the
+    // stale stack is then abandoned with no children pinning it visible.
+    // executeKeepPlan groups by dest and runs one rebase per distinct target,
+    // BEFORE the abandon.
     execute({
       ...pendingPlan,
-      rebaseSources: pendingPlan.nonEmptyDescendants.map(d => d.commit_id),
+      rebaseSources: pendingPlan.nonEmptyDescendants.map(d => ({
+        source: d.commit_id,
+        dest: d.rebaseTarget,
+      })),
       nonEmptyDescendants: [],
     }, pendingKeeperIdx)
   }
@@ -410,7 +414,7 @@
             <div class="confirm-hint">Rebase moves them (and their descendants) onto the keeper. Abandon discards their content.</div>
             <div class="confirm-actions">
               <button class="dp-btn-confirm" onclick={confirmRebaseDescendants}
-                title="jj rebase -s onto {pendingPlan.keeperCommitId.slice(0, 8)} — keeps their content, moves them to the winning stack">
+                title="jj rebase -s onto keeper at the same stack level — keeps their content, moves them to the winning stack">
                 Rebase onto keeper
               </button>
               <button class="dp-btn-abandon" onclick={confirmAbandonDescendants}
@@ -453,7 +457,7 @@
            instead of crashing on undefined.commit_id. Keep stays disabled. -->
       <div class="version-columns" style="--n-cols: {nVersions}">
         {#each Array(nVersions) as _, colIdx}
-          {@const tipCommitId = group.versions[group.versions.length - 1][colIdx]?.commit_id}
+          {@const colCommitIds = new Set(group.versions.map(l => l[colIdx]?.commit_id).filter(Boolean))}
           {@const rootV = group.versions[0][colIdx]}
           <div class="version-col" class:col-live={group.liveVersion === colIdx} class:col-from={colIdx === compareFrom} class:col-to={colIdx === compareTo}>
             <div class="col-header">
@@ -484,7 +488,7 @@
                 {/if}
               </div>
             {/each}
-            {#each group.descendants.filter(d => tipCommitId && d.parent_commit_ids.includes(tipCommitId)) as d}
+            {#each group.descendants.filter(d => d.parent_commit_ids.some(p => colCommitIds.has(p))) as d}
               <div class="version-cell descendant-cell" title="Non-divergent descendant — pins this column visible">
                 <span class="descendant-marker">└</span>
                 <span class="cell-commit-id">{d.commit_id.slice(0, 8)}</span>

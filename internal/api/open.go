@@ -111,7 +111,7 @@ func (s *Server) editorTemplate(relPath string, line *int) ([]string, editorSubs
 	if err != nil {
 		return nil, editorSubst{}, err
 	}
-	if s.RepoDir != "" {
+	if s.hasLocalFS() {
 		// Local mode (also port-forward: lightjj runs where the repo lives).
 		return cfg.EditorArgs, editorSubst{
 			File:    filepath.Join(s.RepoDir, relPath),

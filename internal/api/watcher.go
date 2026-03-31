@@ -108,7 +108,7 @@ func (w *Watcher) setStale(v bool) {
 // server has no local RepoDir (SSH mode) — SSE auto-refresh requires a local
 // filesystem to observe.
 func NewWatcher(srv *Server, snapshotInterval time.Duration) *Watcher {
-	if srv.RepoDir == "" {
+	if !srv.hasLocalFS() {
 		return nil
 	}
 	w := newWatcher(srv)

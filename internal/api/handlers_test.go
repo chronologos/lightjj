@@ -1040,7 +1040,7 @@ func TestHandleInfo(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, "myhost", got["hostname"])
 	assert.Equal(t, "/home/user/repo", got["repo_path"])
-	assert.Equal(t, true, got["ssh_mode"]) // newTestServer passes RepoDir=""
+	assert.Equal(t, false, got["ssh_mode"]) // newTestServer: no SSHHost. Old RepoDir=="" conflation reported tests as SSH.
 	assert.Equal(t, "origin", got["default_remote"]) // NewServer's baseline
 	assert.Equal(t, "", got["log_revset"])            // unset by newTestServer
 	assert.Equal(t, "jj 0.39.0", got["jj_version"])

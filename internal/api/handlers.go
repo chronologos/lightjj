@@ -499,7 +499,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"hostname":          s.Hostname,
 		"repo_path":         s.RepoPath,
-		"ssh_mode":          s.RepoDir == "",
+		"ssh_mode":          s.isSSHMode(),
 		"editor_configured": len(tmpl) > 0,
 		"default_remote":    s.DefaultRemote,
 		"log_revset":        s.ConfiguredLogRevset,
@@ -1148,9 +1148,8 @@ const fileContentBodyLimit = 64 << 20
 func (s *Server) handleSplitHunks(w http.ResponseWriter, r *http.Request) {
 	// Local-only: jj must be able to exec our binary. In SSH mode the jj
 	// subprocess runs on the REMOTE host where this binary doesn't exist.
-	// RepoDir=="" is the SSH sentinel (see BACKLOG.md `RepoDir` debt note);
 	// SelfBinary=="" covers tests and any future mode that skips os.Executable.
-	if s.RepoDir == "" || s.SelfBinary == "" {
+	if !s.hasLocalFS() || s.SelfBinary == "" {
 		s.writeError(w, http.StatusNotImplemented, "hunk-level split requires local mode")
 		return
 	}

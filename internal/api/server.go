@@ -59,6 +59,16 @@ type Server struct {
 	jjVersionMu       sync.Mutex
 }
 
+// hasLocalFS reports whether this Server can read the repo filesystem directly
+// (op_heads/, workspace_store/). True in local mode; false in SSH mode (repo
+// lives on the remote) and tests (no repo at all).
+func (s *Server) hasLocalFS() bool { return s.RepoDir != "" }
+
+// isSSHMode reports whether jj runs on a remote host via SSH. Distinct from
+// !hasLocalFS(): tests have neither local fs NOR SSH. In prod they're
+// equivalent (main.go sets RepoDir/SSHHost together).
+func (s *Server) isSSHMode() bool { return s.SSHHost != "" }
+
 func NewServer(r runner.CommandRunner, repoDir string) *Server {
 	s := &Server{
 		Runner:        r,
@@ -211,7 +221,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 // subprocess for SSH mode (no local fs) or divergent ops (>1 head, rare,
 // self-healing on next jj command).
 func (s *Server) refreshOpId() string {
-	if s.RepoDir != "" {
+	if s.hasLocalFS() {
 		heads := filepath.Join(s.RepoDir, ".jj", "repo", "op_heads", "heads")
 		if entries, err := os.ReadDir(heads); err == nil && len(entries) == 1 {
 			name := entries[0].Name()
@@ -389,7 +399,7 @@ func (s *Server) getOpId() string {
 // not in the parser, because resolution needs the repo path (fs knowledge the
 // pure parser shouldn't have). Callers need absolute for TabResolve's IsAbs.
 func (s *Server) readWorkspaceStore(ctx context.Context) (map[string]string, error) {
-	if s.RepoDir != "" {
+	if s.hasLocalFS() {
 		// Local: direct fs read. filepath.* for host OS semantics (Windows
 		// absolute paths in pre-0.39 stores wouldn't survive path.IsAbs).
 		repoStore := filepath.Join(s.RepoDir, ".jj", "repo")

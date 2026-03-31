@@ -192,7 +192,7 @@ describe('DivergencePanel — confirm flow', () => {
     await fireEvent.click(container.querySelector('.dp-btn-confirm')!)  // "Rebase onto keeper"
     expect(h.onkeep).toHaveBeenCalledOnce()
     const plan = h.onkeep.mock.calls[0][0]
-    expect(plan.rebaseSources).toEqual(['desc'])
+    expect(plan.rebaseSources).toEqual([{ source: 'desc', dest: 'x1' }])
     expect(plan.abandonCommitIds).not.toContain('desc')  // mutual exclusion
     expect(plan.nonEmptyDescendants).toEqual([])
   })

@@ -123,7 +123,7 @@ Thin HTTP handlers. Each handler: parses request → calls command builder → e
 
 The server includes an operation ID cache (`cachedOp`) that tracks jj's current operation. Every JSON response includes an `X-JJ-Op-Id` header. Mutation endpoints refresh the cache asynchronously via `runMutation()`, which centralizes the post-mutation pattern (run command → refresh op ID → return output).
 
-`refreshOpId()` reads `.jj/repo/op_heads/heads/` directly when `RepoDir` is set — the op-id IS the filename (128 hex chars, truncated to 12 for `short()`), and jj atomically swaps that file on every operation. `os.ReadDir` is <1ms vs ~15-20ms for a `jj op log` subprocess. Falls back to the subprocess for SSH mode (`RepoDir == ""`), divergent op heads (>1 file), or secondary workspaces where `.jj/repo` is a pointer file (ENOTDIR).
+`refreshOpId()` reads `.jj/repo/op_heads/heads/` directly when `hasLocalFS()` — the op-id IS the filename (128 hex chars, truncated to 12 for `short()`), and jj atomically swaps that file on every operation. `os.ReadDir` is <1ms vs ~15-20ms for a `jj op log` subprocess. Falls back to the subprocess for SSH mode, divergent op heads (>1 file), or secondary workspaces where `.jj/repo` is a pointer file (ENOTDIR). `hasLocalFS()`/`isSSHMode()` are the two mode-check helpers — tests have neither (no `RepoDir`, no `SSHHost`), so each site picks the check that matches its semantic.
 
 Handlers use `httptest.NewRecorder` + `testutil.MockRunner` for testing, so they never touch a real jj process in tests.
 

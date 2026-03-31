@@ -19,6 +19,10 @@ func TestDivergence(t *testing.T) {
 	assert.Contains(t, tmpl, `local_bookmarks`)
 	assert.Contains(t, tmpl, `current_working_copy`)
 	assert.NotContains(t, tmpl, `committer.timestamp`) // doc §"Failed heuristics" — don't add back
+	// Full commit_id — flows into jj abandon/rebase, short prefixes risk
+	// ambiguity between fetch and Keep. Same fix staleImmutableTemplate already has.
+	assert.NotContains(t, tmpl, `commit_id.short()`)
+	assert.NotContains(t, tmpl, `p.commit_id().short()`)
 	// 10 fields = 9 separators
 	assert.Equal(t, 9, strings.Count(tmpl, `"\x1F"`))
 }

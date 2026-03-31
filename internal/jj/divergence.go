@@ -31,11 +31,18 @@ type DivergenceEntry struct {
 // local_bookmarks.map(|b| b.name()) strips @origin tracking and * ahead-marker.
 // Bookmarks join on \x1E (sub-field sep) — commas are valid in git refs so
 // join(",") would split `fix,bug` into phantoms. Parent IDs stay comma-joined
-// (hex strings can't contain commas). .short() to match LogGraph.
+// (hex strings can't contain commas).
+//
+// Full commit_id (not .short()) — these IDs flow into jj abandon/rebase via
+// buildKeepPlan → executeKeepPlan. A short prefix is jj's disambiguating
+// minimum AT TEMPLATE TIME; new commits between fetch and Keep can make it
+// ambiguous. Parent commit_ids must match for the Set comparison in
+// classify()'s descendant filter, so they're full too. change_id stays .short()
+// (display-only grouping key, never used in commands).
 const divergenceTemplate = `change_id.short() ++ "\x1F" ++ ` +
-	`commit_id.short() ++ "\x1F" ++ ` +
+	`commit_id ++ "\x1F" ++ ` +
 	`if(divergent, "1", "") ++ "\x1F" ++ ` +
-	`parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ ` +
+	`parents.map(|p| p.commit_id()).join(",") ++ "\x1F" ++ ` +
 	`parents.map(|p| p.change_id().short()).join(",") ++ "\x1F" ++ ` +
 	`if(self.contained_in("::working_copies()"), "1", "") ++ "\x1F" ++ ` +
 	`local_bookmarks.map(|b| b.name()).join("\x1E") ++ "\x1F" ++ ` +

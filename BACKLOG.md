@@ -2,23 +2,11 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-03-30** v1.8.3 — uniform Alt+click annotation entry across diff source view and markdown preview (was preview-only). Toolbar hint for discoverability.
-
-## Divergence deferred (low-impact, from 2026-03-18 bughunt)
-
-The only non-trivial carryover from the 2026-03-20 fix cluster:
-
-- [ ] **confirmRebaseDescendants wrong target** — Requires per-descendant parent-level tracking; current `keeperTip` target is correct for the common case (descendants off tip). Mid-stack-branch is uncommon.
-- [ ] **Mid-stack descendant display tip-filtered** — confirm dialog shows them, panel doesn't. Low priority.
-- [ ] **commit_id.short() TOCTOU** — same window as `staleImmutableTemplate`; low-probability.
+Last shipped: **2026-03-31** v1.8.4 — divergence mid-stack fixes (per-level rebase targets + column display), `commit_id.short()` TOCTOU, `hasLocalFS`/`isSSHMode` helpers.
 
 ## Active
 
-- [ ] **OplogPanel visual diff** (Small, deferred) — Enter → `jj op show` expansion shipped. Remaining: visual diff between op snapshots (tree-at-op-A vs tree-at-op-B). `jj op show -p` gives per-change patches but comparing two arbitrary ops needs `--at-op` revset gymnastics. Defer until asked.
-
-## Architecture debt
-
-- [ ] **`RepoDir == ""` overloaded sentinel** (Low) — Used as SSH-mode flag across 4 sites (down from 6 — two were consolidated). Conflates "SSH mode" / "test mode" / "no local fs". A `hasLocalFS bool` would clarify but is cosmetic.
+- [ ] **OplogPanel visual diff** (Medium, needs design) — Enter → `jj op show` expansion shipped. Remaining: visual diff between op snapshots (tree-at-op-A vs tree-at-op-B). `jj op show -p` is diff-from-prev-op; comparing two ARBITRARY ops needs either `--at-op` file-show at both ops (which files?) or op-restore+snapshot (invasive). **Design question: what's the CUJ?** "Show me the working-copy diff between these two ops" wants `jj diff --from <rev> --to <rev>` where both revs resolve at their respective ops — that's not a thing jj supports directly. Closest: two-cursor compare like FileHistoryPanel, but comparing `@` at different ops instead of a file at different revisions.
 
 ## Deferred (explicit — don't do unless conditions change)
 
