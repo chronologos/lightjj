@@ -100,11 +100,15 @@ export function createRevisionNavigator(opts: {
   async function loadDiffAndFiles(commit: Commit, shouldAbort: () => boolean): Promise<void> {
     const gen = ++revGen
     const target = singleTarget(commit)
-    // Refresh (post-mutation loadLog, same commit_id): keep stale content
-    // visible — no spinner, no reset, scroll preserved via DiffFileView key
-    // stability. New target: spinner + reset so the wrong revision's data
+    // Refresh (post-mutation/snapshot loadLog, SAME CHANGE): keep stale
+    // content visible — no spinner, no reset, scroll preserved via DiffFileView
+    // key stability. New change: spinner + reset so the wrong revision's data
     // doesn't sit under the new changeId during the ~440ms SSH meta wait.
-    const isRefresh = loadedTarget?.kind === 'single' && loadedTarget.commitId === commit.commit_id
+    // Keyed on changeId (not commitId): a snapshot mints a new commit_id but
+    // DiffPanel's sameChange path expects the body to stay mounted; commitId
+    // here would set diffPending → spinner branch unmounts all DiffFileViews →
+    // preview/scroll lost before any DiffPanel-side fix can run.
+    const isRefresh = loadedTarget?.kind === 'single' && loadedTarget.changeId === target.changeId
     loadedTarget = target
     if (!isRefresh) {
       diffPending = true

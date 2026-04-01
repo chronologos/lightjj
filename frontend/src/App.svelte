@@ -580,6 +580,13 @@
       },
       when: () => !inlineMode && !!diffPanelRef?.hasAnnotations(),
     },
+    { label: 'Clear all annotations on this revision', category: 'Annotations',
+      action: () => {
+        diffPanelRef?.clearAnnotations()
+        setMessage({ kind: 'success', text: 'Annotations cleared' })
+      },
+      when: () => !inlineMode && !!diffPanelRef?.hasAnnotations(),
+    },
   ])
 
   // Labels that bake reactive state into strings — only these re-allocate on Space/theme/view toggle.

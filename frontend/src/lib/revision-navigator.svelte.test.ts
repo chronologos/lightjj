@@ -20,10 +20,10 @@ import { fetchRevisionMeta } from './api'
 const mockApi = vi.mocked(api)
 const mockMeta = vi.mocked(fetchRevisionMeta)
 
-function mkCommit(commitId: string): LogEntry['commit'] {
+function mkCommit(commitId: string, changeId = `change-${commitId}`): LogEntry['commit'] {
   return {
     commit_id: commitId,
-    change_id: `change-${commitId}`,
+    change_id: changeId,
     change_prefix: 4,
     commit_prefix: 4,
     is_working_copy: false,
@@ -103,6 +103,29 @@ describe('progressive rendering — loadedTarget leads, diff lags', () => {
     await flush()
     expect(nav.diffPending).toBe(false)
     expect(nav.diff.value).toBe('A-diff')
+  })
+
+
+  it('same-change refresh (snapshot: new commitId, same changeId) → diffPending stays false, no spinner', async () => {
+    const nav = createRevisionNavigator({ onError: vi.fn() })
+    mockMeta.mockResolvedValue(undefined)
+    mockApi.diff.mockResolvedValue({ diff: 'A-diff' })
+
+    void nav.loadDiffAndFiles(mkCommit('A', 'ch-X'), noAbort)
+    expect(nav.diffPending).toBe(true)
+    await flush()
+    expect(nav.diffPending).toBe(false)
+
+    // SSE snapshot: new commit_id B, SAME change_id ch-X. isRefresh keys on
+    // changeId → diffPending stays false → DiffFileViews stay mounted.
+    mockApi.diff.mockReturnValue(new Promise(() => {}))
+    void nav.loadDiffAndFiles(mkCommit('B', 'ch-X'), noAbort)
+    expect(nav.diffPending).toBe(false)
+    expect(targetCommitId(nav)).toBe('B')
+
+    // Different change → diffPending true (full reset path)
+    void nav.loadDiffAndFiles(mkCommit('C', 'ch-Y'), noAbort)
+    expect(nav.diffPending).toBe(true)
   })
 
   it('applyCacheHit invalidates suspended loadDiffAndFiles', async () => {

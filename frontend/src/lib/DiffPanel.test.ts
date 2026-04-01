@@ -618,7 +618,7 @@ describe('DiffPanel', () => {
       expect(previewBtn(container)?.textContent).toBe('Preview')
     })
 
-    it('refresh fileShow rejects (file deleted in new commit) → preview closes', async () => {
+    it('refresh fileShow rejects (transient error) → preview stays open with stale content', async () => {
       mockFileShow.mockResolvedValueOnce({ content: '# doc' })
       const { container, rerender } = render(DiffPanel, { props: mdProps('co-1', 'ch-X') })
       await settle()
@@ -626,11 +626,12 @@ describe('DiffPanel', () => {
       await settle()
       expect(previewBtn(container)?.textContent).toBe('Source')
 
-      mockFileShow.mockRejectedValueOnce(new Error('file not found'))
+      mockFileShow.mockRejectedValueOnce(new Error('WC lock'))
       await rerender(mdProps('co-2', 'ch-X'))
       await settle()
 
-      expect(previewBtn(container)?.textContent).toBe('Preview')
+      // Briefly-stale beats vanished — keep showing old content.
+      expect(previewBtn(container)?.textContent).toBe('Source')
     })
   })
 })

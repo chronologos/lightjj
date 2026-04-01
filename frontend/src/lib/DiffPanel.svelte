@@ -172,9 +172,13 @@
   // Same-change reset (snapshot/amend → new commit_id, same change_id) keeps
   // previews open and refreshes content at the new commit. Unchanged .md →
   // identical string → MarkdownPreview's $derived(html) short-circuits, so
-  // ToC/scroll/mermaid pan-zoom survive. Changed .md → fresh render.
-  async function refreshPreviews(commitId: string, paths: string[]) {
+  // ToC/scroll/mermaid pan-zoom survive. Changed .md → {@html} swaps the
+  // subtree, so capture panel scroll just before the write and restore
+  // post-tick. Captured per-write (not pre-loop) so a 400ms-SSH await
+  // doesn't jump the user back to where they were before the fetch.
+  async function refreshPreviews(commitId: string, paths: string[], scrollTop?: number) {
     const gen = previewGen
+    let changed = false
     for (const path of paths) {
       try {
         const { content } = await api.fileShow(commitId, path)
@@ -185,10 +189,19 @@
         if (!previewContents.has(path)) continue
         if (previewContents.get(path) !== content) {
           previewContents = new Map(previewContents).set(path, content)
+          changed = true
         }
       } catch {
-        if (gen === previewGen) closePreview(path)
+        // Keep stale content on transient error (WC-lock contention with the
+        // concurrent diff.load/snapshot loop, SSH blip). Closing here surfaces
+        // as "preview vanished" — worse than briefly-stale.
       }
+    }
+    // scrollTop captured by caller pre-await (sameChange branch) — covers the
+    // whole snapshot window, not just the final write.
+    if (changed && scrollTop !== undefined && gen === previewGen) {
+      await tick()
+      if (panelContentEl) panelContentEl.scrollTop = scrollTop
     }
   }
 
@@ -331,6 +344,7 @@
     if (diffTarget?.kind !== 'single') return ''
     return exportJSON(annotations.list, diffTarget.changeId, diffTarget.commitId)
   }
+  export function clearAnnotations() { return annotations.clear() }
   export function hasAnnotations(): boolean {
     return annotations.list.some(a => a.status !== 'resolved')
   }
@@ -416,6 +430,7 @@
     // Edit wins over preview — DiffFileView's {#if previewContent} branch
     // precedes the FileEditor branch; a stale preview would hide the editor.
     if (previewContents.has(path)) closePreview(path)
+    collapsedFiles.delete(path)
     editFileContents = new Map(editFileContents).set(path, content)
     editingFiles.add(path)
   }
@@ -429,6 +444,7 @@
   async function togglePreview(path: string) {
     if (previewContents.has(path)) return closePreview(path)
     if (diffTarget?.kind !== 'single' || editBusy.has(path)) return
+    collapsedFiles.delete(path)
     const revId = diffTarget.commitId
     const gen = previewGen
     editBusy.add(path)
@@ -860,13 +876,32 @@
     lastActiveRevId = activeRevisionId
     // Compute cache key for the INCOMING diff. Null for multi-check.
     // changeId (not commitId) — collapse preferences should survive rewrites.
-    // sameChange = snapshot/amend/describe rewrote @ under us; use it to
-    // soften resets where the user's intent ("I'm reading README") survives
-    // a content-hash change.
     const incoming = diffTarget?.kind === 'single' ? diffTarget : null
     const sameChange = !!incoming && incoming.changeId === lastCollapseCacheKey
     lastCollapseCacheKey = incoming?.changeId ?? null
 
+    previewGen++
+    if (sameChange) {
+      // Snapshot/amend/describe rewrote @ under us — same change, new commit_id.
+      // Preserve view state (collapse/expand/edit/compare/search/preview-open);
+      // only re-fetch preview content. suppressNextAutoCollapse: parsedDiff
+      // reloads → auto-collapse $effect re-fires → would re-collapse a >500-line
+      // .md the user is reading (saveCollapseState deleted the cache entry at
+      // size===0, so the restore path can't suppress it). scrollTop captured
+      // HERE (pre-await, pre-diffContent-arrival) so the restore covers the
+      // whole snapshot cycle, not just the previewContents write.
+      suppressNextAutoCollapse = true
+      // Edit may push totalDiffLines over HIDE_DIFF_TOTAL_LINES; user was
+      // already viewing the content, so keep showing it.
+      forceShowLargeDiff = true
+      const openPreviews = [...untrack(() => previewContents).keys()]
+      if (openPreviews.length > 0) {
+        refreshPreviews(incoming.commitId, openPreviews, panelContentEl?.scrollTop)
+      }
+      return
+    }
+
+    suppressNextAutoCollapse = false
     forceShowLargeDiff = false
     collapsedFiles.clear()
     resetExpandState()
@@ -874,13 +909,7 @@
     editFileContents = new Map()
     editBusy.clear()
     editError = ''
-    previewGen++
-    const openPreviews = sameChange ? [...untrack(() => previewContents).keys()] : []
-    if (openPreviews.length > 0) {
-      refreshPreviews(incoming!.commitId, openPreviews)
-    } else {
-      previewContents = new Map()
-    }
+    previewContents = new Map()
     comparePickerPath = null
     mergeSides = null
     mergingPath = null
@@ -932,14 +961,22 @@
       suppressNextAutoCollapse = false
       return
     }
+    // Never auto-collapse a file the user is actively previewing/editing —
+    // defense against any path where suppressNextAutoCollapse loses the race
+    // (e.g. HMR, double-SSE, or a future caller forgetting to set it).
+    const pinned = (p: string) =>
+      untrack(() => previewContents).has(p) || untrack(() => editingFiles).has(p)
     for (const file of parsedDiff) {
+      if (pinned(file.filePath)) continue
       if (fileLineCount(file) > AUTO_COLLAPSE_LINE_LIMIT || isOversize(file)) {
         collapsedFiles.add(file.filePath)
       }
     }
     // Many-moderate-files flooding: collapse everything, let user expand.
     if (totalDiffLines > AUTO_COLLAPSE_TOTAL_LINES) {
-      for (const file of parsedDiff) collapsedFiles.add(file.filePath)
+      for (const file of parsedDiff) {
+        if (!pinned(file.filePath)) collapsedFiles.add(file.filePath)
+      }
     }
   })
 
@@ -1280,6 +1317,11 @@
       <button class="ann-export" onclick={() => navigator.clipboard.writeText(exportAnnotationsMarkdown())} title="Copy markdown for agent prompt">
         Export ↗
       </button>
+      <button
+        class="btn btn-sm btn-danger"
+        onclick={() => confirm(`Clear all ${annotations.list.length} annotations on this change?`) && annotations.clear()}
+        title="Delete all review comments on this revision"
+      >Clear</button>
     </div>
   {/if}
   {#if parsedDiff.length > 0}
@@ -1395,7 +1437,7 @@
             onedit={canMutateFiles ? startEdit : undefined}
             onpreview={diffTarget?.kind === 'single' && !hunkReview ? togglePreview : undefined}
             previewContent={previewContents.get(filePath)}
-            previewRevision={diffTarget?.kind === 'single' ? diffTarget.commitId : undefined}
+            previewRevision={diffTarget?.kind === 'single' ? diffTarget.changeId : undefined}
             onmerge={canMutateFiles ? startMerge : undefined}
             ondiscard={canMutateFiles ? discardFile : undefined}
             onsavefile={saveFile}

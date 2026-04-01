@@ -91,7 +91,7 @@
   })
 </script>
 
-<div class="md-preview" bind:this={container}>
+<div class="md-preview">
   {#if annotationsForLine}
     <div class="md-hint"><kbd class="nav-hint">Alt</kbd>+click any block to annotate</div>
   {/if}
@@ -113,20 +113,26 @@
         </div>
       </nav>
     {:else}
-      <!-- Sticky on a <div>, not the <button> — WebKit's theme-engine button
-           layout interferes with sticky positioning (open ToC is <nav>, fine). -->
       <div class="md-toc-tab">
         <button onclick={() => tocOpen = true} title="Show outline ({toc.length})" aria-label="Show outline">‹</button>
       </div>
     {/if}
   {/if}
-  {@html html}
+  <!-- contain on the {@html} wrapper ONLY — it's the phishing-overlay defense
+       (untrusted markdown can't position:fixed over the real UI). On the outer
+       .md-preview it broke ToC sticky: contain:paint is a clipping boundary,
+       browsers treat that as the sticky scroll container. ToC is our chrome,
+       sits outside the boundary; container binding stays on the {@html} host
+       (wirePanzoom/wireAnnotations/toc-query all target [data-src-line]/h1-6
+       which live inside). -->
+  <div class="md-content" bind:this={container}>
+    {@html html}
+  </div>
 </div>
 
 <style>
   .md-preview {
-    /* Left padding hosts the gutter: diff strip (~-10px) + ann badge (~-34px). */
-    padding: 12px 24px 12px 36px;
+    padding: 12px 24px 12px 0;
     font-family: system-ui, -apple-system, sans-serif;
     font-size: 14px;
     line-height: 1.6;
@@ -135,9 +141,17 @@
        and mermaid get the full width; margin:auto centers on wider panes. */
     max-width: 1100px;
     margin: 0 auto;
+  }
+  .md-content {
+    /* Left padding hosts the gutter: diff strip (~-10px) + ann badge (~-34px).
+       Lives here (not on .md-preview) so contain:paint's clip edge sits left
+       of the negative-offset ::before/.annotation-badge. */
+    padding-left: 36px;
     /* Containing block for fixed-position descendants — neutralizes the
        <div style="position:fixed;..."> phishing-overlay vector without
-       stripping inline style (which mermaid SVG may use). */
+       stripping inline style. On the outer .md-preview this broke ToC sticky
+       (browsers treat any paint-clipping ancestor as the sticky scroll
+       boundary; ToC now sits OUTSIDE this and sticks to .panel-content). */
     contain: layout paint;
   }
   .md-preview :global(h1),
@@ -254,7 +268,8 @@
      so prose wraps around it. */
   .md-toc {
     position: sticky;
-    top: 8px;
+    /* .diff-file-header (sticky top:0, ~33px tall) sits above; offset below it. */
+    top: 40px;
     float: right;
     width: 170px;
     max-height: 70vh;
@@ -329,7 +344,7 @@
      it doesn't reflow prose when toggled. */
   .md-toc-tab {
     position: sticky;
-    top: 8px;
+    top: 40px;
     float: right;
     margin: 0 -8px 12px 8px;
     z-index: 1;
@@ -355,7 +370,7 @@
     display: inline-block;
     font-size: 10px;
     color: var(--overlay0);
-    margin: -4px 0 12px;
+    margin: -4px 0 12px 36px;
     padding: 2px 8px;
     background: var(--surface0);
     border-radius: 10px;
