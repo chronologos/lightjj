@@ -73,6 +73,8 @@ body {
   --green: #66bb6a;
   --red: #ef5350;
   --blue: #6880b8;  /* informational (behind sync-state, question annotations) */
+  --mauve: #c792ea;
+  --lavender: #b4befe;
 
   /* Semantic backgrounds */
   --bg-hover: rgba(255,255,255,0.04);
@@ -171,6 +173,8 @@ body {
   --amber: #e68a00;
   --green: #2e7d32;
   --red: #c62828;
+  --mauve: #8839ef;
+  --lavender: #7287fd;
   --blue: #4860a0;
 
   --bg-hover: rgba(0,0,0,0.03);

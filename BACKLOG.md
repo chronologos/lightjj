@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-04-02** v1.10.0 — jj version gating (Semver/jjSupports backend-pessimistic, jj-features.svelte frontend-optimistic; first gate WorkspaceRootTmpl ≥0.40 replaces protobuf parser) + 6-item leverage sweep: SSH workspace tiebreak via RepoPath, ConflictQueue earliest-first + propagated-↑ hints, fast-check buildKeepPlan property test (genGroup+checkInvariants hoisted), --overlay1 defined, History header button, .ann-export→.btn-sm. Palette 2-line clamp.
+Last shipped: **2026-04-02** v1.10.1 — markdown preview sweep (21 confirmed/13 unique): heading scale h1-h6+weight 600, img/table/prose overflow-clip via contain:paint fixed, mermaidReady hoisted to <script module> (was double-parsing every mount), stamp() leaf-skip so code-fence-containing-heading doesn't mis-stamp, stampedBlocks O(n)+exported+footnote-sort, scroll-margin-top 40px, IO root=.panel-content, ToC active-row scroll. li diff-strip −1.8em (was overlapping bullet). --mauve+--lavender defined.
 
 ## Active
 

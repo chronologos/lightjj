@@ -1,5 +1,14 @@
+<script module lang="ts">
+  import { ensureMermaidLoaded } from './markdown-render'
+  // Module-level: the lazy chunk loads once. Per-instance $state(false) was
+  // forcing a SECOND full marked.parse on every mount-after-first (the .then
+  // microtask flips it after html already computed correctly).
+  let mermaidReady = $state(false)
+  ensureMermaidLoaded().then(() => mermaidReady = true)
+</script>
+
 <script lang="ts">
-  import { renderMarkdown, renderMarkdownAnnotated, ensureMermaidLoaded, wirePanzoom, wireAnnotations, wireDiffGutter, type PreviewContext } from './markdown-render'
+  import { renderMarkdown, renderMarkdownAnnotated, wirePanzoom, wireAnnotations, wireDiffGutter, stampedBlocks, type PreviewContext } from './markdown-render'
   import type { Annotation } from './api'
 
   interface Props {
@@ -17,13 +26,6 @@
 
   let { content, ctx, annotationsForLine, onannotationclick, addedLines }: Props = $props()
   let container: HTMLElement | undefined = $state()
-
-  // Mermaid chunk lazy-loads on first preview. `mermaidReady` is a dep of
-  // `html` so the preview re-derives once the renderer lands — first paint
-  // shows raw ```mermaid blocks, ~100ms later they become SVGs. Subsequent
-  // previews start with mermaidReady=true (module-level cache).
-  let mermaidReady = $state(false)
-  $effect(() => { ensureMermaidLoaded().then(() => mermaidReady = true) })
 
   // data-src-line stamping is needed for both annotation badges AND diff
   // gutter marks — both use the [own, next) range walk over stamped blocks.
@@ -51,6 +53,13 @@
   let toc = $state<TocEntry[]>([])
   let activeHeading = $state<HTMLElement | null>(null)
   let tocOpen = $state(true)
+  let tocItemsEl: HTMLElement | undefined = $state()
+  // Keep the .active row visible inside the ToC's own overflow-y scrollbox.
+  $effect(() => {
+    void activeHeading
+    tocItemsEl?.querySelector('.md-toc-item.active')
+      ?.scrollIntoView({ block: 'nearest' })
+  })
   $effect(() => {
     void html
     // Reset first: on html re-derive, old elements are detached. Stale
@@ -66,28 +75,33 @@
     // "current". rootMargin -70% bottom = only the top 30% counts. When
     // multiple headings intersect (short sections), the last one to enter
     // wins — matches reading-order intuition.
+    // root = the actual scroll container (DiffPanel's .panel-content), not
+    // viewport — rootMargin % is relative to root, and viewport-relative
+    // miscounts the ~100px of toolbar/header chrome above the scrollport.
+    const root = container.closest<HTMLElement>('.panel-content')
     const io = new IntersectionObserver(
       entries => {
         for (const e of entries) {
           if (e.isIntersecting) activeHeading = e.target as HTMLElement
         }
       },
-      { rootMargin: '0px 0px -70% 0px' },
+      { root, rootMargin: '-40px 0px -70% 0px' },
     )
     headings.forEach(h => io.observe(h))
     return () => io.disconnect()
   })
 
+  // Single $effect computes stampedBlocks once; both wire fns consume it.
   $effect(() => {
     void html
-    if (!container || !annotationsForLine) return
-    return wireAnnotations(container, sourceLines, annotationsForLine, onannotationclick)
-  })
-
-  $effect(() => {
-    void html
-    if (!container || !addedLines?.size) return
-    return wireDiffGutter(container, sourceLines.length, addedLines)
+    if (!container || !stamped) return
+    const ranges = stampedBlocks(container, sourceLines.length)
+    const cleanups: Array<() => void> = []
+    if (annotationsForLine)
+      cleanups.push(wireAnnotations(container, ranges, sourceLines, annotationsForLine, onannotationclick))
+    if (addedLines?.size)
+      cleanups.push(wireDiffGutter(ranges, addedLines))
+    return () => cleanups.forEach(fn => fn())
   })
 </script>
 
@@ -99,14 +113,14 @@
     {#if tocOpen}
       <nav class="md-toc" aria-label="Table of contents">
         <button class="md-toc-close" onclick={() => tocOpen = false} title="Hide outline" aria-label="Hide outline">›</button>
-        <div class="md-toc-items">
+        <div class="md-toc-items" bind:this={tocItemsEl}>
           {#each toc as h}
             <button
               class="md-toc-item"
               class:active={h.el === activeHeading}
               class:deep={h.depth >= 4}
               style:padding-left="{(h.depth - 1) * 10 + 8}px"
-              onclick={() => h.el.scrollIntoView({ block: 'start', behavior: 'smooth' })}
+              onclick={() => { activeHeading = h.el; h.el.scrollIntoView({ block: 'start', behavior: 'smooth' }) }}
               title={h.text}
             >{h.text}</button>
           {/each}
@@ -153,14 +167,29 @@
        (browsers treat any paint-clipping ancestor as the sticky scroll
        boundary; ToC now sits OUTSIDE this and sticks to .panel-content). */
     contain: layout paint;
+    /* Long unbroken tokens (URLs, hashes) would be clipped by contain:paint. */
+    overflow-wrap: break-word;
   }
-  .md-preview :global(h1),
-  .md-preview :global(h2),
-  .md-preview :global(h3) {
+  .md-preview :global(h1), .md-preview :global(h2), .md-preview :global(h3),
+  .md-preview :global(h4), .md-preview :global(h5), .md-preview :global(h6) {
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 1.5em 0 0.5em;
+    /* scrollIntoView({block:'start'}) + footnote # links would land under
+       DiffFileView's sticky .diff-file-header (~33px) without this. */
+    scroll-margin-top: 40px;
+  }
+  .md-preview :global(h1) { font-size: 2em; }
+  .md-preview :global(h2) { font-size: 1.5em; }
+  .md-preview :global(h3) { font-size: 1.25em; }
+  .md-preview :global(h4) { font-size: 1em; }
+  .md-preview :global(h5) { font-size: 0.875em; }
+  .md-preview :global(h6) { font-size: 0.85em; color: var(--subtext0); }
+  .md-preview :global(h1), .md-preview :global(h2) {
     border-bottom: 1px solid var(--surface1);
     padding-bottom: 0.3em;
-    margin-top: 1.2em;
   }
+  .md-preview :global([id^="fn"]) { scroll-margin-top: 40px; }
   .md-preview :global(code) {
     background: var(--surface0);
     padding: 0.15em 0.35em;
@@ -187,6 +216,11 @@
   .md-preview :global(table) {
     border-collapse: collapse;
     margin: 1em 0;
+    /* Wide tables would be clipped by contain:paint — display:block lets
+       overflow-x scroll. (table-layout stays auto; cells size normally.) */
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
   }
   .md-preview :global(th),
   .md-preview :global(td) {
@@ -199,10 +233,23 @@
   .md-preview :global(a) {
     color: var(--blue);
   }
+  .md-preview :global(img) {
+    /* contain:paint on .md-content silently CLIPS overflow — without this,
+       wide screenshots lose their right edge with no scrollbar. */
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+  }
   .md-preview :global(hr) {
     border: none;
     border-top: 1px solid var(--surface1);
     margin: 1.5em 0;
+  }
+  .md-preview :global(ul),
+  .md-preview :global(ol) {
+    /* Browser defaults vary (40px Chrome / 2.5em legacy). 1.8em is enough
+       for ::marker + the diff strip's -1.8em offset to land in clear space. */
+    padding-left: 1.8em;
   }
   .md-preview :global(.fn-ref) {
     font-size: 0.75em;
@@ -395,6 +442,11 @@
     border-radius: 2px;
     opacity: 0.7;
   }
+  /* <li>: list-style-position:outside puts the marker at ~-1.2em from the
+     content edge — left:-10px lands on top of it. Pushing to -1.8em clears
+     the marker at any font size while keeping the indent-follows-nesting
+     design (a nested <li>'s strip is still indented relative to its parent). */
+  .md-preview :global(li.md-diff-added::before) { left: -1.8em; }
   /* <pre> overflow-x:auto and .mermaid-block overflow:hidden clip the ::before
      at negative-x — use border-left instead (their existing padding/radius
      accommodates it without layout shift). */
@@ -413,5 +465,8 @@
     font-size: 13px;
     padding: 2px 4px;
   }
+  /* On <li>, the diff strip is at -1.8em (clears the marker) — push the badge
+     past it. ul's 1.8em padding + .md-content's 36px gutter give the budget. */
+  .md-preview :global(li > .annotation-badge) { left: calc(-1.8em - 24px); }
   .md-preview :global(.annotation-badge sup) { font-size: 9px; vertical-align: super; }
 </style>

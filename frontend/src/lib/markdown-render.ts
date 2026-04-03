@@ -140,6 +140,11 @@ function resolveImgSrc(href: string): string {
 
 type Stamped = Token & { _srcLine?: number }
 const STAMPED = new Set(['heading', 'paragraph', 'list_item', 'blockquote', 'code', 'hr', 'table', 'footnoteDef'])
+// Containers have STAMPED descendants whose .raw is a substring of the
+// parent's — cursor must stay at pos+1 so the child is found. Leaf blocks
+// advance past their full raw so a later block whose text appears verbatim
+// inside an earlier code fence isn't matched there.
+const CONTAINER = new Set(['list_item', 'blockquote'])
 
 // Default table renderer — used below to wrap with srcAttr without
 // reimplementing header/align/row logic. TableCell has no `raw`, so per-row
@@ -164,7 +169,13 @@ function stamp(token: Token) {
     if (stampCtx.src.charCodeAt(i) === 10) stampCtx.line++
   }
   ;(token as Stamped)._srcLine = stampCtx.line
-  stampCtx.cursor = pos + 1
+  const skip = CONTAINER.has(token.type) ? 1 : token.raw.length
+  // Newlines inside the skipped span must be counted too, or the next
+  // token's [cursor,pos) count starts from the wrong base.
+  for (let i = pos; i < pos + skip; i++) {
+    if (stampCtx.src.charCodeAt(i) === 10) stampCtx.line++
+  }
+  stampCtx.cursor = pos + skip
 }
 
 const srcAttr = (t: Stamped) => t._srcLine ? ` data-src-line="${t._srcLine}"` : ''
@@ -356,17 +367,26 @@ export function renderMarkdownAnnotated(src: string, ctx?: PreviewContext): stri
 // Iterate stamped blocks with their [start, end) source-line range. Nested
 // blocks (loose-list <li> containing a same-line <p>) yield only the inner —
 // the outer's range collapses to empty since [start, next) = [N, N).
+export type StampedRange = { el: HTMLElement; start: number; end: number }
+
 // Shared by wireAnnotations (badge per block) + wireDiffGutter (mark per
-// block) — both need identical range semantics.
-function* stampedBlocks(container: HTMLElement, totalLines: number) {
+// block) — both need identical range semantics. Materialized once per html
+// change (MarkdownPreview merges the two wire calls into one $effect).
+// distinct is sorted (NOT doc-order — footnote <li>s are appended at HTML
+// end but carry their mid-document [^x]: srcLine), then nextOf is O(1).
+export function stampedBlocks(container: HTMLElement, totalLines: number): StampedRange[] {
   const blocks = [...container.querySelectorAll<HTMLElement>('[data-src-line]')]
-  const sorted = blocks.map(el => +el.dataset.srcLine!).sort((a, b) => a - b)
-  const endOf = (line: number) => sorted.find(l => l > line) ?? totalLines + 1
-  for (const el of blocks) {
-    const start = +el.dataset.srcLine!
-    if (el.querySelector(`[data-src-line="${start}"]`)) continue
-    yield { el, start, end: endOf(start) }
+  const lines = blocks.map(el => +el.dataset.srcLine!)
+  const distinct = [...new Set(lines)].sort((a, b) => a - b)
+  const nextOf = new Map<number, number>()
+  for (let i = 0; i < distinct.length; i++) nextOf.set(distinct[i], distinct[i + 1] ?? totalLines + 1)
+  const out: StampedRange[] = []
+  for (let i = 0; i < blocks.length; i++) {
+    const start = lines[i]
+    if (blocks[i].querySelector(`[data-src-line="${start}"]`)) continue
+    out.push({ el: blocks[i], start, end: nextOf.get(start)! })
   }
+  return out
 }
 
 // Inject badges + Alt-click annotate gesture on rendered preview. Called from
@@ -378,12 +398,13 @@ function* stampedBlocks(container: HTMLElement, totalLines: number) {
 // inside a nested paragraph anchors to the paragraph, not the list item.
 export function wireAnnotations(
   container: HTMLElement,
+  ranges: readonly StampedRange[],
   sourceLines: readonly string[],
   forLine: (n: number) => readonly Annotation[],
   onClick: ((n: number, content: string, e: MouseEvent) => void) | undefined,
 ): () => void {
   const injected: Array<() => void> = []
-  for (const { el, start, end } of stampedBlocks(container, sourceLines.length)) {
+  for (const { el, start, end } of ranges) {
     const anns: Annotation[] = []
     for (let n = start; n < end; n++) anns.push(...forLine(n))
     if (!anns.length) continue
@@ -430,12 +451,11 @@ export function wireAnnotations(
 // paragraph where one sentence changed) — still marked, matching GitHub's
 // prose diff. CSS draws a green left-gutter strip via ::before.
 export function wireDiffGutter(
-  container: HTMLElement,
-  totalLines: number,
+  ranges: readonly StampedRange[],
   addedLines: ReadonlySet<number>,
 ): () => void {
   const marked: HTMLElement[] = []
-  for (const { el, start, end } of stampedBlocks(container, totalLines)) {
+  for (const { el, start, end } of ranges) {
     for (let n = start; n < end; n++) {
       if (addedLines.has(n)) {
         el.classList.add('md-diff-added')
