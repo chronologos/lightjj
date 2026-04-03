@@ -67,6 +67,16 @@ The revision graph uses multiple colors to distinguish parallel branches:
 
 Shared UI primitives live in `theme.css` (global scope, not Svelte-scoped). Component CSS adds only layout/positioning overrides. Don't redefine these per-component.
 
+## Theme system
+
+`theme.css` is two layers:
+- **~50 derived vars** in plain `:root` via `color-mix()` from primaries — theme-agnostic. `--bg-selected: color-mix(in srgb, var(--amber) 8%, transparent)` etc.
+- **~32 primaries** per `:root[data-theme="X"]` block: base/mantle/crust/surface2/overlay0-1/subtext0-1/text + amber/green/red/blue/mauve/lavender + graph-0..7 + syn-* + backdrop/shadow-heavy.
+
+Adding a builtin theme = one `:root[data-theme="X"]` block (~14 lines packed) + a `THEMES` entry in `themes.ts`. The 486 Ghostty themes are NOT CSS-baked — they ship as raw `{bg, fg, p[16]}` and `deriveTheme()` computes primaries at selection time, injected via `<style id="ghostty-theme-vars">`. Builtins exist for zero-FOUC first paint (the `:root` default is dark; ghostty themes need a chunk fetch before they can apply).
+
+When adding a derived var, put it in the `:root` block as `color-mix(in srgb, var(--<primary>) N%, ...)` — NOT a per-theme hex. Per-theme hex means every new theme must define it; color-mix means zero work per theme.
+
 ### Buttons
 
 | Class | Look | Use |

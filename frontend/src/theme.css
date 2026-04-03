@@ -26,6 +26,9 @@
 .reduce-motion {
   --anim-duration: 0ms;
 }
+/* One-frame class during theme swap — stops .btn etc from animating
+   old-theme-color → new-theme-color over 150ms (perceived as a flash). */
+.theme-switching, .theme-switching * { transition: none !important; }
 
 /* --- Reset & Globals --- */
 *, *::before, *::after {
@@ -48,150 +51,47 @@ body {
   background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
-::selection { background: rgba(255,167,38,0.25); }
-.light ::selection { background: rgba(230,138,0,0.25); }
+::selection { background: color-mix(in srgb, var(--amber) 25%, transparent); }
 
-/* --- Dark theme --- */
+/* ─────────────────────────────────────────────────────────────────────────────
+   THEME LAYER
+
+   Two halves:
+   1. DERIVED — computed from primaries via color-mix(). Theme-agnostic; lives
+      in plain `:root`. ~50 vars that used to be hardcoded hex per theme.
+   2. PRIMARIES — ~32 vars each theme block defines. Maps onto the
+      Ghostty/iTerm2 ANSI model (background/foreground + palette 0-15) so
+      mechanical import is possible (Tier-2).
+
+   Ghostty themes ship as raw {bg, fg, p[16]} (ghostty-themes.json); the
+   ANSI→primary mapping lives in deriveTheme() (themes.ts) — single source
+   of truth, including lum-contrast guards for amber/green/red.
+   ──────────────────────────────────────────────────────────────────────────── */
+
 :root {
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 
-  --base: #0f0f13;
-  --mantle: #0f0f13;
-  --crust: #0a0a0e;
-  --surface0: rgba(255,255,255,0.04);
-  --surface1: rgba(255,255,255,0.07);
-  --surface2: #4e4e58;
-  --overlay0: #8a8a94;
-  --overlay1: #9a9aa4;
-  --subtext0: #8a8a94;
-  --subtext1: #e2e2e6;
-  --text: #e2e2e6;
+  /* surface0/1 derived: text-tinted transparency works for both dark (white
+     tint on black) and light (black tint on white) without per-theme hex. */
+  --surface0: color-mix(in srgb, var(--text) 4%, transparent);
+  --surface1: color-mix(in srgb, var(--text) 7%, transparent);
 
-  /* Tier 1: Semantic core */
-  --amber: #ffa726;
-  --green: #66bb6a;
-  --red: #ef5350;
-  --blue: #6880b8;  /* informational (behind sync-state, question annotations) */
-  --mauve: #c792ea;
-  --lavender: #b4befe;
-
-  /* Semantic backgrounds */
-  --bg-hover: rgba(255,255,255,0.04);
-  --bg-selected: rgba(255,167,38,0.07);
-  --bg-checked: rgba(102,187,106,0.08);
-  --bg-checked-selected: rgba(102,187,106,0.12);
-  --bg-error: rgba(239,83,80,0.1);
-  --bg-warning: rgba(255,167,38,0.1);
-  --bg-success: rgba(102,187,106,0.08);
-  --bg-diff-header-hover: #151519;
-  --bg-hunk-header: rgba(255,255,255,0.03);
-  --border-hunk-header: rgba(255,255,255,0.05);
-  --bg-diff-empty: rgba(255,255,255,0.02);
-  --bg-active: rgba(255,167,38,0.15);
-  --bg-btn-primary-hover: #ffb74d;
-  --bg-btn-kbd: rgba(255,255,255,0.04);
-  --wc-desc-color: #e2e2e6;
-
-  /* Tier 2: Entity badges — neutral, distinguished by icon */
-  --bg-bookmark: var(--surface0);
-  --border-bookmark: var(--surface1);
-  --badge-workspace-bg: var(--surface0);
-  --border-workspace: var(--surface1);
-  --bg-pr: var(--surface0);
-  --border-pr: var(--surface1);
-  --border-pr-hover: var(--surface2);
-
-  /* Diff */
-  --diff-add-bg: rgba(102,187,106,0.08);
-  --diff-remove-bg: rgba(239,83,80,0.08);
-  --diff-add-word: rgba(102,187,106,0.2);
-  --diff-remove-word: rgba(239,83,80,0.2);
-
-  /* File status badges (semantic — correct) */
-  --badge-add-bg: rgba(102,187,106,0.12);
-  --badge-modify-bg: rgba(255,167,38,0.12);
-  --badge-delete-bg: rgba(239,83,80,0.12);
-  --badge-other-bg: rgba(255,167,38,0.12);
-
-  /* Conflicts: both sides red, side B muted */
-  --conflict-boundary-border: rgba(239,83,80,0.2);
-  --conflict-boundary-bg: rgba(239,83,80,0.06);
-  --conflict-side1-border: var(--red);
-  --conflict-side1-bg: rgba(239,83,80,0.06);
-  --conflict-side2-border: rgba(239,83,80,0.5);
-  --conflict-side2-bg: rgba(239,83,80,0.03);
-
-  /* Tier 3: Graph palette — muted, decorative only */
-  --graph-0: #BF8A30;
-  --graph-1: #B86848;
-  --graph-2: #A8506A;
-  --graph-3: #8868A8;
-  --graph-4: #6880B8;
-  --graph-5: #5098A0;
-  --graph-6: #5AA058;
-  --graph-7: #A89838;
-
-  --search-match-bg: rgba(255,167,38,0.2);
-  --search-match-current-bg: rgba(255,167,38,0.45);
-
-  --backdrop: rgba(0,0,0,0.5);
-  --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
-
-  --scrollbar-thumb: rgba(255,255,255,0.1);
-  --scrollbar-track: transparent;
-
-  /* Syntax tokens (Lezer classHighlighter tok-*). Decorative like Tier 3
-     graph colors — muted, not semantic. One var per token kind; tok-* rules
-     below reference these so theme toggle is a pure var swap (cached
-     highlight HTML stays valid). */
-  --syn-keyword:  #c792ea;
-  --syn-string:   #a3be8c;
-  --syn-number:   #f78c6c;
-  --syn-comment:  #6c7086;
-  --syn-type:     #f9e2af;
-  --syn-property: #89b4fa;
-  --syn-operator: #9399b2;
-  --syn-punct:    #6c7086;
-  --syn-atom:     #f78c6c;
-}
-
-/* --- Light theme --- */
-:root.light {
-  --base: #f8f8f6;
-  --mantle: #f8f8f6;
-  --crust: #eeeeec;
-  --surface0: rgba(0,0,0,0.03);
-  --surface1: rgba(0,0,0,0.07);
-  --surface2: #a1a1aa;
-  --overlay0: #71717a;
-  --overlay1: #62626a;
-  --subtext0: #71717a;
-  --subtext1: #1a1a1e;
-  --text: #1a1a1e;
-
-  --amber: #e68a00;
-  --green: #2e7d32;
-  --red: #c62828;
-  --mauve: #8839ef;
-  --lavender: #7287fd;
-  --blue: #4860a0;
-
-  --bg-hover: rgba(0,0,0,0.03);
-  --bg-selected: rgba(230,138,0,0.08);
-  --bg-checked: rgba(46,125,50,0.08);
-  --bg-checked-selected: rgba(46,125,50,0.12);
-  --bg-error: rgba(198,40,40,0.08);
-  --bg-warning: rgba(230,138,0,0.1);
-  --bg-success: rgba(46,125,50,0.06);
-  --bg-diff-header-hover: #f4f4f2;
-  --bg-hunk-header: rgba(0,0,0,0.03);
-  --border-hunk-header: rgba(0,0,0,0.05);
-  --bg-diff-empty: rgba(0,0,0,0.02);
-  --bg-active: rgba(230,138,0,0.12);
-  --bg-btn-primary-hover: #cc7a00;
-  --bg-btn-kbd: rgba(0,0,0,0.04);
-  --wc-desc-color: #1a1a1e;
+  --bg-hover: var(--surface0);
+  --bg-selected:         color-mix(in srgb, var(--amber) 8%, transparent);
+  --bg-checked:          color-mix(in srgb, var(--green) 8%, transparent);
+  --bg-checked-selected: color-mix(in srgb, var(--green) 12%, transparent);
+  --bg-error:            color-mix(in srgb, var(--red) 10%, transparent);
+  --bg-warning:          color-mix(in srgb, var(--amber) 10%, transparent);
+  --bg-success:          color-mix(in srgb, var(--green) 8%, transparent);
+  --bg-active:           color-mix(in srgb, var(--amber) 14%, transparent);
+  --bg-btn-primary-hover: color-mix(in srgb, var(--amber) 85%, var(--text));
+  --bg-btn-kbd: var(--surface0);
+  --bg-hunk-header:      color-mix(in srgb, var(--text) 3%, transparent);
+  --border-hunk-header:  color-mix(in srgb, var(--text) 5%, transparent);
+  --bg-diff-empty:       color-mix(in srgb, var(--text) 2%, transparent);
+  --bg-diff-header-hover: color-mix(in srgb, var(--text) 3%, var(--base));
+  --wc-desc-color: var(--text);
 
   --bg-bookmark: var(--surface0);
   --border-bookmark: var(--surface1);
@@ -201,51 +101,129 @@ body {
   --border-pr: var(--surface1);
   --border-pr-hover: var(--surface2);
 
-  --diff-add-bg: rgba(46,125,50,0.14);
-  --diff-remove-bg: rgba(198,40,40,0.1);
-  --diff-add-word: rgba(46,125,50,0.2);
-  --diff-remove-word: rgba(198,40,40,0.2);
+  --diff-add-bg:      color-mix(in srgb, var(--green) 10%, transparent);
+  --diff-remove-bg:   color-mix(in srgb, var(--red) 10%, transparent);
+  --diff-add-word:    color-mix(in srgb, var(--green) 22%, transparent);
+  --diff-remove-word: color-mix(in srgb, var(--red) 22%, transparent);
 
-  --badge-add-bg: rgba(46,125,50,0.12);
-  --badge-modify-bg: rgba(230,138,0,0.12);
-  --badge-delete-bg: rgba(198,40,40,0.12);
-  --badge-other-bg: rgba(230,138,0,0.12);
+  --badge-add-bg:    color-mix(in srgb, var(--green) 12%, transparent);
+  --badge-modify-bg: color-mix(in srgb, var(--amber) 12%, transparent);
+  --badge-delete-bg: color-mix(in srgb, var(--red) 12%, transparent);
+  --badge-other-bg:  color-mix(in srgb, var(--amber) 12%, transparent);
 
-  --conflict-boundary-border: rgba(198,40,40,0.2);
-  --conflict-boundary-bg: rgba(198,40,40,0.06);
+  --conflict-boundary-border: color-mix(in srgb, var(--red) 20%, transparent);
+  --conflict-boundary-bg:     color-mix(in srgb, var(--red) 6%, transparent);
   --conflict-side1-border: var(--red);
-  --conflict-side1-bg: rgba(198,40,40,0.06);
-  --conflict-side2-border: rgba(198,40,40,0.5);
-  --conflict-side2-bg: rgba(198,40,40,0.03);
+  --conflict-side1-bg:     color-mix(in srgb, var(--red) 6%, transparent);
+  --conflict-side2-border: color-mix(in srgb, var(--red) 50%, transparent);
+  --conflict-side2-bg:     color-mix(in srgb, var(--red) 3%, transparent);
 
-  --graph-0: #9A6E18;
-  --graph-1: #984830;
-  --graph-2: #883858;
-  --graph-3: #6A4890;
-  --graph-4: #4860A0;
-  --graph-5: #387880;
-  --graph-6: #3A8038;
-  --graph-7: #887820;
+  --search-match-bg:         color-mix(in srgb, var(--amber) 20%, transparent);
+  --search-match-current-bg: color-mix(in srgb, var(--amber) 45%, transparent);
 
-  --search-match-bg: rgba(230,138,0,0.2);
-  --search-match-current-bg: rgba(230,138,0,0.45);
-
-  --backdrop: rgba(0,0,0,0.3);
-  --shadow-heavy: 0 20px 60px rgba(0,0,0,0.15);
-
-  --scrollbar-thumb: rgba(0,0,0,0.12);
+  --scrollbar-thumb: color-mix(in srgb, var(--text) 12%, transparent);
   --scrollbar-track: transparent;
-
-  --syn-keyword:  #8839ef;
-  --syn-string:   #40a02b;
-  --syn-number:   #fe640b;
-  --syn-comment:  #9ca0b0;
-  --syn-type:     #df8e1d;
-  --syn-property: #1e66f5;
-  --syn-operator: #6c6f85;
-  --syn-punct:    #9ca0b0;
-  --syn-atom:     #fe640b;
 }
+
+/* ───── PRIMARIES — Default Dark (lightjj's original Mocha-ish) ───── */
+:root, :root[data-theme="dark"] {
+  --base: #0f0f13; --mantle: #0f0f13; --crust: #0a0a0e;
+  --surface2: #4e4e58; --overlay0: #8a8a94; --overlay1: #9a9aa4;
+  --subtext0: #8a8a94; --subtext1: #e2e2e6; --text: #e2e2e6;
+  --amber: #ffa726; --green: #66bb6a; --red: #ef5350;
+  --blue: #6880b8; --mauve: #c792ea; --lavender: #b4befe;
+  --graph-0: #BF8A30; --graph-1: #B86848; --graph-2: #A8506A; --graph-3: #8868A8;
+  --graph-4: #6880B8; --graph-5: #5098A0; --graph-6: #5AA058; --graph-7: #A89838;
+  --syn-keyword: #c792ea; --syn-string: #a3be8c; --syn-number: #f78c6c;
+  --syn-comment: #6c7086; --syn-type: #f9e2af; --syn-property: #89b4fa;
+  --syn-operator: #9399b2; --syn-punct: #6c7086; --syn-atom: #f78c6c;
+  --backdrop: rgba(0,0,0,0.5); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+:root[data-theme="light"] {
+  --base: #f8f8f6; --mantle: #f8f8f6; --crust: #eeeeec;
+  --surface2: #a1a1aa; --overlay0: #71717a; --overlay1: #62626a;
+  --subtext0: #71717a; --subtext1: #1a1a1e; --text: #1a1a1e;
+  --amber: #e68a00; --green: #2e7d32; --red: #c62828;
+  --blue: #4860a0; --mauve: #8839ef; --lavender: #7287fd;
+  --graph-0: #9A6E18; --graph-1: #984830; --graph-2: #883858; --graph-3: #6A4890;
+  --graph-4: #4860A0; --graph-5: #387880; --graph-6: #3A8038; --graph-7: #887820;
+  --syn-keyword: #8839ef; --syn-string: #40a02b; --syn-number: #fe640b;
+  --syn-comment: #9ca0b0; --syn-type: #df8e1d; --syn-property: #1e66f5;
+  --syn-operator: #6c6f85; --syn-punct: #9ca0b0; --syn-atom: #fe640b;
+  --backdrop: rgba(0,0,0,0.3); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.15);
+}
+
+:root[data-theme="nord"] {
+  --base: #2e3440; --mantle: #2e3440; --crust: #272c36;
+  --surface2: #4c566a; --overlay0: #616e88; --overlay1: #6d7a96;
+  --subtext0: #81889c; --subtext1: #d8dee9; --text: #eceff4;
+  --amber: #ebcb8b; --green: #a3be8c; --red: #bf616a;
+  --blue: #81a1c1; --mauve: #b48ead; --lavender: #88c0d0;
+  --graph-0: #ebcb8b; --graph-1: #d08770; --graph-2: #bf616a; --graph-3: #b48ead;
+  --graph-4: #81a1c1; --graph-5: #88c0d0; --graph-6: #a3be8c; --graph-7: #8fbcbb;
+  --syn-keyword: #81a1c1; --syn-string: #a3be8c; --syn-number: #b48ead;
+  --syn-comment: #616e88; --syn-type: #8fbcbb; --syn-property: #88c0d0;
+  --syn-operator: #81a1c1; --syn-punct: #616e88; --syn-atom: #d08770;
+  --backdrop: rgba(0,0,0,0.5); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+:root[data-theme="gruvbox-dark"] {
+  --base: #282828; --mantle: #282828; --crust: #1d2021;
+  --surface2: #504945; --overlay0: #928374; --overlay1: #a89984;
+  --subtext0: #928374; --subtext1: #d5c4a1; --text: #ebdbb2;
+  --amber: #fabd2f; --green: #b8bb26; --red: #fb4934;
+  --blue: #83a598; --mauve: #d3869b; --lavender: #8ec07c;
+  --graph-0: #fabd2f; --graph-1: #fe8019; --graph-2: #fb4934; --graph-3: #d3869b;
+  --graph-4: #83a598; --graph-5: #8ec07c; --graph-6: #b8bb26; --graph-7: #d79921;
+  --syn-keyword: #fb4934; --syn-string: #b8bb26; --syn-number: #d3869b;
+  --syn-comment: #928374; --syn-type: #fabd2f; --syn-property: #83a598;
+  --syn-operator: #a89984; --syn-punct: #928374; --syn-atom: #fe8019;
+  --backdrop: rgba(0,0,0,0.5); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+:root[data-theme="dracula"] {
+  --base: #282a36; --mantle: #282a36; --crust: #21222c;
+  --surface2: #44475a; --overlay0: #6272a4; --overlay1: #7282b4;
+  --subtext0: #6272a4; --subtext1: #f8f8f2; --text: #f8f8f2;
+  --amber: #ffb86c; --green: #50fa7b; --red: #ff5555;
+  --blue: #8be9fd; --mauve: #bd93f9; --lavender: #ff79c6;
+  --graph-0: #ffb86c; --graph-1: #ff79c6; --graph-2: #ff5555; --graph-3: #bd93f9;
+  --graph-4: #8be9fd; --graph-5: #50fa7b; --graph-6: #f1fa8c; --graph-7: #6272a4;
+  --syn-keyword: #ff79c6; --syn-string: #f1fa8c; --syn-number: #bd93f9;
+  --syn-comment: #6272a4; --syn-type: #8be9fd; --syn-property: #50fa7b;
+  --syn-operator: #ff79c6; --syn-punct: #6272a4; --syn-atom: #bd93f9;
+  --backdrop: rgba(0,0,0,0.5); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+:root[data-theme="tokyo-night"] {
+  --base: #1a1b26; --mantle: #1a1b26; --crust: #15161e;
+  --surface2: #414868; --overlay0: #565f89; --overlay1: #6673a3;
+  --subtext0: #565f89; --subtext1: #a9b1d6; --text: #c0caf5;
+  --amber: #e0af68; --green: #9ece6a; --red: #f7768e;
+  --blue: #7aa2f7; --mauve: #bb9af7; --lavender: #7dcfff;
+  --graph-0: #e0af68; --graph-1: #ff9e64; --graph-2: #f7768e; --graph-3: #bb9af7;
+  --graph-4: #7aa2f7; --graph-5: #7dcfff; --graph-6: #9ece6a; --graph-7: #73daca;
+  --syn-keyword: #bb9af7; --syn-string: #9ece6a; --syn-number: #ff9e64;
+  --syn-comment: #565f89; --syn-type: #2ac3de; --syn-property: #7aa2f7;
+  --syn-operator: #89ddff; --syn-punct: #565f89; --syn-atom: #ff9e64;
+  --backdrop: rgba(0,0,0,0.5); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+:root[data-theme="rose-pine"] {
+  --base: #191724; --mantle: #191724; --crust: #12111b;
+  --surface2: #403d52; --overlay0: #6e6a86; --overlay1: #7e7a96;
+  --subtext0: #908caa; --subtext1: #e0def4; --text: #e0def4;
+  --amber: #f6c177; --green: #31748f; --red: #eb6f92;
+  --blue: #9ccfd8; --mauve: #c4a7e7; --lavender: #ebbcba;
+  --graph-0: #f6c177; --graph-1: #ebbcba; --graph-2: #eb6f92; --graph-3: #c4a7e7;
+  --graph-4: #9ccfd8; --graph-5: #31748f; --graph-6: #6e6a86; --graph-7: #908caa;
+  --syn-keyword: #31748f; --syn-string: #f6c177; --syn-number: #ebbcba;
+  --syn-comment: #6e6a86; --syn-type: #9ccfd8; --syn-property: #c4a7e7;
+  --syn-operator: #908caa; --syn-punct: #6e6a86; --syn-atom: #eb6f92;
+  --backdrop: rgba(0,0,0,0.5); --shadow-heavy: 0 20px 60px rgba(0,0,0,0.3);
+}
+
 
 /* --- Shared UI primitives ---------------------------------------------------
    Button/toggle/badge classes used across components. Component-scoped styles

@@ -7,11 +7,17 @@
     shortcut?: string
     hint?: string
     category?: string
-    action: () => void
+    action?: () => void
     when?: () => boolean
     infoOnly?: boolean
     // Show in the empty-query cheatsheet even without a shortcut (otherwise search-only)
     showInCheatsheet?: boolean
+    /** Submenu — selecting drills in (breadcrumb shows label, Esc goes back).
+     *  Isolates large option sets (themes, aliases) from the root list. */
+    children?: PaletteCommand[]
+    /** 3-4 hex colors rendered as a chip strip — visual-first picking for
+     *  theme/color submenus without clicking through. */
+    swatch?: readonly string[]
   }
 
   interface Props {
@@ -25,10 +31,16 @@
   let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let resultsEl: HTMLElement | undefined = $state(undefined)
+  // Label of the drilled-into command (stable key — the cmd OBJECT is fresh
+  // each `commands` recompute, so storing the object would freeze children at
+  // the value at drill-in time and miss lazy-loaded additions).
+  let submenuLabel = $state<string | null>(null)
+  let submenu = $derived(submenuLabel ? commands.find(c => c.label === submenuLabel) : null)
 
   let availableCommands = $derived.by(() => {
     if (!open) return []
-    return commands.filter(c => !c.when || c.when())
+    const src = submenu?.children ?? commands
+    return src.filter(c => !c.when || c.when())
   })
 
   let filteredCommands = $derived.by(() => {
@@ -59,6 +71,7 @@
     if (open) {
       query = ''
       index = 0
+      submenuLabel = null
       inputEl?.focus()
     }
   })
@@ -66,11 +79,20 @@
   function close() {
     open = false
     query = ''
+    submenuLabel = null
   }
 
   function execute(cmd: PaletteCommand) {
+    if (cmd.children) {
+      cmd.action?.()  // optional side-effect (e.g. kick a lazy load)
+      submenuLabel = cmd.label
+      query = ''
+      index = 0
+      inputEl?.focus()
+      return
+    }
     close()
-    cmd.action()
+    cmd.action?.()
   }
 
   function scrollActiveIntoView() {
@@ -105,7 +127,8 @@
         break
       case 'Escape':
         e.preventDefault()
-        close()
+        if (submenuLabel) { submenuLabel = null; query = ''; index = 0 }
+        else close()
         break
     }
   }
@@ -115,7 +138,13 @@
   <div class="palette-backdrop" onclick={close} role="presentation"></div>
   <div class="palette" class:palette-wide={isCheatsheet} role="dialog" aria-modal="true" aria-label="Command palette">
     <div class="palette-input-wrap">
-      <span class="palette-arrow">▸</span>
+      {#if submenu}
+        <button class="palette-crumb" onclick={() => { submenuLabel = null; query = ''; index = 0; inputEl?.focus() }} title="Back (Esc)">
+          {submenu.label} ›
+        </button>
+      {:else}
+        <span class="palette-arrow">▸</span>
+      {/if}
       <input
         bind:this={inputEl}
         bind:value={query}
@@ -167,8 +196,14 @@
             onclick={() => execute(cmd)}
             onmouseenter={() => { index = i }}
           >
+            {#if cmd.swatch}
+              <span class="palette-swatch">
+                {#each cmd.swatch as c}<span style:background={c}></span>{/each}
+              </span>
+            {/if}
             <span class="palette-label">
               {cmd.label}
+              {#if cmd.children}<span class="palette-submenu-arrow">›</span>{/if}
               {#if cmd.category === 'Aliases'}<span class="palette-badge">alias</span>{/if}
             </span>
             {#if cmd.hint}<span class="palette-hint" title={cmd.hint}>{cmd.hint}</span>{/if}
@@ -393,6 +428,34 @@
     vertical-align: 1px;
   }
 
+
+  .palette-crumb {
+    background: transparent;
+    border: none;
+    color: var(--amber);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 0 4px 0 0;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .palette-crumb:hover { text-decoration: underline; }
+  .palette-submenu-arrow {
+    margin-left: 6px;
+    color: var(--overlay0);
+  }
+  .palette-swatch {
+    display: inline-flex;
+    margin-right: 8px;
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid var(--surface2);
+  }
+  .palette-swatch span {
+    width: 12px;
+    height: 12px;
+  }
   .palette-hint {
     color: var(--surface2);
     font-family: var(--font-mono);

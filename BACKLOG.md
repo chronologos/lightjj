@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-04-02** v1.10.1 — markdown preview sweep (21 confirmed/13 unique): heading scale h1-h6+weight 600, img/table/prose overflow-clip via contain:paint fixed, mermaidReady hoisted to <script module> (was double-parsing every mount), stamp() leaf-skip so code-fence-containing-heading doesn't mis-stamp, stampedBlocks O(n)+exported+footnote-sort, scroll-margin-top 40px, IO root=.panel-content, ToC active-row scroll. li diff-strip −1.8em (was overlapping bullet). --mauve+--lavender defined.
+Last shipped: **2026-04-03** v1.11.0 — Theme system: 7 builtins (CSS-baked) + 486 Ghostty (raw palettes lazy-loaded, deriveTheme() client-side with pickAccent lum-guards). theme.css ~50 derived via color-mix() + per-theme primaries (~32). CommandPalette children submenu + swatch. Cold-load triple-fix (void ghosttyThemes on $effect AND $derived AND GraphSvg themeEpoch). .theme-switching double-rAF (single rAF fires pre-style-recalc → suppression was no-op). themeSubmenuCommand own $derived (493 children not rebuilt on Space-spam). loadGhosttyThemes .catch clears memo.
 
 ## Active
 

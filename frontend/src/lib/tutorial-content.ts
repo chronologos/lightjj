@@ -6,6 +6,7 @@ export interface TutorialFeature {
 }
 
 export const FEATURES: TutorialFeature[] = [
+  { version: '1.11.0', shortcut: '\u2318K → Theme', title: '493 color themes', description: '7 hand-tuned builtins + 486 derived from Ghostty\'s palette set. Swatch preview in the picker; `t` still toggles dark↔light.' },
   { version: '0.1.0', shortcut: 'j / k', title: 'Navigate revisions', description: 'Move through the revision graph. Enter to view diff.' },
   { version: '0.1.0', shortcut: '\u2318K', title: 'Command palette', description: 'Search all available actions. Also shows keyboard shortcuts.' },
   { version: '0.1.0', shortcut: '/', title: 'Revset filter', description: 'Filter revisions with any jj revset expression.' },

@@ -35,7 +35,9 @@
     rebase: RebaseMode
     squash: SquashMode
     split: SplitMode
-    isDark: boolean
+    theme: string
+    /** Bumps when ghostty themes lazy-load — see GraphSvg refreshPalette. */
+    themeEpoch?: number
     prByBookmark: Map<string, PullRequest>
     impliedCommitIds: Set<string>
     remoteVisibility: RemoteVisibility
@@ -47,7 +49,7 @@
     onnewfromchecked, onabandonchecked, onclearchecks,
     onbookmarkclick,
     rebase, squash, split,
-    isDark, prByBookmark, impliedCommitIds, remoteVisibility,
+    theme, themeEpoch = 0, prByBookmark, impliedCommitIds, remoteVisibility,
   }: Props = $props()
 
   let anyModeActive = $derived(rebase.active || squash.active || split.active)
@@ -371,7 +373,8 @@
             gutter={line.gutter}
             isDivergent={line.isDivergent ?? false}
             gutterWidth={maxGutterLen}
-            {isDark}
+            {theme}
+            {themeEpoch}
           />
           {#if line.isNode}
             {@const entry = revisions[line.entryIndex]}

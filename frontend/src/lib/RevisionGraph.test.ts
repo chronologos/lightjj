@@ -81,7 +81,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     rebase: createRebaseMode(),
     squash: createSquashMode(),
     split: createSplitMode(),
-    isDark: true,
+    theme: 'dark',
     prByBookmark: new Map(),
     impliedCommitIds: new Set<string>(),
     ...overrides,

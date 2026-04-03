@@ -58,6 +58,7 @@
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config } from './lib/config.svelte'
+  import { THEMES, isThemeDark, loadGhosttyThemes, applyGhosttyTheme, type GhosttyTheme } from './lib/themes'
   import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt, checkForUpdate, type UpdateInfo } from './lib/version'
   import { FEATURES, type TutorialFeature } from './lib/tutorial-content'
   import WelcomeModal from './lib/WelcomeModal.svelte'
@@ -357,19 +358,66 @@
   }
 
   // --- Theme ---
-  let darkMode = $derived(config.theme === 'dark')
+  // ghosttyThemes dep: isThemeDark reads non-reactive module state, so a
+  // saved light ghostty theme on reload would compute darkMode=true (?? true
+  // fallback) and never re-derive when the chunk lands.
+  let darkMode = $derived((void ghosttyThemes, isThemeDark(config.theme)))
   const cmdKey = typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'
 
-  // Highlight HTML uses tok-* class names (not inline styles), so theme
-  // toggle is a pure CSS var swap — no cache invalidation, no re-render.
+  // 't' key cycles current ↔ the opposite-luminance default. Per-theme
+  // selection is via Cmd+K → "Theme: …". Highlight HTML uses tok-* class
+  // names (not inline styles), so a swap is pure CSS — no cache invalidation.
   function toggleTheme() {
     config.theme = darkMode ? 'light' : 'dark'
   }
 
-  // Sync theme class + reduce-motion class to <html>
+  let ghosttyThemes = $state<GhosttyTheme[]>([])
+
+  // Own $derived — keyed only on config.theme + ghosttyThemes so the 493
+  // children DON'T rebuild on Space-spam / pullRequests / reduceMotion (which
+  // dynamicCommands depends on).
+  let themeSubmenuCommand = $derived<PaletteCommand>({
+    label: 'Theme…', category: 'View', showInCheatsheet: true,
+    hint: [...THEMES, ...ghosttyThemes].find(t => t.id === config.theme)?.label,
+    action: () => { if (!ghosttyThemes.length) loadGhosttyThemes().then(ts => { ghosttyThemes = ts }) },
+    children: [...THEMES, ...ghosttyThemes].map(t => ({
+      label: t.label, swatch: t.swatch, action: () => { config.theme = t.id },
+      hint: config.theme === t.id ? 'current' : t.dark ? 'dark' : 'light',
+    })),
+  })
+
+  // Theme application — split from reduceMotion so toggling that doesn't
+  // re-inject the ghostty <style> (O(486) find + stylesheet reparse).
+  // `void ghosttyThemes` re-fires after lazy load (applyGhosttyTheme reads
+  // non-reactive module state). .theme-switching for one frame suppresses
+  // .btn/.seg color transitions animating old→new theme values.
   $effect(() => {
-    document.documentElement.classList.toggle('light', !darkMode)
+    void ghosttyThemes
+    const root = document.documentElement
+    root.classList.add('theme-switching')
+    applyGhosttyTheme(config.theme)
+    root.dataset.theme = config.theme
+    root.classList.toggle('light', !darkMode)
+    // Double-rAF: single rAF fires BEFORE style recalc in the same frame
+    // (event→microtask→rAF→style→paint), so the class would be removed
+    // before the browser observes the new theme + suppression together.
+    requestAnimationFrame(() => requestAnimationFrame(() =>
+      root.classList.remove('theme-switching')))
+  })
+  $effect(() => {
     document.documentElement.classList.toggle('reduce-motion', config.reduceMotion)
+  })
+
+  // Saved config.theme might be a ghostty id — load eagerly so the first
+  // paint after hydration has the vars. On load failure, fall back to a
+  // builtin so the UI isn't unstyled (catch in loadGhosttyThemes returns []).
+  $effect(() => {
+    if (!THEMES.some(t => t.id === config.theme)) {
+      loadGhosttyThemes().then(ts => {
+        ghosttyThemes = ts
+        if (!ts.some(t => t.id === config.theme)) config.theme = 'dark'
+      })
+    }
   })
 
   // --- Refs ---
@@ -595,6 +643,7 @@
     { label: `Abandon ${checkedRevisions.size} checked`, category: 'Revisions', action: handleAbandonChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: `New from ${checkedRevisions.size} checked`, category: 'Revisions', action: handleNewFromChecked, when: () => !inlineMode && checkedRevisions.size > 0 },
     { label: darkMode ? 'Light theme' : 'Dark theme', shortcut: 't', category: 'View', action: toggleTheme },
+    themeSubmenuCommand,
     { label: config.reduceMotion ? 'Enable animations' : 'Reduce motion', category: 'View', action: () => { config.reduceMotion = !config.reduceMotion } },
     { label: `View: Open PRs (${pullRequests.length})`, hint: prsRevset, category: 'Navigation', action: () => applyRevsetExample(prsRevset), when: () => pullRequests.length > 0 },
   ])
@@ -2274,7 +2323,8 @@
             {rebase}
             {squash}
             {split}
-            isDark={darkMode}
+            theme={config.theme}
+            themeEpoch={ghosttyThemes.length}
             {prByBookmark}
             {impliedCommitIds}
             remoteVisibility={repoVisibility}

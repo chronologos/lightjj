@@ -13,7 +13,7 @@ import type { RemoteVisibilityByRepo } from './api'
 const STORAGE_KEY = 'lightjj-config'
 
 interface Config {
-  theme: 'dark' | 'light'
+  theme: string  // matches THEMES[].id in themes.ts; legacy 'dark'|'light' values are valid ids
   splitView: boolean
   reduceMotion: boolean
   revisionPanelWidth: number

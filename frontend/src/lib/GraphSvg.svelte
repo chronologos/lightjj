@@ -76,11 +76,14 @@
   }
 
   let palette: string[] = $state(Array(GRAPH_COLORS).fill('#888'))
-  let paletteDark: boolean | undefined // sentinel: undefined = never read
+  // Cache key includes epoch — for ghostty themes the --graph-N vars don't
+  // exist until the lazy <style> injection lands, so theme-id alone would
+  // cache the pre-injection default-dark colors permanently.
+  let paletteKey: string | undefined
 
-  function refreshPalette(isDark: boolean) {
-    if (paletteDark === isDark) return
-    paletteDark = isDark
+  function refreshPalette(key: string) {
+    if (paletteKey === key) return
+    paletteKey = key
     const style = getComputedStyle(document.documentElement)
     palette = Array.from({ length: GRAPH_COLORS }, (_, i) =>
       style.getPropertyValue(`--graph-${i}`).trim()
@@ -97,16 +100,16 @@
     gutter: string
     isDivergent: boolean
     gutterWidth: number
-    isDark: boolean
+    theme: string
+    themeEpoch?: number
   }
 
-  let { gutter, isDivergent, gutterWidth, isDark }: Props = $props()
+  let { gutter, isDivergent, gutterWidth, theme, themeEpoch = 0 }: Props = $props()
 
-  // Must use $effect (not $derived): the .light class toggle happens in an
+  // Must use $effect (not $derived): the data-theme attr write happens in an
   // $effect in App.svelte — $derived would read stale CSS vars. refreshPalette
-  // no-ops if paletteDark === isDark, so only the first instance mounted
-  // after a theme change does actual work.
-  $effect(() => refreshPalette(isDark))
+  // no-ops on same key, so only the first instance after a change does work.
+  $effect(() => refreshPalette(`${theme}:${themeEpoch}`))
 
   function laneColor(lane: number): string {
     return palette[lane % GRAPH_COLORS]
