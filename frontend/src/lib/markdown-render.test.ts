@@ -13,15 +13,8 @@ vi.mock('beautiful-mermaid', () => ({
     return `<svg data-src="${src.slice(0, 20)}"></svg>`
   }),
 }))
-import { renderMarkdown, renderMarkdownAnnotated, ensureMermaidLoaded, wirePanzoom, wireAnnotations, wireDiffGutter, stampedBlocks } from './markdown-render'
+import { renderMarkdown, renderMarkdownAnnotated, ensureMermaidLoaded, wirePanzoom, stampedBlocks } from './markdown-render'
 
-// Test wrappers — wire fns now take precomputed ranges (stampedBlocks runs
-// once in MarkdownPreview's merged $effect).
-const wireAnn = (div: HTMLElement, lines: string[], forLine: (n: number) => readonly Annotation[], onClick?: (n: number, c: string, e: MouseEvent) => void) =>
-  wireAnnotations(div, stampedBlocks(div, lines.length), lines, forLine, onClick)
-const wireGutter = (div: HTMLElement, total: number, added: Set<number>) =>
-  wireDiffGutter(stampedBlocks(div, total), added)
-import type { Annotation } from './api'
 
 describe('renderMarkdown', () => {
   it('renders GFM basics', () => {
@@ -477,7 +470,7 @@ describe('renderMarkdownAnnotated', () => {
   })
 })
 
-// Shared by wireAnnotations + wireDiffGutter — both walk the same stamped DOM.
+// Feeds MarkdownPreview's gutter-row measurement.
 const renderAnnotated = (src: string) => {
   const div = document.createElement('div')
   div.innerHTML = renderMarkdownAnnotated(src)
@@ -502,123 +495,6 @@ describe('stampedBlocks — footnote order', () => {
   })
 })
 
-describe('wireAnnotations', () => {
-  const mkAnn = (lineNum: number, comment = 'note'): Annotation => ({
-    id: 'a', changeId: 'c', filePath: 'doc.md',
-    lineNum, lineContent: `line ${lineNum}`, comment,
-    severity: 'suggestion', createdAt: 0, createdAtCommitId: 'x', status: 'open',
-  })
-
-  it('injects badge on block covering annotation line', () => {
-    // heading@1, para@3 → ann at line 4 falls in para's [3, ∞) range
-    const div = renderAnnotated('# Title\n\nPara text\ncontinues')
-    const ann = mkAnn(4)
-    wireAnn(div, ['# Title', '', 'Para text', 'continues'], n => n === 4 ? [ann] : [], undefined)
-
-    expect(div.querySelector('h1 .annotation-badge')).toBeNull()
-    const badge = div.querySelector('p .annotation-badge') as HTMLElement
-    expect(badge).toBeTruthy()
-    expect(badge.title).toBe('1 annotation: note')
-  })
-
-  it('nested block claims sub-range (li > inner p does not double-badge)', () => {
-    // Loose list: li@1 contains p@1. Both claim line 1 initially, but
-    // sorted-next-line gives li range [1,1) = empty, p range [1,end).
-    // Only the innermost p gets the badge.
-    const div = renderAnnotated('- item one\n\n- item two')
-    wireAnn(div, ['- item one', '', '- item two'], n => n === 1 ? [mkAnn(1)] : [], undefined)
-    const badges = div.querySelectorAll('.annotation-badge')
-    expect(badges.length).toBe(1)
-  })
-
-  it('Alt+click emits innermost block start line + source content', () => {
-    const div = renderAnnotated('# Title\n\nPara')
-    const srcLines = ['# Title', '', 'Para']
-    const calls: [number, string][] = []
-    wireAnn(div, srcLines, () => [], (n, c) => { calls.push([n, c]) })
-
-    const p = div.querySelector('p')!
-    p.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true }))
-    expect(calls).toEqual([[3, 'Para']])
-  })
-
-  it('non-Alt click is ignored', () => {
-    const div = renderAnnotated('# Title')
-    let fired = false
-    wireAnn(div, ['# Title'], () => [], () => { fired = true })
-    div.querySelector('h1')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    expect(fired).toBe(false)
-  })
-
-  it('cleanup removes badges + listener', () => {
-    const div = renderAnnotated('# Title')
-    const ann = mkAnn(1)
-    const cleanup = wireAnn(div, ['# Title'], () => [ann], () => {})
-    expect(div.querySelector('.annotation-badge')).toBeTruthy()
-    expect(div.querySelector('.md-ann-host')).toBeTruthy()
-    cleanup()
-    expect(div.querySelector('.annotation-badge')).toBeNull()
-    expect(div.querySelector('.md-ann-host')).toBeNull()
-  })
-})
-
-describe('wireDiffGutter', () => {
-  it('marks block whose [start,end) range contains an added line', () => {
-    // h1@1, p@3 → p claims [3,∞). Line 4 added → p marked, h1 not.
-    const div = renderAnnotated('# Title\n\nPara text\ncontinues')
-    wireGutter(div, 4, new Set([4]))
-    expect(div.querySelector('h1.md-diff-added')).toBeNull()
-    expect(div.querySelector('p.md-diff-added')).toBeTruthy()
-  })
-
-  it('marks the start line itself (range is [start,end) inclusive of start)', () => {
-    const div = renderAnnotated('# Title\n\nPara')
-    wireGutter(div, 3, new Set([3]))
-    expect(div.querySelector('p.md-diff-added')).toBeTruthy()
-  })
-
-  it('skips blocks with no added lines in range', () => {
-    const div = renderAnnotated('# Title\n\nPara')
-    wireGutter(div, 3, new Set([99]))
-    expect(div.querySelectorAll('.md-diff-added').length).toBe(0)
-  })
-
-  it('marks multiple blocks independently', () => {
-    const div = renderAnnotated('# Edited heading\n\nUnchanged para\n\nEdited para')
-    wireGutter(div, 5, new Set([1, 5]))
-    expect(div.querySelector('h1.md-diff-added')).toBeTruthy()
-    expect(div.querySelectorAll('p.md-diff-added').length).toBe(1)
-    expect(div.querySelector('p.md-diff-added')!.textContent).toBe('Edited para')
-  })
-
-  it('nested loose-list: inner block claims range (same dedup as wireAnnotations)', () => {
-    // li@1 contains p@1 — outer skipped via the same querySelector check.
-    const div = renderAnnotated('- item one\n\n- item two')
-    wireGutter(div, 3, new Set([1]))
-    const marks = div.querySelectorAll('.md-diff-added')
-    expect(marks.length).toBe(1)
-    expect(marks[0].tagName).toBe('P')
-  })
-
-  it('cleanup removes marks', () => {
-    const div = renderAnnotated('# Title')
-    const cleanup = wireGutter(div, 1, new Set([1]))
-    expect(div.querySelectorAll('.md-diff-added').length).toBe(1)
-    cleanup()
-    expect(div.querySelectorAll('.md-diff-added').length).toBe(0)
-  })
-
-  it('coexists with wireAnnotations on the same block', () => {
-    const div = renderAnnotated('# Title')
-    const ann = { id: 'a', changeId: 'c', filePath: 'f.md', lineNum: 1, lineContent: '# Title', comment: 'hi', severity: 'suggestion' as const, createdAt: 0, createdAtCommitId: 'x', status: 'open' as const }
-    wireAnn(div, ['# Title'], () => [ann], undefined)
-    wireGutter(div, 1, new Set([1]))
-    const h1 = div.querySelector('h1')!
-    expect(h1.classList.contains('md-ann-host')).toBe(true)
-    expect(h1.classList.contains('md-diff-added')).toBe(true)
-    expect(h1.querySelector('.annotation-badge')).toBeTruthy()
-  })
-})
 
 describe('wirePanzoom', () => {
   const mkContainer = (n = 1) => {

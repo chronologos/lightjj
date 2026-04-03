@@ -328,10 +328,10 @@
   let orphanedAnns = $derived(annotations.list.filter(a => a.status === 'orphaned'))
 
   function scrollToAnnotation(ann: Annotation) {
-    // Scroll to the file then to its approximate line position. DiffFileView
-    // doesn't expose per-line scrolling; this gets close enough. Close preview
-    // — the annotation is on a diff line, hidden when MarkdownPreview renders.
-    if (previewContents.has(ann.filePath)) closePreview(ann.filePath)
+    // Preview renders the badge too (wireAnnotations) — don't kick the user
+    // out of preview. scrollToFile gets to the header; the badge is visible
+    // in either mode. (Per-line scroll within preview would need querying the
+    // injected .annotation-badge element — deferred.)
     scrollToFile(ann.filePath)
   }
 

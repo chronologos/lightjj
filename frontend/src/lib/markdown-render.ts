@@ -1,11 +1,7 @@
 import { marked, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { escapeHtml, escapeAttr, highlightLines, EXTENSION_LANGUAGES } from './highlighter'
-import { api, type Annotation, type AnnotationSeverity } from './api'
-
-const SEV_ORDER: Record<AnnotationSeverity, number> = {
-  'must-fix': 0, suggestion: 1, question: 2, nitpick: 3,
-}
+import { api } from './api'
 
 // beautiful-mermaid lazy-loaded — ~300KB chunk (mostly elkjs), only fetched
 // on first preview. Subsequent previews hit module cache. Promise-memoized
@@ -369,11 +365,9 @@ export function renderMarkdownAnnotated(src: string, ctx?: PreviewContext): stri
 // the outer's range collapses to empty since [start, next) = [N, N).
 export type StampedRange = { el: HTMLElement; start: number; end: number }
 
-// Shared by wireAnnotations (badge per block) + wireDiffGutter (mark per
-// block) — both need identical range semantics. Materialized once per html
-// change (MarkdownPreview merges the two wire calls into one $effect).
-// distinct is sorted (NOT doc-order — footnote <li>s are appended at HTML
-// end but carry their mid-document [^x]: srcLine), then nextOf is O(1).
+// Feeds MarkdownPreview's gutter-row measurement. distinct is sorted (NOT
+// doc-order — footnote <li>s are appended at HTML end but carry their
+// mid-document [^x]: srcLine), then nextOf is O(1).
 export function stampedBlocks(container: HTMLElement, totalLines: number): StampedRange[] {
   const blocks = [...container.querySelectorAll<HTMLElement>('[data-src-line]')]
   const lines = blocks.map(el => +el.dataset.srcLine!)
@@ -389,83 +383,7 @@ export function stampedBlocks(container: HTMLElement, totalLines: number): Stamp
   return out
 }
 
-// Inject badges + Alt-click annotate gesture on rendered preview. Called from
-// MarkdownPreview's post-{@html} $effect. forLine() reads the store's $derived
-// byLine Map, so calling it here registers that as a dep — badges re-inject
-// when annotations.list mutates (user saves via the bubble).
-//
-// closest() in the Alt-click path returns the innermost match, so clicking
-// inside a nested paragraph anchors to the paragraph, not the list item.
-export function wireAnnotations(
-  container: HTMLElement,
-  ranges: readonly StampedRange[],
-  sourceLines: readonly string[],
-  forLine: (n: number) => readonly Annotation[],
-  onClick: ((n: number, content: string, e: MouseEvent) => void) | undefined,
-): () => void {
-  const injected: Array<() => void> = []
-  for (const { el, start, end } of ranges) {
-    const anns: Annotation[] = []
-    for (let n = start; n < end; n++) anns.push(...forLine(n))
-    if (!anns.length) continue
-    // Block spans multiple source lines → multiple annotations possible. Sort
-    // so must-fix tints the badge (not hidden behind a nitpick's 0.4 opacity).
-    anns.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
 
-    const badge = document.createElement('button')
-    badge.className = `annotation-badge severity-${anns[0].severity}`
-    if (anns[0].status === 'orphaned') badge.classList.add('orphaned')
-    badge.textContent = '💬'
-    if (anns.length > 1) {
-      const sup = document.createElement('sup')
-      sup.textContent = String(anns.length)
-      badge.appendChild(sup)
-    }
-    badge.title = `${anns.length} annotation${anns.length > 1 ? 's' : ''}: ${anns[0].comment}`
-    badge.ariaLabel = 'View annotation'
-    badge.onclick = (e) => { e.stopPropagation(); onClick?.(anns[0].lineNum, anns[0].lineContent, e) }
-    el.classList.add('md-ann-host')
-    el.appendChild(badge)
-    injected.push(() => { badge.remove(); el.classList.remove('md-ann-host') })
-  }
-
-  const onAlt = (e: MouseEvent) => {
-    if (!e.altKey || !onClick) return
-    const block = (e.target as Element).closest<HTMLElement>('[data-src-line]')
-    if (!block || !container.contains(block)) return
-    e.preventDefault()
-    const line = +block.dataset.srcLine!
-    onClick(line, sourceLines[line - 1] ?? '', e)
-  }
-  container.addEventListener('click', onAlt)
-
-  return () => {
-    injected.forEach(fn => fn())
-    container.removeEventListener('click', onAlt)
-  }
-}
-
-// Mark stamped blocks whose [start,end) source range contains any added line.
-// Preview renders NEW content — removed lines don't exist, so the only
-// meaningful mark is "added". A block's range may span context+added (a
-// paragraph where one sentence changed) — still marked, matching GitHub's
-// prose diff. CSS draws a green left-gutter strip via ::before.
-export function wireDiffGutter(
-  ranges: readonly StampedRange[],
-  addedLines: ReadonlySet<number>,
-): () => void {
-  const marked: HTMLElement[] = []
-  for (const { el, start, end } of ranges) {
-    for (let n = start; n < end; n++) {
-      if (addedLines.has(n)) {
-        el.classList.add('md-diff-added')
-        marked.push(el)
-        break
-      }
-    }
-  }
-  return () => marked.forEach(el => el.classList.remove('md-diff-added'))
-}
 
 const MIN_SCALE = 0.3
 const MAX_SCALE = 5

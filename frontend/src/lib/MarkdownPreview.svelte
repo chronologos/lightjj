@@ -8,27 +8,21 @@
 </script>
 
 <script lang="ts">
-  import { renderMarkdown, renderMarkdownAnnotated, wirePanzoom, wireAnnotations, wireDiffGutter, stampedBlocks, type PreviewContext } from './markdown-render'
+  import { renderMarkdown, renderMarkdownAnnotated, wirePanzoom, stampedBlocks, type PreviewContext } from './markdown-render'
   import type { Annotation } from './api'
 
   interface Props {
     content: string
     ctx?: PreviewContext
-    // Same signatures as DiffFileView — DiffPanel threads them through
-    // unchanged. forLine reads the annotation store's $derived byLine Map,
-    // so the wireAnnotations $effect re-runs when annotations.list changes.
+    // Same signatures as DiffFileView — DiffPanel threads them through.
     annotationsForLine?: (lineNum: number) => readonly Annotation[]
     onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent) => void
-    // New-file line numbers that are diff additions. Blocks whose source-line
-    // range contains any added line get a green left-gutter strip.
     addedLines?: ReadonlySet<number>
   }
 
   let { content, ctx, annotationsForLine, onannotationclick, addedLines }: Props = $props()
   let container: HTMLElement | undefined = $state()
 
-  // data-src-line stamping is needed for both annotation badges AND diff
-  // gutter marks — both use the [own, next) range walk over stamped blocks.
   let stamped = $derived(!!annotationsForLine || !!addedLines?.size)
   let html = $derived((void mermaidReady, stamped
     ? renderMarkdownAnnotated(content, ctx)
@@ -36,29 +30,87 @@
 
   let sourceLines = $derived(stamped ? content.split('\n') : [])
 
-  // Re-wire pan/zoom after every html change. Returned cleanup removes
-  // the prior batch's listeners — they survive {@html} subtree replacement.
   $effect(() => {
     void html
     if (!container) return
     return wirePanzoom(container)
   })
 
+  // ───── Gutter rows — explicit column, NOT injected ::before/badges ─────
+  // One row per stamped block, positioned at the block's offsetTop. Replaces
+  // wireAnnotations/wireDiffGutter (imperative inject/cleanup) with a plain
+  // {#each} so annotation changes flow through Svelte's normal reactivity
+  // instead of a re-run-everything $effect. All gutter elements at one x —
+  // no per-element-type offset CSS (li/pre/mermaid special cases deleted).
+
+  interface GutterRow {
+    srcLine: number; top: number; height: number
+    added: boolean; anns: readonly Annotation[]
+  }
+  const SEV_ORDER: Record<string, number> = { 'must-fix': 0, suggestion: 1, question: 2, nitpick: 3 }
+
+  let gutterRows = $state<GutterRow[]>([])
+  let resizeEpoch = $state(0)
+
+  $effect(() => {
+    void html; void resizeEpoch
+    if (!container || !stamped) { gutterRows = []; return }
+    const ranges = stampedBlocks(container, sourceLines.length)
+    gutterRows = ranges.map(({ el, start, end }) => {
+      const anns: Annotation[] = []
+      let added = false
+      for (let n = start; n < end; n++) {
+        if (annotationsForLine) anns.push(...annotationsForLine(n))
+        if (addedLines?.has(n)) added = true
+      }
+      anns.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
+      return { srcLine: start, top: el.offsetTop, height: el.offsetHeight, added, anns }
+    })
+  })
+
+  // Re-measure on reflow (image load, mermaid render, split-drag). One
+  // observer on the content container; any descendant size change bubbles
+  // to a content-box change here.
+  $effect(() => {
+    if (!container) return
+    const ro = new ResizeObserver(() => resizeEpoch++)
+    ro.observe(container)
+    return () => ro.disconnect()
+  })
+
+  // Alt+click annotate — the only remaining imperative wire (a delegated
+  // listener; everything else is template-rendered).
+  function handleContentClick(e: MouseEvent) {
+    if (!e.altKey || !onannotationclick) return
+    const el = (e.target as Element).closest<HTMLElement>('[data-src-line]')
+    if (!el) return
+    const n = +el.dataset.srcLine!
+    onannotationclick(n, sourceLines[n - 1] ?? '', e)
+  }
+
   // ToC: query headings post-{@html}. Depth from tag (h1→1..h6→6) for indent.
   // Click scrolls the heading element directly — no IDs needed.
-  // DECLARED BEFORE wireAnnotations — effects fire in source order within a
-  // batch; wireAnnotations appends badge buttons to headings, which would
-  // pollute textContent ("Section Title💬") if ToC queried after.
+  // (Gutter is a separate column now — no badge buttons in headings, so the
+  //  declared-before-wireAnnotations ordering constraint is gone.)
   interface TocEntry { el: HTMLElement; depth: number; text: string }
   let toc = $state<TocEntry[]>([])
   let activeHeading = $state<HTMLElement | null>(null)
   let tocOpen = $state(true)
   let tocItemsEl: HTMLElement | undefined = $state()
   // Keep the .active row visible inside the ToC's own overflow-y scrollbox.
+  // Direct scrollTop math — scrollIntoView() bubbles to ancestor scroll
+  // containers and CANCELS the content's smooth-scroll mid-flight (the IO
+  // fires repeatedly during the smooth scroll → this effect fires → ToC
+  // scrollIntoView touches .panel-content → heading scroll stops short).
   $effect(() => {
     void activeHeading
-    tocItemsEl?.querySelector('.md-toc-item.active')
-      ?.scrollIntoView({ block: 'nearest' })
+    if (!tocItemsEl) return
+    const active = tocItemsEl.querySelector<HTMLElement>('.md-toc-item.active')
+    if (!active) return
+    const top = active.offsetTop, bot = top + active.offsetHeight
+    const viewTop = tocItemsEl.scrollTop, viewBot = viewTop + tocItemsEl.clientHeight
+    if (top < viewTop) tocItemsEl.scrollTop = top
+    else if (bot > viewBot) tocItemsEl.scrollTop = bot - tocItemsEl.clientHeight
   })
   $effect(() => {
     void html
@@ -91,18 +143,6 @@
     return () => io.disconnect()
   })
 
-  // Single $effect computes stampedBlocks once; both wire fns consume it.
-  $effect(() => {
-    void html
-    if (!container || !stamped) return
-    const ranges = stampedBlocks(container, sourceLines.length)
-    const cleanups: Array<() => void> = []
-    if (annotationsForLine)
-      cleanups.push(wireAnnotations(container, ranges, sourceLines, annotationsForLine, onannotationclick))
-    if (addedLines?.size)
-      cleanups.push(wireDiffGutter(ranges, addedLines))
-    return () => cleanups.forEach(fn => fn())
-  })
 </script>
 
 <div class="md-preview">
@@ -139,8 +179,30 @@
        sits outside the boundary; container binding stays on the {@html} host
        (wirePanzoom/wireAnnotations/toc-query all target [data-src-line]/h1-6
        which live inside). -->
-  <div class="md-content" bind:this={container}>
-    {@html html}
+  <div class="md-body">
+    {#if stamped}
+      <div class="md-gutter">
+        {#each gutterRows as row (row.srcLine)}
+          <div class="md-gutter-row" style:top="{row.top}px" style:height="{row.height}px">
+            {#if row.added}<span class="md-strip-add"></span>{/if}
+            {#if row.anns.length}
+              {@const a = row.anns[0]}
+              <button
+                class="annotation-badge severity-{a.severity}"
+                class:orphaned={a.status === 'orphaned'}
+                onclick={(e) => onannotationclick?.(a.lineNum, a.lineContent, e)}
+                title="{row.anns.length} annotation{row.anns.length > 1 ? 's' : ''}: {a.comment}"
+                aria-label="View annotation"
+              >💬{#if row.anns.length > 1}<sup>{row.anns.length}</sup>{/if}</button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="md-content" bind:this={container} onclick={handleContentClick}>
+      {@html html}
+    </div>
   </div>
 </div>
 
@@ -156,10 +218,38 @@
     max-width: 1100px;
     margin: 0 auto;
   }
+  .md-body {
+    position: relative;  /* anchor for .md-gutter absolute */
+  }
+  .md-gutter {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 36px;
+    pointer-events: none;  /* badge re-enables */
+  }
+  .md-gutter-row {
+    position: absolute;
+    left: 0; right: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .md-strip-add {
+    width: 3px;
+    height: 100%;
+    background: var(--green);
+    border-radius: 2px;
+    opacity: 0.7;
+  }
+  .md-gutter :global(.annotation-badge) {
+    position: static;  /* override theme.css absolute */
+    pointer-events: auto;
+    font-size: 13px;
+    padding: 2px 4px;
+    margin-top: 2px;
+  }
+  .md-gutter :global(.annotation-badge sup) { font-size: 9px; vertical-align: super; }
   .md-content {
-    /* Left padding hosts the gutter: diff strip (~-10px) + ann badge (~-34px).
-       Lives here (not on .md-preview) so contain:paint's clip edge sits left
-       of the negative-offset ::before/.annotation-badge. */
     padding-left: 36px;
     /* Containing block for fixed-position descendants — neutralizes the
        <div style="position:fixed;..."> phishing-overlay vector without
@@ -423,50 +513,4 @@
     border-radius: 10px;
     user-select: none;
   }
-
-  /* Gutter elements: both position relative to their block (the strip moves
-     with indent — GitHub's prose-diff does this; visually associates the mark
-     with the changed content). md-ann-host and md-diff-added each set
-     position:relative; a block with both is fine (same value). */
-  .md-preview :global(.md-ann-host),
-  .md-preview :global(.md-diff-added) { position: relative; }
-
-  .md-preview :global(.md-diff-added::before) {
-    content: '';
-    position: absolute;
-    left: -10px;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: var(--green);
-    border-radius: 2px;
-    opacity: 0.7;
-  }
-  /* <li>: list-style-position:outside puts the marker at ~-1.2em from the
-     content edge — left:-10px lands on top of it. Pushing to -1.8em clears
-     the marker at any font size while keeping the indent-follows-nesting
-     design (a nested <li>'s strip is still indented relative to its parent). */
-  .md-preview :global(li.md-diff-added::before) { left: -1.8em; }
-  /* <pre> overflow-x:auto and .mermaid-block overflow:hidden clip the ::before
-     at negative-x — use border-left instead (their existing padding/radius
-     accommodates it without layout shift). */
-  .md-preview :global(pre.md-diff-added::before),
-  .md-preview :global(.mermaid-block.md-diff-added::before) { content: none; }
-  .md-preview :global(pre.md-diff-added),
-  .md-preview :global(.mermaid-block.md-diff-added) {
-    border-left: 3px solid color-mix(in srgb, var(--green) 70%, transparent);
-  }
-
-  /* Annotation badge — left gutter (right side is under the sticky ToC).
-     Shared semantic rules in theme.css. */
-  .md-preview :global(.annotation-badge) {
-    top: 0;
-    left: -34px;
-    font-size: 13px;
-    padding: 2px 4px;
-  }
-  /* On <li>, the diff strip is at -1.8em (clears the marker) — push the badge
-     past it. ul's 1.8em padding + .md-content's 36px gutter give the budget. */
-  .md-preview :global(li > .annotation-badge) { left: calc(-1.8em - 24px); }
-  .md-preview :global(.annotation-badge sup) { font-size: 9px; vertical-align: super; }
 </style>
