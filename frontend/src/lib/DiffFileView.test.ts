@@ -482,7 +482,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
-          annotationsForLine: (ln: number) => ln === 2 ? [mkAnn('suggestion')] : [],
+          annotationsForLine: (_fp: string, ln: number) => ln === 2 ? [mkAnn('suggestion')] : [],
         }),
       })
       const badges = container.querySelectorAll('.annotation-badge')
@@ -494,7 +494,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
-          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('must-fix')] : [],
+          annotationsForLine: (_fp: string, ln: number) => ln === 1 ? [mkAnn('must-fix')] : [],
         }),
       })
       const badge = container.querySelector('.annotation-badge')
@@ -505,7 +505,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
-          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion', 'orphaned')] : [],
+          annotationsForLine: (_fp: string, ln: number) => ln === 1 ? [mkAnn('suggestion', 'orphaned')] : [],
         }),
       })
       const badge = container.querySelector('.annotation-badge')
@@ -516,7 +516,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
-          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion'), mkAnn('nitpick')] : [],
+          annotationsForLine: (_fp: string, ln: number) => ln === 1 ? [mkAnn('suggestion'), mkAnn('nitpick')] : [],
         }),
       })
       const badge = container.querySelector('.annotation-badge')
@@ -529,7 +529,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
-          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion')] : [],
+          annotationsForLine: (_fp: string, ln: number) => ln === 1 ? [mkAnn('suggestion')] : [],
           onannotationclick,
         }),
       })
@@ -552,7 +552,7 @@ describe('DiffFileView', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
-          annotationsForLine: (ln: number) => ln === 1 ? [mkAnn('suggestion')] : [],
+          annotationsForLine: (_fp: string, ln: number) => ln === 1 ? [mkAnn('suggestion')] : [],
           onannotationclick,
           onlinecontext,
         }),
@@ -574,12 +574,12 @@ describe('DiffFileView', () => {
         { type: 'add', content: '+added' },       // old=null, new=1
         { type: 'context', content: ' kept' },    // old=2, new=2
       ])
-      const spy = vi.fn((_ln: number): Annotation[] => [])
+      const spy = vi.fn((_fp: string, _ln: number): Annotation[] => [])
       render(DiffFileView, {
         props: defaultProps({ file, annotationsForLine: spy }),
       })
       // Called for new lines 1 and 2 (add, context); NOT for the remove line.
-      const calledWith = spy.mock.calls.map(c => c[0] as number)
+      const calledWith = spy.mock.calls.map(c => c[1] as number)
       expect(calledWith).toContain(1)
       expect(calledWith).toContain(2)
       expect(calledWith).not.toContain(null)

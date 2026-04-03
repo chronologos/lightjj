@@ -14,19 +14,25 @@
   interface Props {
     content: string
     ctx?: PreviewContext
-    // Same signatures as DiffFileView — DiffPanel threads them through.
-    annotationsForLine?: (lineNum: number) => readonly Annotation[]
+    filePath?: string
+    // Stable reference (the store's forLine method) — fresh-closure-per-render
+    // would defeat gutterRows $derived's reference-equality short-circuit.
+    annotationsForLine?: (filePath: string, lineNum: number) => readonly Annotation[]
     onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent) => void
     addedLines?: ReadonlySet<number>
   }
 
-  let { content, ctx, annotationsForLine, onannotationclick, addedLines }: Props = $props()
+  let { content, ctx, filePath = '', annotationsForLine, onannotationclick, addedLines }: Props = $props()
   let container: HTMLElement | undefined = $state()
 
   let stamped = $derived(!!annotationsForLine || !!addedLines?.size)
-  let html = $derived((void mermaidReady, stamped
-    ? renderMarkdownAnnotated(content, ctx)
-    : renderMarkdown(content, ctx)))
+  // Only depend on mermaidReady when the doc actually has a mermaid block —
+  // otherwise the lazy chunk landing triggers a pointless full re-parse.
+  let hasMermaid = $derived(content.includes('```mermaid'))
+  let html = $derived.by(() => {
+    if (hasMermaid) void mermaidReady
+    return stamped ? renderMarkdownAnnotated(content, ctx) : renderMarkdown(content, ctx)
+  })
 
   let sourceLines = $derived(stamped ? content.split('\n') : [])
 
@@ -43,30 +49,33 @@
   // instead of a re-run-everything $effect. All gutter elements at one x —
   // no per-element-type offset CSS (li/pre/mermaid special cases deleted).
 
-  interface GutterRow {
-    srcLine: number; top: number; height: number
-    added: boolean; anns: readonly Annotation[]
-  }
   const SEV_ORDER: Record<string, number> = { 'must-fix': 0, suggestion: 1, question: 2, nitpick: 3 }
 
-  let gutterRows = $state<GutterRow[]>([])
+  // Geometry (DOM measurement — depends on layout only) is split from data
+  // (annotation/added lookup — depends on store). Annotation add/remove
+  // re-derives gutterRows without re-querying offsetTop; resize re-measures
+  // without re-reading the store.
+  interface BlockGeom { srcLine: number; end: number; top: number; height: number }
+  let blockGeometry = $state<BlockGeom[]>([])
   let resizeEpoch = $state(0)
 
   $effect(() => {
     void html; void resizeEpoch
-    if (!container || !stamped) { gutterRows = []; return }
-    const ranges = stampedBlocks(container, sourceLines.length)
-    gutterRows = ranges.map(({ el, start, end }) => {
-      const anns: Annotation[] = []
-      let added = false
-      for (let n = start; n < end; n++) {
-        if (annotationsForLine) anns.push(...annotationsForLine(n))
-        if (addedLines?.has(n)) added = true
-      }
-      anns.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
-      return { srcLine: start, top: el.offsetTop, height: el.offsetHeight, added, anns }
-    })
+    if (!container || !stamped) { blockGeometry = []; return }
+    blockGeometry = stampedBlocks(container, sourceLines.length).map(({ el, start, end }) =>
+      ({ srcLine: start, end, top: el.offsetTop, height: el.offsetHeight }))
   })
+
+  let gutterRows = $derived(blockGeometry.map(b => {
+    const anns: Annotation[] = []
+    let added = false
+    for (let n = b.srcLine; n < b.end; n++) {
+      if (annotationsForLine) anns.push(...annotationsForLine(filePath, n))
+      if (addedLines?.has(n)) added = true
+    }
+    anns.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
+    return { ...b, added, anns }
+  }))
 
   // Re-measure on reflow (image load, mermaid render, split-drag). One
   // observer on the content container; any descendant size change bubbles

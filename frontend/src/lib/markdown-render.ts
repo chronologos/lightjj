@@ -49,32 +49,35 @@ function tryRenderDiagram(src: string): string | null {
   }
 }
 
-// Rendered SVGs are stashed here during marked.parse(), re-injected after
-// DOMPurify. The SVG is TRUSTED (library-generated; user input is the
-// mermaid syntax, which the library parses — no raw-HTML passthrough).
-// Sanitizing it would strip the internal <style> block that defines the
-// derived-color vars (--_text-sec, --_node-fill, etc) — the reason for the
-// placeholder indirection. renderMarkdown is sync so module-level is safe.
-let pendingDiagrams: string[] = []
-
-// Per-call context for the image renderer hook. Module-level (same pattern
-// as pendingDiagrams) — marked.use is configured once at module load so hooks
-// can't receive call-time params directly. Set in renderMarkdown, read in
-// the image hook, never read outside the sync parse call.
-let imgCtx: { revision: string, baseDir: string } | null = null
-let imgCount = 0
+// ── Per-render state ───────────────────────────────────────────────────────
+// marked.use() configures hooks ONCE at module load so they can't take
+// call-time params directly — they read this single module slot instead.
+// Bundled (vs N separate lets) so the per-render boundary is one variable:
+// easier to reason about, and the first await someone adds to the pipeline
+// breaks one obvious thing instead of seven scattered ones. renderMarkdown
+// is sync today; rs is non-null exactly inside that call.
+//
+// pendingDiagrams: rendered mermaid SVG stash, re-injected after DOMPurify
+// (sanitize would strip the SVG's internal <style> block that defines
+// --_text-sec etc; the SVG is library-generated → trusted).
+interface RenderState {
+  pendingDiagrams: string[]
+  imgCtx: { revision: string; baseDir: string } | null
+  imgCount: number
+  footnotes: Footnote[]
+  fnLabelToIdx: Map<string, number>
+  headingSlugs: Map<string, number>
+  stamp: { src: string; cursor: number; line: number } | null
+}
+let rs: RenderState | null = null
 
 // Cap proxied images per preview. Each is a jj subprocess (SSH mode: a full
 // round trip). A malicious README with 1000 images would queue 1000 requests.
 const MAX_PROXIED_IMAGES = 50
 
-// ── Footnotes ──────────────────────────────────────────────────────────────
-// Collected during parse (def renderer returns ''), assembled after sanitize.
-// fnScope scopes anchor ids per render — DiffPanel shows multiple .md files;
-// two READMEs each with [^1] would otherwise collide on id="fn-1".
 interface Footnote { html: string; srcLine?: number }
-let footnotes: Footnote[] = []
-let fnLabelToIdx = new Map<string, number>()
+// fnScope is NOT per-render — it's a cross-render counter so multiple .md
+// previews on one page (DiffPanel shows several) get distinct anchor ids.
 let fnScope = 0
 
 // ── Heading anchor IDs ─────────────────────────────────────────────────────
@@ -83,13 +86,11 @@ let fnScope = 0
 // shape in CHANGELOG-ARCHIVE). Strip-then-collapse would merge to one hyphen.
 // Not byte-exact for md formatting (`## _italic_` → `_italic_` vs GitHub's
 // `italic`), but stable + linkable. Dedup with -N suffix per render.
-let headingSlugs = new Map<string, number>()
-
 function headingId(text: string): string {
   const slug = text.toLowerCase().replace(/\s/g, '-').replace(/[^\w-]/g, '')
   if (!slug) return ''
-  const n = headingSlugs.get(slug) ?? 0
-  headingSlugs.set(slug, n + 1)
+  const n = rs!.headingSlugs.get(slug) ?? 0
+  rs!.headingSlugs.set(slug, n + 1)
   return ` id="${n ? `${slug}-${n}` : slug}"`
 }
 
@@ -114,16 +115,16 @@ const SCHEME_RE = /^(https?:|data:image\/|\/\/|#)/i
 const tryDecode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
 
 function resolveImgSrc(href: string): string {
-  if (!imgCtx || SCHEME_RE.test(href)) return href
-  if (++imgCount > MAX_PROXIED_IMAGES) return ''
+  if (!rs!.imgCtx || SCHEME_RE.test(href)) return href
+  if (++rs!.imgCount > MAX_PROXIED_IMAGES) return ''
   // Strip ?query/#fragment — browser applies those client-side; server needs
   // bare file path. Decode before URLSearchParams re-encodes (avoids %20→%2520).
   const clean = tryDecode(href.replace(/[?#].*$/, ''))
   // Leading `/` = repo-root-relative (common in docs); strip it, skip baseDir.
   const path = clean.startsWith('/')
     ? clean.slice(1)
-    : imgCtx.baseDir ? `${imgCtx.baseDir}/${clean}` : clean
-  return api.fileRawUrl(imgCtx.revision, path)
+    : rs!.imgCtx.baseDir ? `${rs!.imgCtx.baseDir}/${clean}` : clean
+  return api.fileRawUrl(rs!.imgCtx.revision, path)
 }
 
 // ── Source-line stamping for preview annotations ──────────────────────────
@@ -147,8 +148,6 @@ const CONTAINER = new Set(['list_item', 'blockquote'])
 // stamping isn't possible; per-table is the best the data supports.
 const defaultTable = new marked.Renderer().table
 
-let stampCtx: { src: string; cursor: number; line: number } | null = null
-
 // walkTokens visits depth-first in document order. indexOf(raw, cursor) with
 // a monotone cursor disambiguates duplicate raw slices (two identical list
 // items resolve to their respective source positions). Cursor advances to
@@ -158,20 +157,21 @@ let stampCtx: { src: string; cursor: number; line: number } | null = null
 // (indexOf guarantee), so counting [cursor, pos) makes total work O(src)
 // regardless of block count.
 function stamp(token: Token) {
-  if (!stampCtx || !STAMPED.has(token.type)) return
-  const pos = stampCtx.src.indexOf(token.raw, stampCtx.cursor)
+  const sc = rs?.stamp
+  if (!sc || !STAMPED.has(token.type)) return
+  const pos = sc.src.indexOf(token.raw, sc.cursor)
   if (pos < 0) return
-  for (let i = stampCtx.cursor; i < pos; i++) {
-    if (stampCtx.src.charCodeAt(i) === 10) stampCtx.line++
+  for (let i = sc.cursor; i < pos; i++) {
+    if (sc.src.charCodeAt(i) === 10) sc.line++
   }
-  ;(token as Stamped)._srcLine = stampCtx.line
+  ;(token as Stamped)._srcLine = sc.line
   const skip = CONTAINER.has(token.type) ? 1 : token.raw.length
   // Newlines inside the skipped span must be counted too, or the next
   // token's [cursor,pos) count starts from the wrong base.
   for (let i = pos; i < pos + skip; i++) {
-    if (stampCtx.src.charCodeAt(i) === 10) stampCtx.line++
+    if (sc.src.charCodeAt(i) === 10) sc.line++
   }
-  stampCtx.cursor = pos + skip
+  sc.cursor = pos + skip
 }
 
 const srcAttr = (t: Stamped) => t._srcLine ? ` data-src-line="${t._srcLine}"` : ''
@@ -192,11 +192,11 @@ marked.use({
       },
       renderer(token: Tokens.Generic) {
         const label = token.label as string
-        const isFirst = !fnLabelToIdx.has(label)
-        let idx = fnLabelToIdx.get(label)
+        const isFirst = !rs!.fnLabelToIdx.has(label)
+        let idx = rs!.fnLabelToIdx.get(label)
         if (idx === undefined) {
-          idx = footnotes.push({ html: '' }) - 1
-          fnLabelToIdx.set(label, idx)
+          idx = rs!.footnotes.push({ html: '' }) - 1
+          rs!.fnLabelToIdx.set(label, idx)
         }
         // id only on first ref — dupes would be invalid HTML and the def's
         // back-link can only point to one anyway.
@@ -222,13 +222,13 @@ marked.use({
         // Same create-if-missing as the ref renderer — defs at the top of a
         // doc render before refs and would otherwise be silently dropped.
         const label = token.label as string
-        let idx = fnLabelToIdx.get(label)
+        let idx = rs!.fnLabelToIdx.get(label)
         if (idx === undefined) {
-          idx = footnotes.push({ html: '' }) - 1
-          fnLabelToIdx.set(label, idx)
+          idx = rs!.footnotes.push({ html: '' }) - 1
+          rs!.fnLabelToIdx.set(label, idx)
         }
-        footnotes[idx].html = this.parser.parseInline(token.tokens!)
-        footnotes[idx].srcLine = (token as Stamped)._srcLine
+        rs!.footnotes[idx].html = this.parser.parseInline(token.tokens!)
+        rs!.footnotes[idx].srcLine = (token as Stamped)._srcLine
         return ''
       },
     },
@@ -240,7 +240,7 @@ marked.use({
       if (lang === 'mermaid') {
         const svg = tryRenderDiagram(text)
         if (svg) {
-          const idx = pendingDiagrams.push(svg) - 1
+          const idx = rs!.pendingDiagrams.push(svg) - 1
           return `<i data-mermaid="${idx}"${srcAttr(token)}></i>`
         }
         // Not-yet-loaded, unsupported type, parse error, or over-limit — raw
@@ -329,36 +329,35 @@ export interface PreviewContext {
   baseDir: string
 }
 
-export function renderMarkdown(src: string, ctx?: PreviewContext): string {
-  pendingDiagrams = []
-  imgCtx = ctx ?? null
-  imgCount = 0
-  footnotes = []
-  fnLabelToIdx.clear()
+export function renderMarkdown(src: string, ctx?: PreviewContext, stampSrc = false): string {
   fnScope++
-  headingSlugs.clear()
-  const html = DOMPurify.sanitize(marked.parse(src) as string, SANITIZE_CFG)
-  imgCtx = null
-  let result = html.replace(
-    /<i data-mermaid="(\d+)"( data-src-line="\d+")?><\/i>/g,
-    (_, i, srcLine) => `<div class="mermaid-block"${srcLine ?? ''}>${pendingDiagrams[+i]}</div>`,
-  )
-  if (footnotes.length) {
-    const items = footnotes.map((f, i) => {
-      const sl = f.srcLine ? ` data-src-line="${f.srcLine}"` : ''
-      return `<li id="fn${fnScope}-${i}"${sl}>${f.html || '<em>(missing)</em>'} <a href="#fnref${fnScope}-${i}" class="fn-back" aria-label="back">\u21a9</a></li>`
-    }).join('')
-    // Separate sanitize pass — def body is parseInline of user content.
-    result += DOMPurify.sanitize(`<section class="footnotes"><ol>${items}</ol></section>`, SANITIZE_CFG)
+  rs = {
+    pendingDiagrams: [], imgCtx: ctx ?? null, imgCount: 0,
+    footnotes: [], fnLabelToIdx: new Map(), headingSlugs: new Map(),
+    stamp: stampSrc ? { src, cursor: 0, line: 1 } : null,
   }
-  return result
+  try {
+    const html = DOMPurify.sanitize(marked.parse(src) as string, SANITIZE_CFG)
+    let result = html.replace(
+      /<i data-mermaid="(\d+)"( data-src-line="\d+")?><\/i>/g,
+      (_, i, srcLine) => `<div class="mermaid-block"${srcLine ?? ''}>${rs!.pendingDiagrams[+i]}</div>`,
+    )
+    if (rs.footnotes.length) {
+      const items = rs.footnotes.map((f, i) => {
+        const sl = f.srcLine ? ` data-src-line="${f.srcLine}"` : ''
+        return `<li id="fn${fnScope}-${i}"${sl}>${f.html || '<em>(missing)</em>'} <a href="#fnref${fnScope}-${i}" class="fn-back" aria-label="back">\u21a9</a></li>`
+      }).join('')
+      // Separate sanitize pass — def body is parseInline of user content.
+      result += DOMPurify.sanitize(`<section class="footnotes"><ol>${items}</ol></section>`, SANITIZE_CFG)
+    }
+    return result
+  } finally {
+    rs = null
+  }
 }
 
-export function renderMarkdownAnnotated(src: string, ctx?: PreviewContext): string {
-  stampCtx = { src, cursor: 0, line: 1 }
-  try { return renderMarkdown(src, ctx) }
-  finally { stampCtx = null }
-}
+export const renderMarkdownAnnotated = (src: string, ctx?: PreviewContext) =>
+  renderMarkdown(src, ctx, true)
 
 // Iterate stamped blocks with their [start, end) source-line range. Nested
 // blocks (loose-list <li> containing a same-line <p>) yield only the inner —

@@ -52,9 +52,10 @@
     onfilehistory?: (path: string) => void
     oncompare?: (path: string) => void
     /** Lookup annotations for a new-side line number. Called per-line during
-     *  render — MUST be O(1) (backed by a Map, not a filter). Empty array =
-     *  no badge. Returned severity drives badge color. */
-    annotationsForLine?: (lineNum: number) => readonly Annotation[]
+     *  render — MUST be O(1) (backed by a Map, not a filter). Stable reference
+     *  (the store's forLine method directly) — a fresh closure per render would
+     *  defeat MarkdownPreview's gutterRows $derived short-circuit. */
+    annotationsForLine?: (filePath: string, lineNum: number) => readonly Annotation[]
     /** Click handler for the annotation gutter badge. Receives the new-side
      *  line number, the line's raw content (without diff prefix), and the
      *  click event (for positioning the bubble). Also fires on left-click of
@@ -398,7 +399,7 @@
 </script>
 
 {#snippet gutter(lineNumbers: (number | null)[], rawContent: string, annLine: number | null)}
-  {@const anns = annLine !== null && annotationsForLine ? annotationsForLine(annLine) : []}
+  {@const anns = annLine !== null && annotationsForLine ? annotationsForLine(filePath, annLine) : []}
   {#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{#if anns.length > 0 && annLine !== null}<!--
   --><button
         class="annotation-badge severity-{anns[0].severity}"
@@ -564,6 +565,7 @@
           ctx={previewRevision
             ? { revision: previewRevision, baseDir: filePath.split('/').slice(0, -1).join('/') }
             : undefined}
+          {filePath}
           {annotationsForLine}
           {onannotationclick}
           {addedLines}

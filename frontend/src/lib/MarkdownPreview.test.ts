@@ -14,9 +14,9 @@ const ann = (lineNum: number): Annotation => ({
 describe('MarkdownPreview — explicit gutter', () => {
   it('renders gutter rows with diff strip + annotation badge from reactive props', async () => {
     const content = '# Title\n\nPara one\n\nPara two'
-    const annotationsForLine = (n: number) => n === 3 ? [ann(3)] : []
+    const annotationsForLine = (_fp: string, n: number) => n === 3 ? [ann(3)] : []
     const { container } = render(MarkdownPreview, {
-      props: { content, annotationsForLine, addedLines: new Set([1, 5]) },
+      props: { content, filePath: 'f', annotationsForLine, addedLines: new Set([1, 5]) },
     })
     // gutterRows is populated in a post-render $effect — flush microtasks.
     await Promise.resolve()
@@ -42,7 +42,7 @@ describe('MarkdownPreview — explicit gutter', () => {
   it('Alt+click on a block calls onannotationclick with srcLine', async () => {
     const onannotationclick = vi.fn()
     const { container } = render(MarkdownPreview, {
-      props: { content: '# Title\n\nPara', annotationsForLine: () => [], onannotationclick },
+      props: { content: '# Title\n\nPara', filePath: 'f', annotationsForLine: () => [], onannotationclick },
     })
     await Promise.resolve()
     const para = container.querySelector('.md-content p[data-src-line]')!

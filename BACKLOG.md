@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-04-03** v1.11.1 — Markdown preview explicit gutter column: post-render $effect → gutterRows[{srcLine,top:offsetTop,height,added,anns}] → {#each} renders strip+badge at one fixed x. Replaces wireAnnotations/wireDiffGutter (badges appended INSIDE <table>/<pre>/<hr> were clipped by overflow or void — root cause of "badges don't appear"; v1.10.1's table{overflow-x:auto} introduced it). ResizeObserver re-measure. scrollToAnnotation no longer closePreview. ToC active-row direct scrollTop (scrollIntoView bubbled to .panel-content, cancelled content smooth-scroll mid-flight). −110 LOC net.
+Last shipped: **2026-04-03** v1.11.2 — Markdown preview architecture pass: gutterRows split into blockGeometry $state (DOM measure, html+resizeEpoch deps) + gutterRows $derived (pure lookup). annotationsForLine prop now store's stable forLine(filePath,lineNum) — fresh-closure-per-render was defeating $derived short-circuit. markdown-render: 7 module lets (pendingDiagrams/imgCtx/footnotes/…/stamp) → one rs:RenderState slot, hooks read rs!.x inside try/finally; fnScope stays cross-render. mermaidReady dep gated on hasMermaid. −3 net.
 
 ## Active
 

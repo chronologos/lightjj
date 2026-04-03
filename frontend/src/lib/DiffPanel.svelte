@@ -316,13 +316,6 @@
     }
   }
 
-  // Per-file lookup closures — one per DiffFileView so the hot per-line path
-  // stays O(1). The store's forLine() is already Map-backed; this just
-  // captures filePath so the component doesn't need to pass it.
-  function annotationsForFile(filePath: string) {
-    return (lineNum: number) => annotations.forLine(filePath, lineNum)
-  }
-
   // Summary counts — shown in a compact bar below the file list when non-zero.
   let openAnns = $derived(annotations.list.filter(a => a.status === 'open'))
   let orphanedAnns = $derived(annotations.list.filter(a => a.status === 'orphaned'))
@@ -1447,7 +1440,7 @@
             {onopenfile}
             {onfilehistory}
             oncompare={diffTarget?.kind === 'single' ? toggleCompare : undefined}
-            annotationsForLine={diffTarget?.kind === 'single' ? annotationsForFile(filePath) : undefined}
+            annotationsForLine={diffTarget?.kind === 'single' ? annotations.forLine : undefined}
             onannotationclick={(ln, content, e) => handleAnnotationClick(filePath, ln, content, e)}
           />
           {#if comparePickerPath === filePath && diffTarget?.kind === 'single'}
