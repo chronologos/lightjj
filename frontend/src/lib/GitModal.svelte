@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { api, type Bookmark } from './api'
+  import { createLoader } from './loader.svelte'
   import { fuzzyMatch } from './fuzzy'
   import { scrollIdxIntoView } from './scroll-into-view'
 
@@ -26,16 +27,21 @@
 
   let query: string = $state('')
   let index: number = $state(0)
-  let bookmarks: Bookmark[] = $state([])
-  let remotes: string[] = $state([])
-  let selectedRemote: string = $state('origin')
-  let loading: boolean = $state(false)
-  let fetchError: string | null = $state(null)
+  // null = "use default" (remotes[0]); set on user cycle/click. Derived
+  // selectedRemote means it tracks remotes[0] the same tick data lands —
+  // no .then() side-effect, no microtask gap.
+  let remoteOverride: string | null = $state(null)
   let modalEl: HTMLDivElement | undefined = $state(undefined)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let inputFocused: boolean = $state(false)
   let previousFocus: HTMLElement | null = null
-  let fetchGen: number = 0
+  const data = createLoader(
+    () => Promise.all([api.bookmarks({ local: true }), api.remotes()]),
+    [[], []] as [Bookmark[], string[]],
+  )
+  let bookmarks = $derived(data.value[0])
+  let remotes = $derived(data.value[1])
+  let selectedRemote = $derived(remoteOverride ?? remotes[0] ?? 'origin')
 
   function buildOps(bms: Bookmark[], remote: string, allRemotes: string[], changeId: string | null): GitOp[] {
     const ops: GitOp[] = []
@@ -111,16 +117,8 @@
       previousFocus = document.activeElement as HTMLElement | null
       query = ''
       index = 0
-      loading = true
-      fetchError = null
-      const gen = ++fetchGen
-      Promise.all([api.bookmarks({ local: true }), api.remotes()]).then(([bms, rms]) => {
-        if (gen !== fetchGen) return
-        bookmarks = bms
-        remotes = rms
-        selectedRemote = rms[0] ?? 'origin' // backend sorts default-remote first
-        loading = false
-      }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
+      remoteOverride = null
+      data.load()
       tick().then(() => modalEl?.focus())
     }
   })
@@ -132,7 +130,6 @@
   })
 
   function close() {
-    fetchError = null
     open = false
     previousFocus?.focus()
   }
@@ -149,7 +146,7 @@
   function cycleRemote(delta: 1 | -1) {
     if (remotes.length <= 1) return
     const i = remotes.indexOf(selectedRemote)
-    selectedRemote = remotes[(i + delta + remotes.length) % remotes.length]
+    remoteOverride = remotes[(i + delta + remotes.length) % remotes.length]
     index = 0
   }
 
@@ -237,7 +234,7 @@
           <button
             class="git-remote-pill"
             class:active={r === selectedRemote}
-            onclick={() => { selectedRemote = r; index = 0 }}
+            onclick={() => { remoteOverride = r; index = 0 }}
           >{r}</button>
         {/each}
         <span class="git-remotes-hint">h/l</span>
@@ -263,10 +260,10 @@
       aria-label="Git operations"
       aria-activedescendant={selected ? `git-opt-${index}` : undefined}
     >
-      {#if loading}
+      {#if data.loading}
         <div class="git-empty">Loading...</div>
-      {:else if fetchError}
-        <div class="git-empty git-error" role="alert">{fetchError}</div>
+      {:else if data.error}
+        <div class="git-empty git-error" role="alert">{data.error}</div>
       {:else if filtered.length === 0}
         <div class="git-empty">No matching operations</div>
       {:else}

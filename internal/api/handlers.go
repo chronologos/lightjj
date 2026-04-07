@@ -877,6 +877,56 @@ var opIdRe = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
 // opMutation returns a handler that decodes {id}, validates via opIdRe,
 // and runs the given command builder. Shared by /api/op/undo + /api/op/restore.
+// bookmarkMutation/bookmarkRevMutation/bookmarkRemoteMutation are the bookmark
+// analogues of opMutation: decode → validate-non-empty → runMutation. Three
+// factories (not one) because the three request shapes have distinct JSON
+// field names — a generic version would need reflection and break the typed
+// request-struct marshaling in handlers_test.go.
+func (s *Server) bookmarkMutation(build func(name string) jj.CommandArgs) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req bookmarkNameRequest
+		if err := decodeBody(w, r, &req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.Name == "" {
+			s.writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		s.runMutation(w, r, build(req.Name))
+	}
+}
+
+func (s *Server) bookmarkRevMutation(build func(revision, name string) jj.CommandArgs) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req bookmarkRevisionRequest
+		if err := decodeBody(w, r, &req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.Revision == "" || req.Name == "" {
+			s.writeError(w, http.StatusBadRequest, "revision and name are required")
+			return
+		}
+		s.runMutation(w, r, build(req.Revision, req.Name))
+	}
+}
+
+func (s *Server) bookmarkRemoteMutation(build func(name, remote string) jj.CommandArgs) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req bookmarkRemoteRequest
+		if err := decodeBody(w, r, &req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.Name == "" || req.Remote == "" {
+			s.writeError(w, http.StatusBadRequest, "name and remote are required")
+			return
+		}
+		s.runMutation(w, r, build(req.Name, req.Remote))
+	}
+}
+
 func (s *Server) opMutation(build func(id string) jj.CommandArgs) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -1054,96 +1104,6 @@ type gitFlagsRequest struct {
 	Flags []string `json:"flags,omitempty"`
 }
 
-func (s *Server) handleBookmarkSet(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkRevisionRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Revision == "" || req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "revision and name are required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkSet(req.Revision, req.Name))
-}
-
-func (s *Server) handleBookmarkDelete(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkNameRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkDelete(req.Name))
-}
-
-func (s *Server) handleBookmarkMove(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkRevisionRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Revision == "" || req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "revision and name are required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkMove(req.Revision, req.Name, "--allow-backwards"))
-}
-
-func (s *Server) handleBookmarkAdvance(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkRevisionRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Revision == "" || req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "revision and name are required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkAdvance(req.Revision, req.Name))
-}
-
-func (s *Server) handleBookmarkForget(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkNameRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkForget(req.Name))
-}
-
-func (s *Server) handleBookmarkTrack(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkRemoteRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Name == "" || req.Remote == "" {
-		s.writeError(w, http.StatusBadRequest, "name and remote are required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkTrack(req.Name, req.Remote))
-}
-
-func (s *Server) handleBookmarkUntrack(w http.ResponseWriter, r *http.Request) {
-	var req bookmarkRemoteRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Name == "" || req.Remote == "" {
-		s.writeError(w, http.StatusBadRequest, "name and remote are required")
-		return
-	}
-	s.runMutation(w, r, jj.BookmarkUntrack(req.Name, req.Remote))
-}
 
 func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 	var req gitFlagsRequest

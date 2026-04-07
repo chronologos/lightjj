@@ -150,11 +150,13 @@ describe('GitModal', () => {
       expect(container.querySelector('.modal')).not.toBeInTheDocument()
     })
 
-    it('loading state shows Loading...', () => {
+    it('loading state shows Loading...', async () => {
       mockBookmarks.mockReturnValue(new Promise(() => {}))
       mockRemotes.mockReturnValue(new Promise(() => {}))
 
       const { container } = render(GitModal, { props: defaultProps() })
+      // createLoader defers loading=true via setTimeout(0)
+      await new Promise(res => setTimeout(res, 0))
       expect(container.querySelector('.git-empty')?.textContent).toBe('Loading...')
     })
 

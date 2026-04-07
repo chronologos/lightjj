@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { api, type Bookmark } from './api'
+  import { createLoader } from './loader.svelte'
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
   import { createConfirmGate } from './confirm-gate.svelte'
@@ -28,11 +29,8 @@
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let modalEl: HTMLDivElement | undefined = $state(undefined)
   let inputFocused: boolean = $state(false)
-  let bookmarks: Bookmark[] = $state([])
-  let loading: boolean = $state(false)
-  let fetchError: string | null = $state(null)
   let previousFocus: HTMLElement | null = null
-  let fetchGen: number = 0
+  const bms = createLoader(() => api.bookmarks({ local: true }), [] as Bookmark[])
 
   const confirm = createConfirmGate<'d' | 'f' | 't'>()
   let armed = $derived(confirm.armed)
@@ -43,14 +41,14 @@
 
   let filtered = $derived.by(() => {
     if (!open) return []
-    let bms = bookmarks
-    if (filterBookmark) bms = bms.filter(b => b.name === filterBookmark)
-    if (query) return bms.filter(b => fuzzyMatch(query, b.name))
+    let list = bms.value
+    if (filterBookmark) list = list.filter(b => b.name === filterBookmark)
+    if (query) return list.filter(b => fuzzyMatch(query, b.name))
     // No query: conflict > recency. Conflict-first mirrors BookmarksPanel's
     // trouble-first syncPriority — if a bookmark is conflicted you opened this
     // modal to resolve it. snapshot() is one JSON.parse; count() would be N.
     const counts = history.snapshot()
-    return [...bms].sort((a, b) =>
+    return [...list].sort((a, b) =>
       (+b.conflict - +a.conflict) ||
       ((counts[b.name] ?? 0) - (counts[a.name] ?? 0))
     )
@@ -77,14 +75,7 @@
       query = ''
       index = 0
       confirm.disarm()
-      loading = true
-      fetchError = null
-      const gen = ++fetchGen
-      api.bookmarks({ local: true }).then((bms) => {
-        if (gen !== fetchGen) return
-        bookmarks = bms
-        loading = false
-      }).catch((e) => { if (gen === fetchGen) { loading = false; fetchError = e.message || 'Failed to load' } })
+      bms.load()
       // {#if open} hasn't mounted yet on this tick — modalEl is undefined.
       // tick() resolves after DOM flush. Same pattern as ContextMenu/AnnotationBubble.
       tick().then(() => modalEl?.focus())
@@ -254,10 +245,10 @@
       aria-label="Bookmarks"
       aria-activedescendant={selected ? `bm-opt-${index}` : undefined}
     >
-      {#if loading}
+      {#if bms.loading}
         <div class="bm-empty">Loading...</div>
-      {:else if fetchError}
-        <div class="bm-empty bm-error" role="alert">{fetchError}</div>
+      {:else if bms.error}
+        <div class="bm-empty bm-error" role="alert">{bms.error}</div>
       {:else if filtered.length === 0}
         <div class="bm-empty">No matching bookmarks</div>
       {:else}

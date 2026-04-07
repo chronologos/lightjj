@@ -365,10 +365,9 @@
       const result = onjjmutation
         ? await onjjmutation(() => api.restore(revId, files))
         : await api.restore(revId, files)
-      if (result === undefined && onjjmutation) {
-        editError = 'Operation in progress — try again'
-        return
-      }
+      // undefined = withMutation rejected (busy). It already setMessage'd the
+      // warning at App.svelte — don't duplicate it in editError.
+      if (result === undefined && onjjmutation) return
       if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return
       // Explicit refresh — onjjmutation is withMutation (lock only, no loadLog).
       // The X-JJ-Op-Id header fires notifyOpId via queueMicrotask BEFORE
@@ -399,10 +398,7 @@
         const result = onjjmutation
           ? await onjjmutation(() => api.edit(revId))
           : await api.edit(revId)
-        if (result === undefined && onjjmutation) {
-          editError = 'Operation in progress — try again'
-          return undefined
-        }
+        if (result === undefined && onjjmutation) return undefined
       }
       // Post-await identity guard — j/k navigation is possible during await.
       if (diffTarget?.kind !== 'single' || diffTarget.changeId !== revId) return undefined

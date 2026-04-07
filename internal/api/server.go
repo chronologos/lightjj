@@ -138,13 +138,15 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/commit", s.handleCommit)
 	s.Mux.HandleFunc("POST /api/open-file", s.handleOpenFile)
 
-	s.Mux.HandleFunc("POST /api/bookmark/set", s.handleBookmarkSet)
-	s.Mux.HandleFunc("POST /api/bookmark/delete", s.handleBookmarkDelete)
-	s.Mux.HandleFunc("POST /api/bookmark/move", s.handleBookmarkMove)
-	s.Mux.HandleFunc("POST /api/bookmark/advance", s.handleBookmarkAdvance)
-	s.Mux.HandleFunc("POST /api/bookmark/forget", s.handleBookmarkForget)
-	s.Mux.HandleFunc("POST /api/bookmark/track", s.handleBookmarkTrack)
-	s.Mux.HandleFunc("POST /api/bookmark/untrack", s.handleBookmarkUntrack)
+	s.Mux.HandleFunc("POST /api/bookmark/set", s.bookmarkRevMutation(jj.BookmarkSet))
+	s.Mux.HandleFunc("POST /api/bookmark/delete", s.bookmarkMutation(jj.BookmarkDelete))
+	s.Mux.HandleFunc("POST /api/bookmark/move", s.bookmarkRevMutation(func(rev, name string) jj.CommandArgs {
+		return jj.BookmarkMove(rev, name, "--allow-backwards")
+	}))
+	s.Mux.HandleFunc("POST /api/bookmark/advance", s.bookmarkRevMutation(jj.BookmarkAdvance))
+	s.Mux.HandleFunc("POST /api/bookmark/forget", s.bookmarkMutation(jj.BookmarkForget))
+	s.Mux.HandleFunc("POST /api/bookmark/track", s.bookmarkRemoteMutation(jj.BookmarkTrack))
+	s.Mux.HandleFunc("POST /api/bookmark/untrack", s.bookmarkRemoteMutation(jj.BookmarkUntrack))
 
 	s.Mux.HandleFunc("GET /api/aliases", s.handleAliases)
 	s.Mux.HandleFunc("POST /api/alias", s.handleRunAlias)

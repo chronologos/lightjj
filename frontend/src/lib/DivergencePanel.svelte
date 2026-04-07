@@ -2,6 +2,7 @@
   import { api } from './api'
   import { classify, buildKeepPlan, type DivergenceGroup, type KeepPlan } from './divergence'
   import { computeRefinedKind, findCrossColumnMerge, type RefinedKind } from './divergence-refined'
+  import { createLoader } from './loader.svelte'
   import { recommend, immutableSiblingCopy, type Strategy } from './divergence-strategy'
   import { parseDiffContent } from './diff-parser'
   import DiffFileView from './DiffFileView.svelte'
@@ -63,23 +64,23 @@
   )
 
   // --- Cross-diff (works for both stack tips and single-change versions) ---
+  // Loader-scoped: crossDiff.error is rendered inline in the compare-section,
+  // separate from panel-level `error` so cross-diff failure doesn't hide Keep
+  // buttons (`{:else if error}` replaces the entire group view).
   let compareFrom = $state(0)
   let compareTo = $state(1)
-  let crossDiff = $state('')
-  let diffLoading = $state(false)
-  // Separate from `error` — cross-diff failure must NOT hide the Keep buttons
-  // (the `{:else if error}` template branch replaces the entire group view).
-  // Previously this WROTE `error` → panel clobbered with no recovery (success
-  // path doesn't clear it). Rendered inline in the compare-section instead.
-  let crossDiffError = $state('')
+  const crossDiff = createLoader(
+    (from: string, to: string, files?: string[]) => api.diffRange(from, to, files).then(r => r.diff),
+    '',
+  )
   let fileUnion = $state<Set<string>>(new Set())
 
-  let parsedCrossDiff = $derived(parseDiffContent(crossDiff))
+  let parsedCrossDiff = $derived(parseDiffContent(crossDiff.value))
 
   // RefinedKind — full taxonomy after tree-delta lands. Feeds both the kind
   // badge AND recommend(). Decision logic extracted to divergence-refined.ts.
   let refinedKind = $derived(
-    computeRefinedKind(group, diffLoading, parsedCrossDiff.map(f => f.filePath), fileUnion)
+    computeRefinedKind(group, crossDiff.loading, parsedCrossDiff.map(f => f.filePath), fileUnion)
   )
 
   // Strategy recommendations — ranked list, [0] rendered as primary card.
@@ -137,7 +138,7 @@
       // fileUnion BEFORE group: the diff effect depends on both. Setting
       // group first would fire it with fileUnion empty → unfiltered fetch
       // (large, includes trunk churn), then fileUnion lands → fires again
-      // filtered → first response discarded by diffGen but wasted round trip.
+      // filtered → first response discarded but wasted round trip.
       // With this order: fileUnion set → diff effect checks `if (!group)` →
       // bails. group set → single filtered fetch.
       // No per-call .catch(): a silently-empty fileUnion makes refineRebaseKind
@@ -168,46 +169,21 @@
     })
   })
 
-  // Cross-diff between selected version-tips. diffGen invalidates in-flight
-  // fetches when compareFrom/compareTo toggle. Separate from version load —
-  // a shared counter would kill the fileUnion continuation when this effect
-  // fires on group becoming non-null (mid-way through version load's async).
-  let diffGen = 0
+  // Cross-diff between selected version-tips. createLoader's gen invalidates
+  // in-flight fetches when compareFrom/compareTo toggle. Separate from version
+  // load — a shared counter would kill the fileUnion continuation when this
+  // effect fires on group becoming non-null (mid-way through version load's async).
   $effect(() => {
-    // Clear error at the top — early-returns below would otherwise leave a
-    // stale crossDiffError displayed after toggling compareFrom/To out of a
-    // failed state (e.g. self-compare, or !alignable colIdx out-of-range).
-    crossDiffError = ''
-    // compareFrom === compareTo: meaningless self-compare. Clear crossDiff so
-    // the template doesn't show stale content labeled "Diff /N → /N". Also
-    // invalidate in-flight fetch (prev from/to selection) that would clobber.
-    if (!group || nVersions < 2 || compareFrom === compareTo) {
-      diffGen++
-      crossDiff = ''
-      diffLoading = false
-      return
-    }
+    // Self-compare or pre-load: reset() bumps gen (invalidates prior in-flight)
+    // + clears value/error so template doesn't show stale "Diff /N → /N".
+    if (!group || nVersions < 2 || compareFrom === compareTo) return crossDiff.reset()
     const tipLevel = group.versions[group.versions.length - 1]
     const fromId = tipLevel[compareFrom]?.commit_id
     const toId = tipLevel[compareTo]?.commit_id
     if (!fromId || !toId) return
-
-    const g = ++diffGen
-    diffLoading = true
-    // Pass fileUnion as filter if we have it — reduces diff size, and the
-    // full-diff fetch would include trunk churn that refineRebaseKind would
-    // subtract anyway. Empty Set → don't filter (still loading).
-    const filterFiles = fileUnion.size > 0 ? [...fileUnion] : undefined
-    api.diffRange(fromId, toId, filterFiles).then(result => {
-      if (g !== diffGen) return
-      crossDiff = result.diff
-      diffLoading = false
-    }).catch(e => {
-      if (g !== diffGen) return
-      crossDiff = ''
-      diffLoading = false
-      crossDiffError = e.message || 'Failed to load cross-version diff'
-    })
+    // fileUnion filter reduces diff size; full-diff would include trunk churn
+    // that refineRebaseKind subtracts anyway. Empty Set → don't filter (still loading).
+    crossDiff.load(fromId, toId, fileUnion.size > 0 ? [...fileUnion] : undefined)
   })
 
   // Thin wrapper — logic lives in divergence.ts now (testable in isolation).
@@ -527,11 +503,11 @@
             {/if}
           </div>
 
-          {#if diffLoading}
+          {#if crossDiff.loading}
             <div class="diff-loading">Loading diff…</div>
-          {:else if crossDiffError}
-            <div class="diff-empty diff-error">{crossDiffError}</div>
-          {:else if crossDiff === '' && compareFrom !== compareTo}
+          {:else if crossDiff.error}
+            <div class="diff-empty diff-error">{crossDiff.error}</div>
+          {:else if crossDiff.value === '' && compareFrom !== compareTo}
             <!-- Diff is filtered to fileUnion — empty means the files THIS
                  change owns are identical. For same-parent that's "only
                  metadata"; for diff-parent the trees may still differ via

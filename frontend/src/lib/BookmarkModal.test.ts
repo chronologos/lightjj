@@ -35,12 +35,13 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
   }
 }
 
-// Waits for any terminal state (items rendered OR empty/error message).
-// Previous version waited for .bm-item.length > 0, which timed out on
-// empty/error cases.
+// Two macrotasks: createLoader defers loading=true via setTimeout(0), and
+// mockResolvedValue settles in microtask. Covers both fetch-resolved and
+// loading-never-flipped (cache-hit-like) paths.
 async function renderSettled(props: ReturnType<typeof defaultProps>) {
   const r = render(BookmarkModal, { props })
-  await waitFor(() => expect(screen.queryByText('Loading...')).toBeNull())
+  await new Promise(res => setTimeout(res, 0))
+  await new Promise(res => setTimeout(res, 0))
   return r
 }
 
@@ -506,9 +507,11 @@ describe('BookmarkModal', () => {
   })
 
   describe('states', () => {
-    it('shows loading while fetching', () => {
+    it('shows loading while fetching', async () => {
       mockBookmarks.mockReturnValue(new Promise(() => {}))
       render(BookmarkModal, { props: defaultProps() })
+      // createLoader defers loading=true via setTimeout(0)
+      await new Promise(res => setTimeout(res, 0))
       expect(screen.getByText('Loading...')).toBeInTheDocument()
     })
 
