@@ -11,6 +11,7 @@ function harness(handled: Partial<Record<keyof GateHandlers, boolean>> = {}) {
   const h: GateHandlers = {
     globalOverrides: spy('globalOverrides'),
     inlineCommit: spy('inlineCommit'),
+    diffScroll: spy('diffScroll'),
     delegateFileHistory: spy('delegateFileHistory'),
     inlineNav: spy('inlineNav'),
     delegateBranches: spy('delegateBranches'),
@@ -30,6 +31,12 @@ const base: GateCtx = {
 
 const ctx = (over: Partial<GateCtx>): GateCtx => ({ ...base, ...over })
 
+// Try-handlers that fire before each swallow gate. PRE_INPUT = before inInput
+// returns; PRE_MOD = before hasModifier returns (adds diffScroll, which sits
+// between the two).
+const PRE_INPUT = ['globalOverrides', 'inlineCommit']
+const PRE_MOD = [...PRE_INPUT, 'diffScroll']
+
 describe('routeKeydown — gate priority', () => {
   // The ORDER invariants from the :1742-1750 comment. Each row asserts the
   // LAST handler called — earlier handlers in the chain return false (default).
@@ -47,17 +54,16 @@ describe('routeKeydown — gate priority', () => {
   })
 
   // Swallow gates — no handler called past the try-handlers.
-  it.each<[string, Partial<GateCtx>]>([
-    ['j in input → swallowed', { inInput: true }],
-    ['Cmd+j → swallowed (modifier passthrough)', { hasModifier: true }],
-    ['j behind modal → swallowed', { anyModalOpen: true }],
-    ['j in branches with defaultPrevented → swallowed', { activeView: 'branches', defaultPrevented: true }],
-    ['j in merge with defaultPrevented → swallowed', { activeView: 'merge', defaultPrevented: true }],
-  ])('%s', (_, over) => {
+  it.each<[string, Partial<GateCtx>, string[]]>([
+    ['j in input → swallowed', { inInput: true }, PRE_INPUT],
+    ['Cmd+j → swallowed (modifier passthrough)', { hasModifier: true }, PRE_MOD],
+    ['j behind modal → swallowed', { anyModalOpen: true }, PRE_MOD],
+    ['j in branches with defaultPrevented → swallowed', { activeView: 'branches', defaultPrevented: true }, PRE_MOD],
+    ['j in merge with defaultPrevented → swallowed', { activeView: 'merge', defaultPrevented: true }, PRE_MOD],
+  ])('%s', (_, over, expected) => {
     const { h, calls } = harness()
     routeKeydown(ctx(over), h)
-    // Only the try-handlers (globalOverrides, inlineCommit) fire before swallow.
-    expect(calls).toEqual(['globalOverrides', 'inlineCommit'])
+    expect(calls).toEqual(expected)
   })
 
   // The load-bearing orderings — these are the regression locks.
@@ -77,7 +83,19 @@ describe('routeKeydown — gate priority', () => {
     it('hasModifier AFTER globalOverrides — Cmd+C passes through to browser', () => {
       const { h, calls } = harness()
       routeKeydown(ctx({ hasModifier: true, key: 'c' }), h)
-      expect(calls).toEqual(['globalOverrides', 'inlineCommit'])  // neither handles → hasModifier swallows
+      expect(calls).toEqual(PRE_MOD)  // none handle → hasModifier swallows
+    })
+
+    it('diffScroll AFTER inInput — Ctrl+E in a text field is readline end-of-line, not diff scroll', () => {
+      const { h, calls } = harness({ diffScroll: true })
+      routeKeydown(ctx({ hasModifier: true, key: 'e', inInput: true }), h)
+      expect(calls).toEqual(PRE_INPUT)
+    })
+
+    it('diffScroll BEFORE hasModifier — Ctrl+E claims the key instead of passthrough', () => {
+      const { h, calls } = harness({ diffScroll: true })
+      routeKeydown(ctx({ hasModifier: true, key: 'e' }), h)
+      expect(calls.at(-1)).toBe('diffScroll')
     })
 
     it('inlineNav swallows EVERYTHING — t does not toggle theme in rebase mode', () => {
@@ -96,7 +114,7 @@ describe('routeKeydown — gate priority', () => {
     it('fileHistory delegate falls through to modal swallow on non-handled key', () => {
       const { h, calls } = harness({ delegateFileHistory: false })
       routeKeydown(ctx({ fileHistoryOpen: true, anyModalOpen: true }), h)
-      expect(calls).toEqual(['globalOverrides', 'inlineCommit', 'delegateFileHistory'])  // then swallowed
+      expect(calls).toEqual([...PRE_MOD, 'delegateFileHistory'])  // then swallowed
     })
 
     it('merge Escape BEFORE conflictQueue delegate — Escape always exits', () => {
@@ -125,7 +143,7 @@ describe('routeKeydown — gate priority', () => {
     it('branches: delegate falls through → globalKeys → logKeys (Space on visible graph)', () => {
       const { h, calls } = harness()
       routeKeydown(ctx({ activeView: 'branches' }), h)
-      expect(calls).toEqual(['globalOverrides', 'inlineCommit', 'delegateBranches', 'globalKeys', 'logKeys'])
+      expect(calls).toEqual([...PRE_MOD, 'delegateBranches', 'globalKeys', 'logKeys'])
     })
 
     it('branches: globalKeys handles → logKeys NOT called', () => {
@@ -138,7 +156,7 @@ describe('routeKeydown — gate priority', () => {
     it('merge: delegate falls through → globalKeys terminal', () => {
       const { h, calls } = harness()
       routeKeydown(ctx({ activeView: 'merge' }), h)
-      expect(calls).toEqual(['globalOverrides', 'inlineCommit', 'delegateConflictQueue', 'globalKeys'])
+      expect(calls).toEqual([...PRE_MOD, 'delegateConflictQueue', 'globalKeys'])
     })
   })
 })

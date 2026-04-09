@@ -1074,6 +1074,11 @@
   export function setScrollTop(v: number) {
     if (panelContentEl) panelContentEl.scrollTop = v
   }
+  export function scrollByStep(mode: 'line' | 'half', dir: 1 | -1) {
+    if (!panelContentEl) return
+    const dy = mode === 'half' ? panelContentEl.clientHeight / 2 : 20
+    panelContentEl.scrollBy({ top: dy * dir })
+  }
 
   // --- Diff search ---
   let searchOpen = $state(false)

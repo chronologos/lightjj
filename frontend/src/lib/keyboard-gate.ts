@@ -28,6 +28,9 @@ export interface GateCtx {
 export interface GateHandlers {
   globalOverrides(): boolean
   inlineCommit(): boolean
+  /** Ctrl+e/y/d/u diff-pane scroll. AFTER inInput (Ctrl+E is readline
+   *  end-of-line in text fields), BEFORE hasModifier passthrough. */
+  diffScroll(): boolean
   delegateFileHistory(): boolean
   inlineNav(): void
   /** Delegate to branches-panel key handler; return true if consumed. Unlike
@@ -52,6 +55,7 @@ export function routeKeydown(c: GateCtx, h: GateHandlers): void {
   if (h.globalOverrides()) return
   if (h.inlineCommit()) return
   if (c.inInput) return
+  if (h.diffScroll()) return
   if (c.hasModifier) return
   if (c.fileHistoryOpen && h.delegateFileHistory()) return
   if (c.anyModalOpen) return

@@ -1783,6 +1783,7 @@
       {
         globalOverrides: () => handleGlobalOverrides(e),
         inlineCommit: () => handleInlineCommit(e, target),
+        diffScroll: () => handleDiffScroll(e),
         delegateFileHistory: () => {
           if (fileHistoryRef?.handleKeydown(e)) { e.preventDefault(); return true }
           return false
@@ -1834,6 +1835,21 @@
       return true
     }
     return false
+  }
+
+  const SCROLL_KEYS: Record<string, ['line' | 'half', 1 | -1]> = {
+    e: ['line', 1], y: ['line', -1], d: ['half', 1], u: ['half', -1],
+  }
+  function handleDiffScroll(e: KeyboardEvent): boolean {
+    // diffPanelRef gates same as Cmd+F (undefined in branches/merge → fall
+    // through to hasModifier passthrough so the browser default still wins).
+    if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return false
+    if (!diffPanelRef || fileHistoryPath || anyModalOpen) return false
+    const step = SCROLL_KEYS[e.key]
+    if (!step) return false
+    e.preventDefault()
+    diffPanelRef.scrollByStep(...step)
+    return true
   }
 
   // Inline mode Enter/Escape — must fire even when FileSelectionPanel holds
@@ -2251,6 +2267,7 @@
                 if (e.key === 'Enter') {
                   e.preventDefault()
                   handleRevsetSubmit()
+                  revsetInputEl?.blur()
                 } else if (e.key === 'Escape') {
                   e.preventDefault()
                   clearRevsetFilter()
