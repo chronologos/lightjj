@@ -116,6 +116,7 @@
   let filePath = $derived(file.filePath)
   let isConflict = $derived(fileStats?.conflict ?? false)
   let isMarkdown = $derived(/\.md$/i.test(filePath))
+  let isExcalidraw = $derived(/\.excalidraw$/i.test(filePath))
 
   // Gutter marks for the markdown preview. Gated on previewContent so the
   // hunk walk doesn't run on every render of the (much hotter) source view.
@@ -521,8 +522,8 @@
         {#if fileStats.deletions > 0}<span class="stat-del">-{fileStats.deletions}</span>{/if}
       </span>
     {/if}
-    {#if onpreview && isMarkdown && !editing && fileStats?.type !== 'D'}
-      <button class="btn btn-sm" onclick={(e: MouseEvent) => { e.stopPropagation(); onpreview(filePath) }} title="Render markdown (mermaid diagrams supported)">{previewContent !== undefined ? 'Source' : 'Preview'}</button>
+    {#if onpreview && (isMarkdown || isExcalidraw) && !editing && fileStats?.type !== 'D'}
+      <button class="btn btn-sm" onclick={(e: MouseEvent) => { e.stopPropagation(); onpreview(filePath) }} title={isExcalidraw ? 'Render diagram' : 'Render markdown (mermaid diagrams supported)'}>{previewContent !== undefined ? 'Source' : 'Preview'}</button>
     {/if}
     {#if onfilehistory && !editing}
       <button class="btn btn-sm" onclick={(e: MouseEvent) => { e.stopPropagation(); onfilehistory(filePath) }} title="View file history (Kaleidoscope-style two-cursor compare)">History</button>
@@ -559,18 +560,24 @@
   </div>
   {#if !isCollapsed}
     {#if previewContent !== undefined}
-      {#await import('./MarkdownPreview.svelte') then { default: MarkdownPreview }}
-        <MarkdownPreview
-          content={previewContent}
-          ctx={previewRevision
-            ? { revision: previewRevision, baseDir: filePath.split('/').slice(0, -1).join('/') }
-            : undefined}
-          {filePath}
-          {annotationsForLine}
-          {onannotationclick}
-          {addedLines}
-        />
-      {/await}
+      {#if isExcalidraw}
+        {#await import('./ExcalidrawPreview.svelte') then { default: ExcalidrawPreview }}
+          <ExcalidrawPreview content={previewContent} />
+        {/await}
+      {:else}
+        {#await import('./MarkdownPreview.svelte') then { default: MarkdownPreview }}
+          <MarkdownPreview
+            content={previewContent}
+            ctx={previewRevision
+              ? { revision: previewRevision, baseDir: filePath.split('/').slice(0, -1).join('/') }
+              : undefined}
+            {filePath}
+            {annotationsForLine}
+            {onannotationclick}
+            {addedLines}
+          />
+        {/await}
+      {/if}
     {:else if effectiveSplit}
       <!-- Split (side-by-side) view -->
       {#if !isExpanded && hasHiddenContext}

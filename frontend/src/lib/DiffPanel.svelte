@@ -1017,9 +1017,8 @@
 
   function collapseAll() {
     collapsedFiles.clear()
-    for (const f of parsedDiff) {
-      collapsedFiles.add(f.filePath)
-    }
+    for (const f of parsedDiff) collapsedFiles.add(f.filePath)
+    for (const cf of conflictOnlyFiles) collapsedFiles.add(cf.path)
   }
 
   function expandAll() {
@@ -1057,7 +1056,7 @@
   // Mirrors the onpreview gate at the template call site: single-rev + no
   // hunk-review. togglePreview itself guards editBusy/diffTarget.
   export function togglePreviewActive() {
-    if (!activeFilePath || hunkReview || !/\.md$/i.test(activeFilePath)) return
+    if (!activeFilePath || hunkReview || !/\.(md|excalidraw)$/i.test(activeFilePath)) return
     void togglePreview(activeFilePath)
   }
 
@@ -1342,15 +1341,20 @@
     </div>
   {/if}
   {#if parsedDiff.length > 0}
-    {@const allExpanded = collapsedFiles.size === 0}
+    <!-- Derived from RENDERED files, not collapsedFiles.size — the set can hold
+         stale paths (sameChange rewrite drops a file; collapseStateCache restore
+         after a rebase). size>0 with only stale entries would stick the button
+         on "Expand all" while every visible file is already expanded. -->
+    {@const anyCollapsed = parsedDiff.some(f => collapsedFiles.has(f.filePath))
+      || conflictOnlyFiles.some(cf => collapsedFiles.has(cf.path))}
     <div class="diff-toolbar">
       <div class="diff-toolbar-left">
         <button
           class="btn btn-sm"
-          onclick={allExpanded ? collapseAll : expandAll}
-          title={allExpanded ? 'Collapse all files' : 'Expand all files'}
-          aria-label={allExpanded ? 'Collapse all files' : 'Expand all files'}
-        >{allExpanded ? '⊟' : '⊞'}</button>
+          onclick={anyCollapsed ? expandAll : collapseAll}
+          title={anyCollapsed ? 'Expand all files' : 'Collapse all files'}
+          aria-label={anyCollapsed ? 'Expand all files' : 'Collapse all files'}
+        >{anyCollapsed ? '⊞' : '⊟'}</button>
         {#if diffTarget?.kind === 'single'}
           <span class="ann-hint"><kbd class="nav-hint">Alt</kbd>+click line to annotate</span>
         {/if}
