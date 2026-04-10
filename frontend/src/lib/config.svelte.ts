@@ -29,6 +29,12 @@ interface Config {
   fontUI: string
   /** CSS font-family stack for code/diffs. Empty → theme.css default. */
   fontMono: string
+  /** Markdown preview body font. Empty → system-ui. */
+  fontMdBody: string
+  /** Markdown preview heading font. Empty → falls through to fontMdBody. */
+  fontMdHeading: string
+  /** Markdown preview code/pre font. Empty → --font-mono. */
+  fontMdCode: string
   revisionPanelWidth: number
   evologPanelHeight: number
   tutorialVersion: string
@@ -54,6 +60,9 @@ const defaults: Config = {
   fontSize: 13,
   fontUI: '',
   fontMono: '',
+  fontMdBody: '',
+  fontMdHeading: '',
+  fontMdCode: '',
   revisionPanelWidth: 420,
   evologPanelHeight: 360,
   tutorialVersion: '',
@@ -220,6 +229,15 @@ function createConfig() {
 
     get fontMono() { return state.fontMono },
     set fontMono(v: string) { state.fontMono = v },
+
+    get fontMdBody() { return state.fontMdBody },
+    set fontMdBody(v: string) { state.fontMdBody = v },
+
+    get fontMdHeading() { return state.fontMdHeading },
+    set fontMdHeading(v: string) { state.fontMdHeading = v },
+
+    get fontMdCode() { return state.fontMdCode },
+    set fontMdCode(v: string) { state.fontMdCode = v },
 
     get revisionPanelWidth() { return state.revisionPanelWidth },
     set revisionPanelWidth(v: number) { state.revisionPanelWidth = v },

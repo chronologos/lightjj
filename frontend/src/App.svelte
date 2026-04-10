@@ -411,14 +411,23 @@
     document.documentElement.classList.toggle('reduce-motion', config.reduceMotion)
   })
   // Typography. setProperty on :root overrides the theme.css defaults (inline
-  // style > stylesheet); removeProperty falls back to them. Empty fontUI/Mono
-  // = "use default", so a hand-edited config.json with the key absent and one
-  // with "" behave identically. Clamping lives in the config.fontSize getter.
+  // style > stylesheet); removeProperty falls back to them. Empty string = "use
+  // default", so a hand-edited config.json with the key absent and one with ""
+  // behave identically. Clamping lives in the config.fontSize getter.
+  const FONT_VARS = [
+    ['--font-ui',         () => config.fontUI],
+    ['--font-mono',       () => config.fontMono],
+    ['--font-md-body',    () => config.fontMdBody],
+    ['--font-md-heading', () => config.fontMdHeading],
+    ['--font-md-code',    () => config.fontMdCode],
+  ] as const
   $effect(() => {
     const s = document.documentElement.style
     s.setProperty('--font-size', `${config.fontSize}px`)
-    config.fontUI ? s.setProperty('--font-ui', config.fontUI) : s.removeProperty('--font-ui')
-    config.fontMono ? s.setProperty('--font-mono', config.fontMono) : s.removeProperty('--font-mono')
+    for (const [cssVar, get] of FONT_VARS) {
+      const v = get()
+      v ? s.setProperty(cssVar, v) : s.removeProperty(cssVar)
+    }
   })
 
   // Saved config.theme might be a ghostty id — load eagerly so the first

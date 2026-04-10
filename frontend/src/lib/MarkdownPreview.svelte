@@ -218,7 +218,7 @@
 <style>
   .md-preview {
     padding: 12px 24px 12px 0;
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--font-md-body);
     font-size: var(--fs-lg);
     line-height: 1.6;
     color: var(--text);
@@ -271,6 +271,7 @@
   }
   .md-preview :global(h1), .md-preview :global(h2), .md-preview :global(h3),
   .md-preview :global(h4), .md-preview :global(h5), .md-preview :global(h6) {
+    font-family: var(--font-md-heading);
     font-weight: 600;
     line-height: 1.25;
     margin: 1.5em 0 0.5em;
@@ -293,7 +294,7 @@
     background: var(--surface0);
     padding: 0.15em 0.35em;
     border-radius: 3px;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-md-code);
     font-size: 0.9em;
   }
   .md-preview :global(pre) {

@@ -14,6 +14,9 @@ The config file lives in your local config directory regardless of mode — only
 | `fontSize` | `number` | `13` | Base font size in px (clamped 10–16). All UI text scales relative to this — see [Typography](#typography) |
 | `fontUI` | `string` | `""` | CSS `font-family` stack for UI text. Empty = built-in default |
 | `fontMono` | `string` | `""` | CSS `font-family` stack for code, diffs, change IDs. Empty = built-in default |
+| `fontMdBody` | `string` | `""` | Markdown preview body text. Empty = `system-ui` |
+| `fontMdHeading` | `string` | `""` | Markdown preview headings. Empty = inherits `fontMdBody` |
+| `fontMdCode` | `string` | `""` | Markdown preview `code`/`pre`. Empty = inherits `fontMono` |
 | `revisionPanelWidth` | `number` | `420` | Revision panel width in px |
 | `evologPanelHeight` | `number` | `360` | Evolog panel height in px |
 | `tutorialVersion` | `string` | `""` | Last-seen "what's new" version; managed by the UI |
@@ -35,9 +38,13 @@ The upper clamp (`16`) exists because graph rows and diff lines have a fixed `18
 {
   "fontSize": 14,
   "fontUI": "'SF Pro Text', system-ui, sans-serif",
-  "fontMono": "'Berkeley Mono', 'JetBrains Mono', monospace"
+  "fontMono": "'Berkeley Mono', 'JetBrains Mono', monospace",
+  "fontMdBody": "'Charter', 'Georgia', serif",
+  "fontMdHeading": "'Inter', sans-serif"
 }
 ```
+
+Markdown preview fonts are intentionally separate from `fontUI` — prose reads better in a book-style face than a UI font. `fontMdHeading` defaults to `fontMdBody` (set just one for matched serif headings) and `fontMdCode` defaults to `fontMono` (so diffs and code blocks match).
 
 The font must be installed locally — lightjj does not download webfonts. From the UI: **Cmd+K → "Font size"** for increase/decrease/reset; font families are config-file only.
 

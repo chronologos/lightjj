@@ -71,6 +71,12 @@ body {
 :root {
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  /* Markdown preview is content, not chrome — system-ui (GitHub's choice) reads
+     better as prose than --font-ui. Heading defaults to body so setting only
+     fontMdBody cascades. Code defaults to --font-mono so diffs/preview match. */
+  --font-md-body: system-ui, -apple-system, sans-serif;
+  --font-md-heading: var(--font-md-body);
+  --font-md-code: var(--font-mono);
 
   /* Typography scale. --font-size is the config override hook (App.svelte sets
      it via root.style.setProperty); the --fs-* derived sizes are what

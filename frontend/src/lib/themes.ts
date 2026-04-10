@@ -78,6 +78,37 @@ function pickAccent(bg: string, candidates: string[], fallback: string): string 
   return fallback
 }
 
+/** Weighted-RGB perceptual distance (ITU-R BT.601 weights — same source as
+ *  lum()). Cheap and good enough for "is this hue too close to amber". */
+export const colorDist = (a: string, b: string) => {
+  const [ar, ag, ab] = hex2rgb(a), [br, bg, bb] = hex2rgb(b)
+  return Math.sqrt(2*(ar-br)**2 + 4*(ag-bg)**2 + 3*(ab-bb)**2)
+}
+
+// ANSI slots that carry hue. 0/7/8/15 (black/white/grays) are surface/text
+// territory — using them as graph lanes makes lines vanish into bg/fg.
+const HUE_SLOTS = [3, 9, 1, 5, 4, 6, 2, 11, 13, 12, 14, 10]
+
+/** Derive 8 graph-lane colors that don't collide with semantic amber/green/red.
+ *  DESIGN_LANGUAGE.md Tier 3: graph is decorative-only, "never amber/green/red".
+ *  The old fixed mapping (graph-0=p[3]) made lane 0 == --amber for most ghostty
+ *  palettes — selection tint and lane-0 nodes were the same hue. Ranking by
+ *  min-distance-to-semantic puts the most distinct hues in low lanes (where
+ *  most commits live on linear history). 0.25 mix toward bg desaturates to the
+ *  ~60% level the hand-tuned builtins use. */
+export function pickGraphPalette(p: string[], semantic: string[], bg: string): string[] {
+  const minDist = (c: string) => Math.min(...semantic.map(s => colorDist(c, s)))
+  const seen = new Set<string>()
+  const ranked = HUE_SLOTS
+    .map(i => p[i])
+    .filter(c => !seen.has(c) && (seen.add(c), true))
+    .sort((a, b) => minDist(b) - minDist(a))
+  // Pad if dedupe left <8 (mono/duotone palettes) — reuse with heavier mute so
+  // adjacent lanes still differ visibly.
+  while (ranked.length < 8) ranked.push(ranked[ranked.length % seen.size] ?? bg)
+  return ranked.slice(0, 8).map((c, i) => mix(c, bg, i < seen.size ? 0.25 : 0.45))
+}
+
 function deriveTheme(raw: GhosttyRaw): GhosttyTheme {
   const { id, label, bg, fg, p } = raw
   const dark = lum(bg) < lum(fg)
@@ -92,8 +123,7 @@ function deriveTheme(raw: GhosttyRaw): GhosttyTheme {
     surface2: p[8], overlay0: mix(p[8], fg, 0.3), overlay1: mix(p[8], fg, 0.4),
     subtext0: mix(p[8], fg, 0.55), subtext1: fg, text: fg,
     amber, green, red, blue: p[4], mauve: p[5], lavender: p[6],
-    'graph-0': p[3], 'graph-1': p[9], 'graph-2': p[1], 'graph-3': p[5],
-    'graph-4': p[4], 'graph-5': p[6], 'graph-6': p[2], 'graph-7': p[11],
+    ...Object.fromEntries(pickGraphPalette(p, [amber, green, red], bg).map((c, i) => [`graph-${i}`, c])),
     'syn-keyword': p[13], 'syn-string': p[10], 'syn-number': p[9],
     'syn-comment': p[8], 'syn-type': p[11], 'syn-property': p[12],
     'syn-operator': p[7], 'syn-punct': p[8], 'syn-atom': p[9],
