@@ -105,6 +105,7 @@
       {:else if activeView === 'log'}
         <span class="key-hints">
           <kbd>j</kbd>/<kbd>k</kbd> navigate
+          <kbd>⇧J</kbd>/<kbd>⇧K</kbd> slide
           <kbd>[</kbd>/<kbd>]</kbd> file
           <kbd>Space</kbd> check
           <kbd>e</kbd> describe

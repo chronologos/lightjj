@@ -55,6 +55,7 @@
   import { executeKeepPlan, splitIdentity, squashDivergent, abandonMutable, type DivergenceActionResult } from './lib/divergence-actions'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, createFileSelection, targetModeLabel } from './lib/modes.svelte'
   import { routeKeydown, type ActiveView } from './lib/keyboard-gate'
+  import { computeSlide, type SlideDir } from './lib/slide'
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { config, FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT } from './lib/config.svelte'
@@ -597,6 +598,8 @@
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !inlineMode && (!!selectedRevision || checkedRevisions.size > 0) },
     { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Slide revision down (swap with parent)', shortcut: '⇧J', category: 'Revisions', action: () => handleSlide('down'), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
+    { label: 'Slide revision up (swap with child)', shortcut: '⇧K', category: 'Revisions', action: () => handleSlide('up'), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Review revision (accept/reject files)', shortcut: 'v', category: 'Revisions', action: enterReviewMode, when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Commit working copy', shortcut: 'c', category: 'Revisions', action: handleCommit, when: () => !inlineMode },
 
@@ -961,8 +964,11 @@
   }
 
   function openRevisionContextMenu(changeId: string, x: number, y: number) {
-    const entry = revisions.find(r => effectiveId(r.commit) === changeId)
+    const idx = revisions.findIndex(r => effectiveId(r.commit) === changeId)
+    const entry = idx >= 0 ? revisions[idx] : undefined
     const commitId = entry?.commit.commit_id ?? ''
+    const slideUp = computeSlide(revisions, idx, 'up')
+    const slideDown = computeSlide(revisions, idx, 'down')
     // Mode-transition items (Rebase/Squash/Split/Describe/New/Edit) are gated
     // on !inlineMode — clicking Split while already in squash mode would call
     // cancelInlineModes() + split.enter() in one tick, leaving FileSelectionPanel
@@ -976,6 +982,8 @@
       { label: 'Rebase...', shortcut: 'R', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterRebaseMode() } },
       { label: 'Squash...', shortcut: 'S', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSquashMode() } },
       { label: 'Split...', shortcut: 's', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSplitMode() } },
+      { label: 'Slide up', shortcut: '⇧K', disabled: inlineMode || !slideUp.ok, action: () => { selectByChangeId(changeId); handleSlide('up') } },
+      { label: 'Slide down', shortcut: '⇧J', disabled: inlineMode || !slideDown.ok, action: () => { selectByChangeId(changeId); handleSlide('down') } },
       { separator: true },
       { label: 'Set bookmark...', shortcut: 'B', disabled: inlineMode, action: () => { selectByChangeId(changeId); openModal('bookmarkInput') } },
     ]
@@ -1359,6 +1367,26 @@
         setMessage(mutationMessage(msg, result))
         clearChecks()
         await loadLog()
+      } catch (e) {
+        showError(e)
+      }
+    })
+  }
+
+  // Shift+J/K: jj-arrange-style single-step swap with topological neighbor.
+  // Gate logic lives in slide.ts (pure, tested). Cursor follows the moved
+  // change_id post-reload — commit_id changes, so loadLog's index-preservation
+  // alone would land on the swapped neighbor.
+  async function handleSlide(dir: SlideDir) {
+    const s = computeSlide(revisions, selectedIndex, dir)
+    if (!s.ok) return setMessage({ kind: 'warning', text: s.reason })
+    const changeId = effectiveId(revisions[selectedIndex].commit)
+    return withMutation(async () => {
+      try {
+        const r = await api.rebase([changeId], s.dest, '-r', s.targetMode)
+        setMessage(mutationMessage(`Slid ${changeId.slice(0, 8)} ${dir}`, r))
+        await loadLog()
+        selectByChangeId(changeId)
       } catch (e) {
         showError(e)
       }
@@ -2001,6 +2029,8 @@
       case 'B': if (singleOnly) { e.preventDefault(); openModal('bookmarkInput') } break
       case 'R': if (oneOrMany) { e.preventDefault(); enterRebaseMode() } break
       case 'S': if (oneOrMany) { e.preventDefault(); enterSquashMode() } break
+      case 'J': if (singleOnly) { e.preventDefault(); handleSlide('down') } break
+      case 'K': if (singleOnly) { e.preventDefault(); handleSlide('up') } break
     }
   }
 
