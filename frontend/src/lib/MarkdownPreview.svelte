@@ -432,6 +432,20 @@
   .md-preview :global(.mermaid-block:active) {
     cursor: grabbing;
   }
+  /* Author classDef/style/linkStyle colors are baked as literal fill=/stroke=
+     presentation attrs (e.g. fill="#e1f5ff") — authored for mermaid's light
+     default, so dark mode gets light-pastel boxes under our light --text.
+     Presentation attrs have specificity 0; theme defaults use fill="var(--_…)"
+     so :not([fill^="var"]) targets ONLY author literals. fill-opacity tints
+     toward --base (hue preserved → red/green boxes stay distinguishable);
+     text override catches author color:#333. Strokes left alone — saturated
+     ones (the common semantic case) read fine on dark; near-black is rare. */
+  :global(:root:not(.light)) .md-preview :global(.mermaid-block svg :is(rect, path, polygon, ellipse, circle)[fill]:not([fill^="var"]):not([fill="none"])) {
+    fill-opacity: 0.2;
+  }
+  :global(:root:not(.light)) .md-preview :global(.mermaid-block svg text[fill]:not([fill^="var"])) {
+    fill: var(--text);
+  }
   .md-preview :global(.mermaid-fallback) {
     border-left: 3px solid var(--overlay0);
   }
