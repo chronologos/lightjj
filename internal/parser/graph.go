@@ -188,7 +188,7 @@ func parseNodeLine(line string) GraphRow {
 
 	// Bookmarks field (after SplitN(7) keeps tail unsplit) contains locals then
 	// remotes, all \x1F-joined. Remotes are `name\x1Eremote`; locals are
-	// `name\x1Dconflict` (\x1E presence is the local/remote distinguisher).
+	// `name\x1Dconflict\x1Dsynced` (\x1E presence is the local/remote distinguisher).
 	// RefSymbol quoting (`"name"`) is stripped — it's a template-output detail
 	// (jj quotes names with revset-special chars). The @git synthetic colocation
 	// remote is dropped here so no consumer needs to filter it.

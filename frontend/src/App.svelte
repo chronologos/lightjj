@@ -735,21 +735,9 @@
   }
 
   function formatTitle(host: string, path: string): string {
-    const MAX = 10
-
-    // Path: single-letter per component except last, then drop leading letters
-    // until ≤MAX. /home/alice/src/lightjj → /h/a/s/lightjj → …/lightjj
-    const parts = path.split(/[/\\]/)
-    const last = parts.pop() || path
-    const letters = parts.map(p => p.slice(0, 1))
-    let shortPath = letters.join('/') + '/' + last
-    while (shortPath.length > MAX && letters.length) {
-      letters.shift()
-      shortPath = '…' + letters.join('/') + '/' + last
-    }
-
-    if (!host) return `${last} — lightjj`
-    return `${hostEmoji(host)} ${shortPath} — lightjj`
+    const folder = path.split(/[/\\]/).filter(Boolean).pop() || path
+    if (!host) return folder
+    return `${hostEmoji(host)} ${host.slice(0, 8)} ${folder}`
   }
 
   async function loadWorkspaces() {

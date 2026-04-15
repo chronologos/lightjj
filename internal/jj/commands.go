@@ -70,7 +70,7 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// chars per git-check-ref-format, all three are collision-safe):
 	//   \x1F — outer field separator
 	//   \x1E — distinguishes remote entries (name\x1Eremote); presence = remote
-	//   \x1D — sub-field within locals (name\x1Dconflict); the "??" marker in jj log
+	//   \x1D — sub-field within locals (name\x1Dconflict\x1Dsynced); jj's "??"/"*" decorators
 	// @ CAN appear in git-created branch names, which jj imports and RefSymbol-quotes.
 	// .name() quote-wraps names containing revset-special chars; the parser strips
 	// those quotes and filters the @git colocation synthetic remote.
