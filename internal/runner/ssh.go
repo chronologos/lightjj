@@ -37,7 +37,11 @@ func (r *SSHRunner) sshArgv(remoteCmd string) []string {
 }
 
 func (r *SSHRunner) wrapArgs(jjArgs []string) []string {
-	return r.sshArgv(fmt.Sprintf("jj -R %s %s", shellQuote(r.RepoPath), quoteAll(jjArgs)))
+	// See local.go:jjNoWrap — inject once at the runner boundary so every jj
+	// builder gets wrap-safe output. SSHRunner's inner local uses Binary="ssh",
+	// so local.go's prependJJFlags doesn't fire for this path.
+	withFlags := append([]string{jjNoWrap}, jjArgs...)
+	return r.sshArgv(fmt.Sprintf("jj -R %s %s", shellQuote(r.RepoPath), quoteAll(withFlags)))
 }
 
 func (r *SSHRunner) Run(ctx context.Context, args []string) ([]byte, error) {

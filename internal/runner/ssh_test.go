@@ -21,6 +21,17 @@ func TestSSHRunner_wrapArgs(t *testing.T) {
 	assert.Contains(t, got[n+1], "'log'")
 	assert.Contains(t, got[n+1], "'-r'")
 	assert.Contains(t, got[n+1], "'@'")
+	// jjNoWrap injected at the runner boundary so every jj command gets
+	// wrap-safe output without per-builder overrides.
+	assert.Contains(t, got[n+1], "'--config=ui.log-word-wrap=false'")
+}
+
+func TestSSHRunner_wrapRaw_NoJJFlagInjection(t *testing.T) {
+	// RunRaw is for non-jj binaries (gh). Prepending a jj flag would break
+	// argv — verify wrapRaw leaves it alone.
+	r := NewSSHRunner("user@host", "/home/user/repo")
+	got := r.wrapRaw([]string{"gh", "pr", "list"})
+	assert.NotContains(t, got[n+1], "log-word-wrap")
 }
 
 func TestSSHRunner_wrapRaw(t *testing.T) {

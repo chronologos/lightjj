@@ -36,6 +36,25 @@ func NewLocalRunner(repoDir string) *LocalRunner {
 	return &LocalRunner{Binary: "jj", RepoDir: repoDir}
 }
 
+// jjNoWrap disables ui.log-word-wrap globally for jj invocations. User config
+// with log-word-wrap=true splits single-line template output across graph
+// lines — every parser in internal/jj (LogGraph, OpLog, Divergence,
+// StaleImmutable, GetDescription, …) splits on \n and either drops rows with
+// the wrong field count or injects spurious newlines into editor prefill.
+// Applied once at the runner boundary so per-builder overrides aren't needed.
+const jjNoWrap = "--config=ui.log-word-wrap=false"
+
+// prependJJFlags injects jjNoWrap when Binary resolves to jj. Skipped for
+// RunRaw paths (gh, etc.) and for SSHRunner's internal ssh invocations (the
+// flag is prepended to jj args inside wrapArgs before the ssh wrap).
+// filepath.Base so absolute paths (`/usr/local/bin/jj`) match too.
+func (r *LocalRunner) prependJJFlags(args []string) []string {
+	if filepath.Base(r.Binary) != "jj" {
+		return args
+	}
+	return append([]string{jjNoWrap}, args...)
+}
+
 // waitDelay force-closes pipes when a grandchild process (SSH ControlMaster
 // mux master) inherits them — ctx expiry kills the direct child, but Wait()
 // blocks in awaitGoroutines until the pipe-copier sees EOF. Applied to every
@@ -86,6 +105,7 @@ func (r *LocalRunner) RunWithInput(ctx context.Context, args []string, stdin str
 // on success. On non-zero exit, stderr is baked into the error message
 // (stdout/stderr are nil).
 func (r *LocalRunner) runSeparate(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
+	args = r.prependJJFlags(args)
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
 	cmd.WaitDelay = waitDelay
@@ -154,6 +174,7 @@ func (r *LocalRunner) RunForMutation(ctx context.Context, args []string, stdin s
 // queries shouldn't warn; if they did, mixing warnings into the byte stream
 // would corrupt it anyway).
 func (r *LocalRunner) ReadBytes(ctx context.Context, args []string) ([]byte, error) {
+	args = r.prependJJFlags(args)
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
 	cmd.WaitDelay = waitDelay
@@ -222,6 +243,7 @@ func (r *LocalRunner) StreamCombined(ctx context.Context, args []string) (io.Rea
 }
 
 func (r *LocalRunner) stream(ctx context.Context, args []string, mergeStderr bool) (io.ReadCloser, error) {
+	args = r.prependJJFlags(args)
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.RepoDir
 	// StdoutPipe case: the hang is in the CALLER's Scanner.Read (grandchild

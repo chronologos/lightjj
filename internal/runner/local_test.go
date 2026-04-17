@@ -184,6 +184,24 @@ func TestLocalRunner_ReadBytes_ExitWithStderr(t *testing.T) {
 	assert.Contains(t, err.Error(), "oops")
 }
 
+func TestLocalRunner_prependJJFlags(t *testing.T) {
+	// jj binary → inject --config=ui.log-word-wrap=false at argv[0]. Every
+	// builder in internal/jj emits wrap-susceptible single-line templates;
+	// injecting once here keeps per-builder args clean.
+	jj := &LocalRunner{Binary: "jj"}
+	got := jj.prependJJFlags([]string{"log", "-r", "@"})
+	assert.Equal(t, []string{"--config=ui.log-word-wrap=false", "log", "-r", "@"}, got)
+
+	// Absolute path to jj must also match — users with non-PATH installs.
+	abs := &LocalRunner{Binary: "/usr/local/bin/jj"}
+	assert.Equal(t, []string{"--config=ui.log-word-wrap=false", "log"}, abs.prependJJFlags([]string{"log"}))
+
+	// Non-jj binary (RunRaw path for gh) → untouched. A jj flag in gh's argv
+	// would make gh error out.
+	gh := &LocalRunner{Binary: "gh"}
+	assert.Equal(t, []string{"pr", "list"}, gh.prependJJFlags([]string{"pr", "list"}))
+}
+
 // WriteFile symlink-escape tests — moved from handler tests when the check
 // migrated from handleFileWrite to LocalRunner.WriteFile (SSH-mode file-write
 // support). The handler does lexical validation; the runner owns filesystem
