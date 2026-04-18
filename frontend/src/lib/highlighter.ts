@@ -26,8 +26,9 @@ const PARSERS: Record<string, Parser> = {
   // No @lezer/svelte. HTML parser handles tags/attrs/strings; {interpolations}
   // and <script> bodies stay plain. Good enough for a diff view.
   svelte: htmlParser,
-  // bash/toml registered lazily via ensureLegacyParsers() — StreamLanguage
-  // pulls in @codemirror/language (~100K) that the main bundle doesn't need.
+  // bash/toml/zig/protobuf registered lazily via ensureLegacyParsers() —
+  // StreamLanguage pulls in @codemirror/language (~100K) that the main
+  // bundle doesn't need. zig has no first-party Lezer grammar; see lang-zig.ts.
 }
 
 // No first-party @lezer grammars for bash/toml — StreamLanguage wraps the
@@ -35,19 +36,23 @@ const PARSERS: Record<string, Parser> = {
 // @codemirror/language stays out of the main bundle. Callers that need
 // .sh/.toml highlighting await this before highlightLines; unhighlighted
 // (escaped-plain) output is returned in the interim.
-const LEGACY_LANGS = new Set(['bash', 'toml'])
+const LEGACY_LANGS = new Set(['bash', 'toml', 'zig', 'protobuf'])
 export const needsLegacyParser = (lang: string) => LEGACY_LANGS.has(lang) && !(lang in PARSERS)
 
 let legacyPromise: Promise<void> | undefined
 export function ensureLegacyParsers(): Promise<void> {
   return legacyPromise ??= (async () => {
-    const [{ StreamLanguage }, { shell }, { toml }] = await Promise.all([
+    const [{ StreamLanguage }, { shell }, { toml }, { zigMode }, { protobuf }] = await Promise.all([
       import('@codemirror/language'),
       import('@codemirror/legacy-modes/mode/shell'),
       import('@codemirror/legacy-modes/mode/toml'),
+      import('./lang-zig'),
+      import('@codemirror/legacy-modes/mode/protobuf'),
     ])
     PARSERS.bash = StreamLanguage.define(shell).parser
     PARSERS.toml = StreamLanguage.define(toml).parser
+    PARSERS.zig = StreamLanguage.define(zigMode).parser
+    PARSERS.protobuf = StreamLanguage.define(protobuf).parser
   })().catch(e => { legacyPromise = undefined; throw e })
 }
 
@@ -61,6 +66,8 @@ export const EXTENSION_LANGUAGES: Record<string, string> = {
   json: 'json', yaml: 'yaml', yml: 'yaml',
   sh: 'bash', bash: 'bash', shell: 'bash',
   toml: 'toml', mod: 'go', sum: 'go',
+  zig: 'zig', zon: 'zig',
+  proto: 'protobuf',
 }
 
 // Detect language from file extension. Also imported by FileEditor for its

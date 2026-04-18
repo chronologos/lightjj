@@ -29,6 +29,15 @@ describe('detectLanguage', () => {
     expect(detectLanguage('script.bash')).toBe('bash')
   })
 
+  it('maps zig and zon', () => {
+    expect(detectLanguage('main.zig')).toBe('zig')
+    expect(detectLanguage('build.zig.zon')).toBe('zig')
+  })
+
+  it('maps proto to protobuf', () => {
+    expect(detectLanguage('foo.proto')).toBe('protobuf')
+  })
+
   it('handles nested path', () => {
     expect(detectLanguage('path/to/file.go')).toBe('go')
   })
@@ -129,6 +138,44 @@ describe('highlightLines', () => {
     await ensureLegacyParsers()
     const out = highlightLines(['name = "foo"'], 'toml')
     expect(out[0]).toContain('tok-string')
+  })
+
+  it('zig via in-tree simple-mode tokenizer', async () => {
+    await ensureLegacyParsers()
+    const src = [
+      'const std = @import("std");',
+      'pub fn main() !void {',
+      '    const x: u32 = 0x2A; // hex',
+      '}',
+    ]
+    const out = highlightLines(src, 'zig')
+    expect(out).toHaveLength(4)
+    expect(out[0]).toContain('tok-keyword')   // const
+    expect(out[0]).toContain('tok-string')    // "std"
+    expect(out[1]).toContain('tok-keyword')   // pub / fn
+    expect(out[2]).toContain('tok-typeName')  // u32 → 'type' maps to tok-typeName
+    expect(out[2]).toContain('tok-number')    // 0x2A
+    expect(out[2]).toContain('tok-comment')   // // hex
+  })
+
+  it('zig recognizes @builtins and atoms', async () => {
+    await ensureLegacyParsers()
+    const out = highlightLines(['const x = @sizeOf(u8); const b = true;'], 'zig')
+    // Legacy-mode token names are mapped by StreamLanguage's built-in table
+    // to Lezer tags: 'builtin' → variableName, 'atom' → atom, 'type' → typeName.
+    // A regression in the tokenizer (@ matched as operator, atoms as keyword)
+    // would flip these classes, so pin them.
+    expect(out[0]).toContain('>@sizeOf</span>')
+    expect(out[0]).toMatch(/class="tok-variableName">@sizeOf/)
+    expect(out[0]).toContain('tok-typeName">u8')
+    expect(out[0]).toContain('tok-atom">true')
+  })
+
+  it('protobuf via StreamLanguage', async () => {
+    await ensureLegacyParsers()
+    const out = highlightLines(['message Foo { required string name = 1; }'], 'protobuf')
+    expect(out[0]).toContain('tok-keyword') // message / required / string
+    expect(out[0]).toContain('tok-number')  // 1
   })
 
   it('unknown language falls back to escaped plain text', () => {
