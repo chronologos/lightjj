@@ -5,6 +5,7 @@ go 1.25.9
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/stretchr/testify v1.11.1
+	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 )
 
 require (
