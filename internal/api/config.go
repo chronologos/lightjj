@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/tailscale/hujson"
@@ -310,4 +312,76 @@ func writePersistedTabs(mode, host string, tabs []PersistedTab) error {
 		return err
 	}
 	return writeConfigBytesLocked(path, out)
+}
+
+// handleConfigGetRaw returns the config file bytes verbatim as text/plain.
+// Used by ConfigModal so the user sees (and can edit) their actual JSONC
+// including comments. Missing file serves the template so new users get a
+// commented starter in the editor rather than `{}`.
+func handleConfigGetRaw(w http.ResponseWriter, r *http.Request) {
+	path, err := configPath()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "cannot resolve config dir")
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			data = []byte(configTemplate)
+		} else {
+			// Don't silently reseed: user's real file exists but couldn't be
+			// read (EACCES, EIO). Handing them the template would prime a
+			// save that clobbers their file when the fs recovers.
+			log.Printf("warning: cannot read config for raw view: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "cannot read config: "+err.Error())
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(data)
+}
+
+// handleConfigSetRaw accepts a JSONC document as text/plain and atomic-writes
+// it verbatim after validating via hujson.Parse. Unlike POST /api/config (which
+// merges per-key), this one REPLACES the whole file — ConfigModal shows the
+// user the whole content, so the whole content is what they're intending to
+// save. Cross-origin guard is identical to handleConfigSet: a malicious page
+// POSTing editorArgs through here has the same reach as through the typed
+// endpoint.
+func handleConfigSetRaw(w http.ResponseWriter, r *http.Request) {
+	if origin := r.Header.Get("Origin"); origin != "" && !isLocalOrigin(origin) {
+		writeJSONError(w, http.StatusForbidden, "cross-origin config write rejected")
+		return
+	}
+	// Require text/plain — forces CORS preflight for cross-origin requests,
+	// same defence-in-depth that decodeBody's application/json check gives
+	// to the typed endpoint. Without it, a cross-origin <form enctype="text/plain">
+	// post would be treated as a "simple" request and skip preflight.
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/plain") {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "Content-Type must be text/plain")
+		return
+	}
+	path, err := configPath()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "cannot resolve config dir")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20)) // 1MB cap
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := hujson.Parse(body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSONC: "+err.Error())
+		return
+	}
+	configMu.Lock()
+	defer configMu.Unlock()
+	if err := writeConfigBytesLocked(path, body); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }

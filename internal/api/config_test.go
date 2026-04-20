@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -389,4 +390,118 @@ func TestReadPersistedTabs(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Equal(t, "/x", got[0].Path)
 	})
+}
+
+func TestHandleConfigGetRaw_ReturnsRawJSONC(t *testing.T) {
+	path := withConfigDir(t)
+	seedConfig(t, path, `{
+  // a comment
+  "theme": "dark"
+}`)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/raw", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/plain")
+	assert.Contains(t, w.Body.String(), "// a comment")
+}
+
+func TestHandleConfigGetRaw_MissingFileReturnsTemplate(t *testing.T) {
+	withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/raw", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "// Theme id.",
+		"missing file should serve the template so the modal shows commented defaults")
+}
+
+func TestHandleConfigSetRaw_RoundTripPreservesComments(t *testing.T) {
+	path := withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	body := `{
+  // my comment
+  "theme": "light"
+}`
+	req := httptest.NewRequest("POST", "/api/config/raw", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, body, string(data), "raw POST should write bytes verbatim")
+}
+
+func TestHandleConfigSetRaw_RejectsInvalidJSONC(t *testing.T) {
+	withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	req := httptest.NewRequest("POST", "/api/config/raw", bytes.NewReader([]byte(`{not json`)))
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleConfigSetRaw_CrossOriginRejected(t *testing.T) {
+	withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	req := httptest.NewRequest("POST", "/api/config/raw",
+		bytes.NewReader([]byte(`{"theme":"dark"}`)))
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestHandleConfigSetRaw_RejectsNonTextPlain(t *testing.T) {
+	withConfigDir(t)
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	req := httptest.NewRequest("POST", "/api/config/raw",
+		bytes.NewReader([]byte(`{"theme":"dark"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnsupportedMediaType, w.Code)
+}
+
+func TestHandleConfigGetRaw_PermissionErrorReturns500(t *testing.T) {
+	// Create a file then chmod 0 so os.ReadFile returns EACCES. Verify the
+	// handler returns 500 rather than silently serving the template (which
+	// would let the user accidentally clobber their real file on save).
+	if os.Geteuid() == 0 {
+		t.Skip("cannot test permission errors as root")
+	}
+	path := withConfigDir(t)
+	seedConfig(t, path, `{"theme":"dark"}`)
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := NewServer(runner, t.TempDir())
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/raw", nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

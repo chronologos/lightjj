@@ -101,6 +101,8 @@ func NewTabManager(newTab TabFactory, resolve TabResolve) *TabManager {
 	// redundant; same backing file).
 	m.Mux.HandleFunc("GET /api/config", handleConfigGet)
 	m.Mux.HandleFunc("POST /api/config", handleConfigSet)
+	m.Mux.HandleFunc("GET /api/config/raw", handleConfigGetRaw)
+	m.Mux.HandleFunc("POST /api/config/raw", handleConfigSetRaw)
 	return m
 }
 

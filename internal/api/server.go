@@ -155,6 +155,8 @@ func (s *Server) routes() {
 
 	s.Mux.HandleFunc("GET /api/config", handleConfigGet)
 	s.Mux.HandleFunc("POST /api/config", handleConfigSet)
+	s.Mux.HandleFunc("GET /api/config/raw", handleConfigGetRaw)
+	s.Mux.HandleFunc("POST /api/config/raw", handleConfigSetRaw)
 
 	s.Mux.HandleFunc("GET /api/annotations", s.handleAnnotationsGet)
 	s.Mux.HandleFunc("POST /api/annotations", s.handleAnnotationsPost)

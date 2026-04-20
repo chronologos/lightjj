@@ -372,6 +372,12 @@ func TestTabManager_ConfigAtTopLevel(t *testing.T) {
 	tm.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "{}", w.Body.String())
+
+	// ConfigModal fetches /api/config/raw without a tab prefix — must route.
+	w = httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/raw", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/plain")
 }
 
 // TestTabPersistence exercises the create → config.json → close cycle.
