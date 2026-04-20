@@ -16,41 +16,47 @@
   let editorRef: ReturnType<typeof FileEditor> | undefined = $state(undefined)
 
   // Raw fetch — same rationale as config.svelte.ts (non-jj endpoint, no op-id).
-  // Re-stringify so the editor always shows pretty 2-indent regardless of
-  // what's on disk (backend writes MarshalIndent but a hand-edit may not).
+  // /api/config/raw returns the on-disk bytes verbatim (or the template on
+  // missing file), so the user sees comments they wrote and the commented
+  // defaults on first open. No re-stringify.
   $effect(() => {
     if (!open) return
     loading = true
     parseError = ''
-    fetch('/api/config')
-      .then(r => r.status === 204 ? {} : r.json())
-      .then(obj => { content = JSON.stringify(obj, null, 2) })
+    fetch('/api/config/raw')
+      .then(r => r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(text => { content = text })
       .catch(e => onerror(e))
       .finally(() => { loading = false })
   })
 
   async function save(text: string) {
-    let parsed: Record<string, unknown>
-    try {
-      parsed = JSON.parse(text)
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('config must be a JSON object')
-      }
-    } catch (e) {
-      parseError = e instanceof Error ? e.message : String(e)
+    // Lazy-load jsonc-parser only when the user actually saves. Keeps main
+    // bundle free of the ~30KB dep.
+    const { parse: parseJsonc, printParseErrorCode } = await import('jsonc-parser')
+    const errors: Array<{ error: number; offset: number; length: number }> = []
+    const parsed = parseJsonc(text, errors, { allowTrailingComma: true }) as unknown
+    if (errors.length > 0) {
+      const e = errors[0]
+      parseError = `${printParseErrorCode(e.error)} at offset ${e.offset}`
+      return
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      parseError = 'config must be a JSONC object'
       return
     }
     parseError = ''
     try {
-      const res = await fetch('/api/config', {
+      const res = await fetch('/api/config/raw', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed),
+        headers: { 'Content-Type': 'text/plain' },
+        body: text,
       })
       if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
       // Apply known keys to reactive state so theme/fontSize/etc take effect
-      // immediately. The config save-effect will then echo to localStorage.
-      config.applyPartial(parsed)
+      // immediately. The config save-effect then echoes to localStorage. Unknown
+      // keys in `parsed` are ignored by applyPartial.
+      config.applyPartial(parsed as Record<string, unknown>)
       onclose()
     } catch (e) {
       onerror(e)
