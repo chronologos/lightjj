@@ -852,9 +852,17 @@ export const api = {
     return cachedRequest<FileChange[]>('files:' + revision, `/api/files?${params}`)
   },
 
-  fileShow: (revision: string, path: string) => {
+  /** `snapshot=true` forces ui.conflict-marker-style=snapshot for byte-exact
+   *  base in MergePanel. NOT the default — hunk-review's left-content read
+   *  must match the user's style (Diff + `jj split --tool` $left). The cache
+   *  key includes the flag so the two styles don't cross-contaminate. */
+  fileShow: (revision: string, path: string, snapshot = false) => {
     const params = new URLSearchParams({ revision, path })
-    return cachedRequest<{ content: string }>('fileshow:' + revision + ':' + path, `/api/file-show?${params}`)
+    if (snapshot) params.set('snapshot', '1')
+    return cachedRequest<{ content: string }>(
+      `fileshow:${revision}:${path}:${snapshot ? 's' : ''}`,
+      `/api/file-show?${params}`,
+    )
   },
 
   // Tab-scoped URL for raw file bytes — feeds <img src> in markdown preview
@@ -864,6 +872,12 @@ export const api = {
 
   fileWrite: (path: string, content: string) =>
     post<{ ok: boolean }>('/api/file-write', { path, content }),
+
+  /** Commit MergePanel's resolved content at any mutable revision via
+   *  `jj resolve --tool` (cp). Local-only — 501 in SSH; caller should fall
+   *  back to fileWrite for `@` (which IS SSH-compatible). */
+  mergeResolve: (revision: string, path: string, content: string) =>
+    post<MutationResult>('/api/merge-resolve', { revision, path, content }),
 
   remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
 

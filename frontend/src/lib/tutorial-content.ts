@@ -6,6 +6,7 @@ export interface TutorialFeature {
 }
 
 export const FEATURES: TutorialFeature[] = [
+  { version: '1.21.0', shortcut: '⌘S in merge mode', title: 'Resolve conflicts at any revision', description: 'Merge mode now saves resolutions at non-@ revisions via `jj resolve --tool` — no more "use `jj edit` first" warning. The base pane is also byte-exact (snapshot-style markers) instead of being reconstructed from a diff. SSH mode still requires @ for non-@ saves; the warning now includes the `jj edit` hint.' },
   { version: '1.20.0', shortcut: '⌘K → Edit config', title: 'JSONC config with comments', description: 'The config file is now JSONC — add // line comments and trailing commas. Fresh installs get a commented template teaching you how to set theme, editorArgs, fonts. Comments survive programmatic writes (theme toggle, panel drag) because the backend patches the AST instead of re-serialising. Syntax errors surface as a warning bar instead of overwriting your file.' },
   { version: '1.18.0', shortcut: null, title: 'Image preview', description: 'Preview .svg/.png/.jpg/.gif/.webp files inline in the diff panel — same Preview button as markdown. Served via the CSP-hardened file-raw proxy, rendered over a checkered transparency background.' },
   { version: '1.17.0', shortcut: null, title: 'Snapshot pause during mutations', description: 'Background snapshots are suppressed while a jj git push (or any mutation) is in flight, avoiding the "Concurrent checkout" / op-divergence race that long pushes can hit. Tabs on the same working copy share the gate.' },

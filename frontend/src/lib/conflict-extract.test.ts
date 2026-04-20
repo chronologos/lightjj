@@ -102,6 +102,39 @@ describe('reconstructSides', () => {
     expect(r.theirs).toBe('pre\ntheirs\npost')
   })
 
+  it('extracts byte-exact base + labels from real jj snapshot output (FileShow forces this style)', () => {
+    // Literal `jj file show --config ui.conflict-marker-style=snapshot` output.
+    // Base bytes are verbatim — no %%%%%%% diff reconstruction. This is the
+    // load path for MergePanel after the resolve-tool design simplification:
+    // one --config flag in FileShow instead of a --tool dump phase.
+    const raw = [
+      'a',
+      '<<<<<<< conflict 1 of 1',
+      '+++++++ zwquruzm a5f2cfce "ours msg"',
+      'B-ours',
+      '------- loqpmonx 5233a833 "base msg"',
+      'b',
+      '+++++++ mpqoopsp b9c8d9d6 "theirs msg"',
+      'B-theirs',
+      '>>>>>>> conflict 1 of 1 ends',
+      'c',
+    ].join('\n')
+
+    const r = reconstructSides(raw)!
+    expect(r.base).toBe('a\nb\nc')         // exact base bytes from -------
+    expect(r.ours).toBe('a\nB-ours\nc')
+    expect(r.theirs).toBe('a\nB-theirs\nc')
+    // MergePanel pane-header chips — survive without the v1 dump-phase JSON.
+    // extractSideLabel pulls the quoted description; parseRef pulls the IDs.
+    expect(r.oursLabel).toBe('ours msg')
+    expect(r.theirsLabel).toBe('theirs msg')
+    expect(r.oursRef).toEqual({ changeId: 'zwquruzm', commitId: 'a5f2cfce' })
+    expect(r.theirsRef).toEqual({ changeId: 'mpqoopsp', commitId: 'b9c8d9d6' })
+    // parse-time blocks preserved (no LCS regression on >1414-line files).
+    expect(r.blocks).toHaveLength(1)
+    expect(r.blocks[0]).toMatchObject({ aFrom: 2, aTo: 3, bFrom: 2, bTo: 3 })
+  })
+
   it('handles multiple conflict regions with shared spans between them', () => {
     const raw = [
       'A',

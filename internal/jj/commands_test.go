@@ -46,14 +46,43 @@ func TestLogGraph_NoRevset(t *testing.T) {
 }
 
 func TestFileShow(t *testing.T) {
-	got := FileShow("abc", "src/main.go")
-	assert.Equal(t, []string{"file", "show", "-r", "abc", "--ignore-working-copy", `root-file:"src/main.go"`}, got)
+	// Default (snapshotMarkers=false) — must match Diff() / `jj split --tool`'s
+	// $left so executeHunkReview's applyHunks line offsets stay aligned.
+	got := FileShow("abc", "src/main.go", false)
+	assert.Equal(t, []string{
+		"file", "show", "-r", "abc", "--ignore-working-copy",
+		`root-file:"src/main.go"`,
+	}, got)
+	// snapshotMarkers=true — merge-controller path. Byte-exact base.
+	got = FileShow("abc", "src/main.go", true)
+	assert.Equal(t, []string{
+		"file", "show", "-r", "abc", "--ignore-working-copy",
+		"--config", "ui.conflict-marker-style=snapshot",
+		`root-file:"src/main.go"`,
+	}, got)
 }
 
 func TestFileShow_EscapesPath(t *testing.T) {
 	// Dash-prefixed paths could be interpreted as flags without EscapeFileName
-	got := FileShow("abc", "-rm")
+	got := FileShow("abc", "-rm", false)
 	assert.Equal(t, `root-file:"-rm"`, got[len(got)-1])
+}
+
+func TestResolveApply(t *testing.T) {
+	got := ResolveApply("abc", "/tmp/result.txt", "src/main.go")
+	assert.Equal(t, []string{
+		"resolve", "-r", "abc",
+		"--config", `merge-tools.ljjcp.program="cp"`,
+		"--config", `merge-tools.ljjcp.merge-args=["/tmp/result.txt","$output"]`,
+		"--tool", "ljjcp",
+		"--", `root-file:"src/main.go"`,
+	}, got)
+}
+
+func TestResolveApply_QuotesResultPath(t *testing.T) {
+	// %q escapes embedded quotes/backslashes — TOML basic-string compatible.
+	got := ResolveApply("abc", `/tmp/a"b.txt`, "f.go")
+	assert.Contains(t, got, `merge-tools.ljjcp.merge-args=["/tmp/a\"b.txt","$output"]`)
 }
 
 func TestNew(t *testing.T) {

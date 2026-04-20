@@ -2052,6 +2052,75 @@ func TestHandleResolve(t *testing.T) {
 	}
 }
 
+func TestHandleMergeResolve_SSHMode501(t *testing.T) {
+	// RepoDir="" → !hasLocalFS() → 501 before body parsing.
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/merge-resolve", []byte(`garbage`)))
+	assert.Equal(t, http.StatusNotImplemented, w.Code)
+}
+
+func TestHandleMergeResolve_Validation(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.RepoDir = "/some/repo"
+	for name, body := range map[string]string{
+		"missing revision": `{"path":"f.go","content":"x"}`,
+		"missing path":     `{"revision":"abc","content":"x"}`,
+		"bad json":         `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, jsonPost("/api/merge-resolve", []byte(body)))
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
+func TestHandleMergeResolve_HappyPath(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	// Tempfile path is non-deterministic; match by prefix and inspect args.
+	exp := runner.ExpectPrefix([]string{"resolve", "-r", "abc"}).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = "/some/repo"
+	body, _ := json.Marshal(mergeResolveRequest{
+		Revision: "abc", Path: "src/main.go", Content: "RESOLVED\n",
+	})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/merge-resolve", body))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	args := exp.GotArgs()
+	require.NotNil(t, args)
+	// Shape: resolve -r abc --config <prog> --config <merge-args> --tool ljjcp -- root-file:"src/main.go"
+	assert.Equal(t, "--tool", args[7])
+	assert.Equal(t, "ljjcp", args[8])
+	assert.Equal(t, `root-file:"src/main.go"`, args[10])
+	assert.Contains(t, args[6], "lightjj-resolve-")
+	assert.Contains(t, args[6], `,"$output"]`)
+}
+
+func TestHandleMergeResolve_EmptyContentNormalised(t *testing.T) {
+	// jj rejects empty $output. Handler writes "\n" instead so the request
+	// reaches jj rather than failing. Assert the call goes through; the
+	// normalisation itself is 3 lines, locked by this not 400ing.
+	runner := testutil.NewMockRunner(t)
+	runner.ExpectPrefix([]string{"resolve", "-r", "abc"}).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = "/some/repo"
+	body, _ := json.Marshal(mergeResolveRequest{Revision: "abc", Path: "f.go", Content: ""})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/merge-resolve", body))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestHandleResolve_InvalidTool(t *testing.T) {
 	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(resolveRequest{Revision: "abc", File: "file.go", Tool: ":bad"})
@@ -2145,7 +2214,7 @@ func TestHandleFiles_WithConflictOnlyFile(t *testing.T) {
 
 func TestHandleFileShow(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FileShow("abc", "src/main.go")).SetOutput([]byte("file content here"))
+	runner.Expect(jj.FileShow("abc", "src/main.go", false)).SetOutput([]byte("file content here"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2157,6 +2226,19 @@ func TestHandleFileShow(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "file content here", resp["content"])
+}
+
+func TestHandleFileShow_SnapshotParam(t *testing.T) {
+	// ?snapshot=1 → snapshotMarkers=true. merge-controller is the only caller;
+	// hunk-review and DiffPanel callers must NOT pass it.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.FileShow("abc", "f.go", true)).SetOutput([]byte("snap"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/file-show?revision=abc&path=f.go&snapshot=1", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestHandleFileShow_MissingParams(t *testing.T) {
@@ -2180,7 +2262,7 @@ func TestHandleFileShow_MissingParams(t *testing.T) {
 
 func TestHandleFileShow_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FileShow("abc", "bad.go")).SetError(errors.New("file not found"))
+	runner.Expect(jj.FileShow("abc", "bad.go", false)).SetError(errors.New("file not found"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2196,7 +2278,7 @@ func TestHandleFileShow_RunnerError(t *testing.T) {
 
 func TestHandleFileRaw_Image(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FileShow("abc", "docs/logo.png")).SetOutput([]byte("\x89PNG..."))
+	runner.Expect(jj.FileShow("abc", "docs/logo.png", false)).SetOutput([]byte("\x89PNG..."))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2214,7 +2296,7 @@ func TestHandleFileRaw_Image(t *testing.T) {
 func TestHandleFileRaw_NonImage_ForcesDownload(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	// .html is the XSS case — serving it with text/html would execute scripts
-	runner.Expect(jj.FileShow("abc", "evil.html")).SetOutput([]byte("<script>alert(1)</script>"))
+	runner.Expect(jj.FileShow("abc", "evil.html", false)).SetOutput([]byte("<script>alert(1)</script>"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2229,7 +2311,7 @@ func TestHandleFileRaw_NonImage_ForcesDownload(t *testing.T) {
 
 func TestHandleFileRaw_SVG_CSPNeutersScript(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.FileShow("abc", "evil.svg")).SetOutput([]byte("<svg><script>fetch('/api/abandon')</script></svg>"))
+	runner.Expect(jj.FileShow("abc", "evil.svg", false)).SetOutput([]byte("<svg><script>fetch('/api/abandon')</script></svg>"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2258,7 +2340,7 @@ func TestHandleFileRaw_CacheControl(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := testutil.NewMockRunner(t)
-			runner.Expect(jj.FileShow(tt.rev, "x.png")).SetOutput([]byte("png"))
+			runner.Expect(jj.FileShow(tt.rev, "x.png", false)).SetOutput([]byte("png"))
 			srv.Runner = runner
 			req := httptest.NewRequest("GET", "/api/file-raw?revision="+url.QueryEscape(tt.rev)+"&path=x.png", nil)
 			w := httptest.NewRecorder()

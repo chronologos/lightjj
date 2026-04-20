@@ -449,6 +449,11 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "revision and path are required")
 		return
 	}
+	// ?snapshot=1 forces ui.conflict-marker-style=snapshot for byte-exact base
+	// in MergePanel. NOT the default — hunk-review's left-content read must
+	// match Diff() and `jj split --tool`'s $left (user's style); a global
+	// override here desyncs line offsets and silently corrupts applyHunks output.
+	snapshot := r.URL.Query().Get("snapshot") == "1"
 	// ReadBytes (not Run) — file content is data, not display text. Run's
 	// TrimRight("\n") corrupts the merge-editor round trip: a file ending
 	// in \n gets stripped here → center doc has no final \n → saveMerge
@@ -456,7 +461,7 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 	// Worse: CRLF-ending files have their final \n stripped leaving a lone
 	// \r, which CM6 normalizes to \n (phantom extra line) while split('\n')
 	// doesn't — line-count mismatch breaks diffBlocks' LCS matching.
-	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(revision, path))
+	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(revision, path, snapshot))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -489,7 +494,7 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(revision, filepath.ToSlash(cleaned)))
+	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(revision, filepath.ToSlash(cleaned), false))
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -1264,6 +1269,55 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runMutation(w, r, jj.Resolve(req.Revision, req.File, req.Tool))
+}
+
+type mergeResolveRequest struct {
+	Revision string `json:"revision"`
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+}
+
+// handleMergeResolve commits MergePanel's resolved content at any mutable
+// revision via `jj resolve --tool ljjcp` (cp). Local-only — the result
+// tempfile must be readable by the jj subprocess; SSH 501 matches
+// handleSplitHunks. Frontend keeps api.fileWrite for @ (SSH-compatible,
+// handles empty content natively); this is the non-@ branch only.
+func (s *Server) handleMergeResolve(w http.ResponseWriter, r *http.Request) {
+	if !s.hasLocalFS() {
+		s.writeError(w, http.StatusNotImplemented, "merge-resolve requires local mode")
+		return
+	}
+	var req mergeResolveRequest
+	if err := decodeBodyLimit(w, r, &req, fileContentBodyLimit); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Revision == "" || req.Path == "" {
+		s.writeError(w, http.StatusBadRequest, "revision and path are required")
+		return
+	}
+	// jj rejects an empty-or-unchanged $output ("output file is either
+	// unchanged or empty after editing"). $output starts empty so unchanged
+	// can't happen; empty resolution is rare but valid — normalise to a single
+	// newline. The @ path (api.fileWrite) handles empty natively.
+	content := req.Content
+	if len(content) == 0 {
+		content = "\n"
+	}
+	f, err := os.CreateTemp("", "lightjj-resolve-*.txt")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resultPath := f.Name()
+	defer os.Remove(resultPath)
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	f.Close()
+	s.runMutation(w, r, jj.ResolveApply(req.Revision, resultPath, req.Path))
 }
 
 func (s *Server) handleAliases(w http.ResponseWriter, r *http.Request) {

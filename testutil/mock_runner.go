@@ -15,14 +15,16 @@ import (
 
 // ExpectedCommand represents a command we expect the runner to execute.
 type ExpectedCommand struct {
-	args       []string
-	output     []byte
-	stderr     []byte
-	called     bool
-	err        error
-	wantStdin  string
-	gotStdin   string
-	checkStdin bool
+	args        []string
+	output      []byte
+	stderr      []byte
+	called      bool
+	err         error
+	wantStdin   string
+	gotStdin    string
+	checkStdin  bool
+	prefixMatch bool     // ExpectPrefix: args is a prefix to match
+	gotArgs     []string // recorded full argv on prefix match
 }
 
 func (e *ExpectedCommand) SetOutput(output []byte) *ExpectedCommand {
@@ -101,6 +103,20 @@ func (m *MockRunner) Allow(args []string) *AllowedCommand {
 	return &AllowedCommand{cmd: e}
 }
 
+// ExpectPrefix registers an expectation matched by argv PREFIX. Used when a
+// handler embeds a non-deterministic tempfile path in args (handleSplitHunks,
+// handleMergeResolve). The full args of the matching call are recorded and
+// readable via GotArgs() for assertions.
+func (m *MockRunner) ExpectPrefix(prefix []string) *ExpectedCommand {
+	subCmd := prefix[0]
+	e := &ExpectedCommand{args: prefix, prefixMatch: true}
+	m.expectations[subCmd] = append(m.expectations[subCmd], e)
+	return e
+}
+
+// GotArgs returns the actual argv recorded for a prefix-matched expectation.
+func (e *ExpectedCommand) GotArgs() []string { return e.gotArgs }
+
 // Expect registers an expected command. Returns the expectation for chaining.
 func (m *MockRunner) Expect(args []string) *ExpectedCommand {
 	subCmd := args[0]
@@ -132,6 +148,14 @@ func (m *MockRunner) findExpectation(args []string) *ExpectedCommand {
 	expectations, ok := m.expectations[subCmd]
 	if ok {
 		for _, e := range expectations {
+			if e.prefixMatch {
+				if len(args) >= len(e.args) && slices.Equal(args[:len(e.args)], e.args) {
+					e.called = true
+					e.gotArgs = slices.Clone(args)
+					return e
+				}
+				continue
+			}
 			if slices.Equal(e.args, args) {
 				e.called = true
 				return e

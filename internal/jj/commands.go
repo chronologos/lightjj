@@ -465,8 +465,38 @@ func ConfigGet(key string) CommandArgs {
 
 // FileShow returns args for `jj file show` to get a file's content at a revision.
 // Uses EscapeFileName for consistency and to prevent dash-prefix flag injection.
-func FileShow(revision string, path string) CommandArgs {
-	return []string{"file", "show", "-r", revision, "--ignore-working-copy", EscapeFileName(path)}
+//
+// snapshotMarkers forces ui.conflict-marker-style=snapshot so reconstructSides()
+// sees byte-exact base in `-------` sections. ONLY merge-controller wants this —
+// hunk-review (App.svelte executeHunkReview) needs FileShow to match Diff() and
+// `jj split --tool`'s $left, which both use the user's configured style; a
+// mismatch shifts applyHunks line offsets and silently commits corrupted output.
+func FileShow(revision string, path string, snapshotMarkers bool) CommandArgs {
+	args := []string{"file", "show", "-r", revision, "--ignore-working-copy"}
+	if snapshotMarkers {
+		args = append(args, "--config", "ui.conflict-marker-style=snapshot")
+	}
+	return append(args, EscapeFileName(path))
+}
+
+// ResolveApply commits a resolved file at any mutable revision via
+// `jj resolve --tool`, where the "tool" is `cp <resultPath> $output`. jj
+// materializes $base/$left/$right/$output as temp files, runs cp, and on
+// exit 0 commits whatever's in $output. Inline --config (no temp TOML) so
+// the only filesystem dependency is resultPath itself.
+//
+// Local-only — resultPath must be readable by the jj subprocess. SSH mode
+// should 501 at the handler (matching handleSplitHunks). POSIX-only (`cp`) —
+// release.yml ships darwin/linux only; if Windows lands, swap to a self-binary
+// helper mode like writeHunkToolConfig's pattern.
+func ResolveApply(rev, resultPath, repoRelPath string) CommandArgs {
+	return []string{
+		"resolve", "-r", rev,
+		"--config", `merge-tools.ljjcp.program="cp"`,
+		"--config", fmt.Sprintf(`merge-tools.ljjcp.merge-args=[%q,"$output"]`, resultPath),
+		"--tool", "ljjcp",
+		"--", EscapeFileName(repoRelPath),
+	}
 }
 
 // FilesBatch returns args for a single jj log template call that emits file

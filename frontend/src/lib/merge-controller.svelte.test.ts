@@ -4,7 +4,7 @@ import { api } from './api'
 
 vi.mock('./api', async (orig) => {
   const actual = await orig<typeof import('./api')>()
-  return { ...actual, api: { ...actual.api, conflicts: vi.fn(), fileShow: vi.fn(), fileWrite: vi.fn() } }
+  return { ...actual, api: { ...actual.api, conflicts: vi.fn(), fileShow: vi.fn(), fileWrite: vi.fn(), mergeResolve: vi.fn() } }
 })
 vi.mock('./conflict-extract', () => ({
   reconstructSides: vi.fn((c: string) => c.startsWith('UNSUPPORTED') ? null : { base: 'b', ours: 'o', theirs: 't', oursRef: null, theirsRef: null }),
@@ -45,6 +45,7 @@ beforeEach(() => {
   mockApi.conflicts.mockReset().mockResolvedValue([])
   mockApi.fileShow.mockReset().mockResolvedValue({ content: 'ok' })
   mockApi.fileWrite.mockReset().mockResolvedValue({ ok: true })
+  mockApi.mergeResolve.mockReset().mockResolvedValue({ output: '', warnings: '' })
 })
 
 describe('enter()', () => {
@@ -151,23 +152,41 @@ describe('selectFile()', () => {
 })
 
 describe('save()', () => {
-  it('bug_040: gates on change_id, not commit_id', async () => {
+  it('@ branch (change_id matches wc) → fileWrite', async () => {
+    // bug_040: gates on change_id, not commit_id (fileWrite snapshots @).
     const mc = createMergeController(deps)
     mc.selectFile(item('a.go', 'zzz'))  // changeId matches wc
     await flush()
     const ok = await mc.save('fixed')
     expect(ok).toBe(true)
     expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'fixed')
+    expect(mockApi.mergeResolve).not.toHaveBeenCalled()
   })
 
-  it('bug_040 inverse: changeId mismatch → warning, no write', async () => {
+  it('non-@ branch (change_id mismatch) → mergeResolve with commit_id', async () => {
+    // Replaces the old "warning, no write" — non-@ now resolves via
+    // jj resolve --tool cp. commit_id (not change_id) so divergent change_ids
+    // don't make `jj resolve -r` ambiguous.
     const mc = createMergeController(deps)
     mc.selectFile(item('a.go', 'aaa'))  // NOT wc's change_id
     await flush()
     const ok = await mc.save('fixed')
-    expect(ok).toBe(false)
+    expect(ok).toBe(true)
     expect(mockApi.fileWrite).not.toHaveBeenCalled()
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('@'))
+    expect(mockApi.mergeResolve).toHaveBeenCalledWith('c_a.go', 'a.go', 'fixed')
+  })
+
+  it('non-@ SSH 501 → warning (jj edit hint), not error', async () => {
+    mockApi.mergeResolve.mockRejectedValueOnce(
+      new Error('501: merge-resolve requires local mode'),
+    )
+    const mc = createMergeController(deps)
+    mc.selectFile(item('a.go', 'aaa'))
+    await flush()
+    const ok = await mc.save('fixed')
+    expect(ok).toBe(false)
+    expect(onError).not.toHaveBeenCalled()
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('jj edit'))
   })
 
   it('bug_051: save goes through withMutation', async () => {

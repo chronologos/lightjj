@@ -41,9 +41,11 @@ export interface MergeController {
    */
   selectFile(item: MergeQueueItem): void
   /**
-   * Write resolved content. @-only: gated on change_id (NOT commit_id —
-   * bug_040: fileWrite snapshots @ → new commit_id). Returns false if the
-   * @-gate rejected — caller can surface a warning and skip.
+   * Write resolved content. `@` → api.fileWrite (SSH-compatible, handles
+   * empty content natively); non-@ → api.mergeResolve (`jj resolve --tool cp`,
+   * local-only — 501 in SSH surfaces as a warning). The @-branch compares
+   * change_id, NOT commit_id (bug_040: fileWrite snapshots @ → new commit_id).
+   * Returns false on warning/skip so caller can leave the panel open.
    */
   save(content: string): Promise<boolean>
 }
@@ -99,7 +101,7 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
     sides = null
     busy = true
     try {
-      const { content } = await api.fileShow(item.commitId, item.path)
+      const { content } = await api.fileShow(item.commitId, item.path, true)
       if (g !== gen) return
       const reconstructed = reconstructSides(content)
       sides = reconstructed
@@ -118,22 +120,33 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
     const cur = current
     if (!cur) return false
     // bug_040: change_id, NOT commit_id — fileWrite snapshots @.
-    if (cur.changeId !== deps.getWorkingCopyChangeId()) {
-      deps.onWarning('Merge mode currently only resolves @ conflicts. Use `jj edit` to move @ first.')
-      return false
-    }
+    const isWC = cur.changeId === deps.getWorkingCopyChangeId()
     // bug_048/051: shared gen + withMutation mutex.
     const g = ++gen
     const result = await deps.withMutation(async () => {
       busy = true
       try {
-        await api.fileWrite(cur.path, content)
+        if (isWC) {
+          // SSH-compatible + handles empty content natively.
+          await api.fileWrite(cur.path, content)
+        } else {
+          // Local-only; 501 surfaces below. cur.commitId — `jj resolve -r`
+          // accepts commit_id and won't be ambiguous on divergent change_ids.
+          await api.mergeResolve(cur.commitId, cur.path, content)
+        }
         if (g !== gen) return false  // superseded — not an error
         resolved = new Set([...resolved, `${cur.commitId}:${cur.path}`])
         await deps.reload()
         return true
       } catch (e) {
-        if (g === gen) deps.onError(e)
+        // 501 = SSH non-@; surface as warning (actionable: jj edit), not error.
+        if (g === gen) {
+          if (e instanceof Error && e.message.includes('local mode')) {
+            deps.onWarning('Non-@ resolve requires local mode. Run `jj edit ' + cur.changeId.slice(0, 8) + '` then save.')
+          } else {
+            deps.onError(e)
+          }
+        }
         return false
       } finally {
         if (g === gen) busy = false

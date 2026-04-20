@@ -129,6 +129,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/split", s.handleSplit)
 	s.Mux.HandleFunc("POST /api/split-hunks", s.handleSplitHunks)
 	s.Mux.HandleFunc("POST /api/resolve", s.handleResolve)
+	s.Mux.HandleFunc("POST /api/merge-resolve", s.handleMergeResolve)
 	s.Mux.HandleFunc("POST /api/undo", s.handleUndo)
 	s.Mux.HandleFunc("POST /api/op/undo", s.opMutation(jj.OpUndo))
 	s.Mux.HandleFunc("POST /api/op/restore", s.opMutation(jj.OpRestore))
