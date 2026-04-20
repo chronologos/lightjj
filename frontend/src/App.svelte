@@ -223,6 +223,7 @@
   // Set SYNCHRONOUSLY at navigate — leads the diff content (progressive render).
   let loadedTarget = $derived(nav.loadedTarget)
   let diffPending = $derived(nav.diffPending)
+  let diffContentKey = $derived(nav.diffContentKey)
   let changedFiles = $derived(files.value)
   let fullDescription = $derived(description.value)
   let oplogEntries = $derived(oplog.value)
@@ -2522,6 +2523,7 @@
             diffTarget={loadedTarget}
             {diffPending}
             {diffLoading}
+            {diffContentKey}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
             fileSelectionMode={squash.active ? 'squash' : (split.active && !split.review) ? 'split' : false}
             {hunkReview}

@@ -37,6 +37,11 @@
      *  navigate-time so the spinner shows with no gap — diffLoading alone has
      *  a one-macrotask delay (setTimeout 0 defer in loader.svelte.ts). */
     diffPending?: boolean
+    /** `diffTargetKey` of the target `diffContent` was last set FOR — trails
+     *  `diffTarget` during a fetch. Equality with activeRevisionId is the
+     *  "content matches target" invariant. Covers snapshot-refresh (isRefresh
+     *  path) where diffPending stays false but commit_id still churns. */
+    diffContentKey?: string
     splitView: boolean
     /** Revision metadata header (change_id, description, bookmarks, describe
      *  editor). Rendered in single-rev mode; multi-check shows a simpler
@@ -76,7 +81,7 @@
 
   let {
     diffContent, changedFiles, diffTarget,
-    diffLoading, diffPending = false, splitView = $bindable(false), header,
+    diffLoading, diffPending = false, diffContentKey, splitView = $bindable(false), header,
     fileSelectionMode, selectedFiles, ontogglefile, hunkReview = null,
     onfilesaved, onjjmutation, oncontextmenu, onopenfile, onfilehistory,
   }: Props = $props()
@@ -84,6 +89,19 @@
   // Stable string key for derivedCache + lastActiveRevId tracking.
   // commit_id for single-rev; revset string for multi-check.
   let activeRevisionId = $derived(diffTarget && diffTargetKey(diffTarget))
+
+  // Has the diff content caught up to the current target? False during the
+  // navigate→fetch-resolve gap. Gates the highlight/word-diff derivation
+  // effect — running with stale parsedDiff under new cacheKey writes a
+  // poisoned memo that the next fire would then short-circuit on. When
+  // diffContentKey is undefined (pre-fix App, tests that don't pass it),
+  // fall back to `!diffPending` — still catches the common non-refresh
+  // path, matching the minimal-fix behavior.
+  let contentMatchesTarget = $derived(
+    diffContentKey !== undefined
+      ? diffContentKey === activeRevisionId
+      : !diffPending
+  )
 
   // --- Local state ---
   let panelContentEl: HTMLElement | undefined = $state(undefined)
@@ -812,6 +830,29 @@
     const files = effectiveFiles
     const cacheKey = activeRevisionId
     clearTimeout(highlightTimer)
+
+    // Skip while parsedDiff is stale vs activeRevisionId: `loadedTarget` (→
+    // activeRevisionId) flips sync at navigate, `diff.value` (→ diffContent →
+    // parsedDiff) lags the fetch. Running in that gap would write memo for
+    // newCacheKey using oldFiles; the re-fire with fresh parsedDiff would
+    // tryRestore the poisoned entry (non-empty → looks like a hit) and skip
+    // the real run — new files render without tok-* spans until a manual
+    // update() call (context-expand) seeds them.
+    //
+    // Covers BOTH nav paths: non-refresh (diffPending=true) and snapshot
+    // refresh (diffPending=false, commit_id churns without spinner). The
+    // nav-level `diffContentKey` tracks which target diff.value was last set
+    // FOR — equality with activeRevisionId is the sync invariant.
+    //
+    // lastDerivationFiles cleared here too: the next fire compares files to
+    // lastDerivationFiles for the single-file-delta branch; leaving a stale
+    // value from a past rev could coincidentally match length+all-but-one and
+    // trigger update() instead of run(), leaving other files' entries from
+    // the prior rev alive in byFile under the new cacheKey.
+    if (!contentMatchesTarget) {
+      lastDerivationFiles = undefined
+      return
+    }
 
     if (files.length === 0) {
       lastDerivationFiles = undefined

@@ -283,6 +283,117 @@ describe('DiffPanel', () => {
       expect(inputAfter.value).toBe('') // query cleared
     })
 
+    it('highlights apply on post-lag parsedDiff update when cacheKey already advanced — DiffPanel.svelte:820', async () => {
+      // Root cause: activeRevisionId updates sync at nav; diff.value (→
+      // diffContent → parsedDiff) lags the async fetch. Pre-fix the $effect
+      // would fire with STALE parsedDiff under the NEW cacheKey, writeMemo
+      // poisoning derivedCache[newCacheKey] with stale-file entries. When
+      // fresh parsedDiff later arrived, tryRestore hit the poisoned memo
+      // (non-empty → looks like a hit), skipped the real run, and the new
+      // file rendered without tok-* spans until a manual update() call
+      // (context-expand) seeded them. Go/zig symptom in the wild, nothing
+      // language-specific.
+      //
+      // Scenario needs TWO files in the outgoing rev → ONE file in the new
+      // rev so single-file-delta (:835) doesn't mask the bug via update().
+      const twoFile = tinyDiff('a.go') + tinyDiff('b.go')
+      // Real Go keywords → tok-keyword spans if highlighting runs.
+      const newGo = (path: string) =>
+        `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n` +
+        `@@ -0,0 +1,2 @@\n+package foo\n+var x int\n`
+
+      const { container, rerender } = render(DiffPanel, {
+        props: props({
+          diffContent: twoFile,
+          changedFiles: [mkFile('a.go'), mkFile('b.go')],
+          diffTarget: target('co-A', 'ch-A'),
+          diffContentKey: 'co-A',
+        }),
+      })
+      await settle()
+
+      // Nav to B: cacheKey flips sync, diffContent still lags. diffPending=true
+      // AND diffContentKey='co-A' both signal the mismatch — either would
+      // suffice here. (The isRefresh sibling test below exercises the gap
+      // where only diffContentKey is load-bearing.)
+      await rerender(props({
+        diffContent: twoFile, // stale
+        changedFiles: [mkFile('a.go'), mkFile('b.go')],
+        diffTarget: target('co-B', 'ch-B'),
+        diffContentKey: 'co-A',
+        diffPending: true,
+      }))
+      await settle()
+
+      // Diff arrives: parsedDiff now has c.go (not in stale files → single-
+      // file-delta misses, full-run path).
+      await rerender(props({
+        diffContent: newGo('c.go'),
+        changedFiles: [mkFile('c.go')],
+        diffTarget: target('co-B', 'ch-B'),
+        diffContentKey: 'co-B',
+        diffPending: false,
+      }))
+      await settle()
+
+      // Post-fix: run executed for c.go → tok-keyword on "package" / "var".
+      // Pre-fix: tryRestore hit poisoned memo → c.go absent from byFile →
+      // DiffFileView falls through to plain render (no .highlighted class).
+      const cFile = container.querySelector('[data-file-path="c.go"]')
+      expect(cFile).not.toBeNull()
+      expect(cFile!.querySelector('.diff-line.highlighted')).not.toBeNull()
+    })
+
+    it('highlights apply on same-change snapshot refresh (isRefresh path, diffPending stays false)', async () => {
+      // The isRefresh branch in revision-navigator.svelte.ts:111-117 deliberately
+      // skips `diffPending=true` to keep stale-while-revalidate content visible.
+      // But commit_id (= activeRevisionId in single-rev mode) still advances,
+      // opening the same memo-poisoning gap. Covered by contentMatchesTarget
+      // (diffContentKey === activeRevisionId), not by diffPending alone.
+      //
+      // 2-file outgoing → 1-file incoming so single-file-delta doesn't mask it.
+      const twoFile = tinyDiff('a.go') + tinyDiff('b.go')
+      const newGo = (path: string) =>
+        `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n` +
+        `@@ -0,0 +1,2 @@\n+package foo\n+var x int\n`
+
+      const { container, rerender } = render(DiffPanel, {
+        props: props({
+          diffContent: twoFile,
+          changedFiles: [mkFile('a.go'), mkFile('b.go')],
+          diffTarget: target('co-A1', 'ch-A'),
+          diffContentKey: 'co-A1',
+        }),
+      })
+      await settle()
+
+      // Snapshot → new commit_id, SAME change_id → isRefresh=true in the nav,
+      // diffPending stays false. activeRevisionId advances, diffContentKey
+      // trails until diff.load resolves.
+      await rerender(props({
+        diffContent: twoFile, // stale
+        changedFiles: [mkFile('a.go'), mkFile('b.go')],
+        diffTarget: target('co-A2', 'ch-A'),
+        diffContentKey: 'co-A1', // still the old key
+        diffPending: false,
+      }))
+      await settle()
+
+      // Fresh diff arrives at new commit_id. contentMatchesTarget goes true.
+      await rerender(props({
+        diffContent: newGo('c.go'),
+        changedFiles: [mkFile('c.go')],
+        diffTarget: target('co-A2', 'ch-A'),
+        diffContentKey: 'co-A2',
+        diffPending: false,
+      }))
+      await settle()
+
+      const cFile = container.querySelector('[data-file-path="c.go"]')
+      expect(cFile).not.toBeNull()
+      expect(cFile!.querySelector('.diff-line.highlighted')).not.toBeNull()
+    })
+
     it('collapse state saved for outgoing revision, restored on return (change_id-keyed)', async () => {
       // Two files so we have something to collapse.
       const twoDiff = tinyDiff('a.go') + tinyDiff('b.go')

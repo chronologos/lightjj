@@ -21,6 +21,13 @@ export interface RevisionNavigator {
    *  spinner gate — diff.loading alone has a one-macrotask gap (setTimeout 0
    *  defer in loader.svelte.ts, which is correct for cache-hit flicker). */
   readonly diffPending: boolean
+  /** `diffTargetKey` of the target `diff.value` was last SET FOR. Trails
+   *  `loadedTarget` during a fetch (spinner or stale-while-revalidate). The
+   *  "content matches target" invariant is `diffContentKey === diffTargetKey(loadedTarget)`.
+   *  Covers snapshot-refresh: `diffPending` stays false on isRefresh but the
+   *  commit_id still churns under stale diff.value — this field reflects that
+   *  staleness where `diffPending` alone doesn't. */
+  readonly diffContentKey: string
   singleTarget(c: Commit): DiffTarget
   /**
    * Progressive load: sets loadedTarget + diffPending SYNC (header renders,
@@ -79,6 +86,10 @@ export function createRevisionNavigator(opts: {
 
   let loadedTarget: DiffTarget | undefined = $state(undefined)
   let diffPending = $state(false)
+  // Tracks the target `diff.value` was LAST SET FOR. Empty until the first
+  // apply/load. Set atomically with the loader's value write on success
+  // (either sync via applyCacheHit or post-fetch via load's resolve path).
+  let diffContentKey = $state('')
 
   // revGen guards the gap between the meta await and files/description.load().
   // loader.generation alone isn't enough: it invalidates in-flight load()
@@ -116,8 +127,12 @@ export function createRevisionNavigator(opts: {
       description.reset()
     }
     // Diff is the long pole (~200ms+ for large commits). Fire independently;
-    // template shows spinner until this resolves.
-    diff.load(target).finally(() => {
+    // template shows spinner until this resolves. `load()` returns whether
+    // the resolve was applied (false if superseded) — only then is value in
+    // sync with target and diffContentKey safe to advance.
+    diff.load(target).then(applied => {
+      if (applied && gen === revGen) diffContentKey = diffTargetKey(target)
+    }).finally(() => {
       if (gen === revGen) diffPending = false
     })
     // Meta (~20ms) resolves first → file list + description render while
@@ -133,9 +148,11 @@ export function createRevisionNavigator(opts: {
 
   function applyCacheHit(commit: Commit, hit: CacheHit): void {
     revGen++
-    loadedTarget = singleTarget(commit)
+    const target = singleTarget(commit)
+    loadedTarget = target
     diffPending = false
     diff.set(hit.diff)
+    diffContentKey = diffTargetKey(target)
     files.set(hit.files)
     description.set(hit.description)
   }
@@ -191,6 +208,7 @@ export function createRevisionNavigator(opts: {
     diff, files, description, singleTarget,
     get loadedTarget() { return loadedTarget },
     get diffPending() { return diffPending },
+    get diffContentKey() { return diffContentKey },
     loadDiffAndFiles, applyCacheHit, cancel,
     navigateCached, navigateDeferred,
   }
