@@ -14,6 +14,12 @@ package api
 //   - frontend/src/lib/config.svelte.ts `defaults`
 //   - docs/CONFIG.md `Fields` table
 const configTemplate = `{
+  // lightjj config — JSONC (// line comments, /* block */, trailing commas ok).
+  // Full field reference: https://github.com/chronologos/lightjj/blob/main/docs/CONFIG.md
+  // Fields you add later (or that newer versions introduce) are documented there.
+  // Comments you add to EXISTING keys survive programmatic writes (theme toggle,
+  // panel drag). New keys added by the app land without comments by design.
+
   // Theme id. Builtin options: "dark", "light", "nord", "gruvbox-dark",
   // "dracula", "tokyo-night", "rose-pine". Or use any Ghostty theme slug —
   // they lazy-load from ghostty-themes.json. Cmd+K → "Theme" to preview.

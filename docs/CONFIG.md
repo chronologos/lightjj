@@ -64,9 +64,11 @@ For larger text than 16px, use browser zoom (⌘/Ctrl +) — it scales the fixed
 }
 ```
 
-Fresh installs receive a commented starter template on their first save — panel drag, theme toggle, or any programmatic write all trigger the seed. If you hand-authored a config before upgrading, it stays plain JSON until you add comments yourself — no migration is performed.
+Fresh installs receive a commented starter template on their first save — panel drag, theme toggle, or any programmatic write triggers the seed. If you hand-authored a plain-JSON config before upgrading, lightjj auto-migrates it to the commented template on the first 1.20 startup: your values are preserved; the template's teaching comments are added.
 
 Comments attached to **existing** keys are preserved across writes. The backend cannot attach comments to keys it adds for the first time (e.g. `openTabs` written on first tab-open) — add them yourself if you want them.
+
+**This document is the canonical field reference.** The template itself only carries short hints to get new users started; newer lightjj versions may introduce fields that aren't in the template — look them up in the table above.
 
 **Syntax errors are not overwritten.** If your hand-edited file has a typo, the frontend shows a warning ("Config has a syntax error — open the editor to fix") with an "Edit config" action button, and the on-disk file is left alone. Fix it in the editor or directly; the warning clears on the next successful save.
 
