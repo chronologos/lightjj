@@ -246,6 +246,18 @@ func TestReadConfigEditor(t *testing.T) {
 	assert.Equal(t, []string{"zed", "{host}{file}"}, got.EditorArgsRemote)
 }
 
+func TestReadConfigEditor_AcceptsJSONCWithComments(t *testing.T) {
+	path := withConfigDir(t)
+	seedConfig(t, path, `{
+  // teaching comment
+  "editorArgs": ["zed", "{file}:{line}"],
+  "theme": "dark", // trailing comma
+}`)
+	cfg, err := readConfigEditor()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"zed", "{file}:{line}"}, cfg.EditorArgs)
+}
+
 func TestValidateRepoRelativePath(t *testing.T) {
 	cases := []struct{ in, wantErr string }{
 		{"", "path is required"},

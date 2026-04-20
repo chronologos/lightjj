@@ -378,4 +378,15 @@ func TestReadPersistedTabs(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Equal(t, "u@hostB", got[0].Host) // B untouched
 	})
+
+	t.Run("accepts JSONC with comments", func(t *testing.T) {
+		path := withConfigDir(t)
+		seedConfig(t, path, `{
+  // user note
+  "openTabs": [{"path":"/x","mode":"local"}]
+}`)
+		got := ReadPersistedTabs()
+		require.Len(t, got, 1)
+		assert.Equal(t, "/x", got[0].Path)
+	})
 }

@@ -246,7 +246,7 @@ func ReadPersistedTabs() []PersistedTab {
 	var cfg struct {
 		OpenTabs []PersistedTab `json:"openTabs"`
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := unmarshalJSONC(data, &cfg); err != nil {
 		log.Printf("warning: corrupt config, skipping tab restore: %v", err)
 		return nil
 	}

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -99,7 +98,7 @@ func readConfigEditor() (editorConfig, error) {
 		return editorConfig{}, nil // missing file → zero state
 	}
 	var cfg editorConfig
-	_ = json.Unmarshal(data, &cfg) // corrupt → zero state (same as handleConfigSet)
+	_ = unmarshalJSONC(data, &cfg) // corrupt → zero state (same as handleConfigSet)
 	return cfg, nil
 }
 
