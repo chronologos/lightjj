@@ -187,8 +187,8 @@ func TestHandleConfigSet_FreshInstallSeedsTemplate(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	content := string(data)
-	assert.Contains(t, content, "// Theme id.",
-		"fresh install should carry the template's theme comment")
+	assert.Contains(t, content, "// lightjj config",
+		"fresh install should carry the template's header comment")
 	assert.Contains(t, content, "// Open-in-editor argv",
 		"fresh install should carry the editorArgs comment")
 	assert.Contains(t, content, `"theme": "gruvbox-dark"`,
@@ -418,7 +418,7 @@ func TestHandleConfigGetRaw_MissingFileReturnsTemplate(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/raw", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "// Theme id.",
+	assert.Contains(t, w.Body.String(), "// lightjj config",
 		"missing file should serve the template so the modal shows commented defaults")
 }
 
@@ -544,7 +544,7 @@ func TestMigrateConfigIfNeeded_OldFormatGetsSeeded(t *testing.T) {
 	content := string(data)
 
 	// Teaching comments are present.
-	assert.Contains(t, content, "// Theme id.")
+	assert.Contains(t, content, "// lightjj config")
 	assert.Contains(t, content, "// Open-in-editor argv")
 
 	// User values survived.
