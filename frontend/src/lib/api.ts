@@ -1071,6 +1071,13 @@ export const api = {
   bookmarkTrack: (name: string, remote: string) =>
     post<MutationResult>('/api/bookmark/track', { name, remote }),
 
+  // Snap a (typically conflicted) local bookmark to its remote-tracking ref.
+  // Always sends --allow-backwards on the server: the user's intent here is
+  // "match remote, override whatever local is" (conflict sides aren't in any
+  // ancestry relation, so jj would otherwise refuse).
+  bookmarkSetToRemote: (name: string, remote: string) =>
+    post<MutationResult>('/api/bookmark/set-to-remote', { name, remote }),
+
   bookmarkUntrack: (name: string, remote: string) =>
     post<MutationResult>('/api/bookmark/untrack', { name, remote }),
 

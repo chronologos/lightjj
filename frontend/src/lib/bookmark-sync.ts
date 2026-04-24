@@ -112,6 +112,34 @@ export function fmtCount(n: number): string {
   return Math.round(n / 1000) + 'k'
 }
 
+export type SyncLabelAction =
+  | { kind: 'fast-forward'; remote: string }
+  | { kind: 'push'; remote: string }
+
+/**
+ * Action to dispatch when the sync label is clicked, or null if no single
+ * obvious action exists. The label is the affordance: "click ↓N to pull,
+ * click ↑N to push, click nothing when diverged/conflicted".
+ *
+ * `shownRemote` is the remote whose state classifyBookmark used — for
+ * `behind`/`ahead` the SyncState doesn't carry it (caller's first-tracked /
+ * scoped), so it's threaded through. `secondary` carries its own remote.
+ *
+ * Deliberately excludes diverged + secondary-with-both-nonzero: those have
+ * commits on both sides and "fix" is ambiguous (push --force vs rebase vs
+ * fast-forward-then-push). Conflict resolution stays on the explicit
+ * "Set to <remote>" context-menu action.
+ */
+export function syncLabelAction(s: SyncState, shownRemote: string | undefined): SyncLabelAction | null {
+  if (s.kind === 'behind') return shownRemote ? { kind: 'fast-forward', remote: shownRemote } : null
+  if (s.kind === 'ahead') return shownRemote ? { kind: 'push', remote: shownRemote } : null
+  if (s.kind === 'secondary' && s.remote !== '?') {
+    if (s.ahead === 0 && s.behind > 0) return { kind: 'fast-forward', remote: s.remote }
+    if (s.behind === 0 && s.ahead > 0) return { kind: 'push', remote: s.remote }
+  }
+  return null
+}
+
 /** Short human label for the sync-state column. */
 export function syncLabel(s: SyncState, remote: string): string {
   switch (s.kind) {

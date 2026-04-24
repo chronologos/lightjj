@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import type { Bookmark, PullRequest, RemoteVisibility, RemoteVisibilityEntry } from './api'
-  import { classifyBookmark, syncPriority, syncLabel, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
+  import { classifyBookmark, syncPriority, syncLabel, syncLabelAction, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
   import { fuzzyMatch } from './fuzzy'
   import { createConfirmGate } from './confirm-gate.svelte'
   import { scrollIdxIntoView } from './scroll-into-view'
@@ -19,6 +19,11 @@
     pushDelete: string[]
     /** Per-remote track/untrack toggles. Empty = nothing to do. */
     track: TrackOption[]
+    /** Tracked remote names available to "Set local to remote@<X>". Populated
+     *  ONLY when the bookmark is conflicted (the dominant trigger for this
+     *  action — local diverged from remote and user wants to snap to remote).
+     *  Empty otherwise to keep the menu clean for non-conflict cases. */
+    setToRemote: string[]
   }
 
   interface GroupRow {
@@ -203,6 +208,20 @@
     const pushDelete = !bm.local && !bm.conflict
       ? (bm.remotes ?? []).filter(r => r.tracked).map(r => r.remote)
       : []
+    // setToRemote: the conflict-resolution affordance. Only the conflicted
+    // case is in scope — outside conflict, regular move/advance covers it.
+    // bm.local must exist (you can't "set local to remote" if there's no
+    // local ref to set; that's just `track`).
+    //
+    // commit_id !== "" filter is load-bearing: delete-staged tracked remotes
+    // (parser preserves them with empty commit_id; see jj/bookmark.go) would
+    // otherwise be offered, then `jj bookmark set -r <name>@<remote>` returns
+    // "Revision doesn't exist" because the remote ref no longer points anywhere.
+    // This is the EXACT scenario the feature targets (upstream deleted, local
+    // diverged → conflict) so the filter is essential, not paranoia.
+    const setToRemote = bm.conflict && bm.local
+      ? (bm.remotes ?? []).filter(r => r.tracked && r.commit_id !== '').map(r => r.remote)
+      : []
     return {
       // jumpTarget covers: remote-group rows (scoped commit_id), LOCAL-group
       // conflict rows (added_targets[0]). bm.commit_id covers LOCAL non-conflict.
@@ -210,6 +229,7 @@
       del: !!bm.local,
       pushDelete,
       track: trackOptions(bm),
+      setToRemote,
     }
   }
 
@@ -517,6 +537,7 @@
           {@const trackedRemote = row.bm.remotes?.find(r => r.tracked)}
           {@const shownRemote = scopedRemote ?? trackedRemote ?? row.bm.remotes?.[0]}
           {@const label = syncLabel(row.sync, shownRemote?.remote ?? defaultRemote)}
+          {@const syncAction = syncLabelAction(row.sync, shownRemote?.remote)}
           {@const local = row.remote === '.' ? row.bm.local : undefined}
           {@const diverged = local && shownRemote && local.commit_id !== shownRemote.commit_id}
           {@const primaryCid = local?.commit_id ?? shownRemote?.commit_id}
@@ -555,7 +576,29 @@
                 </a>
               {/if}
             </span>
-            <span class="bp-sync" class:bp-sync-conflict={row.sync.kind === 'conflict'}>{label}</span>
+            {#if syncAction}
+              <!-- Ahead/behind state: the sync label IS the action.
+                   behind → fast-forward local to remote (set-to-remote)
+                   ahead  → push this bookmark to that remote
+                   stopPropagation: row onclick is the jump action; without
+                   this, clicking the label would also jump. -->
+              <button
+                class="bp-sync bp-sync-action"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  onexecute(syncAction.kind === 'fast-forward'
+                    ? { action: 'set-to-remote', bookmark: row.bm.name, remote: syncAction.remote }
+                    : { action: 'push', bookmark: row.bm.name, remote: syncAction.remote })
+                }}
+                title={syncAction.kind === 'fast-forward'
+                  ? `Fast-forward ${row.bm.name} to ${row.bm.name}@${syncAction.remote}`
+                  : `Push ${row.bm.name} to ${syncAction.remote}`}
+              >
+                {label}
+              </button>
+            {:else}
+              <span class="bp-sync" class:bp-sync-conflict={row.sync.kind === 'conflict'}>{label}</span>
+            {/if}
 
             <div class="bp-commits">
               {#if row.sync.kind === 'conflict'}
@@ -803,6 +846,24 @@
   }
 
   .bp-sync-conflict { color: var(--red); font-weight: 500; }
+
+  /* Clickable sync label (behind / secondary-behind) — fast-forward to remote.
+     <button> reset: inherit the .bp-sync layout but strip native chrome.
+     Dotted underline + cursor signals "actionable text" without adding a
+     button-shaped element to every behind row (would be visually noisy). */
+  .bp-sync-action {
+    border: none;
+    background: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+  .bp-sync-action:hover {
+    color: var(--accent);
+    text-decoration-style: solid;
+  }
 
   /* Commit column: flex-grows to fill remaining width. Stacked lines for
      diverged (local + remote) and conflict (one line per added_target). */

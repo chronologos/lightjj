@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyBookmark, syncPriority, fmtCount, syncLabel, trackOptions } from './bookmark-sync'
+import { classifyBookmark, syncPriority, fmtCount, syncLabel, syncLabelAction, trackOptions } from './bookmark-sync'
 import type { Bookmark, BookmarkRemote } from './api'
 
 const mkRemote = (over: Partial<BookmarkRemote> = {}): BookmarkRemote => ({
@@ -323,5 +323,57 @@ describe('trackOptions', () => {
   it('local-only bookmark (no remotes at all) → empty', () => {
     const bm = mkBm({ local: mkRemote({ remote: '.' }) })
     expect(trackOptions(bm)).toEqual([])
+  })
+})
+
+describe('syncLabelAction', () => {
+  it('behind → fast-forward to shownRemote (the canonical "fork lagging upstream" case)', () => {
+    expect(syncLabelAction({ kind: 'behind', by: 118 }, 'upstream'))
+      .toEqual({ kind: 'fast-forward', remote: 'upstream' })
+  })
+
+  it('ahead → push to shownRemote (the "local main ahead of fork origin" case)', () => {
+    expect(syncLabelAction({ kind: 'ahead', by: 118 }, 'origin'))
+      .toEqual({ kind: 'push', remote: 'origin' })
+  })
+
+  it('behind/ahead with no shownRemote (defensive) → null', () => {
+    expect(syncLabelAction({ kind: 'behind', by: 5 }, undefined)).toBeNull()
+    expect(syncLabelAction({ kind: 'ahead', by: 5 }, undefined)).toBeNull()
+  })
+
+  it('secondary behind-only → fast-forward to that secondary remote', () => {
+    // origin synced, upstream behind 118 → secondary carries upstream.
+    expect(syncLabelAction(
+      { kind: 'secondary', remote: 'upstream', ahead: 0, behind: 118 }, 'origin',
+    )).toEqual({ kind: 'fast-forward', remote: 'upstream' })
+  })
+
+  it('secondary ahead-only → push to that secondary remote', () => {
+    // The "local synced to upstream, fork-origin behind" mirror — local is
+    // AHEAD of the secondary, so push.
+    expect(syncLabelAction(
+      { kind: 'secondary', remote: 'origin', ahead: 118, behind: 0 }, 'upstream',
+    )).toEqual({ kind: 'push', remote: 'origin' })
+  })
+
+  it('secondary diverged (both nonzero) → null — no single obvious action', () => {
+    expect(syncLabelAction(
+      { kind: 'secondary', remote: 'upstream', ahead: 3, behind: 118 }, 'origin',
+    )).toBeNull()
+  })
+
+  it('secondary with sentinel remote "?" → null (defensive — no real remote)', () => {
+    expect(syncLabelAction(
+      { kind: 'secondary', remote: '?', ahead: 0, behind: 5 }, 'origin',
+    )).toBeNull()
+  })
+
+  it('no-action states → null', () => {
+    expect(syncLabelAction({ kind: 'synced' }, 'origin')).toBeNull()
+    expect(syncLabelAction({ kind: 'diverged', ahead: 2, behind: 5 }, 'origin')).toBeNull()
+    expect(syncLabelAction({ kind: 'conflict', sides: 2 }, 'origin')).toBeNull()
+    expect(syncLabelAction({ kind: 'local-only' }, 'origin')).toBeNull()
+    expect(syncLabelAction({ kind: 'remote-only', tracked: true }, 'origin')).toBeNull()
   })
 })

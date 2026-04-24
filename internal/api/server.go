@@ -149,6 +149,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/bookmark/forget", s.bookmarkMutation(jj.BookmarkForget))
 	s.Mux.HandleFunc("POST /api/bookmark/track", s.bookmarkRemoteMutation(jj.BookmarkTrack))
 	s.Mux.HandleFunc("POST /api/bookmark/untrack", s.bookmarkRemoteMutation(jj.BookmarkUntrack))
+	s.Mux.HandleFunc("POST /api/bookmark/set-to-remote", s.bookmarkRemoteMutation(jj.BookmarkSetToRemote))
 
 	s.Mux.HandleFunc("GET /api/aliases", s.handleAliases)
 	s.Mux.HandleFunc("POST /api/alias", s.handleRunAlias)

@@ -1452,6 +1452,31 @@ func TestHandleBookmarkTrack_NoRemote(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "name and remote are required")
 }
 
+func TestHandleBookmarkSetToRemote(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.BookmarkSetToRemote("master", "origin")).SetOutput([]byte("Moved bookmark master from div +abc... to +def..."))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "master", Remote: "origin"})
+	req := jsonPost("/api/bookmark/set-to-remote", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleBookmarkSetToRemote_NoRemote(t *testing.T) {
+	// Validation matches the rest of the bookmarkRemoteMutation family.
+	srv := newTestServer(testutil.NewMockRunner(t))
+	body, _ := json.Marshal(bookmarkRemoteRequest{Name: "master"})
+	req := jsonPost("/api/bookmark/set-to-remote", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestHandleBookmarkTrack_MissingName(t *testing.T) {
 	srv := newTestServer(testutil.NewMockRunner(t))
 	body, _ := json.Marshal(bookmarkRemoteRequest{Remote: "origin"})

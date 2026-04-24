@@ -49,6 +49,7 @@
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
   import BookmarksPanel, { type BookmarkRowActions } from './lib/BookmarksPanel.svelte'
   import BookmarkInput from './lib/BookmarkInput.svelte'
+  import DestinationInput from './lib/DestinationInput.svelte'
   import GitModal from './lib/GitModal.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import DivergencePanel from './lib/DivergencePanel.svelte'
@@ -279,6 +280,10 @@
   let bookmarkModalOpen: boolean = $state(false)
   let bookmarkModalFilter: string = $state('')
   let bookmarkInputOpen: boolean = $state(false)
+  // `/` in rebase/squash mode → type a destination (off-revset bookmark or
+  // change_id) instead of j/k cursor. Submit calls executeRebase/Squash
+  // directly with the typed value; no state survives close.
+  let destInputOpen: boolean = $state(false)
   let gitModalOpen: boolean = $state(false)
   let configModalOpen: boolean = $state(false)
   const rebase = createRebaseMode()
@@ -930,6 +935,17 @@
         action: () => handleBookmarkOp({ action: t.action, bookmark: bm.name, remote: t.remote }),
       })
     }
+    // "Set to <remote>" — conflict-resolution shortcut. Empty array on
+    // non-conflict (computeActions only populates on conflict + has local),
+    // so this loop no-ops then. Multiple items if multiple tracked remotes;
+    // user picks the canonical one. Not flagged danger — it's recovery
+    // (snap to known-good remote state), and jj op undo reverses it.
+    for (const remote of actions.setToRemote) {
+      items.push({
+        label: `Set to ${remote}`,
+        action: () => handleBookmarkOp({ action: 'set-to-remote', bookmark: bm.name, remote }),
+      })
+    }
     items.push(
       { separator: true },
       { label: `Copy name (${bm.name})`, action: () => navigator.clipboard.writeText(bm.name) },
@@ -1310,28 +1326,35 @@
 
   function handleBookmarkOp(op: BookmarkOp) {
     bookmarkModalOpen = false
-    // Delete-staged completion (tracked remote-only): pushing IS the delete.
-    // Delegate to handleGitOp — push is a slow network op and the streaming
-    // path handles mutationProgress + PR reload.
-    if (op.action === 'push-delete') {
+    // Per-bookmark push (ahead-state sync-label click) and delete-staged
+    // completion (tracked remote-only) both go through handleGitOp — push is a
+    // slow network op and the streaming path handles mutationProgress + PR
+    // reload. Same jj command underneath; the action enum split is for the
+    // toast/menu wording, not behaviour.
+    if (op.action === 'push' || op.action === 'push-delete') {
       // exact: prefix — jj git push -b uses glob matching by default; a
       // bookmark literally named "*" would otherwise match everything.
       return handleGitOp('push', ['--bookmark', `exact:${op.bookmark}`, '--remote', op.remote!])
     }
     if ((op.action === 'move' || op.action === 'advance') && !selectedRevision) return
     const changeId = selectedRevision ? effectiveId(selectedRevision.commit) : ''
-    const actions: Record<Exclude<BookmarkOp['action'], 'push-delete'>, () => Promise<MutationResult>> = {
+    const actions: Record<Exclude<BookmarkOp['action'], 'push' | 'push-delete'>, () => Promise<MutationResult>> = {
       move: () => api.bookmarkMove(op.bookmark, changeId),
       advance: () => api.bookmarkAdvance(op.bookmark, changeId),
       delete: () => api.bookmarkDelete(op.bookmark),
       forget: () => api.bookmarkForget(op.bookmark),
       track: () => api.bookmarkTrack(op.bookmark, op.remote!),
       untrack: () => api.bookmarkUntrack(op.bookmark, op.remote!),
+      'set-to-remote': () => api.bookmarkSetToRemote(op.bookmark, op.remote!),
     }
-    runMutation(
-      actions[op.action],
-      `${op.action} ${op.bookmark}`,
-    )
+    // Default toast = `<action> <bookmark>` (move/delete/forget/track/etc are
+    // already verb-led). 'set-to-remote' is a slug not a verb, and the remote
+    // is the load-bearing detail (multi-remote case picks one) — render it
+    // explicitly to match the menu label "Set to <remote>".
+    const label = op.action === 'set-to-remote'
+      ? `Set ${op.bookmark} to ${op.remote}`
+      : `${op.action} ${op.bookmark}`
+    runMutation(actions[op.action], label)
   }
 
   // Wraps divergence-actions.ts executors in App's withMutation→close→log
@@ -1409,9 +1432,16 @@
     rebase.enter(revs)
   }
 
-  async function executeRebase() {
-    if (!selectedRevision || rebase.sources.length === 0) return
-    const destination = effectiveId(selectedRevision.commit)
+  // typedDest: from DestinationInput (`/` in rebase mode) — bookmark name,
+  // change_id, or revset. Overrides the j/k cursor; lets you target commits
+  // not in the current revset (the freshly-synced-upstream-main case). The
+  // sources.includes() self-target guard still works for change_ids; for
+  // bookmark names it's a no-op (different namespace) but jj rejects with a
+  // clear error if you try to rebase X onto a bookmark pointing at X.
+  async function executeRebase(typedDest?: string) {
+    if (rebase.sources.length === 0) return
+    if (!typedDest && !selectedRevision) return
+    const destination = typedDest ?? effectiveId(selectedRevision!.commit)
     if (rebase.sources.includes(destination)) {
       setMessage({ kind: 'warning', text: 'Cannot rebase onto source revision' })
       return
@@ -1476,9 +1506,10 @@
     }
   }
 
-  async function executeSquash() {
-    if (!selectedRevision || squash.sources.length === 0) return
-    const destination = effectiveId(selectedRevision.commit)
+  async function executeSquash(typedDest?: string) {
+    if (squash.sources.length === 0) return
+    if (!typedDest && !selectedRevision) return
+    const destination = typedDest ?? effectiveId(selectedRevision!.commit)
     // C2: exit mode before guard so user isn't stuck
     if (squash.sources.includes(destination)) {
       cancelInlineModes()
@@ -1765,6 +1796,7 @@
     fileSel.clear()
     selectedHunks.clear()
     hunkCursor = 0
+    destInputOpen = false
     // Restore focus to the revision list so j/k keys work immediately
     blurActiveInput()
   }
@@ -1999,6 +2031,15 @@
     const [mode, jk] = split.active ? [split, undefined] as const
                      : squash.active ? [squash, selectRevisionCursorOnly] as const
                      : [rebase, selectRevision] as const
+    // `/` opens DestinationInput for off-revset targets. Split has no
+    // destination (it's in-place), so only rebase/squash get it. Handled HERE
+    // (not in mode.handleKey) because opening a modal is App-level concern;
+    // the mode factory has no access to destInputOpen.
+    if (e.key === '/' && !split.active) {
+      e.preventDefault()
+      destInputOpen = true
+      return
+    }
     if (jk && navKey(e, jk)) return
     if (mode.handleKey(e.key)) e.preventDefault()
   }
@@ -2689,6 +2730,12 @@
   <BookmarkInput
     bind:open={bookmarkInputOpen}
     onsave={handleBookmarkSet}
+  />
+
+  <DestinationInput
+    bind:open={destInputOpen}
+    verb={squash.active ? 'Squash into' : `Rebase ${targetModeLabel[rebase.targetMode]}`}
+    onsubmit={(dest) => squash.active ? executeSquash(dest) : executeRebase(dest)}
   />
 
   <BookmarkModal

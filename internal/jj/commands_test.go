@@ -150,6 +150,19 @@ func TestBookmarkSet(t *testing.T) {
 	assert.Equal(t, []string{"bookmark", "set", "-r", "abc", "main"}, got)
 }
 
+func TestBookmarkSetToRemote(t *testing.T) {
+	got := BookmarkSetToRemote("master", "origin")
+	assert.Equal(t, []string{"bookmark", "set", "-r", "master@origin", "master", "--allow-backwards"}, got)
+}
+
+func TestBookmarkSetToRemote_DotInName(t *testing.T) {
+	// jj allows dots in bookmark names (e.g. release/v1.21.1) — verify the
+	// builder doesn't try to quote/escape (revset @ operator must stay
+	// unquoted, and the name itself is safe per jj's bookmark-name grammar).
+	got := BookmarkSetToRemote("release/v1.21.1", "origin")
+	assert.Equal(t, []string{"bookmark", "set", "-r", "release/v1.21.1@origin", "release/v1.21.1", "--allow-backwards"}, got)
+}
+
 func TestBookmarkTrack(t *testing.T) {
 	got := BookmarkTrack("main", "origin")
 	assert.Equal(t, []string{"bookmark", "track", "main", "--remote", "origin"}, got)

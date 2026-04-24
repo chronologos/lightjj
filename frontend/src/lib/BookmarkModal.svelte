@@ -9,7 +9,7 @@
   import { trackOptions, type TrackOption } from './bookmark-sync'
 
   export interface BookmarkOp {
-    action: 'move' | 'advance' | 'delete' | 'forget' | 'track' | 'untrack' | 'push-delete'
+    action: 'move' | 'advance' | 'delete' | 'forget' | 'track' | 'untrack' | 'push' | 'push-delete' | 'set-to-remote'
     bookmark: string
     remote?: string
   }

@@ -217,6 +217,20 @@ func BookmarkSet(revision string, name string) CommandArgs {
 	return []string{"bookmark", "set", "-r", revision, name}
 }
 
+// BookmarkSetToRemote snaps a (typically conflicted) local bookmark to its
+// remote-tracking ref `name@remote`. Always passes --allow-backwards because
+// the whole point of this command is "override whatever local state is, match
+// remote": a conflicted bookmark has multiple targets that aren't in any
+// ancestry relation, and even non-conflicted overrides may move backwards.
+//
+// jj's revset syntax is `<name>@<remote>` UNQUOTED — the @ is the at-operator,
+// not part of a string literal. Bookmark names allow letters/digits/-/_/. so
+// no escaping needed here (jj's bookmark-name parser would have rejected the
+// name at create time if it contained whitespace or special chars).
+func BookmarkSetToRemote(name string, remote string) CommandArgs {
+	return []string{"bookmark", "set", "-r", name + "@" + remote, name, "--allow-backwards"}
+}
+
 func BookmarkMove(revision string, bookmark string, extraFlags ...string) CommandArgs {
 	args := []string{"bookmark", "move", bookmark, "--to", revision}
 	args = append(args, extraFlags...)

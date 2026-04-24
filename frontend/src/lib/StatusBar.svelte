@@ -59,6 +59,7 @@
       <span class="key-group">
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
+        <kbd class="key action-key">/</kbd><span class="key-label">type dest</span>
       </span>
       <span class="key-divider"></span>
       <span class="key-group">
@@ -78,6 +79,7 @@
       <span class="key-group">
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
+        <kbd class="key action-key">/</kbd><span class="key-label">type dest</span>
       </span>
       <span class="key-divider"></span>
       <span class="key-group">
