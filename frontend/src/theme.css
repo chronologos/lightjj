@@ -482,27 +482,48 @@ body {
    Severity tint via filter on the 💬 glyph: hue-rotate off the base amber
    emoji color, saturate for intensity. Positioning is per-component (diff-line
    right-edge vs prose block top-right); only the semantic rules live here. */
+/* Single severity→color table. Consumers read var(--ann-accent). */
+.severity-must-fix   { --ann-accent: var(--red); }
+.severity-suggestion { --ann-accent: var(--amber); }
+.severity-question   { --ann-accent: var(--blue); }
+.severity-nitpick    { --ann-accent: var(--surface2); }
+.severity-reviewed   { --ann-accent: var(--green); }
+
+/* Gutter annotation marker — solid SVG in the exact theme severity color.
+   Positioning (left/top) per-component; this is the shared visual. */
 .annotation-badge {
-  --ann-shadow: drop-shadow(0 0 1px rgba(0,0,0,0.5));
   position: absolute;
-  /* Faint chip behind the emoji — color-mix(text, 8%) darkens in light mode,
-     lightens in dark mode. drop-shadow outlines the glyph edge. Both together
-     keep the 💬 visible on #f8f8f6 without being loud on #0f0f13. */
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  display: inline-flex;
+  padding: 0;
+  background: none;
   border: none;
-  line-height: 1;
+  line-height: 0;
   cursor: pointer;
-  border-radius: 3px;
-  opacity: 0.85;
-  filter: var(--ann-shadow);
+  color: var(--ann-accent, var(--amber));
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--crust) 40%, transparent));
 }
-.annotation-badge.severity-must-fix { filter: var(--ann-shadow) hue-rotate(-20deg) saturate(2); }
-.annotation-badge.severity-question { filter: var(--ann-shadow) hue-rotate(180deg); }
-.annotation-badge.severity-nitpick  { opacity: 0.4; }
-.annotation-badge.orphaned          { outline: 1px dashed var(--overlay0); }
-/* After severity rules — equal specificity, source-order lets hover beat
-   nitpick's 0.4. (Was pre-existing in DiffFileView before the hoist.) */
-.annotation-badge:hover { opacity: 1; }
+.annotation-badge .ann-count {
+  fill: var(--base);
+  font-size: 6px;
+  font-weight: 700;
+  font-family: var(--font-ui);
+}
+.annotation-badge.orphaned svg { stroke: var(--overlay0); stroke-width: 1; stroke-dasharray: 2 1; }
+.annotation-badge.resolved     { color: var(--green); opacity: 0.55; }
+
+/* Prominent line accent — severity-colored left bar + faint wash so annotated
+   lines stand out at a glance. Static :has() (not :hover) — only invalidates
+   on annotation add/remove, not on scroll/layout. CSS vars don't bubble UP
+   from child to parent, so the per-severity :has() rules are irreducible. */
+.diff-line:has(> .annotation-badge.severity-must-fix)   { --ann-accent: var(--red); }
+.diff-line:has(> .annotation-badge.severity-suggestion) { --ann-accent: var(--amber); }
+.diff-line:has(> .annotation-badge.severity-question)   { --ann-accent: var(--blue); }
+.diff-line:has(> .annotation-badge.severity-nitpick)    { --ann-accent: var(--surface2); }
+.diff-line:has(> .annotation-badge.severity-reviewed)   { --ann-accent: var(--green); }
+.diff-line:has(> .annotation-badge:not(.resolved)) {
+  box-shadow: inset 3px 0 0 var(--ann-accent);
+  background-image: linear-gradient(color-mix(in srgb, var(--ann-accent) 8%, transparent), color-mix(in srgb, var(--ann-accent) 8%, transparent));
+}
 
 /* --- .conflict-marker — jj's ?? decorator on conflicted bookmarks ---
    Was byte-identical in RevisionGraph, RevisionHeader, BookmarkInput (which

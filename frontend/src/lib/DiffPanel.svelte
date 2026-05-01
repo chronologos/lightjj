@@ -22,8 +22,8 @@
   import FileSelectionPanel from './FileSelectionPanel.svelte'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
   import AnnotationBubble from './AnnotationBubble.svelte'
-  import { createAnnotationStore, exportMarkdown, exportJSON } from './annotations.svelte'
-  import type { Annotation, AnnotationSeverity } from './api'
+  import { createAnnotationStore, exportMarkdown, exportJSON, isReviewedMarker } from './annotations.svelte'
+  import { FILE_LEVEL, type Annotation, type AnnotationSeverity } from './api'
 
   interface Props {
     diffContent: string
@@ -315,12 +315,18 @@
     })
   })
 
-  function openAnnotationBubble(filePath: string, lineNum: number, lineContent: string, x: number, y: number) {
+  function openAnnotationBubble(filePath: string, lineNum: number, lineContent: string, x: number, y: number, editing?: Annotation) {
     if (diffTarget?.kind !== 'single') return
-    const existing = annotations.forLine(filePath, lineNum)
+    // File-level: skip the empty reviewed-marker so "Add file comment" opens
+    // a real note, not the checkbox state. (Marker is still toggleable via
+    // the checkbox; the bubble is for comments.) Explicit `editing` (from a
+    // per-note strip click) wins so note #2/#3 are editable, not just first.
+    const editTarget = editing ?? (lineNum === FILE_LEVEL
+      ? annotations.forFile(filePath).find(a => !isReviewedMarker(a))
+      : annotations.forLine(filePath, lineNum)[0])
     annBubble = {
       open: true, x, y,
-      editing: existing[0] ?? null,
+      editing: editTarget ?? null,
       lineContext: {
         filePath, lineNum, lineContent,
         changeId: diffTarget.changeId,
@@ -329,8 +335,8 @@
     }
   }
 
-  function handleAnnotationClick(filePath: string, lineNum: number, lineContent: string, e: MouseEvent) {
-    openAnnotationBubble(filePath, lineNum, lineContent, e.clientX, e.clientY)
+  function handleAnnotationClick(filePath: string, lineNum: number, lineContent: string, e: MouseEvent, editing?: Annotation) {
+    openAnnotationBubble(filePath, lineNum, lineContent, e.clientX, e.clientY, editing)
   }
 
   async function saveAnnotation(comment: string, severity: AnnotationSeverity) {
@@ -342,9 +348,42 @@
     }
   }
 
+  async function resolveAnnotation() {
+    if (!annBubble.editing) return
+    await annotations.update({ ...annBubble.editing, status: 'resolved' })
+  }
+
+  async function toggleReviewed(filePath: string, next: boolean) {
+    if (diffTarget?.kind !== 'single') return
+    const cid = diffTarget.changeId
+    try {
+      const changed = await annotations.setReviewed(filePath, next, {
+        changeId: cid,
+        createdAtCommitId: diffTarget.commitId,
+      })
+      // Collapse only on confirmed check, and only if still on the same
+      // revision (nav during the await would have reset collapsedFiles).
+      // Uncheck does NOT auto-expand — surprise-expanding a 5k-line file
+      // is worse than one extra click.
+      if (changed && next && diffTarget?.kind === 'single' && diffTarget.changeId === cid) {
+        collapsedFiles.add(filePath)
+      }
+    } catch (e) {
+      // Rollback in setReviewed already restored the checkbox; the visible
+      // "didn't stick" is the user feedback. (DiffPanel has no MessageBar
+      // surface — annotations.load() above silently degrades the same way.)
+      console.warn('setReviewed failed', e)
+    }
+  }
+
   // Summary counts — shown in a compact bar below the file list when non-zero.
-  let openAnns = $derived(annotations.list.filter(a => a.status === 'open'))
+  // Reviewed markers (checkbox state) are progress, not feedback — exclude
+  // from chip strip; surface as N/M progress instead.
+  let openAnns = $derived(annotations.list.filter(a => a.status === 'open' && !isReviewedMarker(a)))
   let orphanedAnns = $derived(annotations.list.filter(a => a.status === 'orphaned'))
+  // Intersect with current diff so a file marked-reviewed-then-removed
+  // doesn't push N > M (annotations persist per changeId across rewrites).
+  let reviewedCount = $derived(parsedDiff.filter(f => annotations.isReviewed(f.filePath)).length)
 
   function scrollToAnnotation(ann: Annotation) {
     // Preview renders the badge too (wireAnnotations) — don't kick the user
@@ -365,7 +404,7 @@
   }
   export function clearAnnotations() { return annotations.clear() }
   export function hasAnnotations(): boolean {
-    return annotations.list.some(a => a.status !== 'resolved')
+    return annotations.list.some(a => a.status !== 'resolved' && !isReviewedMarker(a))
   }
 
   // Capability gate for per-file mutations (Edit, Discard). Derived to
@@ -1374,13 +1413,17 @@
       </div>
     </div>
   {/if}
-  {#if diffTarget?.kind === 'single' && (openAnns.length > 0 || orphanedAnns.length > 0)}
+  {#if diffTarget?.kind === 'single' && (openAnns.length > 0 || orphanedAnns.length > 0 || reviewedCount > 0)}
     <div class="annotations-bar">
-      <span class="annotations-label">💬 {openAnns.length} open{#if orphanedAnns.length > 0} · <span class="orphaned-count">{orphanedAnns.length} possibly addressed</span>{/if}</span>
+      <span class="annotations-label">
+        {#if reviewedCount > 0}<span class="reviewed-progress" title="{reviewedCount} of {parsedDiff.length} files reviewed">✓ {reviewedCount}/{parsedDiff.length}</span>{/if}
+        {#if openAnns.length > 0 || orphanedAnns.length > 0}{#if reviewedCount > 0} · {/if}💬 {openAnns.length} open{#if orphanedAnns.length > 0} · <span class="orphaned-count">{orphanedAnns.length} possibly addressed</span>{/if}{/if}
+      </span>
       <div class="annotations-chips">
         {#each openAnns as ann (ann.id)}
-          <button class="ann-chip severity-{ann.severity}" onclick={() => scrollToAnnotation(ann)} title="{ann.filePath}:{ann.lineNum} — {ann.comment}">
-            {ann.filePath.split('/').pop()}:{ann.lineNum}
+          {@const lineSuffix = ann.lineNum === FILE_LEVEL ? '' : `:${ann.lineNum}`}
+          <button class="ann-chip severity-{ann.severity}" onclick={() => scrollToAnnotation(ann)} title="{ann.filePath}{lineSuffix} — {ann.comment}">
+            {ann.filePath.split('/').pop()}{lineSuffix}
           </button>
         {/each}
         {#each orphanedAnns as ann (ann.id)}
@@ -1545,7 +1588,9 @@
             {onfilehistory}
             oncompare={diffTarget?.kind === 'single' ? toggleCompare : undefined}
             annotationsForLine={diffTarget?.kind === 'single' ? annotations.forLine : undefined}
-            onannotationclick={(ln, content, e) => handleAnnotationClick(filePath, ln, content, e)}
+            annotationsForFile={diffTarget?.kind === 'single' ? annotations.forFile : undefined}
+            onannotationclick={diffTarget?.kind === 'single' ? (ln, content, e, ed) => handleAnnotationClick(filePath, ln, content, e, ed) : undefined}
+            onreviewedtoggle={diffTarget?.kind === 'single' ? toggleReviewed : undefined}
           />
           {#if comparePickerPath === filePath && diffTarget?.kind === 'single'}
             <FileComparePicker
@@ -1597,6 +1642,7 @@
   editing={annBubble.editing}
   lineContext={annBubble.lineContext ?? undefined}
   onsave={saveAnnotation}
+  onresolve={annBubble.editing ? resolveAnnotation : undefined}
   ondelete={annBubble.editing ? () => annotations.remove(annBubble.editing!.id) : undefined}
   onclose={() => { annBubble.editing = null; annBubble.lineContext = null }}
 />
@@ -1816,7 +1862,7 @@
   .ann-chip {
     background: var(--surface0);
     border: 1px solid var(--surface1);
-    border-left-width: 3px;
+    border-left: 3px solid var(--ann-accent, var(--surface2));
     border-radius: 3px;
     padding: 1px 6px;
     font-size: var(--fs-xs);
@@ -1825,10 +1871,7 @@
     white-space: nowrap;
   }
   .ann-chip:hover { background: var(--surface1); }
-  .ann-chip.severity-must-fix { border-left-color: var(--red); }
-  .ann-chip.severity-suggestion { border-left-color: var(--amber); }
-  .ann-chip.severity-question { border-left-color: var(--blue); }
-  .ann-chip.severity-nitpick { border-left-color: var(--surface2); }
+  .reviewed-progress { color: var(--green); font-weight: 600; }
   .ann-chip.orphaned { opacity: 0.6; border-style: dashed; }
 
   /* --- Diff toolbar --- */

@@ -18,7 +18,7 @@
     // Stable reference (the store's forLine method) — fresh-closure-per-render
     // would defeat gutterRows $derived's reference-equality short-circuit.
     annotationsForLine?: (filePath: string, lineNum: number) => readonly Annotation[]
-    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent) => void
+    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent, editing?: Annotation) => void
     addedLines?: ReadonlySet<number>
   }
 
@@ -49,7 +49,7 @@
   // instead of a re-run-everything $effect. All gutter elements at one x —
   // no per-element-type offset CSS (li/pre/mermaid special cases deleted).
 
-  const SEV_ORDER: Record<string, number> = { 'must-fix': 0, suggestion: 1, question: 2, nitpick: 3 }
+  const SEV_ORDER: Record<string, number> = { 'must-fix': 0, suggestion: 1, question: 2, nitpick: 3, reviewed: 4 }
 
   // Geometry (DOM measurement — depends on layout only) is split from data
   // (annotation/added lookup — depends on store). Annotation add/remove
@@ -195,14 +195,22 @@
           <div class="md-gutter-row" style:top="{row.top}px" style:height="{row.height}px">
             {#if row.added}<span class="md-strip-add"></span>{/if}
             {#if row.anns.length}
-              {@const a = row.anns[0]}
+              {@const a = row.anns.find(x => x.status !== 'resolved') ?? row.anns[0]}
+              {@const allResolved = row.anns.every(x => x.status === 'resolved')}
               <button
                 class="annotation-badge severity-{a.severity}"
                 class:orphaned={a.status === 'orphaned'}
-                onclick={(e) => onannotationclick?.(a.lineNum, a.lineContent, e)}
+                class:resolved={allResolved}
+                onclick={(e) => onannotationclick?.(a.lineNum, a.lineContent, e, a)}
                 title="{row.anns.length} annotation{row.anns.length > 1 ? 's' : ''}: {a.comment}"
                 aria-label="View annotation"
-              >💬{#if row.anns.length > 1}<sup>{row.anns.length}</sup>{/if}</button>
+              ><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                {#if allResolved}
+                  <path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                {:else}
+                  <path d="M1.5 2 C1.5 1.2 2.2 .5 3 .5 H9 C9.8 .5 10.5 1.2 10.5 2 V7 C10.5 7.8 9.8 8.5 9 8.5 H5.5 L2.5 11.5 V8.5 C1.9 8.4 1.5 7.8 1.5 7 Z" fill="currentColor"/>
+                {/if}
+              </svg></button>
             {/if}
           </div>
         {/each}
@@ -256,11 +264,8 @@
   .md-gutter :global(.annotation-badge) {
     position: static;  /* override theme.css absolute */
     pointer-events: auto;
-    font-size: var(--font-size);
-    padding: 2px 4px;
     margin-top: 2px;
   }
-  .md-gutter :global(.annotation-badge sup) { font-size: var(--fs-2xs); vertical-align: super; }
   .md-content {
     padding-left: 36px;
     /* Containing block for fixed-position descendants — neutralizes the

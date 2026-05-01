@@ -512,7 +512,7 @@ describe('DiffFileView', () => {
       expect(badge?.classList.contains('orphaned')).toBe(true)
     })
 
-    it('multiple annotations on same line show count superscript', () => {
+    it('multiple annotations on same line show count in glyph', () => {
       const { container } = render(DiffFileView, {
         props: defaultProps({
           file: fileWithLines,
@@ -520,7 +520,7 @@ describe('DiffFileView', () => {
         }),
       })
       const badge = container.querySelector('.annotation-badge')
-      expect(badge?.querySelector('sup')?.textContent).toBe('2')
+      expect(badge?.querySelector('.ann-count')?.textContent).toBe('2')
       expect(badge?.getAttribute('title')).toContain('2 annotations')
     })
 
@@ -540,6 +540,7 @@ describe('DiffFileView', () => {
         1,
         'line one', // raw content without the '+' prefix
         expect.any(MouseEvent),
+        expect.objectContaining({ severity: 'suggestion' }), // explicit edit target
       )
     })
 

@@ -47,13 +47,17 @@ export interface RemoteRef {
   remote: string
 }
 
-export type AnnotationSeverity = 'must-fix' | 'suggestion' | 'question' | 'nitpick'
+export type AnnotationSeverity = 'must-fix' | 'suggestion' | 'question' | 'nitpick' | 'reviewed'
 export type AnnotationStatus = 'open' | 'resolved' | 'orphaned'
+
+/** lineNum sentinel for file-level annotations (line numbers are 1-based). */
+export const FILE_LEVEL = 0
 
 export interface Annotation {
   id: string
   changeId: string
   filePath: string
+  /** 1-based new-side line number, or FILE_LEVEL (0) for whole-file. */
   lineNum: number
   lineContent: string // snapshot for re-anchor after agent iterates
   comment: string

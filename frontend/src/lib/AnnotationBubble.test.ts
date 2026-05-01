@@ -165,11 +165,17 @@ describe('AnnotationBubble', () => {
     expect(onsave).not.toHaveBeenCalled()
   })
 
-  it('severity select has all 4 options', () => {
+  it("severity select omits 'reviewed' (checkbox is the sole marker affordance)", () => {
     render(AnnotationBubble, { props: defaultProps() })
-    const select = screen.getByRole('combobox') as HTMLSelectElement
-    const options = [...select.options].map(o => o.value)
+    const options = [...(screen.getByRole('combobox') as HTMLSelectElement).options].map(o => o.value)
     expect(options).toEqual(['must-fix', 'suggestion', 'question', 'nitpick'])
+  })
+
+  it('file-level (lineNum=0): context label shows path without :line', () => {
+    render(AnnotationBubble, { props: defaultProps({
+      lineContext: { filePath: 'src/a.go', lineNum: 0, lineContent: '' },
+    }) })
+    expect(screen.getByText('src/a.go')).toBeTruthy()
   })
 
   it('editing → re-open populates fresh state (reset effect)', async () => {

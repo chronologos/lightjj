@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import type { Annotation, AnnotationSeverity } from './api'
+  import { FILE_LEVEL, type Annotation, type AnnotationSeverity } from './api'
 
   interface Props {
     open: boolean
@@ -11,11 +11,12 @@
     /** Prefilled line context (for create-new). */
     lineContext?: { filePath: string; lineNum: number; lineContent: string }
     onsave: (comment: string, severity: AnnotationSeverity) => void
+    onresolve?: () => void
     ondelete?: () => void
     onclose: () => void
   }
 
-  let { open = $bindable(false), x, y, editing, lineContext, onsave, ondelete, onclose }: Props = $props()
+  let { open = $bindable(false), x, y, editing, lineContext, onsave, onresolve, ondelete, onclose }: Props = $props()
 
   let comment = $state('')
   let severity = $state<AnnotationSeverity>('suggestion')
@@ -24,8 +25,16 @@
   let adjustedX = $state(0)
   let adjustedY = $state(0)
 
+  // 'reviewed' is NOT offered here — the file-header checkbox is the sole
+  // affordance for the marker. Offering it in the bubble created a second
+  // path to the same backend object with divergent semantics (no dedup, no
+  // auto-collapse, bumps loadGen).
   const SEVERITIES: AnnotationSeverity[] = ['must-fix', 'suggestion', 'question', 'nitpick']
   const MARGIN = 8
+
+  let contextLabel = $derived(
+    !lineContext ? '' : lineContext.lineNum === FILE_LEVEL ? lineContext.filePath : `${lineContext.filePath}:${lineContext.lineNum}`
+  )
 
   $effect(() => {
     if (!open) return
@@ -86,7 +95,7 @@
         {/each}
       </select>
       {#if lineContext}
-        <span class="bubble-context">{lineContext.filePath}:{lineContext.lineNum}</span>
+        <span class="bubble-context">{contextLabel}</span>
       {/if}
       <button class="close-btn" onclick={() => { open = false; onclose() }} aria-label="Close">×</button>
     </div>
@@ -100,6 +109,9 @@
     <div class="bubble-actions">
       {#if editing && ondelete}
         <button class="btn btn-danger bubble-delete" onclick={() => { ondelete(); open = false; onclose() }}>Delete</button>
+      {/if}
+      {#if editing && onresolve && editing.status !== 'resolved'}
+        <button class="btn bubble-resolve" onclick={() => { onresolve(); open = false; onclose() }} title="Mark as resolved — hides from open list, kept for history">✓ Resolve</button>
       {/if}
       <button class="btn" onclick={() => { open = false; onclose() }}>Cancel</button>
       <button class="btn btn-primary" onclick={handleSubmit} disabled={!comment.trim()}>Save</button>
@@ -136,17 +148,13 @@
   .severity-select {
     background: var(--surface0);
     border: 1px solid var(--surface1);
+    border-left: 3px solid var(--ann-accent, var(--surface2));
     color: var(--text);
     border-radius: 4px;
     padding: 2px 6px;
     font-size: var(--fs-sm);
     font-family: inherit;
   }
-
-  .severity-must-fix { border-left: 3px solid var(--red); }
-  .severity-suggestion { border-left: 3px solid var(--amber); }
-  .severity-question { border-left: 3px solid var(--blue); }
-  .severity-nitpick { border-left: 3px solid var(--surface2); }
 
   .bubble-context {
     flex: 1;
@@ -183,4 +191,6 @@
   }
 
   .bubble-delete { margin-right: auto; }
+  .bubble-resolve { color: var(--green); border-color: var(--green); }
+  .bubble-resolve:hover { background: color-mix(in srgb, var(--green) 15%, transparent); }
 </style>

@@ -13,8 +13,15 @@
 // scan ±N lines for an exact match (handles block moves). If both fail,
 // mark orphaned — likely means the agent addressed the feedback.
 
-import { api, type Annotation, type AnnotationSeverity } from './api'
+import { api, FILE_LEVEL, type Annotation, type AnnotationSeverity } from './api'
 import { parseDiffContent, expandTabs } from './diff-parser'
+
+/** A file-level annotation that exists purely as a "viewed" checkbox state —
+ *  green severity, no comment body. Excluded from export + chip bar (it's
+ *  progress tracking, not feedback). File-level annotations WITH a comment
+ *  are real feedback and export normally. */
+export const isReviewedMarker = (a: Annotation) =>
+  a.lineNum === FILE_LEVEL && a.severity === 'reviewed' && a.comment === ''
 
 const FUZZY_WINDOW = 5 // ±lines to search for content match
 const NO_ANN: readonly Annotation[] = [] // shared empty result for forLine misses
@@ -125,7 +132,7 @@ export function reanchor(
 
 // Markdown for text-prompt agents. Groups by file, skips resolved.
 export function exportMarkdown(anns: Annotation[], changeId: string): string {
-  const open = anns.filter(a => a.status === 'open' || a.status === 'orphaned')
+  const open = anns.filter(a => (a.status === 'open' || a.status === 'orphaned') && !isReviewedMarker(a))
   if (open.length === 0) return `No open annotations for ${changeId}.`
 
   const byFile = new Map<string, Annotation[]>()
@@ -138,9 +145,10 @@ export function exportMarkdown(anns: Annotation[], changeId: string): string {
   for (const [file, fileAnns] of byFile) {
     fileAnns.sort((a, b) => a.lineNum - b.lineNum)
     for (const a of fileAnns) {
+      const loc = a.lineNum === FILE_LEVEL ? file : `${file}:${a.lineNum}`
       const orphanNote = a.status === 'orphaned' ? ' (line may have moved)' : ''
-      out += `### ${file}:${a.lineNum} [${a.severity}]${orphanNote}\n`
-      out += '```\n' + a.lineContent + '\n```\n'
+      out += `### ${loc} [${a.severity}]${orphanNote}\n`
+      if (a.lineContent) out += '```\n' + a.lineContent + '\n```\n'
       out += `> ${a.comment}\n\n`
     }
   }
@@ -152,7 +160,7 @@ export function exportJSON(anns: Annotation[], changeId: string, commitId: strin
   return JSON.stringify({
     changeId,
     commitId,
-    annotations: anns.map(a => ({
+    annotations: anns.filter(a => !isReviewedMarker(a)).map(a => ({
       file: a.filePath,
       line: a.lineNum,
       context: a.lineContent,
@@ -175,6 +183,13 @@ interface AnnotationStore {
   /** Lookup annotations for a specific line (for gutter badge). Multiple
    *  annotations may share a line if the user annotated it twice. */
   forLine(filePath: string, lineNum: number): readonly Annotation[]
+  /** File-level annotations (lineNum=0). */
+  forFile(filePath: string): readonly Annotation[]
+  /** Whether the file has a "reviewed" marker (the viewed-checkbox state). */
+  isReviewed(filePath: string): boolean
+  /** Toggle the reviewed marker for a file. Resolves true if state changed,
+   *  false if dropped (in-flight, wrong changeId, or already at target). */
+  setReviewed(filePath: string, reviewed: boolean, ctx: { changeId: string; createdAtCommitId: string }): Promise<boolean>
   /** Load annotations for changeId. If commitId differs from any
    *  createdAtCommitId, re-anchors via diffRange. Pass the current revision's
    *  commitId so the store can detect agent iterations. */
@@ -213,6 +228,14 @@ export function createAnnotationStore(): AnnotationStore {
     return m
   })
 
+  // filePath → has-reviewed-marker. Backs isReviewed() O(1) lookup for the
+  // per-file checkbox + DiffPanel's reviewedCount intersection.
+  let reviewedFiles = $derived.by(() => {
+    const s = new Set<string>()
+    for (const a of list) if (isReviewedMarker(a)) s.add(a.filePath)
+    return s
+  })
+
   let inFlight = 0
   async function withBusy<T>(fn: () => Promise<T>): Promise<T> {
     inFlight++; busy = true
@@ -248,6 +271,7 @@ export function createAnnotationStore(): AnnotationStore {
       // diffRange calls (N annotations from one iteration → 1 fetch).
       const needsReanchor = new Map<string, Annotation[]>()
       for (const a of raw) {
+        if (a.lineNum === FILE_LEVEL) continue
         if (a.status === 'resolved') continue
         if (a.createdAtCommitId === commitId) continue
         if (!needsReanchor.has(a.createdAtCommitId)) needsReanchor.set(a.createdAtCommitId, [])
@@ -327,6 +351,52 @@ export function createAnnotationStore(): AnnotationStore {
     })
   }
 
+  // setReviewed does NOT route through add()/remove() — those bump the global
+  // loadGen, so checking file A then file B would cancel A's post-await list
+  // write (marker on backend, missing from UI). Checkbox toggles are
+  // cross-file-concurrent + high-frequency; optimistic write + rollback keeps
+  // them independent of loadGen and gives instant checkbox feedback.
+  const reviewBusy = new Set<string>()
+
+  async function setReviewed(filePath: string, reviewed: boolean, ctx: { changeId: string; createdAtCommitId: string }): Promise<boolean> {
+    if (reviewBusy.has(filePath) || ctx.changeId !== loadedChangeId) return false
+    const existing = list.filter(a => a.filePath === filePath && isReviewedMarker(a))
+    if (reviewed === existing.length > 0) return false
+    reviewBusy.add(filePath)
+    // Bump-only (no capture, no check): invalidates any in-flight load() so
+    // its stale snapshot won't clobber our optimistic write. setReviewed
+    // itself never CHECKS gen, so cross-file toggles each bump but neither
+    // cancels the other.
+    bumpGen()
+    try {
+      if (reviewed) {
+        const ann: Annotation = {
+          id: crypto.randomUUID(), ...ctx, filePath,
+          lineNum: FILE_LEVEL, lineContent: '', comment: '', severity: 'reviewed',
+          createdAt: Date.now(), status: 'open',
+        }
+        knownEmpty.delete(ctx.changeId)
+        list = [...list, ann]
+        try { await api.saveAnnotation(ann) }
+        catch (e) { list = list.filter(a => a.id !== ann.id); throw e }
+      } else {
+        const ids = new Set(existing.map(m => m.id))
+        list = list.filter(a => !ids.has(a.id))
+        try {
+          for (const m of existing) await api.deleteAnnotation(ctx.changeId, m.id)
+        } catch (e) {
+          // Rollback only if still on the same changeId — appending old-rev
+          // markers onto a navigated-to rev's list would render phantom ✓s.
+          if (ctx.changeId === loadedChangeId) list = [...list, ...existing]
+          throw e
+        }
+      }
+      return true
+    } finally {
+      reviewBusy.delete(filePath)
+    }
+  }
+
   async function clear() {
     if (!loadedChangeId) return
     return withBusy(async () => {
@@ -341,7 +411,13 @@ export function createAnnotationStore(): AnnotationStore {
     get list() { return list },
     get loadedChangeId() { return loadedChangeId },
     get busy() { return busy },
-    forLine: (filePath, lineNum) => byLine.get(`${filePath}:${lineNum}`) ?? NO_ANN,
-    load, add, update, remove, clear,
+    // forLine excludes FILE_LEVEL — split-view's right column for deleted files
+    // (and the `\ No newline` marker line) can yield annLine===0; without this
+    // guard the file-level annotation would leak into the gutter as a line badge.
+    forLine: (filePath, lineNum) =>
+      lineNum === FILE_LEVEL ? NO_ANN : byLine.get(`${filePath}:${lineNum}`) ?? NO_ANN,
+    forFile: (filePath) => byLine.get(`${filePath}:${FILE_LEVEL}`) ?? NO_ANN,
+    isReviewed: (filePath) => reviewedFiles.has(filePath),
+    load, add, update, remove, clear, setReviewed,
   }
 }

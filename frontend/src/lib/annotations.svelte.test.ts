@@ -17,8 +17,8 @@ vi.mock('./api', async (importOriginal) => {
   }
 })
 
-import { reanchor, exportMarkdown, exportJSON, createAnnotationStore } from './annotations.svelte'
-import { api, type Annotation } from './api'
+import { reanchor, exportMarkdown, exportJSON, createAnnotationStore, isReviewedMarker } from './annotations.svelte'
+import { api, FILE_LEVEL, type Annotation } from './api'
 
 const mockAnnotations = api.annotations as ReturnType<typeof vi.fn>
 const mockSave = api.saveAnnotation as ReturnType<typeof vi.fn>
@@ -587,5 +587,192 @@ describe('createAnnotationStore', () => {
     await expect(store.remove('a1')).rejects.toThrow('500')
     expect(store.list).toHaveLength(1) // NOT filtered
     expect(store.busy).toBe(false) // finally-block cleared it
+  })
+})
+
+describe('file-level annotations + reviewed markers', () => {
+  beforeEach(() => {
+    mockAnnotations.mockReset()
+    mockSave.mockReset()
+    mockDelete.mockReset()
+    mockSave.mockImplementation(async (a: Annotation) => a)
+  })
+
+  const mk = (over: Partial<Annotation>): Annotation => ({
+    id: 'a', changeId: 'xyz', filePath: 'foo.go', lineNum: 10,
+    lineContent: 'x', comment: 'c', severity: 'suggestion',
+    createdAt: 0, createdAtCommitId: 'abc', status: 'open', ...over,
+  })
+
+  it('isReviewedMarker: lineNum=0 + reviewed + empty comment only', () => {
+    expect(isReviewedMarker(mk({ lineNum: FILE_LEVEL, severity: 'reviewed', comment: '' }))).toBe(true)
+    expect(isReviewedMarker(mk({ lineNum: FILE_LEVEL, severity: 'reviewed', comment: 'lgtm' }))).toBe(false)
+    expect(isReviewedMarker(mk({ lineNum: FILE_LEVEL, severity: 'must-fix', comment: '' }))).toBe(false)
+    expect(isReviewedMarker(mk({ lineNum: 5, severity: 'reviewed', comment: '' }))).toBe(false)
+  })
+
+  it('forLine(path, 0) returns empty — file-level must not leak into gutter', async () => {
+    // Regression: split-view right column for deleted files yields annLine=0;
+    // returning the file-level set there rendered a spurious gutter badge.
+    mockAnnotations.mockResolvedValue([
+      mk({ id: 'r1', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '' }),
+    ])
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    expect(store.forLine('a.go', 0)).toEqual([])
+    expect(store.forFile('a.go')).toHaveLength(1)
+  })
+
+  it('forFile / isReviewed derive from list', async () => {
+    mockAnnotations.mockResolvedValue([
+      mk({ id: 'r1', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '' }),
+      mk({ id: 'n1', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'must-fix', comment: 'file note' }),
+      mk({ id: 'l1', filePath: 'a.go', lineNum: 7 }),
+      mk({ id: 'r2', filePath: 'b.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '' }),
+    ])
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+
+    expect(store.forFile('a.go').map(a => a.id)).toEqual(['r1', 'n1'])
+    expect(store.forFile('c.go')).toEqual([])
+    expect(store.isReviewed('a.go')).toBe(true)
+    expect(store.isReviewed('b.go')).toBe(true)
+    expect(store.isReviewed('c.go')).toBe(false)
+  })
+
+  it('setReviewed(true) adds marker; (false) removes; idempotent', async () => {
+    mockAnnotations.mockResolvedValue([])
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    const ctx = { changeId: 'xyz', createdAtCommitId: 'abc' }
+
+    await store.setReviewed('a.go', true, ctx)
+    expect(store.isReviewed('a.go')).toBe(true)
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '',
+    }))
+
+    mockSave.mockClear()
+    await store.setReviewed('a.go', true, ctx) // idempotent
+    expect(mockSave).not.toHaveBeenCalled()
+
+    await store.setReviewed('a.go', false, ctx)
+    expect(store.isReviewed('a.go')).toBe(false)
+    expect(mockDelete).toHaveBeenCalledTimes(1)
+  })
+
+  it('load() skips re-anchor for file-level annotations', async () => {
+    mockAnnotations.mockResolvedValue([
+      mk({ id: 'r1', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '', createdAtCommitId: 'old' }),
+    ])
+    mockDiffRange.mockResolvedValue({ diff: '' })
+    const store = createAnnotationStore()
+    await store.load('xyz', 'NEW')
+    // lineNum=0 must NOT enter the diffRange/reanchor path — file-level
+    // doesn't drift, and reanchor() math on line 0 would be nonsense.
+    expect(mockDiffRange).not.toHaveBeenCalled()
+    expect(store.list[0].lineNum).toBe(FILE_LEVEL)
+  })
+
+  it('exportMarkdown: file-level renders without :lineNum, skips bare reviewed markers', () => {
+    const anns: Annotation[] = [
+      mk({ id: 'r', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '', lineContent: '' }),
+      mk({ id: 'n', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'question', comment: 'why?', lineContent: '' }),
+      mk({ id: 'l', filePath: 'a.go', lineNum: 12, comment: 'fix', lineContent: 'code()' }),
+    ]
+    const md = exportMarkdown(anns, 'xyzxyzxyz')
+    expect(md).toContain('### a.go [question]')
+    expect(md).not.toContain('a.go:0')
+    expect(md).not.toMatch(/\[reviewed\]/) // bare marker skipped
+    expect(md).toContain('### a.go:12')
+  })
+
+  it('exportMarkdown: markers-only → "No open annotations" (not header-only)', () => {
+    const anns: Annotation[] = [
+      mk({ id: 'r', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '', lineContent: '' }),
+    ]
+    expect(exportMarkdown(anns, 'xyzxyzxyz')).toContain('No open annotations')
+  })
+
+  it('exportJSON excludes reviewed markers (sibling parity with exportMarkdown)', () => {
+    const anns: Annotation[] = [
+      mk({ id: 'r', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '', lineContent: '' }),
+      mk({ id: 'l', filePath: 'a.go', lineNum: 12 }),
+    ]
+    const out = JSON.parse(exportJSON(anns, 'xyz', 'abc'))
+    expect(out.annotations).toHaveLength(1)
+    expect(out.annotations[0].line).toBe(12)
+  })
+
+  it('setReviewed(false) removes ALL markers (covers historical dups)', async () => {
+    mockAnnotations.mockResolvedValue([
+      mk({ id: 'r1', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '' }),
+      mk({ id: 'r2', filePath: 'a.go', lineNum: FILE_LEVEL, severity: 'reviewed', comment: '' }),
+    ])
+    mockDelete.mockResolvedValue(undefined)
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    expect(store.isReviewed('a.go')).toBe(true)
+
+    await store.setReviewed('a.go', false, { changeId: 'xyz', createdAtCommitId: 'abc' })
+    expect(mockDelete).toHaveBeenCalledTimes(2)
+    expect(store.isReviewed('a.go')).toBe(false)
+  })
+
+  it('setReviewed: rejects → reviewBusy cleared (next attempt not perma-dropped)', async () => {
+    mockAnnotations.mockResolvedValue([])
+    mockSave.mockRejectedValueOnce(new Error('net'))
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    const ctx = { changeId: 'xyz', createdAtCommitId: 'abc' }
+
+    await expect(store.setReviewed('a.go', true, ctx)).rejects.toThrow('net')
+    expect(store.isReviewed('a.go')).toBe(false) // rolled back
+
+    mockSave.mockImplementationOnce(async (a: Annotation) => a)
+    expect(await store.setReviewed('a.go', true, ctx)).toBe(true) // not stuck
+  })
+
+  it('setReviewed: drops when ctx.changeId ≠ loadedChangeId (mid-nav click)', async () => {
+    mockAnnotations.mockResolvedValue([])
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    expect(await store.setReviewed('a.go', true, { changeId: 'OTHER', createdAtCommitId: 'x' })).toBe(false)
+    expect(mockSave).not.toHaveBeenCalled()
+  })
+
+  it('setReviewed: cross-file concurrent checks both land (no loadGen coupling)', async () => {
+    mockAnnotations.mockResolvedValue([])
+    let resA!: (v: Annotation) => void, resB!: (v: Annotation) => void
+    mockSave.mockImplementationOnce(() => new Promise(r => { resA = r }))
+            .mockImplementationOnce(() => new Promise(r => { resB = r }))
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    const ctx = { changeId: 'xyz', createdAtCommitId: 'abc' }
+
+    const pA = store.setReviewed('a.go', true, ctx)
+    const pB = store.setReviewed('b.go', true, ctx)
+    // Optimistic: both already in list before any save resolves
+    expect(store.isReviewed('a.go')).toBe(true)
+    expect(store.isReviewed('b.go')).toBe(true)
+    resB(mk({})); resA(mk({}))
+    await pA; await pB
+    expect(store.isReviewed('a.go')).toBe(true) // NOT dropped by B's completion
+    expect(store.isReviewed('b.go')).toBe(true)
+  })
+
+  it('setReviewed: concurrent calls for same path → second is dropped', async () => {
+    mockAnnotations.mockResolvedValue([])
+    let resolve!: (v: Annotation) => void
+    mockSave.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    const ctx = { changeId: 'xyz', createdAtCommitId: 'abc' }
+
+    const p1 = store.setReviewed('a.go', true, ctx)
+    const p2 = store.setReviewed('a.go', true, ctx) // in-flight → dropped
+    resolve(mk({ id: 'x' }))
+    await p1; await p2
+    expect(mockSave).toHaveBeenCalledTimes(1)
   })
 })
