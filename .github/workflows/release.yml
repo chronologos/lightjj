@@ -77,6 +77,10 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # OIDC token → Sigstore for keyless signing
+      attestations: write   # write build provenance to the repo's attestation store
     steps:
       - uses: actions/checkout@v4
 
@@ -107,16 +111,33 @@ jobs:
           CGO_ENABLED: "0"
           VERSION: ${{ needs.check-version.outputs.version }}
         run: |
+          # -trimpath strips the runner's filesystem paths from debug info, so
+          # builds at the same commit are byte-identical across runners. Combined
+          # with -s -w (no symbol table / debug info), Go binaries become
+          # reproducible — anyone with the same Go version + commit can rebuild.
           LDFLAGS="-s -w -X main.version=$VERSION"
           mkdir -p dist
 
-          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/lightjj-macos-arm64 ./cmd/lightjj
-          GOOS=linux  GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/lightjj-linux-x86_64 ./cmd/lightjj
-          GOOS=linux  GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/lightjj-linux-arm64 ./cmd/lightjj
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-macos-arm64 ./cmd/lightjj
+          GOOS=linux  GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-x86_64 ./cmd/lightjj
+          GOOS=linux  GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-arm64 ./cmd/lightjj
 
       - name: Generate checksums
         working-directory: dist
         run: shasum -a 256 lightjj-* > checksums.sha256
+
+      # SLSA v1.0 build provenance via Sigstore's public-good transparency log.
+      # Proves the binary was produced by THIS workflow file at THIS commit on a
+      # GitHub-hosted runner. End users verify with `gh attestation verify`.
+      # Subjects are listed by hash inside the attestation, so the checksums
+      # file is covered too — no need to attest it separately.
+      - name: Generate build provenance attestations
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/lightjj-macos-arm64
+            dist/lightjj-linux-x86_64
+            dist/lightjj-linux-arm64
 
       - uses: actions/upload-artifact@v4
         with:
@@ -183,9 +204,23 @@ jobs:
 
             ### Verify
 
+            Each binary is signed with [SLSA build provenance](https://slsa.dev/) via
+            Sigstore. The attestation proves the binary was produced by this repo's
+            release workflow on a GitHub-hosted runner — no trust in a personal
+            signing key required.
+
             ```bash
+            # Provenance: proves the binary came from this repo's CI at the tagged commit
+            gh attestation verify lightjj-macos-arm64 --repo ${{ github.repository }}
+
+            # Hashes: artifact integrity (the checksums file is covered by the attestation above)
             shasum -a 256 -c checksums.sha256
             ```
+
+            Builds use `-trimpath` and `-ldflags=-s -w`, so they are reproducible: clone
+            this repo at tag `v${{ needs.check-version.outputs.version }}`, run the same
+            steps as `.github/workflows/release.yml`, and the resulting binaries should be
+            byte-identical to the ones above.
           files: |
             dist/lightjj-macos-arm64
             dist/lightjj-linux-x86_64
