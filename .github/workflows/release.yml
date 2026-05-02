@@ -124,68 +124,83 @@ jobs:
           name: dist
           path: dist
 
+      # Changelog: one bullet per commit, with two passes of cleanup:
+      #   1. strip leading "vX.Y.Z: " prefix (it's already in the release header)
+      #   2. truncate to first sentence boundary OR 120 chars, whichever comes
+      #      first — commit subjects in this repo are paragraph-length, and
+      #      raw `%s` produces unreadable wall-of-text bullets.
+      # Full detail is one click away via the auto-generated compare link below.
       - name: Generate changelog
         id: changelog
         run: |
           PREV_TAG="${{ needs.check-version.outputs.prev_tag }}"
           if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(git log --pretty=format:"- %s" "$PREV_TAG"..HEAD)
+            RANGE="$PREV_TAG..HEAD"
           else
-            CHANGELOG=$(git log --pretty=format:"- %s")
+            RANGE="HEAD"
           fi
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          CHANGELOG=$(git log --pretty=format:"%s" $RANGE | awk '{
+            sub(/^v[0-9]+\.[0-9]+\.[0-9]+:[ \t]*/, "")
+            head = substr($0, 1, 200)
+            if (match(head, /\. [A-Z(]/)) {
+              print "- " substr($0, 1, RSTART)
+            } else if (length($0) > 120) {
+              print "- " substr($0, 1, 117) "…"
+            } else {
+              print "- " $0
+            }
+          }')
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check-version.outputs.version }}
           name: v${{ needs.check-version.outputs.version }}
           body: |
-            ## lightjj v${{ needs.check-version.outputs.version }}
+            Browser UI for [Jujutsu](https://docs.jj-vcs.dev/) version control.
 
-            Browser UI for Jujutsu version control.
-
-            ### Changes
+            ### What's new
 
             ${{ steps.changelog.outputs.changelog }}
 
+            **Full changelog:** https://github.com/${{ github.repository }}/compare/${{ needs.check-version.outputs.prev_tag }}...v${{ needs.check-version.outputs.version }}
+
             ### Install
 
+            One-liner (macOS & Linux):
+
             ```bash
-            # macOS (Apple Silicon; Intel use Rosetta)
-            curl -L https://github.com/${{ github.repository }}/releases/latest/download/lightjj-macos-arm64 -o ~/.local/bin/lightjj
-            chmod +x ~/.local/bin/lightjj
-            xattr -cr ~/.local/bin/lightjj && codesign -s - -f ~/.local/bin/lightjj
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+            ```
 
-            # Linux x86_64
-            curl -L https://github.com/${{ github.repository }}/releases/latest/download/lightjj-linux-x86_64 -o ~/.local/bin/lightjj
-            chmod +x ~/.local/bin/lightjj
+            Or grab a binary directly:
 
-            # Linux arm64
-            curl -L https://github.com/${{ github.repository }}/releases/latest/download/lightjj-linux-arm64 -o ~/.local/bin/lightjj
-            chmod +x ~/.local/bin/lightjj
+            | Platform              | Download                                                                                                                |
+            | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+            | macOS (Apple Silicon) | [lightjj-macos-arm64](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-macos-arm64) |
+            | Linux (x86_64)        | [lightjj-linux-x86_64](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-linux-x86_64) |
+            | Linux (arm64)         | [lightjj-linux-arm64](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-linux-arm64) |
+
+            Then `chmod +x` and put it on your `PATH`. On macOS, also clear quarantine and ad-hoc sign:
+
+            ```bash
+            xattr -cr lightjj && codesign -s - -f lightjj
             ```
 
             ### Verify
 
-            Each binary is signed with [SLSA build provenance](https://slsa.dev/) via
-            Sigstore. The attestation proves the binary was produced by this repo's
-            release workflow on a GitHub-hosted runner — no trust in a personal
-            signing key required.
+            Binaries are signed with [SLSA build provenance](https://slsa.dev/) via Sigstore — the attestation cryptographically ties each binary back to this repo's release workflow on a GitHub-hosted runner. No personal signing keys are in the trust chain.
 
             ```bash
-            # Provenance: proves the binary came from this repo's CI at the tagged commit
             gh attestation verify lightjj-macos-arm64 --repo ${{ github.repository }}
-
-            # Hashes: artifact integrity (the checksums file is covered by the attestation above)
             shasum -a 256 -c checksums.sha256
             ```
 
-            Builds use `-trimpath` and `-ldflags=-s -w`, so they are reproducible: clone
-            this repo at tag `v${{ needs.check-version.outputs.version }}`, run the same
-            steps as `.github/workflows/release.yml`, and the resulting binaries should be
-            byte-identical to the ones above.
+            Builds use `-trimpath -ldflags="-s -w"` and are byte-reproducible: clone at tag `v${{ needs.check-version.outputs.version }}` and re-run the steps in [`.github/workflows/release.yml`](https://github.com/${{ github.repository }}/blob/v${{ needs.check-version.outputs.version }}/.github/workflows/release.yml) to get identical binaries.
           files: |
             dist/lightjj-macos-arm64
             dist/lightjj-linux-x86_64
