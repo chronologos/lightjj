@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"embed"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -37,9 +35,6 @@ func resolvedVersion() string {
 	}
 	return "dev"
 }
-
-//go:embed all:frontend-dist
-var frontendFS embed.FS
 
 func main() {
 	repoDir := flag.String("R", "", "Path to jj repository (default: current directory)")
@@ -241,15 +236,13 @@ func main() {
 		tm.AddTab(newTab(root), root)
 	}
 
-	// Serve embedded frontend static files
-	feFS, err := fs.Sub(frontendFS, "frontend-dist")
-	if err != nil {
-		log.Fatalf("failed to load frontend: %v", err)
-	}
+	// Serve frontend assets. The handler is build-tag-selected:
+	//   `go build -tags embed` → embeds frontend-dist (release path)
+	//   default                → static help page pointing at release binaries
 	// "/" (all-methods subtree), not "GET /" — Go 1.22 ServeMux rejects
 	// patterns where neither is strictly more specific, and "GET /" is
 	// method-narrower but path-wider than "/tab/{id}/" → register panic.
-	tm.Mux.Handle("/", http.FileServer(http.FS(feFS)))
+	tm.Mux.Handle("/", frontendHandler())
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {

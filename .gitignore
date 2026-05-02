@@ -3,9 +3,10 @@
 *.exe
 
 # Frontend build output
-# NOTE: cmd/lightjj/frontend-dist/ is INTENTIONALLY committed — required for
-# `go install github.com/chronologos/lightjj/cmd/lightjj@latest` (issue #2).
-# The //go:embed directive is compile-time; the module proxy only has what's in git.
+# Bundled into the release binary via `go build -tags embed`; not tracked in git.
+# Bare `go install` builds the !embed (default) variant which serves a static
+# help page pointing at the release binaries. See cmd/lightjj/frontend_stub.go.
+cmd/lightjj/frontend-dist/
 frontend/node_modules/
 frontend/.svelte-kit/
 

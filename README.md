@@ -36,11 +36,21 @@ A fast, powerful UI for Jujutsu VCS didn't exist, so I built one! In addition to
 curl -fsSL https://raw.githubusercontent.com/chronologos/lightjj/main/install.sh | sh
 ```
 
-Or `go install` (requires Go >= 1.21):
+Release binaries are signed via [SLSA build provenance](https://slsa.dev/) (Sigstore-backed, no personal keys) and built with `-trimpath` for reproducibility. Verify any download with:
 
 ```bash
-go install github.com/chronologos/lightjj/cmd/lightjj@latest
+gh attestation verify lightjj-macos-arm64 --repo chronologos/lightjj
 ```
+
+**Building from source** (requires Go >= 1.21 and pnpm):
+
+```bash
+git clone https://github.com/chronologos/lightjj
+cd lightjj/frontend && pnpm install && pnpm run build
+cd .. && go build -tags embed ./cmd/lightjj
+```
+
+The `embed` build tag bundles the frontend into the binary. Bare `go install github.com/chronologos/lightjj/cmd/lightjj@latest` works but produces a binary without the frontend (it serves a help page pointing back here) — the Go module proxy has no `pnpm` to run the frontend build.
 
 **Run:**
 

@@ -5,46 +5,6 @@ on:
     branches: [main]
 
 jobs:
-  # Guard against issue #2: `go install` must work from a bare clone (no pnpm build).
-  # Runs unconditionally — the release job below is gated on version bumps, so
-  # without this a broken embed could land on main and not be caught until release.
-  verify-go-install:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      # Step 1: build from committed frontend-dist only (simulates `go install ...@latest`).
-      # Fails if frontend-dist/ is missing, empty, or was deleted from .gitignore again.
-      - name: Build from committed assets
-        run: go build ./cmd/lightjj
-
-      # Step 2: rebuild frontend, fail if committed assets are stale.
-      # Catches the "edited a .svelte file but forgot to rebuild + commit frontend-dist" case.
-      - name: Rebuild frontend
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run build
-      - name: Check committed frontend-dist is up to date
-        run: |
-          git add -A cmd/lightjj/frontend-dist
-          git diff --cached --exit-code --stat -- cmd/lightjj/frontend-dist || {
-            echo "::error::cmd/lightjj/frontend-dist is stale. Run 'cd frontend && pnpm run build' and commit the result."
-            exit 1
-          }
-
   check-version:
     runs-on: ubuntu-latest
     outputs:
@@ -111,16 +71,21 @@ jobs:
           CGO_ENABLED: "0"
           VERSION: ${{ needs.check-version.outputs.version }}
         run: |
-          # -trimpath strips the runner's filesystem paths from debug info, so
-          # builds at the same commit are byte-identical across runners. Combined
-          # with -s -w (no symbol table / debug info), Go binaries become
-          # reproducible — anyone with the same Go version + commit can rebuild.
+          # -tags embed:  selects frontend_embed.go (//go:embed all:frontend-dist).
+          #               Default builds use frontend_stub.go (a static help page),
+          #               so bare `go install` produces a usable binary even
+          #               though the module proxy has no frontend-dist.
+          # -trimpath:    strips runner filesystem paths from debug info, so
+          #               builds at the same commit are byte-identical across
+          #               runners. Combined with -s -w (no symbol table / debug
+          #               info), Go binaries are reproducible — anyone with the
+          #               same Go version + commit can rebuild bit-for-bit.
           LDFLAGS="-s -w -X main.version=$VERSION"
           mkdir -p dist
 
-          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-macos-arm64 ./cmd/lightjj
-          GOOS=linux  GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-x86_64 ./cmd/lightjj
-          GOOS=linux  GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-arm64 ./cmd/lightjj
+          GOOS=darwin GOARCH=arm64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-macos-arm64 ./cmd/lightjj
+          GOOS=linux  GOARCH=amd64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-x86_64 ./cmd/lightjj
+          GOOS=linux  GOARCH=arm64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-arm64 ./cmd/lightjj
 
       - name: Generate checksums
         working-directory: dist
