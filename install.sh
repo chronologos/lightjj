@@ -25,7 +25,7 @@ detect_platform() {
 
     # macOS: only arm64 binary available
     if [ "$OS" = "macos" ] && [ "$ARCH" != "arm64" ]; then
-        echo "Intel macOS not supported — use 'go install github.com/${REPO}/cmd/lightjj@latest'" >&2
+        echo "Intel macOS: no prebuilt binary — build from source (see README 'Building from source')" >&2
         exit 1
     fi
 

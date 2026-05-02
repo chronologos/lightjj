@@ -8,7 +8,7 @@ Browser-based UI for Jujutsu (jj) version control. See [docs/ARCHITECTURE.md](do
 go test ./...                                        # Go tests
 go vet ./...                                         # static analysis
 cd frontend && pnpm install && pnpm run build        # build frontend
-go build ./cmd/lightjj                               # build binary (needs frontend build first)
+go build -tags embed ./cmd/lightjj                   # build binary (needs frontend build first; no tag = stub)
 
 # Dev mode: two terminals
 # 1: go run ./cmd/lightjj --addr localhost:3000 --no-browser

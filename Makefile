@@ -4,10 +4,10 @@ VERSION := $(shell cat version.txt)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 install: frontend
-	go install $(LDFLAGS) ./cmd/lightjj
+	go install -tags embed $(LDFLAGS) ./cmd/lightjj
 
 build: frontend
-	go build $(LDFLAGS) -o lightjj ./cmd/lightjj
+	go build -tags embed $(LDFLAGS) -o lightjj ./cmd/lightjj
 
 frontend:
 	cd frontend && pnpm install && pnpm run build
