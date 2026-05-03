@@ -60,7 +60,7 @@ describe('detectIndent', () => {
   })
 })
 
-// getCmLanguage routes through detectLanguage() (highlighter.ts) to map file
+// getCmLanguage routes through detectLanguage() (languages.ts) to map file
 // extensions to CM6 LanguageSupport. Wrong mapping → plain-text editing in
 // FileEditor/MergePanel (silent degradation, no error). The detectLanguage
 // mapping IS the real test surface — asserting `instanceof LanguageSupport`
@@ -68,6 +68,7 @@ describe('detectIndent', () => {
 // language is expected, null where it isn't.
 describe('getCmLanguage', () => {
   it.each([
+    // Rich support (full @codemirror/lang-* with indent/fold/autocomplete)
     ['foo.ts', 'typescript'],
     ['foo.tsx', 'typescript'],
     ['foo.js', 'javascript'],
@@ -75,16 +76,26 @@ describe('getCmLanguage', () => {
     ['foo.py', 'python'],
     ['foo.go', 'go'],
     ['foo.rs', 'rust'],
-  ])('%s → non-null (%s)', (path) => {
-    expect(getCmLanguage(path)).not.toBeNull()
+    // Registry fallback — eager Lezer parsers wrapped in bare LRLanguage
+    ['foo.css', 'css'],
+    ['foo.html', 'html'],
+    ['foo.svelte', 'svelte'],
+    ['foo.json', 'json'],
+    ['foo.yaml', 'yaml'],
+    // Registry fallback — legacy modes lazy-loaded then wrapped in StreamLanguage
+    ['foo.sh', 'bash'],
+    ['foo.toml', 'toml'],
+    ['foo.swift', 'swift'],
+  ])('%s → non-null (%s)', async (path) => {
+    expect(await getCmLanguage(path)).not.toBeNull()
   })
 
   it.each([
     ['foo.txt'],
-    ['foo.md'],     // detectLanguage returns 'markdown' but cm-shared doesn't wire it
+    ['foo.md'],
     ['foo'],        // no extension
     ['Makefile'],
-  ])('%s → null (plain text)', (path) => {
-    expect(getCmLanguage(path)).toBeNull()
+  ])('%s → null (plain text)', async (path) => {
+    expect(await getCmLanguage(path)).toBeNull()
   })
 })

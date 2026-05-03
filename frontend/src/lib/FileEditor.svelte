@@ -1,6 +1,6 @@
 <script lang="ts">
   import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
-  import { EditorState } from '@codemirror/state'
+  import { EditorState, Compartment } from '@codemirror/state'
   import { defaultKeymap, indentWithTab } from '@codemirror/commands'
   import { foldGutter, foldEffect, unfoldAll, syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentUnit } from '@codemirror/language'
   import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
@@ -62,12 +62,15 @@
   $effect(() => {
     if (!containerEl || view) return
 
-    const langSupport = getCmLanguage(filePath)
-
     // Detect whether the file uses tabs or spaces for indentation, and what
     // the indent width is. This keeps new lines aligned with existing ones.
     // Heuristic: scan first ~200 non-blank leading-whitespace lines.
     const { usesTabs, width } = detectIndent(content)
+
+    // getCmLanguage is async (legacy modes lazy-load). The editor mounts
+    // immediately with an empty slot; language drops in via reconfigure when
+    // resolved. The view === editorView check skips dispatch if cleanup ran.
+    const langCompartment = new Compartment()
 
     const extensions = [
       lineNumbers(),
@@ -92,8 +95,8 @@
         { key: 'Escape', run: () => { oncancel(); return true } },
       ]),
       cmTheme,
+      langCompartment.of([]),
     ]
-    if (langSupport) extensions.push(langSupport)
 
     const state = EditorState.create({ doc: content, extensions })
     const editorView = new EditorView({ state, parent: containerEl })
@@ -106,6 +109,9 @@
     }
 
     view = editorView
+    getCmLanguage(filePath).then(ls => {
+      if (ls && view === editorView) editorView.dispatch({ effects: langCompartment.reconfigure(ls) })
+    }).catch(() => {})
     return () => { view = undefined; editorView.destroy() }
   })
 

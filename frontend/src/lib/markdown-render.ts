@@ -1,6 +1,7 @@
 import { marked, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
-import { escapeHtml, escapeAttr, highlightLines, EXTENSION_LANGUAGES } from './highlighter'
+import { escapeHtml, escapeAttr, highlightLines } from './highlighter'
+import { EXTENSION_LANGUAGES } from './languages'
 import { api } from './api'
 import { wireSvg } from './panzoom'
 

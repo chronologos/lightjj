@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { detectLanguage, highlightLines, ensureLegacyParsers } from './highlighter'
+import { highlightLines } from './highlighter'
+import { detectLanguage, ensureLegacyParsers } from './languages'
 
 describe('detectLanguage', () => {
   it('maps common extensions', () => {
@@ -65,11 +66,10 @@ describe('detectLanguage', () => {
     expect(detectLanguage('.gitignore')).toBe('text')
   })
 
-  // detectLanguage is imported by FileEditor for its own CM6 LanguageSupport
-  // mapping — it switches on the STRING, not the parser. The svelte→html
-  // fallback lives in the PARSERS registry, not here, so FileEditor still
-  // sees 'svelte' → switch default → null (correct: FileEditor has no svelte).
-  it('returns svelte (not html) for .svelte — fallback is in PARSERS', () => {
+  // The svelte→htmlParser mapping lives in the LANGUAGES registry (parser
+  // field), not in the ext map — detectLanguage returns the lang NAME so
+  // both highlighter and cm-shared can apply their own svelte handling.
+  it('returns svelte (not html) for .svelte — parser mapping is in LANGUAGES', () => {
     expect(detectLanguage('App.svelte')).toBe('svelte')
   })
 })
@@ -176,6 +176,13 @@ describe('highlightLines', () => {
     const out = highlightLines(['message Foo { required string name = 1; }'], 'protobuf')
     expect(out[0]).toContain('tok-keyword') // message / required / string
     expect(out[0]).toContain('tok-number')  // 1
+  })
+
+  it('swift via StreamLanguage', async () => {
+    await ensureLegacyParsers()
+    const out = highlightLines(['let name: String = "foo"'], 'swift')
+    expect(out[0]).toContain('tok-keyword') // let
+    expect(out[0]).toContain('tok-string')  // "foo"
   })
 
   it('unknown language falls back to escaped plain text', () => {

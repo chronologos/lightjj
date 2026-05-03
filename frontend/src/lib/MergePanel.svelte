@@ -1,6 +1,6 @@
 <script module lang="ts">
   import { EditorView, keymap, lineNumbers, Decoration, type DecorationSet } from '@codemirror/view'
-  import { EditorState, StateField, StateEffect, type Extension } from '@codemirror/state'
+  import { EditorState, StateField, StateEffect, Compartment, type Extension } from '@codemirror/state'
   import { remapBlock, type BlockSource } from './merge-surgery'
 
   // Flank highlight — static set, computed once at mount. Read-only panes never
@@ -227,8 +227,8 @@
     // Derive from `blocks` (computed at mount) — no second LCS DP pass.
     const { aOnly: oursChanged, bOnly: theirsChanged } = blocksToLineSets(blocks)
 
-    const lang = getCmLanguage(filePath)
     const { usesTabs, width } = detectIndent(sides.theirs)
+    const langCompartment = new Compartment()
 
     const sharedExts: Extension[] = [
       lineNumbers(),
@@ -236,8 +236,8 @@
       EditorState.tabSize.of(4),
       indentUnit.of(usesTabs ? '\t' : ' '.repeat(width)),
       cmTheme,
+      langCompartment.of([]),
     ]
-    if (lang) sharedExts.push(lang)
 
     const readonlyExts = [
       EditorState.readOnly.of(true),
@@ -388,6 +388,11 @@
 
     cv.focus()
     refreshArrows()  // initial population
+
+    getCmLanguage(filePath).then(ls => {
+      if (!ls || centerView !== cv) return
+      for (const v of [ov, cv, tv]) v.dispatch({ effects: langCompartment.reconfigure(ls) })
+    }).catch(() => {})
 
     return () => {
       for (const { el, fn } of scrollHandlers) el.removeEventListener('scroll', fn)

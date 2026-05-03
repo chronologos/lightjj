@@ -2,12 +2,12 @@
 // in MergePanel.svelte. CSS-var-driven theme so toggle is a pure CSS swap.
 
 import { EditorView } from '@codemirror/view'
-import type { LanguageSupport } from '@codemirror/language'
+import { LanguageSupport, LRLanguage } from '@codemirror/language'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
 import { go } from '@codemirror/lang-go'
 import { rust } from '@codemirror/lang-rust'
-import { detectLanguage } from './highlighter'
+import { detectLanguage, LANGUAGES, ensureLegacyParsers, streamLanguageFor } from './languages'
 
 /** Scan leading whitespace to infer indentation style. Falls back to 2-space. */
 export function detectIndent(src: string): { usesTabs: boolean; width: number } {
@@ -39,18 +39,42 @@ export function detectIndent(src: string): { usesTabs: boolean; width: number } 
   return { usesTabs, width }
 }
 
-/** Map file path → CM6 LanguageSupport. null = plain text. */
-export function getCmLanguage(filePath: string): LanguageSupport | null {
+// Full @codemirror/lang-* packages add indent/fold/autocomplete on top of bare
+// highlighting. Kept for the four already-installed packages (ts+js share
+// lang-javascript); everything else falls through to a registry-derived
+// bare-highlight LanguageSupport below.
+const RICH_SUPPORT: Record<string, () => LanguageSupport> = {
+  typescript: () => javascript({ typescript: true, jsx: true }),
+  javascript: () => javascript({ jsx: true }),
+  python,
+  go,
+  rust,
+}
+
+/**
+ * Map file path → CM6 LanguageSupport. null = plain text.
+ * Async because legacy-mode languages (swift, bash, …) lazy-load their
+ * StreamParser; eager Lezer languages resolve synchronously.
+ */
+export async function getCmLanguage(filePath: string): Promise<LanguageSupport | null> {
   const lang = detectLanguage(filePath)
-  switch (lang) {
-    case 'typescript':
-    case 'javascript':
-      return javascript({ typescript: lang === 'typescript', jsx: true })
-    case 'python': return python()
-    case 'go': return go()
-    case 'rust': return rust()
-    default: return null
+  const rich = RICH_SUPPORT[lang]
+  if (rich) return rich()
+
+  const spec = LANGUAGES[lang]
+  if (!spec) return null
+  if (spec.parser) {
+    // @lezer/* exports are concretely LRParser; LANGUAGES types them as the
+    // base Parser so PARSERS can also hold StreamLanguage parsers. Sound cast.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return new LanguageSupport(LRLanguage.define({ parser: spec.parser as any }))
   }
+  if (spec.legacy) {
+    await ensureLegacyParsers()
+    const sl = streamLanguageFor(lang)
+    return sl ? new LanguageSupport(sl) : null
+  }
+  return null
 }
 
 /** CSS-var-driven CM6 theme. 18px line height matches .diff-line / RevisionGraph rows. */

@@ -1,83 +1,12 @@
 import { highlightCode, classHighlighter } from '@lezer/highlight'
-import type { Parser } from '@lezer/common'
-import { parser as jsParser } from '@lezer/javascript'
-import { parser as goParser } from '@lezer/go'
-import { parser as pyParser } from '@lezer/python'
-import { parser as rustParser } from '@lezer/rust'
-import { parser as cssParser } from '@lezer/css'
-import { parser as htmlParser } from '@lezer/html'
-import { parser as jsonParser } from '@lezer/json'
-import { parser as yamlParser } from '@lezer/yaml'
-
-// Lezer parser registry. highlightCode is synchronous and ~30× faster than
-// Shiki (500 lines ≈ 9ms vs ~250ms) — no chunking, no yield, no isStale.
-// classHighlighter emits tok-* CSS class names (not inline styles), so theme
-// toggle is a pure CSS swap: cached HTML stays valid across themes.
-const PARSERS: Record<string, Parser> = {
-  typescript: jsParser.configure({ dialect: 'ts' }),
-  javascript: jsParser,
-  go: goParser,
-  python: pyParser,
-  rust: rustParser,
-  css: cssParser,
-  html: htmlParser,
-  json: jsonParser,
-  yaml: yamlParser,
-  // No @lezer/svelte. HTML parser handles tags/attrs/strings; {interpolations}
-  // and <script> bodies stay plain. Good enough for a diff view.
-  svelte: htmlParser,
-  // bash/toml/zig/protobuf registered lazily via ensureLegacyParsers() —
-  // StreamLanguage pulls in @codemirror/language (~100K) that the main
-  // bundle doesn't need. zig has no first-party Lezer grammar; see lang-zig.ts.
-}
-
-// No first-party @lezer grammars for bash/toml — StreamLanguage wraps the
-// legacy-mode tokenizer in a Parser that emits a Lezer Tree. Lazy-loaded so
-// @codemirror/language stays out of the main bundle. Callers that need
-// .sh/.toml highlighting await this before highlightLines; unhighlighted
-// (escaped-plain) output is returned in the interim.
-const LEGACY_LANGS = new Set(['bash', 'toml', 'zig', 'protobuf'])
-export const needsLegacyParser = (lang: string) => LEGACY_LANGS.has(lang) && !(lang in PARSERS)
-
-let legacyPromise: Promise<void> | undefined
-export function ensureLegacyParsers(): Promise<void> {
-  return legacyPromise ??= (async () => {
-    const [{ StreamLanguage }, { shell }, { toml }, { zigMode }, { protobuf }] = await Promise.all([
-      import('@codemirror/language'),
-      import('@codemirror/legacy-modes/mode/shell'),
-      import('@codemirror/legacy-modes/mode/toml'),
-      import('./lang-zig'),
-      import('@codemirror/legacy-modes/mode/protobuf'),
-    ])
-    PARSERS.bash = StreamLanguage.define(shell).parser
-    PARSERS.toml = StreamLanguage.define(toml).parser
-    PARSERS.zig = StreamLanguage.define(zigMode).parser
-    PARSERS.protobuf = StreamLanguage.define(protobuf).parser
-  })().catch(e => { legacyPromise = undefined; throw e })
-}
-
-// Exported: also used by markdown-render to map fence-lang strings (\`\`\`js,
-// \`\`\`py) to PARSERS keys. Identity entries (javascript→javascript) handled
-// by callers via `?? lang` fallthrough.
-export const EXTENSION_LANGUAGES: Record<string, string> = {
-  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-  go: 'go', py: 'python', rs: 'rust',
-  css: 'css', html: 'html', svelte: 'svelte',
-  json: 'json', yaml: 'yaml', yml: 'yaml',
-  sh: 'bash', bash: 'bash', shell: 'bash',
-  toml: 'toml', mod: 'go', sum: 'go',
-  zig: 'zig', zon: 'zig',
-  proto: 'protobuf',
-}
-
-// Detect language from file extension. Also imported by FileEditor for its
-// own (CM6 LanguageSupport) mapping — keep the return strings stable.
-export function detectLanguage(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  return EXTENSION_LANGUAGES[ext] ?? 'text'
-}
+import { PARSERS } from './languages'
 
 // Highlight code lines → per-line HTML strings with tok-* spans.
+// highlightCode is synchronous and ~30× faster than Shiki (500 lines ≈ 9ms vs
+// ~250ms) — no chunking, no yield, no isStale. classHighlighter emits tok-*
+// CSS class names (not inline styles), so theme toggle is a pure CSS swap:
+// cached HTML stays valid across themes.
+//
 // Sync body; callers may wrap in async. highlightCode's break callback fires
 // on newlines, so joining input + pushing on break naturally rebuilds the
 // per-line array — no string surgery on wrapper markup.
@@ -96,7 +25,7 @@ export function highlightLines(lines: string[], lang: string): string[] {
       () => out.push(''),
     )
   } catch {
-    // StreamLanguage parsers (bash, toml) wrap legacy tokenizers that can
+    // StreamLanguage parsers (legacy modes) wrap legacy tokenizers that can
     // throw on pathological input ("Stream parser failed to advance stream.",
     // @codemirror/language). First-party @lezer/* parsers don't throw.
     return lines.map(escapeHtml)
