@@ -642,6 +642,9 @@
     { label: 'Bookmark operations', shortcut: 'b', category: 'Bookmarks', action: openBookmarkModal, when: () => !inlineMode },
     { label: 'Set bookmark', shortcut: 'B', category: 'Bookmarks', action: () => openModal('bookmarkInput'), when: () => !inlineMode && !!selectedRevision && checkedRevisions.size === 0 },
 
+    // Workspaces
+    { label: 'New workspace…', category: 'Workspace', action: handleWorkspaceAdd, when: () => !inlineMode && sshMode === false },
+
     // View (non-dynamic)
     { label: 'Edit config (JSON)…', category: 'View', hint: 'theme, fonts, editorArgs', action: () => { closeAllModals(); configModalOpen = true } },
     { label: 'Toggle split/unified diff', category: 'View', action: () => { config.splitView = !config.splitView } },
@@ -766,6 +769,40 @@
       currentWorkspace = result.current
       workspaceList = result.workspaces
     } catch { /* ignore — SSH mode or single workspace */ }
+  }
+
+  // Cmd+K → "New workspace". Backend creates a sibling dir <repo>-<name> and
+  // adds it via `jj workspace add`. After success, reload the workspace list
+  // (which picks up the new path from the workspace_store index) and open it
+  // as a tab.
+  async function handleWorkspaceAdd() {
+    // eslint-disable-next-line no-alert
+    const name = prompt('New workspace name (creates sibling directory <repo>-<name>):')?.trim()
+    if (!name) return
+    try {
+      const res = await withMutation(() => api.workspaceAdd(name))
+      if (!res) return
+      await loadWorkspaces()
+      openWorkspaceTab(name)
+    } catch (e) {
+      setMessage(errorMessage(e))
+    }
+  }
+
+  // Shared by toolbar dropdown + RevisionGraph workspace badges. Path can be
+  // undefined for workspaces predating jj's workspace_store index — surface a
+  // warning instead of silently doing nothing.
+  function openWorkspaceTab(wsName: string) {
+    const ws = workspaceList.find(w => w.name === wsName)
+    if (ws?.path) {
+      onOpenTab?.(ws.path)
+    } else {
+      setMessage({
+        kind: 'warning',
+        text: `Workspace '${wsName}' path unknown — predates jj's workspace_store index`,
+        details: 'Open manually with: lightjj -R <path>',
+      })
+    }
   }
 
   async function loadAliases() {
@@ -1108,9 +1145,15 @@
   // Stale warning is lower-priority than a mutation error the user just
   // triggered, so `message` wins. Non-dismissable (the problem persists until
   // fixed); the ✕ only dismisses real messages.
+  //
+  // This only appears when jj's `snapshot.auto-update-stale` is OFF — with
+  // the default (true), jj recovers transparently inside the snapshot
+  // subprocess and the stale error never surfaces. Mention the config so
+  // users who keep hitting this know how to make it permanent.
   const staleWCMessage: Message = {
     kind: 'warning',
     text: 'Working copy is stale — another workspace rewrote shared history',
+    details: 'Set jj config `snapshot.auto-update-stale = true` (default) to recover automatically.',
     action: { label: 'Update stale', onClick: handleUpdateStale },
   }
   const staleImmutableMessage: Message | null = $derived(staleImmutableGroups.length > 0 ? {
@@ -2319,18 +2362,7 @@
                     <button
                       class="toolbar-ws-option"
                       class:toolbar-ws-unavailable={!ws.path}
-                      onclick={() => {
-                        wsDropdownOpen = false
-                        if (ws.path) {
-                          onOpenTab?.(ws.path)
-                        } else {
-                          setMessage({
-                            kind: 'warning',
-                            text: `Workspace '${ws.name}' path unknown — predates jj's workspace_store index`,
-                            details: 'Open manually with: lightjj -R <path>',
-                          })
-                        }
-                      }}
+                      onclick={() => { wsDropdownOpen = false; openWorkspaceTab(ws.name) }}
                     >
                       <span class="toolbar-ws-glyph">◇</span>
                       <span>{ws.name}</span>
@@ -2499,6 +2531,8 @@
             onabandonchecked={handleAbandonChecked}
             onclearchecks={clearChecksAndReload}
             onbookmarkclick={openBookmarkModal}
+            onworkspaceclick={openWorkspaceTab}
+            {currentWorkspace}
             {rebase}
             {squash}
             {split}

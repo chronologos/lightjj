@@ -1051,6 +1051,8 @@ export const api = {
 
   snapshot: () => post<MutationResult>('/api/snapshot', {}),
 
+  workspaceAdd: (name: string) => post<MutationResult>('/api/workspace/add', { name }),
+
   workspaceUpdateStale: () => post<MutationResult>('/api/workspace/update-stale', {}),
 
   unlockRepo: () => post<{ status: string }>('/api/unlock-repo', {}),

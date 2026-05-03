@@ -304,6 +304,15 @@ func TestDebugSnapshot(t *testing.T) {
 	assert.Equal(t, CommandArgs{"util", "snapshot"}, got)
 }
 
+func TestWorkspaceAdd(t *testing.T) {
+	assert.Equal(t,
+		CommandArgs{"workspace", "add", "/tmp/r-feat", "--name", "feat"},
+		WorkspaceAdd("/tmp/r-feat", "feat"))
+	assert.Equal(t,
+		CommandArgs{"workspace", "add", "/tmp/r-feat"},
+		WorkspaceAdd("/tmp/r-feat", ""))
+}
+
 func TestWorkspaceUpdateStale(t *testing.T) {
 	got := WorkspaceUpdateStale()
 	assert.Equal(t, CommandArgs{"workspace", "update-stale"}, got)

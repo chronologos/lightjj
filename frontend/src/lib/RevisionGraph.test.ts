@@ -71,12 +71,16 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     viewLabel: null,
     lastCheckedIndex: -1,
     onselect: vi.fn(),
+    ontogglecheck: vi.fn(),
     onrangecheck: vi.fn(),
     oncontextmenu: vi.fn(),
+    onresolvedivergence: vi.fn(),
     onnewfromchecked: vi.fn(),
     onabandonchecked: vi.fn(),
     onclearchecks: vi.fn(),
     onbookmarkclick: vi.fn(),
+    onworkspaceclick: vi.fn(),
+    currentWorkspace: 'default',
     remoteVisibility: {},
     rebase: createRebaseMode(),
     squash: createSquashMode(),
@@ -133,11 +137,23 @@ describe('RevisionGraph', () => {
       expect(onbookmarkclick).toHaveBeenCalledWith('feat')
     })
 
-    it('renders working copy labels when present', () => {
-      const entry = makeEntry({ working_copies: ['default'] })
-      const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
-      const ws = container.querySelector('.workspace-badge')
-      expect(ws?.textContent).toBe('◇ default@')
+    it('renders workspace badges: current dimmed span, others clickable', () => {
+      const onworkspaceclick = vi.fn()
+      const onselect = vi.fn()
+      const entry = makeEntry({ working_copies: ['default', 'feature'] })
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({ revisions: [entry], currentWorkspace: 'default', onworkspaceclick, onselect }),
+      })
+      const badges = container.querySelectorAll('.workspace-badge')
+      expect(badges).toHaveLength(2)
+      expect(badges[0].tagName).toBe('SPAN')
+      expect(badges[0].classList.contains('ws-current')).toBe(true)
+      expect(badges[0].textContent).toBe('◇ default@')
+      expect(badges[1].tagName).toBe('BUTTON')
+      ;(badges[1] as HTMLElement).click()
+      expect(onworkspaceclick).toHaveBeenCalledWith('feature')
+      // stopPropagation — row select must NOT also fire
+      expect(onselect).not.toHaveBeenCalled()
     })
 
     it('shows revision count in header badge', () => {

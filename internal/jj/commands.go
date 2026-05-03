@@ -695,6 +695,18 @@ func ParseConflictList(output string) []*ConflictEntry {
 	return entries
 }
 
+// WorkspaceAdd returns args for `jj workspace add <dest> --name <name>`.
+// Destination is an absolute path; jj refuses if it already exists with content.
+// Name is optional (jj defaults to basename(dest)) but always passed here so
+// callers see the same name in working_copies output as they typed.
+func WorkspaceAdd(dest, name string) CommandArgs {
+	args := []string{"workspace", "add", dest}
+	if name != "" {
+		args = append(args, "--name", name)
+	}
+	return args
+}
+
 // WorkspaceUpdateStale returns args for `jj workspace update-stale`.
 // Recovers a workspace whose working-copy commit was rewritten by another
 // workspace. jj snapshots any uncommitted edits into a new commit first, then

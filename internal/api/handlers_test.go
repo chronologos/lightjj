@@ -400,6 +400,40 @@ func TestHandleSnapshot(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleWorkspaceAdd(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceAdd("/tmp/myrepo-feature", "feature")).
+		SetOutput([]byte("Created workspace in \"/tmp/myrepo-feature\""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = "/tmp/myrepo"
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/add", []byte(`{"name":"feature"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceAddValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, repoDir string
+	}{
+		{"empty name", `{"name":""}`, "/tmp/r"},
+		{"slash in name", `{"name":"a/b"}`, "/tmp/r"},
+		{"dotdot in name", `{"name":".."}`, "/tmp/r"},
+		{"ssh mode", `{"name":"ok"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := testutil.NewMockRunner(t)
+			defer runner.Verify()
+			srv := newTestServer(runner)
+			srv.RepoDir = tc.repoDir
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/add", []byte(tc.body)))
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
 func TestHandleWorkspaceUpdateStale(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.WorkspaceUpdateStale()).SetOutput([]byte("Updated working copy to fresh commit abc123"))

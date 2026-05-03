@@ -23,6 +23,10 @@ Last shipped: **2026-04-20** v1.20.1 — trim configTemplate teaching comments; 
 
 - [ ] **Multi-line description wrap in RevisionGraph** (Small, opt-in) — Push N `isDescLine` rows instead of 1 in the `flatLines` $derived (RevisionGraph.svelte:218); `contGutter` already produces pure-`│` continuation so GraphSvg, the 18px row invariant, virtualization, and hover-by-`entryIndex` all work unchanged. Only open question is `wrapDesc()`: char-count word-boundary split (~10 LOC, width-stable, fine for ASCII) is the v1; if someone asks for CJK/bidi-correct or pixel-exact reflow-on-split-drag, that's [@chenglou/pretext](https://github.com/chenglou/pretext) — `prepare()` once per description + `layout()` per resize is its designed hot path, gives exact `lineCount` matching browser wrap without DOM measurement. Gate behind `config.maxDescLines` (default 1 = today's single-line ellipsis).
 
+- [ ] **Workspace name in tab title** (Small) — tabs opened from a workspace show `◇ {name}` instead of `filepath.Base(path)`. Backend: `TabResolve` already runs `jj workspace root`; also run `jj workspace list -T name` and match — set `TabInfo.Name = "◇ "+wsName`. Frontend `TabBar.svelte:50` already renders `tab.name`.
+- [ ] **`jj workspace forget` / `rename`** (Small) — context-menu on workspace dropdown entries. Forget needs a confirm (it abandons the workspace's `@` commit if non-empty).
+- [ ] **Per-workspace stale indicator in dropdown** (Medium) — show ⚠ next to stale workspaces. Needs a per-workspace probe (`jj log -r @ --ignore-working-copy` in each workspace dir, check for stale error) or a `WorkspaceRef.is_stale()` template method if jj adds one.
+
 ## Advanced features (roadmap 2.0)
 
 - [ ] **N-way (3+) conflict handling in merge mode** (Medium) — `reconstructSides()` returns null for >2 sides → "unsupported" message. Queue is earliest-first (option c shipped — propagation roots auto-selected, downstream copies dimmed with ↑ hint). `jj resolve --tool` errors before invoking the tool for irreducible N-way, so the only remaining option is (a) sequential 2-at-a-time frontend orchestration.

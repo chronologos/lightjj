@@ -32,6 +32,9 @@
     onabandonchecked: () => void
     onclearchecks: () => void
     onbookmarkclick: (name: string) => void
+    onworkspaceclick: (wsName: string) => void
+    /** Current workspace name — its badge renders dimmed/non-interactive (clicking would dup the active tab). */
+    currentWorkspace: string
     rebase: RebaseMode
     squash: SquashMode
     split: SplitMode
@@ -47,7 +50,7 @@
     revisions, selectedIndex, checkedRevisions, loading, mutating, viewLabel, lastCheckedIndex,
     onselect, ontogglecheck, onrangecheck, oncontextmenu, onresolvedivergence,
     onnewfromchecked, onabandonchecked, onclearchecks,
-    onbookmarkclick,
+    onbookmarkclick, onworkspaceclick, currentWorkspace,
     rebase, squash, split,
     theme, themeEpoch = 0, prByBookmark, impliedCommitIds, remoteVisibility,
   }: Props = $props()
@@ -429,7 +432,15 @@
             {@const visibleRemoteBookmarks = (entry.remote_bookmarks ?? []).filter(r => isRemoteVisible(r, remoteVisibility) && !syncedLocal.has(r.name))}
             <span class="bookmark-line-content">
               {#each entry.commit.working_copies ?? [] as ws}
-                <span class="workspace-badge">◇ {ws}@</span>
+                {#if ws === currentWorkspace}
+                  <span class="workspace-badge ws-current">◇ {ws}@</span>
+                {:else}
+                  <button
+                    class="workspace-badge ws-other"
+                    title="Open workspace '{ws}' in a new tab"
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); onworkspaceclick(ws) }}
+                  >◇ {ws}@</button>
+                {/if}
               {/each}
               {#each localBookmarks as bm}
                 {@const pr = prByBookmark.get(bm.name)}
@@ -946,6 +957,17 @@
     line-height: 1.15;
     letter-spacing: 0.02em;
     vertical-align: baseline;
+    font-family: inherit;
+  }
+  .workspace-badge.ws-current {
+    opacity: 0.55;
+  }
+  .workspace-badge.ws-other {
+    cursor: pointer;
+  }
+  .workspace-badge.ws-other:hover {
+    border-color: var(--accent);
+    color: var(--text);
   }
 
   .mode-badge {

@@ -985,6 +985,35 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	s.clearStale()
 }
 
+type workspaceAddRequest struct {
+	Name string `json:"name"`
+}
+
+var workspaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// handleWorkspaceAdd creates a new workspace as a sibling directory of the
+// current repo: <repoDir>/../<repoBasename>-<name>. Local-fs only — SSH mode
+// would need remote path resolution and the user can run `jj workspace add`
+// directly there. Response is the standard MutationResult; the frontend
+// refreshes /api/workspaces afterward and opens the new path as a tab.
+func (s *Server) handleWorkspaceAdd(w http.ResponseWriter, r *http.Request) {
+	var req workspaceAddRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !workspaceNameRe.MatchString(req.Name) {
+		s.writeError(w, http.StatusBadRequest, "workspace name must match [A-Za-z0-9_-]+")
+		return
+	}
+	if !s.hasLocalFS() {
+		s.writeError(w, http.StatusBadRequest, "workspace add not supported in SSH mode — run `jj workspace add` on the remote")
+		return
+	}
+	dest := filepath.Join(filepath.Dir(s.RepoDir), filepath.Base(s.RepoDir)+"-"+req.Name)
+	s.runMutation(w, r, jj.WorkspaceAdd(dest, req.Name))
+}
+
 // handleWorkspaceUpdateStale recovers a stale working copy. The watcher's
 // snapshotLoop detects staleness and pushes an SSE warning; this is the
 // one-click fix.
