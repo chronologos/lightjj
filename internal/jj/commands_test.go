@@ -165,12 +165,12 @@ func TestBookmarkSetToRemote_DotInName(t *testing.T) {
 
 func TestBookmarkTrack(t *testing.T) {
 	got := BookmarkTrack("main", "origin")
-	assert.Equal(t, []string{"bookmark", "track", "main", "--remote", "origin"}, got)
+	assert.Equal(t, []string{"bookmark", "track", "exact:main", "--remote", "origin"}, got)
 }
 
 func TestBookmarkTrack_NoRemote(t *testing.T) {
 	got := BookmarkTrack("main", "")
-	assert.Equal(t, []string{"bookmark", "track", "main"}, got)
+	assert.Equal(t, []string{"bookmark", "track", "exact:main"}, got)
 }
 
 func TestGitPush(t *testing.T) {
@@ -503,32 +503,40 @@ func TestParseFilesTemplate(t *testing.T) {
 
 func TestBookmarkMove(t *testing.T) {
 	got := BookmarkMove("abc", "feature")
-	assert.Equal(t, []string{"bookmark", "move", "feature", "--to", "abc"}, got)
+	assert.Equal(t, []string{"bookmark", "move", "exact:feature", "--to", "abc"}, got)
 }
 
 func TestBookmarkAdvance(t *testing.T) {
 	got := BookmarkAdvance("abc", "feature")
-	assert.Equal(t, []string{"bookmark", "advance", "feature", "--to", "abc"}, got)
+	assert.Equal(t, []string{"bookmark", "advance", "exact:feature", "--to", "abc"}, got)
 }
 
 func TestBookmarkForget(t *testing.T) {
 	got := BookmarkForget("feature")
-	assert.Equal(t, []string{"bookmark", "forget", "feature"}, got)
+	assert.Equal(t, []string{"bookmark", "forget", "exact:feature"}, got)
 }
 
 func TestBookmarkDelete(t *testing.T) {
 	got := BookmarkDelete("feature")
-	assert.Equal(t, []string{"bookmark", "delete", "feature"}, got)
+	assert.Equal(t, []string{"bookmark", "delete", "exact:feature"}, got)
+}
+
+// Locks the glob-guard: a bookmark named `feat-*` (jj accepts; git-export
+// warns) must NOT match feat-a, feat-b. The exact: prefix is what makes this
+// safe — without it, `jj bookmark delete feat-*` deletes every feat- bookmark.
+func TestBookmarkDelete_GlobCharName(t *testing.T) {
+	got := BookmarkDelete("feat-*")
+	assert.Equal(t, []string{"bookmark", "delete", "exact:feat-*"}, got)
 }
 
 func TestBookmarkUntrack(t *testing.T) {
 	got := BookmarkUntrack("main", "origin")
-	assert.Equal(t, []string{"bookmark", "untrack", "main", "--remote", "origin"}, got)
+	assert.Equal(t, []string{"bookmark", "untrack", "exact:main", "--remote", "origin"}, got)
 }
 
 func TestBookmarkUntrack_NoRemote(t *testing.T) {
 	got := BookmarkUntrack("main", "")
-	assert.Equal(t, []string{"bookmark", "untrack", "main"}, got)
+	assert.Equal(t, []string{"bookmark", "untrack", "exact:main"}, got)
 }
 
 func TestCommitWorkingCopy(t *testing.T) {

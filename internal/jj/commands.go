@@ -213,6 +213,17 @@ func RestoreFromTo(from, to string) CommandArgs {
 	return []string{"restore", "--from", from, "--to", to}
 }
 
+// exactName wraps a bookmark name with the exact: string-pattern prefix.
+// jj's bookmark move/advance/delete/forget/track/untrack and git push -b
+// treat NAMES as GLOB patterns by default (`jj bookmark delete --help`:
+// "the specified pattern matches bookmark names with glob syntax"). A
+// bookmark literally named `feat-*` — which jj accepts; only git-export
+// warns — would otherwise match every feat- bookmark. `bookmark set` is
+// excluded: it creates by literal name, no pattern semantics.
+func exactName(name string) string {
+	return "exact:" + name
+}
+
 func BookmarkSet(revision string, name string) CommandArgs {
 	return []string{"bookmark", "set", "-r", revision, name}
 }
@@ -232,7 +243,7 @@ func BookmarkSetToRemote(name string, remote string) CommandArgs {
 }
 
 func BookmarkMove(revision string, bookmark string, extraFlags ...string) CommandArgs {
-	args := []string{"bookmark", "move", bookmark, "--to", revision}
+	args := []string{"bookmark", "move", exactName(bookmark), "--to", revision}
 	args = append(args, extraFlags...)
 	return args
 }
@@ -242,19 +253,19 @@ func BookmarkMove(revision string, bookmark string, extraFlags ...string) Comman
 // moves — so accidentally hitting the wrong bookmark is safe. No
 // --allow-backwards; that's the point.
 func BookmarkAdvance(revision string, bookmark string) CommandArgs {
-	return []string{"bookmark", "advance", bookmark, "--to", revision}
+	return []string{"bookmark", "advance", exactName(bookmark), "--to", revision}
 }
 
 func BookmarkDelete(name string) CommandArgs {
-	return []string{"bookmark", "delete", name}
+	return []string{"bookmark", "delete", exactName(name)}
 }
 
 func BookmarkForget(name string) CommandArgs {
-	return []string{"bookmark", "forget", name}
+	return []string{"bookmark", "forget", exactName(name)}
 }
 
 func BookmarkTrack(name string, remote string) CommandArgs {
-	args := []string{"bookmark", "track", name}
+	args := []string{"bookmark", "track", exactName(name)}
 	if remote != "" {
 		args = append(args, "--remote", remote)
 	}
@@ -262,7 +273,7 @@ func BookmarkTrack(name string, remote string) CommandArgs {
 }
 
 func BookmarkUntrack(name string, remote string) CommandArgs {
-	args := []string{"bookmark", "untrack", name}
+	args := []string{"bookmark", "untrack", exactName(name)}
 	if remote != "" {
 		args = append(args, "--remote", remote)
 	}

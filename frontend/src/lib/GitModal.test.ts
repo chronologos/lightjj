@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, waitFor } from '@testing-library/svelte'
 import GitModal from './GitModal.svelte'
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importActual) => ({
+  ...(await importActual<typeof import('./api')>()),
   api: {
     bookmarks: vi.fn(),
     remotes: vi.fn(),
@@ -78,7 +79,7 @@ describe('GitModal', () => {
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
-      expect(cmds).toContain('git push --bookmark feat --remote origin')
+      expect(cmds).toContain('git push --bookmark exact:feat --remote origin')
     })
 
     it('currentBookmarks → those push ops sort first, hotkey 1 fires it', async () => {
@@ -89,16 +90,16 @@ describe('GitModal', () => {
 
       const cmds = await waitForCmds(container)
       const bmCmds = cmds.filter(c => c.includes('--bookmark'))
-      expect(bmCmds[0]).toBe('git push --bookmark bbb --remote origin')
-      expect(bmCmds[1]).toBe('git push --bookmark aaa --remote origin')
-      expect(bmCmds[2]).toBe('git push --bookmark ccc --remote origin')
+      expect(bmCmds[0]).toBe('git push --bookmark exact:bbb --remote origin')
+      expect(bmCmds[1]).toBe('git push --bookmark exact:aaa --remote origin')
+      expect(bmCmds[2]).toBe('git push --bookmark exact:ccc --remote origin')
 
       const here = container.querySelectorAll('.git-here')
       expect(here.length).toBe(1)
       expect(here[0].closest('.git-item')?.querySelector('.git-bm-badge')?.textContent).toContain('bbb')
 
       await fireEvent.keyDown(container.querySelector('.modal')!, { key: '1' })
-      expect(onexecute).toHaveBeenCalledWith('push', ['--bookmark', 'bbb', '--remote', 'origin'])
+      expect(onexecute).toHaveBeenCalledWith('push', ['--bookmark', 'exact:bbb', '--remote', 'origin'])
     })
 
     it('multiple currentBookmarks → api order preserved within here-group', async () => {
@@ -109,9 +110,9 @@ describe('GitModal', () => {
       const cmds = await waitForCmds(container)
       const bmCmds = cmds.filter(c => c.includes('--bookmark'))
       expect(bmCmds).toEqual([
-        'git push --bookmark aaa --remote origin',
-        'git push --bookmark ccc --remote origin',
-        'git push --bookmark bbb --remote origin',
+        'git push --bookmark exact:aaa --remote origin',
+        'git push --bookmark exact:ccc --remote origin',
+        'git push --bookmark exact:bbb --remote origin',
       ])
       expect(container.querySelectorAll('.git-here').length).toBe(2)
     })
@@ -293,7 +294,7 @@ describe('GitModal', () => {
 
       // '1' → first bookmark push
       await fireEvent.keyDown(modal, { key: '1' })
-      expect(onexecute).toHaveBeenLastCalledWith('push', ['--bookmark', 'feat', '--remote', 'origin'])
+      expect(onexecute).toHaveBeenLastCalledWith('push', ['--bookmark', 'exact:feat', '--remote', 'origin'])
     })
 
     it('scope hotkeys (a/d/f) fire matching ops', async () => {

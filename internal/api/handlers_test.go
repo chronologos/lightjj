@@ -50,6 +50,29 @@ func jsonPost(url string, body []byte) *http.Request {
 	return req
 }
 
+func TestRepoStorePath(t *testing.T) {
+	// Primary workspace: .jj/repo is a directory → returned as-is.
+	primary := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, ".jj", "repo", "op_heads", "heads"), 0o755))
+	srvP := NewServer(testutil.NewMockRunner(t), primary)
+	assert.Equal(t, filepath.Join(primary, ".jj", "repo"), srvP.repoStorePath())
+
+	// Secondary workspace: .jj/repo is a pointer FILE with a relative path
+	// back to the primary's store. This is what `jj workspace add` creates.
+	// Without resolution, NewWatcher's fsnotify.Add(op_heads/heads/) fails
+	// (can't traverse into a file) → nil Watcher → handleEventsDisabled 204
+	// → frontend shows "disconnected" on every workspace tab.
+	secondary := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(secondary, ".jj"), 0o755))
+	rel, err := filepath.Rel(filepath.Join(secondary, ".jj"), filepath.Join(primary, ".jj", "repo"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(secondary, ".jj", "repo"), []byte(rel), 0o644))
+	srvS := NewServer(testutil.NewMockRunner(t), secondary)
+	assert.Equal(t, filepath.Join(primary, ".jj", "repo"), srvS.repoStorePath())
+	// Memoized: second call doesn't re-stat.
+	assert.Equal(t, filepath.Join(primary, ".jj", "repo"), srvS.repoStorePath())
+}
+
 func TestOpIdHeader(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.LogGraph("", 500)).SetOutput([]byte(""))

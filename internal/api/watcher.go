@@ -174,7 +174,7 @@ func NewWatcher(srv *Server, snapshotInterval time.Duration) *Watcher {
 		return nil
 	}
 	w := newWatcher(srv)
-	w.headsDir = filepath.Join(srv.RepoDir, ".jj", "repo", "op_heads", "heads")
+	w.headsDir = filepath.Join(srv.repoStorePath(), "op_heads", "heads")
 	if err := w.start(snapshotInterval); err != nil {
 		log.Printf("watcher: disabled (%v)", err)
 		return nil
@@ -184,9 +184,9 @@ func NewWatcher(srv *Server, snapshotInterval time.Duration) *Watcher {
 
 // NewSSHWatcher constructs a watcher that polls the remote op-id on a ticker.
 // No external tool dependency (inotify-tools, watchman) — just `jj op log`.
-// Works with any remote OS and from secondary workspaces (.jj/repo pointer
-// file — inotifywait on .jj/repo/op_heads/heads/ failed there). Trade-off:
-// worst-case interval latency vs fsnotify's ~instant notification.
+// Works with any remote OS. Trade-off: worst-case interval latency vs
+// fsnotify's ~instant notification. (Secondary-workspace .jj/repo pointer
+// files are now resolved by repoStorePath() in both modes.)
 //
 // interval <= 0 disables the loop — parity with local mode's snapshotLoop
 // gate (watcher.go:~132) and avoids NewTicker(0) panic. No auto-refresh in

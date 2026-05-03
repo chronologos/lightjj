@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { api, type Bookmark } from './api'
+  import { api, bookmarkPushFlags, type Bookmark } from './api'
   import { createLoader } from './loader.svelte'
   import { fuzzyMatch } from './fuzzy'
   import { scrollIdxIntoView } from './scroll-into-view'
@@ -59,7 +59,7 @@
       ops.push({ type: 'push', title: 'Push bookmark', bookmark: bm.name,
         here: here.has(bm.name),
         hotkey: n <= 9 ? String(n) : undefined,
-        flags: ['--bookmark', bm.name, ...r] })
+        flags: bookmarkPushFlags(bm.name, remote) })
     }
 
     ops.push({ type: 'push', title: 'Push tracking bookmarks in current revset', hotkey: 'p', flags: r })

@@ -33,7 +33,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, wireAutoRefresh, clearAllCaches, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup } from './lib/api'
   import { setDetectedJJVersion, missingJJFeatures } from './lib/jj-features.svelte'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
@@ -799,12 +799,15 @@
     }
   }
 
-  // Shared by toolbar dropdown + RevisionGraph workspace badges. Path can be
-  // undefined for workspaces predating jj's workspace_store index — surface a
-  // warning instead of silently doing nothing.
+  // Shared by toolbar dropdown + RevisionGraph workspace badges. Distinguish
+  // "list not loaded yet" (badges render from log data which can land before
+  // /api/workspaces — silent no-op, badge click will work in a moment) from
+  // "in list but no path" (workspace predates jj's workspace_store index —
+  // genuinely unopenable, warn with the manual recipe).
   function openWorkspaceTab(wsName: string) {
     const ws = workspaceList.find(w => w.name === wsName)
-    if (ws?.path) {
+    if (!ws) return
+    if (ws.path) {
       onOpenTab?.(ws.path)
     } else {
       setMessage({
@@ -1385,9 +1388,7 @@
     // reload. Same jj command underneath; the action enum split is for the
     // toast/menu wording, not behaviour.
     if (op.action === 'push' || op.action === 'push-delete') {
-      // exact: prefix — jj git push -b uses glob matching by default; a
-      // bookmark literally named "*" would otherwise match everything.
-      return handleGitOp('push', ['--bookmark', `exact:${op.bookmark}`, '--remote', op.remote!])
+      return handleGitOp('push', bookmarkPushFlags(op.bookmark, op.remote!))
     }
     if ((op.action === 'move' || op.action === 'advance') && !selectedRevision) return
     const changeId = selectedRevision ? effectiveId(selectedRevision.commit) : ''

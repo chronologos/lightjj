@@ -38,6 +38,12 @@ type Server struct {
 	cachedOp string // last known op-id, refreshed after mutations
 	cachedMu sync.RWMutex
 
+	// repoStore is the resolved .jj/repo directory (follows the secondary-
+	// workspace pointer file). sync.Once is fine here — os.Stat/ReadFile on a
+	// local path doesn't transiently fail the way SSH does (cf. ghRepoMu).
+	repoStore     string
+	repoStoreOnce sync.Once
+
 	// ghRepo is "owner/name" derived from DefaultRemote's URL. Lazy-resolved
 	// on first handlePullRequests; "" is a valid cached answer (not GitHub).
 	// ghRepoMu+ghRepoResolved (not sync.Once) so a transient failure
@@ -71,6 +77,28 @@ func (s *Server) hasLocalFS() bool { return s.RepoDir != "" }
 // !hasLocalFS(): tests have neither local fs NOR SSH. In prod they're
 // equivalent (main.go sets RepoDir/SSHHost together).
 func (s *Server) isSSHMode() bool { return s.SSHHost != "" }
+
+// repoStorePath returns the absolute path to the shared .jj/repo store. In a
+// PRIMARY workspace this is just RepoDir/.jj/repo (a directory). In a
+// SECONDARY workspace, .jj/repo is a one-line text FILE containing a relative
+// path back to the primary's store (e.g. "../../lightjj/.jj/repo"). fsnotify
+// on op_heads/ and the readWorkspaceStore index read both need the resolved
+// directory; without this, opening a workspace as a tab fails watcher startup
+// → handleEventsDisabled 204 → frontend shows "disconnected". Memoized: the
+// pointer never changes for a workspace's lifetime.
+func (s *Server) repoStorePath() string {
+	s.repoStoreOnce.Do(func() {
+		p := filepath.Join(s.RepoDir, ".jj", "repo")
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			if b, err := os.ReadFile(p); err == nil {
+				// Pointer is relative to the .jj/ dir that contains it.
+				p = filepath.Join(s.RepoDir, ".jj", strings.TrimSpace(string(b)))
+			}
+		}
+		s.repoStore = filepath.Clean(p)
+	})
+	return s.repoStore
+}
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {
 	s := &Server{
@@ -234,7 +262,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 // self-healing on next jj command).
 func (s *Server) refreshOpId() string {
 	if s.hasLocalFS() {
-		heads := filepath.Join(s.RepoDir, ".jj", "repo", "op_heads", "heads")
+		heads := filepath.Join(s.repoStorePath(), "op_heads", "heads")
 		if entries, err := os.ReadDir(heads); err == nil && len(entries) == 1 {
 			name := entries[0].Name()
 			if len(name) >= 12 {
@@ -435,8 +463,9 @@ func (s *Server) getOpId() string {
 }
 
 // readWorkspaceStore reads and parses the workspace store index file.
-// Returns nil map if the file can't be read (secondary workspace with .jj/repo
-// pointer file, SSH cat failure, etc.) — callers treat nil as "no paths".
+// Returns nil map if the file can't be read (SSH cat failure, missing index,
+// etc.) — callers treat nil as "no paths". Local secondary workspaces work
+// now that repoStorePath() follows the .jj/repo pointer file.
 //
 // LIMITATION: the index is ADDITIVE-ONLY. Workspaces created before the user's
 // jj version started writing it (or before the index feature existed) won't be
@@ -453,7 +482,7 @@ func (s *Server) readWorkspaceStore(ctx context.Context) (map[string]string, err
 	if s.hasLocalFS() {
 		// Local: direct fs read. filepath.* for host OS semantics (Windows
 		// absolute paths in pre-0.39 stores wouldn't survive path.IsAbs).
-		repoStore := filepath.Join(s.RepoDir, ".jj", "repo")
+		repoStore := s.repoStorePath()
 		data, err := os.ReadFile(filepath.Join(repoStore, "workspace_store", "index"))
 		if err != nil {
 			return nil, fmt.Errorf("reading workspace store: %w", err)
