@@ -518,13 +518,22 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"hostname":       s.Hostname,
-		"repo_path":      s.RepoPath,
-		"ssh_mode":       s.isSSHMode(),
-		"default_remote": s.DefaultRemote,
-		"log_revset":     s.ConfiguredLogRevset,
-		"jj_version":     s.resolveJJVersion(r.Context()),
+		"hostname":                  s.Hostname,
+		"repo_path":                 s.RepoPath,
+		"ssh_mode":                  s.isSSHMode(),
+		"default_remote":            s.DefaultRemote,
+		"log_revset":                s.ConfiguredLogRevset,
+		"jj_version":                s.resolveJJVersion(r.Context()),
+		"watchman_snapshot_trigger": s.jjConfigBool(r.Context(), "fsmonitor.watchman.register-snapshot-trigger"),
 	})
+}
+
+// jjConfigBool reads a boolean jj config key. Returns false on any error
+// (key absent without default, jj unavailable). Used for advisory startup
+// checks where false is the safe assumption.
+func (s *Server) jjConfigBool(ctx context.Context, key string) bool {
+	out, err := s.Runner.Run(ctx, jj.ConfigGet(key))
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 // resolveJJVersion runs `jj --version` once and caches both raw + parsed.

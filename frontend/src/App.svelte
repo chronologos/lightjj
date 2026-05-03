@@ -719,7 +719,7 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path, ssh_mode, default_remote, log_revset, jj_version } = await api.info()
+      const { hostname, repo_path, ssh_mode, default_remote, log_revset, jj_version, watchman_snapshot_trigger } = await api.info()
       pageTitle = formatTitle(hostname, repo_path)
       sshMode = ssh_mode
       defaultRemote = default_remote
@@ -730,6 +730,16 @@
       if (missing.length > 0) {
         setMessage({ kind: 'warning',
           text: `jj ${jj_version.replace(/^jj\s*/, '')} — missing: ${missing.join(', ')}` })
+      } else if (watchman_snapshot_trigger) {
+        // lightjj's snapshot loop already covers on-save visibility AND pauses
+        // for UI-triggered mutations. The watchman trigger does neither — it
+        // races `jj git push` (Concurrent checkout). Advisory only; dismissable.
+        setMessage({
+          kind: 'warning',
+          text: 'jj watchman register-snapshot-trigger is on — redundant with lightjj and races git push',
+          details: 'Set fsmonitor.watchman.register-snapshot-trigger = false (keep fsmonitor.backend = "watchman").\n' +
+                   'Then once per repo: watchman trigger-del "$(jj root)" jj-background-monitor',
+        })
       }
     } catch { /* static <title> fallback + sshMode stays undefined → editorConfigured=false */ }
   }

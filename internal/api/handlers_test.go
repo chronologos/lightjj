@@ -1103,6 +1103,7 @@ func TestHandleGetDescription_MissingRevision(t *testing.T) {
 func TestHandleInfo(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	runner.Expect(jj.Version()).SetOutput([]byte("jj 0.39.0\n"))
+	runner.Expect(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte("true\n"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1122,6 +1123,7 @@ func TestHandleInfo(t *testing.T) {
 	assert.Equal(t, "origin", got["default_remote"]) // NewServer's baseline
 	assert.Equal(t, "", got["log_revset"])            // unset by newTestServer
 	assert.Equal(t, "jj 0.39.0", got["jj_version"])
+	assert.Equal(t, true, got["watchman_snapshot_trigger"])
 }
 
 func TestHandleRemotes(t *testing.T) {

@@ -686,6 +686,7 @@ export interface InfoResponse {
   default_remote: string
   log_revset: string  // user's revsets.log config; empty = jj's built-in default
   jj_version: string  // `jj --version` output, e.g. "jj 0.39.0"; empty on failure
+  watchman_snapshot_trigger: boolean  // jj config fsmonitor.watchman.register-snapshot-trigger
 }
 
 /** Parse `jj 0.39.0` → [0, 39, 0]. Returns null on unparseable.
