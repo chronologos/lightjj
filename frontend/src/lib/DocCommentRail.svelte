@@ -93,19 +93,19 @@
           />
           {#if !t.root.resolution}
             {#if t.root.kind === 'suggestion' && t.root.suggestion}
-              <button class="btn-sm btn-primary" disabled={t.root.orphaned} onclick={() => onaccept?.(t.root.id)}>Accept</button>
-              <button class="btn-sm" onclick={() => session.resolveComment(t.root.id, 'wontfix')}>Reject</button>
+              <button class="btn btn-sm btn-primary" disabled={t.root.orphaned} onclick={() => onaccept?.(t.root.id)}>Accept</button>
+              <button class="btn btn-sm" onclick={() => session.resolveComment(t.root.id, 'wontfix')}>Reject</button>
             {:else}
-              <button class="btn-sm" onclick={() => session.resolveComment(t.root.id, 'addressed')}>Resolve</button>
+              <button class="btn btn-sm" onclick={() => session.resolveComment(t.root.id, 'addressed')}>Resolve</button>
             {/if}
           {:else}
             <span class="resolved-badge">✓ {t.root.resolution}</span>
           {/if}
-          <button class="btn-sm" onclick={() => session.removeComment(t.root.id)} title="Delete thread">✕</button>
+          <button class="btn btn-sm btn-danger" onclick={() => session.removeComment(t.root.id)} title="Delete thread (and replies)">✕</button>
         </div>
       </div>
     {:else}
-      <div class="placeholder-text">No comments. Select text in the document to add one.</div>
+      <div class="placeholder-text">No comments yet. Select text to add one, or paste the Agent hint into a coding agent to request a review.</div>
     {/each}
 
     {#if session.orphanedComments.length > 0}
@@ -120,7 +120,7 @@
             <div class="comment-body">{@html renderMarkdown(c.body)}</div>
           </div>
           <div class="thread-actions">
-            <button class="btn-sm" onclick={() => session.removeComment(c.id)}>✕</button>
+            <button class="btn btn-sm btn-danger" onclick={() => session.removeComment(c.id)} title="Delete comment">✕</button>
           </div>
         </div>
       {/each}
@@ -199,4 +199,8 @@
   .resolved-badge { font-size: var(--fs-2xs); color: var(--green); }
 
   .orphan-header { margin-top: 12px; }
+
+  @media (max-width: 900px) {
+    .rail { width: 240px; }
+  }
 </style>

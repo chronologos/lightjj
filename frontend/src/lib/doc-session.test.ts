@@ -146,6 +146,27 @@ describe('createDocSession', () => {
     expect(s2.comments[0].from).toBeUndefined()
   })
 
+  it('refreshComments places agent-posted comments without resetting dirty state', async () => {
+    mockApi.__setContent(MD)
+    const s = createDocSession('docs/DESIGN.md', () => 'abc123')
+    await s.import_()
+    expect(s.dirty).toBe(false)
+    applyEdit(s, tr => tr.insertText('X', 1, 1))
+    expect(s.dirty).toBe(true)
+    // Agent posts a comment out-of-band (server store changes; session unaware).
+    mockApi.__setStored([{
+      id: 'agent-1', filePath: 'docs/DESIGN.md', kind: 'comment',
+      anchor: { selection: 'distinctive phrase', contextBefore: '', contextAfter: '' },
+      body: 'from agent', author: 'bot', createdAt: 1,
+    }])
+    await s.refreshComments()
+    expect(s.comments).toHaveLength(1)
+    expect(s.comments[0].orphaned).toBe(false)
+    expect(s.comments[0].from).toBeGreaterThan(0)
+    // Crucially: refresh did not reset the doc — user's unsaved edit survives.
+    expect(s.dirty).toBe(true)
+  })
+
   it('normalizationDiff: null when round-trip identical, populated otherwise', async () => {
     mockApi.__setContent('# H\n\npara\n')
     const s = createDocSession('a.md', () => 'cid')

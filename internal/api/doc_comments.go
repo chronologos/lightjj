@@ -1,13 +1,17 @@
 package api
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
+	"time"
 )
 
 // doc_comments.go — range-anchored, per-filePath document comments for the
@@ -49,18 +53,43 @@ type DocComment struct {
 
 func (c DocComment) GetID() string { return c.ID }
 
+// cleanDocPath normalizes filePath to a canonical repo-relative form so that
+// "./docs/X.md" and "docs/X.md" hash to the same store. Agents POST against
+// paths they read from /api/file-show; the UI uses paths from the diff parser —
+// without normalization those silently diverge. Rejects absolute paths and
+// ..-escapes (the hash already prevents traversal on disk, but a rejected error
+// is clearer to the agent than a silently empty store).
+func cleanDocPath(p string) (string, error) {
+	c := filepath.ToSlash(filepath.Clean(p))
+	c = strings.TrimPrefix(c, "./")
+	if c == ".." || strings.HasPrefix(c, "../") || strings.HasPrefix(c, "/") {
+		return "", errors.New("path escapes repo")
+	}
+	return c, nil
+}
+
 func (s *Server) docCommentPath(filePath string) (string, error) {
+	clean, err := cleanDocPath(filePath)
+	if err != nil {
+		return "", err
+	}
 	dir, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}
-	h := sha256.Sum256([]byte(s.RepoPath + "|" + filePath))
+	h := sha256.Sum256([]byte(s.RepoPath + "|" + clean))
 	return filepath.Join(dir, "lightjj", "doc-comments", hex.EncodeToString(h[:])[:16]+".json"), nil
+}
+
+func randID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // GET    /api/doc-comments?path=X       — list (empty array if none)
 // POST   /api/doc-comments              — upsert by id (body = DocComment)
-// DELETE /api/doc-comments?path=X&id=Y  — remove one; omit id to clear all
+// DELETE /api/doc-comments?path=X&id=Y  — remove one (cascades to replies)
 func (s *Server) handleDocComments(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -71,7 +100,7 @@ func (s *Server) handleDocComments(w http.ResponseWriter, r *http.Request) {
 		}
 		path, err := s.docCommentPath(fp)
 		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
+			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		items, _ := readJSONStore[DocComment](path)
@@ -83,9 +112,26 @@ func (s *Server) handleDocComments(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if c.FilePath == "" || c.ID == "" {
-			s.writeError(w, http.StatusBadRequest, "filePath and id required")
+		if c.FilePath == "" {
+			s.writeError(w, http.StatusBadRequest, "filePath required")
 			return
+		}
+		if c.Anchor.Selection == "" {
+			s.writeError(w, http.StatusBadRequest, "anchor.selection required")
+			return
+		}
+		clean, err := cleanDocPath(c.FilePath)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		c.FilePath = clean
+		if c.ID == "" {
+			c.ID = randID()
+		}
+		stamped := c.CreatedAt == 0
+		if stamped {
+			c.CreatedAt = time.Now().UnixMilli()
 		}
 		path, err := s.docCommentPath(c.FilePath)
 		if err != nil {
@@ -95,6 +141,22 @@ func (s *Server) handleDocComments(w http.ResponseWriter, r *http.Request) {
 		docCommentMu.Lock()
 		defer docCommentMu.Unlock()
 		items, _ := readJSONStore[DocComment](path)
+		// Whole-record upsert would let an agent re-POST clobber the user's
+		// resolution. Preserve resolution + original timestamp when the incoming
+		// record omits them — explicit "" still can't clear, but the only writer
+		// of resolution is resolveComment() which always sets a non-empty value.
+		for i := range items {
+			if items[i].ID == c.ID {
+				if c.Resolution == "" {
+					c.Resolution = items[i].Resolution
+					c.ResolvedAt = items[i].ResolvedAt
+				}
+				if stamped {
+					c.CreatedAt = items[i].CreatedAt
+				}
+				break
+			}
+		}
 		items = upsertByID(items, c)
 		if err := atomicWriteJSON(path, items); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "write failed: "+err.Error())
@@ -111,19 +173,15 @@ func (s *Server) handleDocComments(w http.ResponseWriter, r *http.Request) {
 		}
 		path, err := s.docCommentPath(fp)
 		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if id == "" {
+			s.writeError(w, http.StatusBadRequest, "id required")
 			return
 		}
 		docCommentMu.Lock()
 		defer docCommentMu.Unlock()
-		if id == "" {
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				s.writeError(w, http.StatusInternalServerError, "remove failed")
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			return
-		}
 		items, _ := readJSONStore[DocComment](path)
 		// Cascade-delete replies: a thread root delete must take its children
 		// or they reload as ghost highlights with no rail card and no UI delete.

@@ -198,6 +198,16 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/doc-comments", s.handleDocComments)
 	s.Mux.HandleFunc("DELETE /api/doc-comments", s.handleDocComments)
 	s.Mux.HandleFunc("GET /api/agent", s.handleAgentDocs)
+	// Index for cold agent discovery — probing the bare /api path yields a
+	// pointer to the doc instead of a 404.
+	s.Mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
+		s.writeJSON(w, r, http.StatusOK, map[string]string{
+			"_note":    "paths are relative to your tab base — the URL you used to reach this, minus the trailing /api",
+			"docs":     "/api/agent",
+			"comments": "/api/doc-comments",
+			"file":     "/api/file-show",
+		})
+	})
 
   // handle file edits
 	s.Mux.HandleFunc("POST /api/file-write", s.handleFileWrite)

@@ -86,11 +86,13 @@ export function createDocSession(
   // Mutations apply locally first so the UI is instant; if the server write
   // fails (SSH drop, 500) the local state must not silently diverge.
   let mutationError = $state('')
+  let inFlightMutation = 0
   async function optimistic(apply: () => void, persist: () => Promise<unknown>): Promise<void> {
     const g = bumpGen()
     const snapshot = comments
     apply()
     mutationError = ''
+    inFlightMutation++
     try {
       await persist()
     } catch (e) {
@@ -99,6 +101,8 @@ export function createDocSession(
       // remapped positions or a fresh load.
       if (g === gen) comments = snapshot
       mutationError = e instanceof Error ? e.message : String(e)
+    } finally {
+      inFlightMutation--
     }
   }
 
@@ -131,6 +135,32 @@ export function createDocSession(
     committedVersion = 0
     const rt = serializeMarkdown(doc)
     normalizationDiff = rt === content ? null : rt
+  }
+
+  // Re-fetch comments and re-place against the CURRENT doc — does not touch
+  // doc/version, so safe to call while dirty. Polled while doc-mode is active so
+  // agent POSTs appear without a destructive reload(). Skips while a local
+  // optimistic mutation is in flight: a refresh resolving between apply() and
+  // persist() would briefly drop the local write (server hasn't seen it yet);
+  // the next poll tick recovers. gen check covers the typing case
+  // (onTransaction bumps gen, stale placement discarded).
+  async function refreshComments(): Promise<void> {
+    if (!doc || inFlightMutation > 0) return
+    const g = bumpGen()
+    let stored: DocComment[]
+    try {
+      stored = await api.docComments.list(filePath)
+    } catch {
+      return
+    }
+    if (g !== gen || inFlightMutation > 0 || !doc) return
+    const tm = buildTextMap(doc)
+    comments = stored.map((c) => {
+      const hit = refind(c.anchor, tm.text)
+      return hit
+        ? { ...c, from: tm.toPM(hit.from), to: tm.toPM(hit.to), orphaned: false }
+        : { ...c, orphaned: true }
+    })
   }
 
   function onTransaction(tr: Transaction, newDoc: Node): void {
@@ -270,6 +300,7 @@ export function createDocSession(
     get baseContentHash() { return baseContentHash },
     get normalizationDiff() { return normalizationDiff },
     import_,
+    refreshComments,
     onTransaction,
     serialize,
     commitBack,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { captureAnchor, refind, type Anchor } from './reanchor'
+import { captureAnchor, refind, normalizeForMatch, type Anchor } from './reanchor'
 
 describe('captureAnchor', () => {
   it('captures selection + context', () => {
@@ -52,6 +52,46 @@ describe('refind', () => {
   it('rejects too-short context for stage 3', () => {
     const a: Anchor = { selection: 'gone', contextBefore: 'ab', contextAfter: 'cd' }
     expect(refind(a, 'ab something cd')).toBeNull()
+  })
+
+  describe('normalized fallback (raw-md anchor vs PM-flattened text)', () => {
+    it('normalizeForMatch strips md syntax + collapses whitespace', () => {
+      expect(normalizeForMatch('see **bold** and\n\n`code`  here')).toBe('see bold and code here')
+      expect(normalizeForMatch('  [link](url) | _x_ ')).toBe('linkurl x')
+    })
+
+    it('selection with leading block prefix matches PM-flattened heading', () => {
+      // "# " strips to a leading space (syntax-skip then space-emit); refind
+      // trims normSel so it still matches haystacks without that space.
+      const a: Anchor = { selection: '# Architecture', contextBefore: '', contextAfter: '' }
+      const hit = refind(a, 'ArchitectureThe system…')
+      expect(hit).toEqual({ from: 0, to: 12 })
+    })
+
+    it('disambiguates multi-hit using normalized context', () => {
+      // Anchor captured against raw markdown; haystack is PM-flattened (no **).
+      // Exact contextScore fails (' *' vs ' d') but normalized 'see bold ' lands.
+      const a: Anchor = { selection: 'text', contextBefore: 'see **bold** ', contextAfter: ' and' }
+      const flattened = 'see bold text and more text here'
+      expect(refind(a, flattened)).toEqual({ from: 9, to: 13 })
+    })
+
+    it('matches selection spanning a block break against single-line text', () => {
+      const a: Anchor = { selection: 'first paragraph.\n\nSecond', contextBefore: '', contextAfter: ' paragraph' }
+      const flattened = 'first paragraph. Second paragraph here.'
+      expect(refind(a, flattened)).toEqual({ from: 0, to: 23 })
+    })
+
+    it('prefers exact match over normalized when both available', () => {
+      const text = 'plain foo then literal _foo_ here'
+      const a: Anchor = { selection: '_foo_', contextBefore: 'literal ', contextAfter: ' here' }
+      expect(refind(a, text)).toEqual({ from: 23, to: 28 })
+    })
+
+    it('still orphans when normalized is also ambiguous', () => {
+      const a: Anchor = { selection: '**foo**', contextBefore: '????', contextAfter: '????' }
+      expect(refind(a, 'foo and foo and foo')).toBeNull()
+    })
   })
 
   it('property: round-trip on unchanged text', () => {

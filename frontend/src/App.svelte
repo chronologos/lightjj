@@ -338,6 +338,33 @@
   let docViewRef: { scrollTo: (pos: number) => void; applyReplace: (f: number, t: number, s: string) => void } | undefined = $state()
   let docEditable = $state(false)
   let docStale = $state(false)
+  let docAgentPopover = $state(false)
+  // Poll for agent-posted comments while doc-mode is open. refreshComments()
+  // re-places against the current doc (no version reset, safe while dirty) and
+  // skips while a local mutation is in flight, so this never clobbers user
+  // state. 4s — well under SSE-level latency expectations for review iteration.
+  $effect(() => {
+    if (activeView !== 'doc' || !docSession) return
+    const s = docSession
+    const t = setInterval(() => void s.refreshComments(), 4000)
+    return () => clearInterval(t)
+  })
+  // Route session errors to the single MessageBar surface instead of an inline
+  // span that blows out the 34px header on long jj output.
+  $effect(() => {
+    const err = docSession?.error
+    if (err) setMessage(errorMessage(err))
+  })
+  let docAgentHint = $derived.by(() => {
+    if (!docFilePath) return { url: '', remote: '' }
+    const base = agentBaseURL()
+    const port = window.location.port || '80'
+    const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname)
+    return {
+      url: `lightjj doc API: fetch ${base}/api/agent for usage. This file: GET/POST ${base}/api/doc-comments?path=${encodeURIComponent(docFilePath)}`,
+      remote: local ? `ssh -R 8080:localhost:${port} user@agent-host  # then base = http://localhost:8080${base.slice(base.indexOf('/tab/'))}` : '',
+    }
+  })
   // Add-comment bubble state. AnnotationBubble is annotation-coupled (severity
   // select, lineContext, Annotation type) so doc-mode uses a small dedicated
   // input. {x,y} are viewport coords (DocView emits view.coordsAtPos result).
@@ -393,6 +420,7 @@
     if (activeView !== 'doc' || docFilePath !== path) return
     docEditable = false
     docStale = false
+    docAgentPopover = false
     docCommentDraft = null
     docSession = createDocSession(path, () => workingCopyEntry?.commit.commit_id)
     void docSession.import_().catch(e => setMessage(errorMessage(e)))
@@ -402,6 +430,7 @@
     docFilePath = null
     docSession = null
     docStale = false
+    docAgentPopover = false
     docCommentDraft = null
     switchToLogView()
   }
@@ -691,6 +720,10 @@
     { label: 'Jump to working copy (@)', shortcut: '@', category: 'Navigation', action: () => { if (workingCopyIndex >= 0) selectRevision(workingCopyIndex) }, when: () => workingCopyIndex >= 0 },
     { label: 'Next file / Previous file', shortcut: '] / [', category: 'Navigation', action: noop, infoOnly: true },
     { label: 'Toggle markdown preview', shortcut: 'm', category: 'Navigation', action: () => diffPanelRef?.togglePreviewActive(), when: () => !inlineMode },
+    { label: 'Open file as document…', category: 'Navigation', action: () => {
+      const p = prompt('Open as document (repo-relative .md path):')
+      if (p) void switchToDocView(p)
+    }, when: () => !inlineMode },
 
     // Revisions
     { label: 'Refresh revisions', shortcut: 'r', category: 'Revisions', action: userRefresh, when: () => !inlineMode },
@@ -2485,6 +2518,11 @@
             disabled={inlineMode}
             title="Merge view — 3-pane conflict resolver (3)"
           >⧉ Merge <kbd class="nav-hint">3</kbd></button>
+          {#if activeView === 'doc' && docFilePath}
+            <button class="seg-btn active" onclick={closeDocView} title="Doc mode — click or Esc to close">
+              ▤ {docFilePath.split('/').pop()}
+            </button>
+          {/if}
         </nav>
         <span class="toolbar-divider"></span>
         <!-- Drawer toggles — semantically distinct from the nav tabs above
@@ -2716,29 +2754,40 @@
         {:else if activeView === 'doc' && docSession && docFilePath}
           <div class="doc-mode-layout">
             <div class="doc-mode-header panel-header">
-              <span class="panel-title">{docFilePath}{#if docSession.dirty}<span class="doc-dirty"> ●</span>{/if}</span>
+              <span class="doc-mode-path truncate" title={docFilePath}>{docFilePath}{#if docSession.dirty}<span class="doc-dirty"> ●</span>{/if}</span>
               <div class="seg">
-                <button class="seg-btn" class:active={!docEditable} onclick={() => docEditable = false}>Preview</button>
+                <button class="seg-btn" class:active={!docEditable} onclick={() => docEditable = false}>View</button>
                 <button class="seg-btn" class:active={docEditable} onclick={() => docEditable = true}>Edit</button>
               </div>
-              <span class="doc-mode-spacer"></span>
-              {#if docSession.busy}<span class="placeholder-text">Loading…</span>{/if}
-              {#if docSession.error}<span class="doc-mode-error">{docSession.error}</span>{/if}
-              <button
-                class="btn btn-sm"
-                title="Copy agent prompt for this file"
-                onclick={() => {
-                  const base = agentBaseURL()
-                  const hint = `lightjj doc API: fetch ${base}/api/agent for usage. This file: GET/POST ${base}/api/doc-comments?path=${encodeURIComponent(docFilePath ?? '')}`
-                  navigator.clipboard.writeText(hint)
-                  setMessage({ kind: 'success', text: 'Agent hint copied to clipboard' })
-                }}
-              >Agent…</button>
-              <button class="btn btn-sm" disabled={!docSession.dirty || docSession.saving} onclick={handleDocCommit} title="Save to working copy (⌘S)">
-                {docSession.saving ? 'Saving…' : 'Save'}
-              </button>
-              <button class="close-btn" onclick={closeDocView} title="Close (Esc)">×</button>
+              <div class="doc-mode-actions">
+                {#if docSession.busy}<span class="placeholder-text">Loading…</span>{/if}
+                <button class="btn btn-sm" onclick={() => void docSession?.refreshComments()} title="Refresh comments now (auto-polls every 4s)">↻</button>
+                <button class="btn btn-sm" onclick={() => docAgentPopover = !docAgentPopover} title="Agent API hint for this file">
+                  Agent hint
+                </button>
+                <button class="btn btn-sm" disabled={!docSession.dirty || docSession.saving} onclick={handleDocCommit} title="Save to working copy (⌘S)">
+                  {docSession.saving ? 'Saving…' : 'Save'}
+                </button>
+                <button class="close-btn" onclick={closeDocView} title="Close (Esc)">×</button>
+              </div>
             </div>
+            {#if docAgentPopover}
+              <div class="doc-banner doc-agent-popover">
+                <div>
+                  <div>Paste into your agent:</div>
+                  <code class="doc-agent-url">{docAgentHint.url}</code>
+                  {#if docAgentHint.remote}
+                    <div class="placeholder-text">Remote agent? Forward the port from this machine first:</div>
+                    <code class="doc-agent-url">{docAgentHint.remote}</code>
+                  {/if}
+                </div>
+                <button class="btn btn-sm btn-primary" onclick={() => {
+                  navigator.clipboard.writeText(docAgentHint.url)
+                  setMessage({ kind: 'success', text: 'Agent hint copied' })
+                  docAgentPopover = false
+                }}>Copy</button>
+              </div>
+            {/if}
             {#if docStale}
               <div class="doc-banner">
                 File changed on disk since you opened it.
@@ -2748,8 +2797,8 @@
               </div>
             {:else if docSession.normalizationDiff && !docSession.dirty}
               <div class="doc-banner">
-                Opening normalized formatting (list markers, escaping). First save will rewrite {docFilePath}.
-                <button class="btn btn-sm" onclick={() => { docEditable = true }}>Edit</button>
+                Formatting will be normalized on first save (list markers, escaping — no content change).
+                <button class="btn btn-sm" onclick={() => { docEditable = true }}>Edit anyway</button>
               </div>
             {/if}
             {#key docFilePath}
@@ -3451,12 +3500,36 @@
     min-width: 0;
     overflow: auto;
   }
-  .doc-mode-spacer {
-    flex: 1;
+  .doc-mode-path {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    color: var(--subtext1);
+    min-width: 0;
   }
-  .doc-mode-error {
-    color: var(--red);
+  .doc-mode-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .doc-agent-popover {
+    align-items: flex-start;
+  }
+  .doc-agent-popover > div {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .doc-agent-url {
+    display: block;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
+    word-break: break-all;
+    background: var(--surface0);
+    padding: 4px 6px;
+    border-radius: 4px;
   }
   .doc-dirty {
     color: var(--amber);
@@ -3477,7 +3550,7 @@
     background: var(--mantle);
     border: 1px solid var(--surface1);
     border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--shadow-heavy);
     padding: 8px;
   }
   .doc-comment-bubble textarea { width: 100%; resize: vertical; }

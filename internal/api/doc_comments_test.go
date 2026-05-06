@@ -67,7 +67,7 @@ func TestDocComments_CRUD(t *testing.T) {
 	assert.Equal(t, "edited", got[0].Body)
 
 	// Second comment
-	c2 := DocComment{ID: "c2", FilePath: fp, Kind: "comment", Body: "second", Author: "user"}
+	c2 := DocComment{ID: "c2", FilePath: fp, Kind: "comment", Body: "second", Author: "user", Anchor: DocAnchor{Selection: "x"}}
 	body, _ = json.Marshal(c2)
 	w = httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, jsonPost("/api/doc-comments", body))
@@ -82,18 +82,18 @@ func TestDocComments_CRUD(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "c2", got[0].ID)
 
-	// DELETE all (omit id)
+	// DELETE without id is rejected (no clear-all footgun)
 	w = httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/doc-comments?path="+url.QueryEscape(fp), nil))
-	require.Equal(t, http.StatusOK, w.Code)
-	assert.Len(t, getDocComments(t, srv, fp), 0)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Len(t, getDocComments(t, srv, fp), 1)
 }
 
 func TestDocComments_PathIsolation(t *testing.T) {
 	srv := newDocCommentServer(t)
 	for _, c := range []DocComment{
-		{ID: "a", FilePath: "one.md", Kind: "comment", Author: "u"},
-		{ID: "b", FilePath: "two.md", Kind: "comment", Author: "u"},
+		{ID: "a", FilePath: "one.md", Kind: "comment", Author: "u", Anchor: DocAnchor{Selection: "x"}},
+		{ID: "b", FilePath: "two.md", Kind: "comment", Author: "u", Anchor: DocAnchor{Selection: "x"}},
 	} {
 		body, _ := json.Marshal(c)
 		w := httptest.NewRecorder()
@@ -104,6 +104,66 @@ func TestDocComments_PathIsolation(t *testing.T) {
 	assert.Len(t, getDocComments(t, srv, "two.md"), 1)
 }
 
+func TestDocComments_PathNormalization(t *testing.T) {
+	srv := newDocCommentServer(t)
+	c := DocComment{ID: "n1", FilePath: "./docs/X.md", Kind: "comment", Author: "agent", Anchor: DocAnchor{Selection: "x"}}
+	body, _ := json.Marshal(c)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/doc-comments", body))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// All variants resolve to the same store and the stored record carries the
+	// canonical path.
+	for _, variant := range []string{"docs/X.md", "./docs/X.md", "docs/./X.md"} {
+		got := getDocComments(t, srv, variant)
+		require.Len(t, got, 1, "variant %q", variant)
+		assert.Equal(t, "docs/X.md", got[0].FilePath)
+	}
+}
+
+func TestDocComments_PreserveResolution(t *testing.T) {
+	srv := newDocCommentServer(t)
+	const fp = "doc.md"
+
+	a := DocAnchor{Selection: "x"}
+	first := DocComment{ID: "r1", FilePath: fp, Kind: "comment", Body: "v1", Resolution: "addressed", ResolvedAt: 99, Anchor: a}
+	body, _ := json.Marshal(first)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/doc-comments", body))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Agent re-POSTs same id with new body, omits resolution.
+	second := DocComment{ID: "r1", FilePath: fp, Kind: "comment", Body: "v2", Anchor: a}
+	body, _ = json.Marshal(second)
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/doc-comments", body))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	got := getDocComments(t, srv, fp)
+	require.Len(t, got, 1)
+	assert.Equal(t, "v2", got[0].Body)
+	assert.Equal(t, "addressed", got[0].Resolution)
+	assert.Equal(t, int64(99), got[0].ResolvedAt)
+}
+
+func TestDocComments_ServerStamps(t *testing.T) {
+	srv := newDocCommentServer(t)
+	c := DocComment{FilePath: "doc.md", Kind: "comment", Body: "no id", Anchor: DocAnchor{Selection: "x"}}
+	body, _ := json.Marshal(c)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/doc-comments", body))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var echoed DocComment
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &echoed))
+	assert.Len(t, echoed.ID, 16)
+	assert.Greater(t, echoed.CreatedAt, int64(0))
+
+	got := getDocComments(t, srv, "doc.md")
+	require.Len(t, got, 1)
+	assert.Equal(t, echoed.ID, got[0].ID)
+}
+
 func TestDocComments_Validation(t *testing.T) {
 	srv := newDocCommentServer(t)
 	for _, tc := range []struct {
@@ -112,8 +172,10 @@ func TestDocComments_Validation(t *testing.T) {
 	}{
 		{"get missing path", httptest.NewRequest("GET", "/api/doc-comments", nil)},
 		{"delete missing path", httptest.NewRequest("DELETE", "/api/doc-comments", nil)},
+		{"delete missing id", httptest.NewRequest("DELETE", "/api/doc-comments?path=a.md", nil)},
 		{"post missing filePath", jsonPost("/api/doc-comments", []byte(`{"id":"x"}`))},
-		{"post missing id", jsonPost("/api/doc-comments", []byte(`{"filePath":"a.md"}`))},
+		{"post path escapes", jsonPost("/api/doc-comments", []byte(`{"id":"x","filePath":"../etc/passwd"}`))},
+		{"post absolute path", jsonPost("/api/doc-comments", []byte(`{"id":"x","filePath":"/etc/passwd"}`))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()

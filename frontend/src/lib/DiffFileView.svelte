@@ -584,6 +584,9 @@
     {#if onpreview && (isMarkdown || isExcalidraw || isImage) && !editing && fileStats?.type !== 'D'}
       <button class="btn btn-sm" onclick={(e: MouseEvent) => { e.stopPropagation(); onpreview(filePath) }} title={isExcalidraw ? 'Render diagram' : isImage ? 'Render image' : 'Render markdown (mermaid diagrams supported)'}>{previewContent !== undefined ? 'Source' : 'Preview'}</button>
     {/if}
+    {#if onopendoc && isMarkdown && !editing && fileStats?.type !== 'D'}
+      <button class="btn btn-sm" onclick={(e: MouseEvent) => { e.stopPropagation(); onopendoc(filePath) }} title="Open as document (rich editor + comments)">Doc</button>
+    {/if}
     {#if onfilehistory && !editing}
       <button class="btn btn-sm" onclick={(e: MouseEvent) => { e.stopPropagation(); onfilehistory(filePath) }} title="View file history (Kaleidoscope-style two-cursor compare)">History</button>
     {/if}

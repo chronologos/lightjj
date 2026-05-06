@@ -19,6 +19,40 @@ export function captureAnchor(text: string, from: number, to: number, ctxLen = D
   }
 }
 
+// Agents compute anchors against raw markdown (with **/`/#/\n) but doc-session
+// re-finds against ProseMirror-flattened text (syntax stripped, no block
+// separators). normalizeWithMap strips the inline-syntax noise and collapses
+// whitespace while recording where each surviving char came from, so a match in
+// normalized space can be mapped back to original-text positions.
+const MD_SYNTAX = /[*_`~[\]()!#>|]/
+
+// No leading/trailing trim — boundary whitespace is significant for context
+// scoring (contextBefore typically ends in the space before the selection).
+function normalizeWithMap(s: string): { norm: string; map: number[] } {
+  const chars: string[] = []
+  const map: number[] = []
+  let lastWasSpace = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (MD_SYNTAX.test(c)) continue
+    if (/\s/.test(c)) {
+      if (lastWasSpace) continue
+      chars.push(' ')
+      map.push(i)
+      lastWasSpace = true
+    } else {
+      chars.push(c)
+      map.push(i)
+      lastWasSpace = false
+    }
+  }
+  return { norm: chars.join(''), map }
+}
+
+export function normalizeForMatch(s: string): string {
+  return normalizeWithMap(s).norm.trim()
+}
+
 // Score how well a candidate position's surroundings match the stored context.
 // Compares from the selection boundary OUTWARD — chars adjacent to the
 // selection matter most (an edit 35 chars away shouldn't sink the match).
@@ -48,33 +82,57 @@ function allIndicesOf(haystack: string, needle: string): number[] {
   return out
 }
 
+type FindResult = { from: number; to: number } | 'ambiguous' | null
+
+function findIn(text: string, sel: string, before: string, after: string): FindResult {
+  const hits = allIndicesOf(text, sel)
+  if (hits.length === 0) return null
+  if (hits.length === 1) return { from: hits[0], to: hits[0] + sel.length }
+  let best = -1
+  let bestScore = -1
+  const a: Anchor = { selection: sel, contextBefore: before, contextAfter: after }
+  for (const h of hits) {
+    const s = contextScore(a, text, h, h + sel.length)
+    if (s > bestScore) {
+      bestScore = s
+      best = h
+    }
+  }
+  if (bestScore >= 0.7) return { from: best, to: best + sel.length }
+  return 'ambiguous'
+}
+
 // Re-find an anchor in (possibly edited) text. Returns the char range, or a
 // zero-width range if the selection itself was edited away but its context
 // survives, or null (orphaned).
 export function refind(anchor: Anchor, text: string): { from: number; to: number } | null {
   const { selection, contextBefore, contextAfter } = anchor
 
-  // Stage 1/2: exact selection match, disambiguated by context.
+  // Stage 1: exact selection match, disambiguated by exact context.
+  // Stage 2: normalized fallback — strip md syntax + collapse whitespace on
+  // both sides so a raw-markdown anchor lands in PM-flattened text. Positions
+  // are mapped back via normalizeWithMap's index map so the returned range
+  // points into the original `text`.
   if (selection.length > 0) {
-    const hits = allIndicesOf(text, selection)
-    if (hits.length === 1) {
-      return { from: hits[0], to: hits[0] + selection.length }
-    }
-    if (hits.length > 1) {
-      let best = -1
-      let bestScore = -1
-      for (const h of hits) {
-        const s = contextScore(anchor, text, h, h + selection.length)
-        if (s > bestScore) {
-          bestScore = s
-          best = h
-        }
+    const exact = findIn(text, selection, contextBefore, contextAfter)
+    if (exact && exact !== 'ambiguous') return exact
+
+    const { norm: normHay, map: hayMap } = normalizeWithMap(text)
+    // Trim normSel: a leading "# "/"> "/"* " collapses to a leading space (the
+    // syntax char is stripped but the following space survives), which won't be
+    // present in PM-flat text. hayMap-back uses norm.from/to into normHay, so
+    // trimming the needle doesn't perturb position mapping.
+    const normSel = normalizeWithMap(selection).norm.trim()
+    let norm: FindResult = null
+    if (normSel.length > 0) {
+      norm = findIn(normHay, normSel, normalizeWithMap(contextBefore).norm, normalizeWithMap(contextAfter).norm)
+      if (norm && norm !== 'ambiguous') {
+        return { from: hayMap[norm.from], to: hayMap[norm.to - 1] + 1 }
       }
-      if (bestScore >= 0.7) return { from: best, to: best + selection.length }
-      // Ambiguous: many hits, none with strong context. Orphan rather than
-      // guess — a comment landing on the wrong instance is worse than orphaned.
-      return null
     }
+    // Selection text exists but neither pass could pick a winner — orphan
+    // rather than guess; a comment on the wrong instance is worse than orphaned.
+    if (exact === 'ambiguous' || norm === 'ambiguous') return null
   }
 
   // Stage 3: selection gone (or was empty). Find contextBefore followed
