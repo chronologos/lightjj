@@ -68,6 +68,22 @@ export interface Annotation {
   resolvedAtCommitId?: string
 }
 
+// Doc-mode comment — per-filePath, range-anchored via content-addressed Anchor
+// (see reanchor.ts), survives across commits. Mirrors internal/api/doc_comments.go.
+export interface DocComment {
+  id: string
+  filePath: string
+  parentId?: string
+  anchor: { selection: string; contextBefore: string; contextAfter: string }
+  kind: 'comment' | 'suggestion'
+  body: string
+  suggestion?: { replacement: string; baseVersion: number }
+  resolution?: 'addressed' | 'wontfix'
+  resolvedAt?: number
+  author: string
+  createdAt: number
+}
+
 // One commit in the divergence dataset (mutable divergent + their descendants).
 // Mirrors internal/jj/divergence.go DivergenceEntry. See docs/jj-divergence.md.
 export interface DivergenceEntry {
@@ -1127,6 +1143,17 @@ export const api = {
 
   clearAnnotations: (changeId: string) =>
     request<void>(`/api/annotations?changeId=${encodeURIComponent(changeId)}`, { method: 'DELETE' }),
+
+  // Doc-mode comments — per-filePath, range-anchored, survive across commits.
+  // Uncached for the same reason as annotations (review-state, not content).
+  docComments: {
+    list: (path: string) =>
+      request<DocComment[]>(`/api/doc-comments?path=${encodeURIComponent(path)}`),
+    upsert: (c: DocComment) =>
+      post<DocComment>('/api/doc-comments', c),
+    remove: (path: string, id: string) =>
+      request<void>(`/api/doc-comments?path=${encodeURIComponent(path)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
 }
 
 // Test-only exports for cache inspection/reset

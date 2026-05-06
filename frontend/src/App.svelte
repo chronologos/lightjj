@@ -69,6 +69,7 @@
   import ConflictQueue from './lib/ConflictQueue.svelte'
   import FileHistoryPanel from './lib/FileHistoryPanel.svelte'
   import { createMergeController } from './lib/merge-controller.svelte'
+  import type { DocSession } from './lib/doc-session.svelte'
 
   // --- Global state ---
   // initialState-hydrated vars: restored on tab-switch-back via AppShell's
@@ -327,6 +328,31 @@
   function openFileHistory(path: string) {
     fileHistoryPath = path
     fileHistoryPin = diffTarget?.kind === 'single' ? diffTarget.commitId : null
+  }
+
+  // Doc mode — ProseMirror view of a single .md with range-anchored comments.
+  // Per-file like FileHistory, but as an activeView (full-width, hides graph)
+  // not an overlay. {#key docFilePath} remounts the lazy-loaded view per path.
+  let docFilePath: string | null = $state(null)
+  let docSession: DocSession | null = $state(null)
+  let docViewRef: { scrollTo: (pos: number) => void } | undefined = $state()
+
+  async function switchToDocView(path: string) {
+    descriptionEditing = false
+    docFilePath = path
+    activeView = 'doc'
+    // Lazy import keeps prosemirror (~31KB gzip) out of the main bundle —
+    // doc-session pulls pm-schema → prosemirror-{model,state}.
+    const { createDocSession } = await import('./lib/doc-session.svelte')
+    if (activeView !== 'doc' || docFilePath !== path) return
+    docSession = createDocSession(path, () => workingCopyEntry?.commit.commit_id)
+    void docSession.import_().catch(e => setMessage(errorMessage(e)))
+  }
+
+  function closeDocView() {
+    docFilePath = null
+    docSession = null
+    activeView = 'log'
   }
 
   let currentWorkspace: string = $state('')
@@ -2003,6 +2029,7 @@
           if (conflictQueueRef?.handleKeydown(e)) { e.preventDefault(); return true }
           return false
         },
+        docEscape: () => { closeDocView(); e.preventDefault() },
         escapeStack: handleEscapeStack,
         globalKeys: () => handleGlobalKeys(e),
         logKeys: () => handleLogKeys(e),
@@ -2259,9 +2286,9 @@
     return {
       selectedIndex,
       revsetFilter,
-      // Merge mode is NOT preserved across tabs — half-done conflict resolution
-      // across tab-switch is a footgun (same reasoning as inline modes).
-      activeView: activeView === 'merge' ? 'log' : activeView,
+      // Merge/doc modes are NOT preserved across tabs — half-done conflict
+      // resolution or in-progress doc edit across tab-switch is a footgun.
+      activeView: activeView === 'merge' || activeView === 'doc' ? 'log' : activeView,
       diffScrollTop: diffPanelRef?.getScrollTop() ?? 0,
     }
   }
@@ -2449,11 +2476,11 @@
     {@render tabBar?.()}
 
     <div class="workspace">
-      {#if activeView !== 'merge'}
-        <!-- Merge mode hides the graph entirely — ConflictQueue + 3-pane
-             MergePanel need the full width. Branches keeps the graph (it's a
-             right-column sibling that references graph selection via the
-             graphCommitId amber tint). -->
+      {#if activeView !== 'merge' && activeView !== 'doc'}
+        <!-- Merge/doc modes hide the graph entirely — ConflictQueue + 3-pane
+             MergePanel and DocView + comment-rail both need the full width.
+             Branches keeps the graph (right-column sibling that references
+             graph selection via the graphCommitId amber tint). -->
         <div class="revision-panel-wrapper" style="width: {config.revisionPanelWidth}px">
           <!-- Revset filter input — owned by App so programmatic revset changes
                (bookmark click, visibility toggle, smart views) are direct assignments.
@@ -2635,6 +2662,34 @@
               <div class="merge-mode-empty">Select a conflict from the queue.</div>
             {/if}
           </div>
+        {:else if activeView === 'doc' && docSession && docFilePath}
+          <div class="doc-mode-layout">
+            <div class="doc-mode-header panel-header">
+              <span class="panel-title">{docFilePath}</span>
+              <span class="doc-mode-spacer"></span>
+              {#if docSession.busy}<span class="placeholder-text">Loading…</span>{/if}
+              {#if docSession.error}<span class="doc-mode-error">{docSession.error}</span>{/if}
+              <button class="close-btn" onclick={closeDocView} title="Close (Esc)">×</button>
+            </div>
+            {#key docFilePath}
+              {#await Promise.all([import('./lib/DocView.svelte'), import('./lib/DocCommentRail.svelte')]) then [{ default: DocView }, { default: DocCommentRail }]}
+                <div class="doc-mode-body">
+                  <DocView
+                    bind:this={docViewRef}
+                    session={docSession}
+                    onaddcomment={(from, to) => {
+                      const body = window.prompt('Comment:')
+                      if (body) void docSession?.addComment(from, to, body)
+                    }}
+                  />
+                  <DocCommentRail
+                    session={docSession}
+                    onjump={(pos) => docViewRef?.scrollTo(pos)}
+                  />
+                </div>
+              {/await}
+            {/key}
+          </div>
         {:else if divergence.active}
           <!-- {#key} enforces what DivergencePanel assumes: changeId never
                changes in-place. createDivergenceMode.enter() doesn't guard
@@ -2669,6 +2724,7 @@
             oncontextmenu={showContextMenu}
             onopenfile={editorConfigured ? handleOpenFile : undefined}
             onfilehistory={openFileHistory}
+            onopendoc={switchToDocView}
           >
             {#snippet header()}
               <!-- {#key} resets RevisionHeader local state (descExpanded) on nav.
@@ -3260,12 +3316,34 @@
     border-radius: 3px;
   }
 
-  .merge-mode-layout {
+  .merge-mode-layout,
+  .doc-mode-layout {
     display: flex;
     flex: 1;
     min-width: 0;
     height: 100%;
     overflow: hidden;
+  }
+  .doc-mode-layout {
+    flex-direction: column;
+  }
+  .doc-mode-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .doc-mode-body > :global(:first-child) {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+  }
+  .doc-mode-spacer {
+    flex: 1;
+  }
+  .doc-mode-error {
+    color: var(--red);
+    font-size: var(--fs-xs);
   }
   .merge-mode-layout > :global(.merge-panel) {
     flex: 1;

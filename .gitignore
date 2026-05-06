@@ -21,3 +21,4 @@ frontend/.svelte-kit/
 # Local tooling — never commit
 .claude/
 .superpowers/
+do_not_commit/

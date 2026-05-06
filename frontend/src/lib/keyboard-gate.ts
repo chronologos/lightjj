@@ -8,7 +8,7 @@
 // the shape — a pure state→target function would have to duplicate each
 // handler's entry predicate, which drifts.
 
-export type ActiveView = 'log' | 'branches' | 'merge'
+export type ActiveView = 'log' | 'branches' | 'merge' | 'doc'
 
 export interface GateCtx {
   key: string
@@ -40,6 +40,7 @@ export interface GateHandlers {
   /** Exit merge view. */
   mergeEscape(): void
   delegateConflictQueue(): boolean
+  docEscape(): void
   escapeStack(): void
   globalKeys(): boolean
   logKeys(): void
@@ -77,7 +78,13 @@ export function routeKeydown(c: GateCtx, h: GateHandlers): void {
     h.globalKeys()
     return
   }
-  // activeView === 'log' by exhaustion — branches/merge returned above.
+  if (c.activeView === 'doc') {
+    if (c.defaultPrevented) return
+    if (c.key === 'Escape') return h.docEscape()
+    h.globalKeys()
+    return
+  }
+  // activeView === 'log' by exhaustion — branches/merge/doc returned above.
   if (c.key === 'Escape') return h.escapeStack()
   if (h.globalKeys()) return
   h.logKeys()

@@ -78,13 +78,15 @@
     onopenfile?: (path: string, line?: number) => void
     /** Open the file-history overlay for a path. */
     onfilehistory?: (path: string) => void
+    /** Open a markdown file in document mode (ProseMirror view + range comments). */
+    onopendoc?: (path: string) => void
   }
 
   let {
     diffContent, changedFiles, diffTarget,
     diffLoading, diffPending = false, diffContentKey, splitView = $bindable(false), header,
     fileSelectionMode, selectedFiles, ontogglefile, hunkReview = null,
-    onfilesaved, onjjmutation, oncontextmenu, onopenfile, onfilehistory,
+    onfilesaved, onjjmutation, oncontextmenu, onopenfile, onfilehistory, onopendoc,
   }: Props = $props()
 
   // Stable string key for derivedCache + lastActiveRevId tracking.
@@ -1587,6 +1589,7 @@
             {oncontextmenu}
             {onopenfile}
             {onfilehistory}
+            {onopendoc}
             oncompare={diffTarget?.kind === 'single' ? toggleCompare : undefined}
             annotationsForLine={diffTarget?.kind === 'single' ? annotations.forLine : undefined}
             annotationsForFile={diffTarget?.kind === 'single' ? annotations.forFile : undefined}

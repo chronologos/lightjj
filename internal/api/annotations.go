@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -45,6 +44,8 @@ type Annotation struct {
 	ResolvedAtCommitId string `json:"resolvedAtCommitId,omitempty"`
 }
 
+func (a Annotation) GetID() string { return a.ID }
+
 // changeId is embedded in a filesystem path — restrict to jj's charset
 // (lowercase alphanum for change_ids, hex for commit_ids if used as fallback).
 // This prevents path traversal (../, null bytes) and keeps filenames portable.
@@ -61,52 +62,12 @@ func annotationsPath(changeId string) (string, error) {
 	return filepath.Join(dir, "lightjj", "annotations", changeId+".json"), nil
 }
 
-// atomicWriteJSON writes v to path via temp-file + rename (same pattern as
-// config.go). The parent directory is created if missing.
-func atomicWriteJSON(path string, v any) error {
-	out, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".annotations-*.json")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
-}
-
-// readAnnotations returns the stored annotations for changeId, or an empty
-// slice if the file doesn't exist. Corrupt files are treated as empty with
-// no error — the next write will replace them.
 func readAnnotations(changeId string) ([]Annotation, error) {
 	path, err := annotationsPath(changeId)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return []Annotation{}, nil // missing = empty state
-	}
-	var anns []Annotation
-	if err := json.Unmarshal(data, &anns); err != nil {
-		return []Annotation{}, nil // corrupt = empty state
-	}
-	if anns == nil {
-		anns = []Annotation{}
-	}
-	return anns, nil
+	return readJSONStore[Annotation](path)
 }
 
 // GET /api/annotations?changeId=X
@@ -145,18 +106,7 @@ func (s *Server) handleAnnotationsPost(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	found := false
-	for i := range anns {
-		if anns[i].ID == ann.ID {
-			anns[i] = ann
-			found = true
-			break
-		}
-	}
-	if !found {
-		anns = append(anns, ann)
-	}
+	anns = upsertByID(anns, ann)
 
 	path, _ := annotationsPath(ann.ChangeId) // validated via readAnnotations
 	if err := atomicWriteJSON(path, anns); err != nil {
@@ -199,12 +149,7 @@ func (s *Server) handleAnnotationsDelete(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	out := anns[:0]
-	for _, a := range anns {
-		if a.ID != id {
-			out = append(out, a)
-		}
-	}
+	out := removeByID(anns, id)
 	if len(out) == 0 {
 		// Last one deleted — remove the file rather than keep an empty array.
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

@@ -51,6 +51,7 @@
     /** Open in $EDITOR. undefined = disabled (SSH mode). */
     onopenfile?: (path: string, line?: number) => void
     onfilehistory?: (path: string) => void
+    onopendoc?: (path: string) => void
     oncompare?: (path: string) => void
     /** Lookup annotations for a new-side line number. Called per-line during
      *  render — MUST be O(1) (backed by a Map, not a filter). Stable reference
@@ -92,7 +93,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, oncompare, annotationsForLine, annotationsForFile, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
 
   // Translate effective (rendered) gap index → original. When no gaps are
   // revealed, gapMap is undefined → identity. After revealing, hunks merge so
@@ -342,6 +343,7 @@
         ? { label: 'Open in editor', action: () => onopenfile!(filePath) }
         : { label: onopenfile ? 'Open in editor' : 'Open in editor (not configured)', disabled: true },
       ...(onfilehistory ? [{ label: 'View history', action: () => onfilehistory(filePath) }] : []),
+      ...(onopendoc && isMarkdown ? [{ label: 'Open as document', action: () => onopendoc(filePath) }] : []),
       ...(oncompare ? [{ label: 'Compare to…', action: () => oncompare(filePath) }] : []),
       ...(onreviewedtoggle ? [{ label: reviewed ? 'Unmark reviewed' : 'Mark as reviewed', action: () => onreviewedtoggle(filePath, !reviewed) }] : []),
       ...(onannotationclick ? [{ label: 'Add file comment…', action: () => onannotationclick(FILE_LEVEL, '', e) }] : []),
