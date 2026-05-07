@@ -17,6 +17,8 @@ function harness(handled: Partial<Record<keyof GateHandlers, boolean>> = {}) {
     delegateBranches: spy('delegateBranches'),
     mergeEscape: spy('mergeEscape'),
     delegateConflictQueue: spy('delegateConflictQueue'),
+    docEscape: spy('docEscape'),
+    docKeys: spy('docKeys'),
     escapeStack: spy('escapeStack'),
     globalKeys: spy('globalKeys'),
     logKeys: spy('logKeys'),
@@ -46,6 +48,8 @@ describe('routeKeydown — gate priority', () => {
     ['j in merge → globalKeys (after delegate falls through)', { activeView: 'merge' }, 'globalKeys'],
     ['Escape in log → escapeStack', { key: 'Escape' }, 'escapeStack'],
     ['Escape in merge → mergeEscape (NOT escapeStack)', { key: 'Escape', activeView: 'merge' }, 'mergeEscape'],
+    ['Escape in doc → docEscape (NOT escapeStack)', { key: 'Escape', activeView: 'doc' }, 'docEscape'],
+    ['} in doc → globalKeys (docKeys falls through)', { key: '}', activeView: 'doc' }, 'globalKeys'],
     ['j in inline mode → inlineNav (swallows, never reaches logKeys)', { inlineMode: true }, 'inlineNav'],
   ])('%s', (_, over, terminal) => {
     const { h, calls } = harness()
@@ -68,6 +72,13 @@ describe('routeKeydown — gate priority', () => {
 
   // The load-bearing orderings — these are the regression locks.
   describe('ordering invariants', () => {
+    it('docKeys BEFORE globalKeys — }/{ handled in doc, never reaches view-switch', () => {
+      const { h, calls } = harness({ docKeys: true })
+      routeKeydown(ctx({ key: '}', activeView: 'doc' }), h)
+      expect(calls.at(-1)).toBe('docKeys')
+      expect(calls).not.toContain('globalKeys')
+    })
+
     it('globalOverrides BEFORE inInput — Cmd+K works in text fields', () => {
       const { h, calls } = harness({ globalOverrides: true })
       routeKeydown(ctx({ hasModifier: true, key: 'k', inInput: true }), h)

@@ -4,8 +4,11 @@
 
   interface Props {
     open: boolean
-    x: number
-    y: number
+    /** Render in-flow (inside an .inline-review-row) instead of as a fixed
+     *  popup at (x,y). Backdrop + viewport-clamp are skipped. */
+    inline?: boolean
+    x?: number
+    y?: number
     /** Existing annotation for edit; null for create-new. */
     editing: Annotation | null
     /** Prefilled line context (for create-new). */
@@ -16,7 +19,7 @@
     onclose: () => void
   }
 
-  let { open = $bindable(false), x, y, editing, lineContext, onsave, onresolve, ondelete, onclose }: Props = $props()
+  let { open = $bindable(false), inline = false, x = 0, y = 0, editing, lineContext, onsave, onresolve, ondelete, onclose }: Props = $props()
 
   let comment = $state('')
   let severity = $state<AnnotationSeverity>('suggestion')
@@ -46,15 +49,17 @@
     adjustedX = x
     adjustedY = y
     tick().then(() => {
-      if (!bubbleEl) return
-      const rect = bubbleEl.getBoundingClientRect()
-      if (rect.right > window.innerWidth - MARGIN) {
-        adjustedX = Math.max(MARGIN, window.innerWidth - rect.width - MARGIN)
-      }
-      if (rect.bottom > window.innerHeight - MARGIN) {
-        adjustedY = Math.max(MARGIN, window.innerHeight - rect.height - MARGIN)
+      if (!inline && bubbleEl) {
+        const rect = bubbleEl.getBoundingClientRect()
+        if (rect.right > window.innerWidth - MARGIN) {
+          adjustedX = Math.max(MARGIN, window.innerWidth - rect.width - MARGIN)
+        }
+        if (rect.bottom > window.innerHeight - MARGIN) {
+          adjustedY = Math.max(MARGIN, window.innerHeight - rect.height - MARGIN)
+        }
       }
       textareaEl?.focus()
+      if (inline) bubbleEl?.scrollIntoView({ block: 'nearest' })
     })
   })
 
@@ -79,12 +84,15 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="bubble-backdrop" onclick={() => { open = false; onclose() }} role="presentation"></div>
+  {#if !inline}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="bubble-backdrop" onclick={() => { open = false; onclose() }} role="presentation"></div>
+  {/if}
   <div
     bind:this={bubbleEl}
     class="annotation-bubble"
-    style="left: {adjustedX}px; top: {adjustedY}px"
+    class:inline
+    style={inline ? undefined : `left: ${adjustedX}px; top: ${adjustedY}px`}
     onkeydown={handleKeydown}
     role="dialog"
     aria-label="Annotation"
@@ -138,6 +146,16 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
     padding: 10px;
     font-size: var(--fs-md);
+    font-family: var(--font-ui);
+  }
+  .annotation-bubble.inline {
+    position: static;
+    z-index: auto;
+    width: 100%;
+    background: var(--base);
+    border-left: 3px solid var(--ann-accent, var(--amber));
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 8%, transparent);
+    padding: 10px 12px;
   }
 
   .bubble-header {

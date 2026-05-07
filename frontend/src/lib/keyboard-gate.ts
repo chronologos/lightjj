@@ -41,6 +41,7 @@ export interface GateHandlers {
   mergeEscape(): void
   delegateConflictQueue(): boolean
   docEscape(): void
+  docKeys(): boolean
   escapeStack(): void
   globalKeys(): boolean
   logKeys(): void
@@ -81,6 +82,7 @@ export function routeKeydown(c: GateCtx, h: GateHandlers): void {
   if (c.activeView === 'doc') {
     if (c.defaultPrevented) return
     if (c.key === 'Escape') return h.docEscape()
+    if (h.docKeys()) return
     h.globalKeys()
     return
   }

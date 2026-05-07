@@ -305,6 +305,9 @@
   let annBubble = $state<AnnotationBubbleState>({
     open: false, x: 0, y: 0, editing: null, lineContext: null,
   })
+  // Inline composer (full-width row below the line) wherever inline CommentCards
+  // render; popup fallback for split/multi where there's no inline mount point.
+  const useInlineComposer = $derived(diffTarget?.kind === 'single' && !splitView)
 
   // Load + re-anchor whenever the displayed revision changes (single-rev only).
   // Agent iteration = same change_id, new commit_id. After loadLog() runs
@@ -1720,7 +1723,9 @@
             annotationsForFile={diffTarget?.kind === 'single' ? annotations.forFile : undefined}
             annotationCount={annCountByPath.get(filePath) ?? 0}
             docCommentCount={docCommentCounts.get(filePath) ?? 0}
-            vis={diffTarget?.kind === 'single' && !splitView ? vis : undefined}
+            vis={useInlineComposer ? vis : undefined}
+            composer={useInlineComposer && annBubble.open && annBubble.lineContext?.filePath === filePath ? annotationComposer : undefined}
+            draftLine={useInlineComposer && annBubble.open && annBubble.lineContext?.filePath === filePath ? { lineNum: annBubble.lineContext.lineNum, side: annBubble.lineContext.side } : null}
             onreviewresolve={(id, res) => annotations.resolveAs(id, res)}
             onreviewdelete={(id) => annotations.remove(id)}
             onannotationclick={diffTarget?.kind === 'single' ? (ln, content, e, ed, side) => handleAnnotationClick(filePath, ln, content, e, ed, side) : undefined}
@@ -1785,17 +1790,32 @@
   </div>
 </div>
 
-<AnnotationBubble
-  bind:open={annBubble.open}
-  x={annBubble.x}
-  y={annBubble.y}
-  editing={annBubble.editing}
-  lineContext={annBubble.lineContext ?? undefined}
-  onsave={saveAnnotation}
-  onresolve={annBubble.editing ? resolveAnnotation : undefined}
-  ondelete={annBubble.editing ? () => annotations.remove(annBubble.editing!.id) : undefined}
-  onclose={() => { annBubble.editing = null; annBubble.lineContext = null }}
-/>
+{#snippet annotationComposer()}
+  <AnnotationBubble
+    inline
+    bind:open={annBubble.open}
+    editing={annBubble.editing}
+    lineContext={annBubble.lineContext ?? undefined}
+    onsave={saveAnnotation}
+    onresolve={annBubble.editing ? resolveAnnotation : undefined}
+    ondelete={annBubble.editing ? () => annotations.remove(annBubble.editing!.id) : undefined}
+    onclose={() => { annBubble.editing = null; annBubble.lineContext = null }}
+  />
+{/snippet}
+
+{#if !useInlineComposer}
+  <AnnotationBubble
+    bind:open={annBubble.open}
+    x={annBubble.x}
+    y={annBubble.y}
+    editing={annBubble.editing}
+    lineContext={annBubble.lineContext ?? undefined}
+    onsave={saveAnnotation}
+    onresolve={annBubble.editing ? resolveAnnotation : undefined}
+    ondelete={annBubble.editing ? () => annotations.remove(annBubble.editing!.id) : undefined}
+    onclose={() => { annBubble.editing = null; annBubble.lineContext = null }}
+  />
+{/if}
 
 <style>
   /* NO transform/filter/will-change/contain on .panel — would trap the

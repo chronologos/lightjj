@@ -338,6 +338,7 @@
   let docFilePath: string | null = $state(null)
   let docSession: DocSession | null = $state(null)
   let docViewRef: { scrollTo: (pos: number) => void; applyReplace: (f: number, t: number, s: string) => void } | undefined = $state()
+  let docRailRef: { stepComment: (dir: 1 | -1) => boolean } | undefined = $state()
   let docEditable = $state(false)
   let docStale = $state(false)
   let docAgentPopover = $state(false)
@@ -2111,6 +2112,16 @@
           return false
         },
         docEscape: () => { closeDocView(); e.preventDefault() },
+        docKeys: () => {
+          if (e.key === '}' || e.key === '{') {
+            e.preventDefault()
+            if (docRailRef?.stepComment(e.key === '}' ? 1 : -1) === false) {
+              setMessage({ kind: 'warning', text: 'No open comments on this document' })
+            }
+            return true
+          }
+          return false
+        },
         escapeStack: handleEscapeStack,
         globalKeys: () => handleGlobalKeys(e),
         logKeys: () => handleLogKeys(e),
@@ -2862,7 +2873,9 @@
                     }}
                   />
                   <DocCommentRail
+                    bind:this={docRailRef}
                     session={docSession}
+                    vis={commentVis}
                     onhover={(id) => docFocusedComment = id}
                     onjump={(pos) => docViewRef?.scrollTo(pos)}
                     onaccept={(id) => {

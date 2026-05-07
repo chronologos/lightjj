@@ -72,6 +72,11 @@
     /** CommentCard intent callbacks — DiffPanel wires these to the store. */
     onreviewresolve?: (id: string, r: Resolution) => void
     onreviewdelete?: (id: string) => void
+    /** Inline create/edit composer (AnnotationBubble inline) rendered below
+     *  `draftLine`. DiffPanel passes both only when annBubble.open and the
+     *  filePath matches; undefined = popup fallback (split/multi). */
+    composer?: import('svelte').Snippet
+    draftLine?: { lineNum: number; side: DiffSide } | null
     /** Click handler for the annotation gutter badge / Alt+click quick-add.
      *  Receives the line number on `side`, the line's raw content (without
      *  diff prefix), and the click event (for positioning the bubble).
@@ -103,7 +108,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, vis, onreviewresolve, onreviewdelete, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, vis, onreviewresolve, onreviewdelete, composer, draftLine, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
 
   // Translate effective (rendered) gap index → original. When no gaps are
   // revealed, gapMap is undefined → identity. After revealing, hunks merge so
@@ -479,6 +484,7 @@
               review={r}
               anchorText={anchorText(r)}
               orphaned={r.orphaned}
+              compact
               onresolve={onreviewresolve}
               ondelete={onreviewdelete}
               onhideauthor={vis.hideAuthor}
@@ -672,6 +678,9 @@
     {/if}
   </div>
   {@render inlineReviews(fileNotes)}
+  {#if composer && draftLine?.lineNum === FILE_LEVEL}
+    <div class="inline-review-row">{@render composer()}</div>
+  {/if}
   {#if !isCollapsed}
     {#if previewContent !== undefined}
       {#if isImage && previewRevision}
@@ -830,6 +839,9 @@
               {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
               {@const lineAnns = reviewsAt(ln.old, ln.new)}
               {#if lineAnns.length > 0}{@render inlineReviews(lineAnns)}{/if}
+              {#if composer && draftLine && (draftLine.side === 'new' ? draftLine.lineNum === ln.new : draftLine.lineNum === ln.old)}
+                <div class="inline-review-row">{@render composer()}</div>
+              {/if}
             {/if}
           {/each}
         </div>
@@ -1104,11 +1116,19 @@
   }
 
   .inline-review-row {
-    padding: 6px 8px 6px 56px;
+    padding: 10px 12px;
     background: color-mix(in srgb, var(--text) 2%, transparent);
     border-bottom: 1px solid var(--surface0);
   }
-  .inline-review-row :global(.cmt) { max-width: 720px; }
+  /* Full-width inline — the card IS the row content. The 3px severity border
+     reads as a left rail; body text doesn't need to align with the code
+     column above (it's a different content type). */
+  .inline-review-row :global(.cmt) {
+    width: 100%;
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 8%, transparent);
+  }
+  .inline-review-row :global(.cmt-entry) { padding: 8px 12px; }
+  .inline-review-row :global(.cmt-actions) { padding: 6px 10px; }
 
   .stat-add {
     color: var(--green);
@@ -1235,9 +1255,12 @@
      (set by .severity-* in theme.css) for fill. */
   .diff-line { position: relative; }
   .review-bubble {
+    /* abspos with no left/right = sits at its natural inline position (right
+       after the second .line-num), lifted out of flow so it doesn't push the
+       code text. Same trick the old .annotation-badge used. */
     position: absolute;
-    right: 4px;
     top: 2px;
+    margin-left: -2px;
     width: 14px;
     height: 14px;
     padding: 0;

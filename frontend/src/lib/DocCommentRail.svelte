@@ -1,14 +1,18 @@
 <script lang="ts">
   import type { DocSession, PlacedComment } from './doc-session.svelte'
-  import { renderMarkdown } from './markdown-render'
+  import type { CommentVisibility } from './comment-visibility.svelte'
+  import { fromDocComment } from './review'
+  import CommentCard from './CommentCard.svelte'
 
   let {
     session,
+    vis,
     onjump,
     onhover,
     onaccept,
   }: {
     session: DocSession
+    vis?: CommentVisibility
     onjump?: (pmPos: number) => void
     onhover?: (id: string | null) => void
     onaccept?: (id: string) => void
@@ -33,25 +37,21 @@
       .sort((a, b) => (a.root.from ?? 0) - (b.root.from ?? 0))
   })
 
-  const openCount = $derived(threads.filter((t) => !t.root.resolution).length)
+  const hidden = $derived(vis?.hiddenAuthors ?? new Set<string>())
+  const visibleThreads = $derived(threads.filter((t) => !t.root.author || !hidden.has(t.root.author)))
+  const openCount = $derived(visibleThreads.filter((t) => !t.root.resolution).length)
 
-  let replyDrafts = $state<Record<string, string>>({})
+  let navIdx = $state(-1)
 
-  function fmtAge(ts: number): string {
-    const s = Math.floor((Date.now() - ts) / 1000)
-    if (s < 60) return `${s}s`
-    if (s < 3600) return `${Math.floor(s / 60)}m`
-    if (s < 86400) return `${Math.floor(s / 3600)}h`
-    return `${Math.floor(s / 86400)}d`
-  }
-
-  async function submitReply(rootId: string) {
-    const body = replyDrafts[rootId]?.trim()
-    if (!body) return
-    const root = session.comments.find((c) => c.id === rootId)
-    if (!root || root.from === undefined || root.to === undefined) return
-    await session.addComment(root.from, root.to, body, rootId)
-    replyDrafts = { ...replyDrafts, [rootId]: '' }
+  /** {/}' nav over open threads in document order. Returns false when none. */
+  export function stepComment(dir: 1 | -1): boolean {
+    const open = visibleThreads.filter((t) => !t.root.resolution)
+    if (open.length === 0) return false
+    navIdx = (navIdx + dir + open.length) % open.length
+    const t = open[navIdx]
+    if (t.root.from !== undefined) onjump?.(t.root.from)
+    onhover?.(t.root.id)
+    return true
   }
 </script>
 
@@ -59,62 +59,34 @@
   <div class="panel-header">
     <span class="panel-title">Comments</span>
     <span class="rail-count">{openCount} open</span>
+    {#if hidden.size > 0}
+      <span class="rail-filter" title="Hidden authors: {[...hidden].join(', ')}">
+        {hidden.size} hidden
+        {#each hidden as a}<button class="btn btn-sm" onclick={() => vis?.showAuthor(a)}>{a} ×</button>{/each}
+      </span>
+    {/if}
   </div>
 
   <div class="rail-body">
-    {#each threads as t (t.root.id)}
-      <!-- svelte-ignore a11y_no_static_element_interactions a11y_mouse_events_have_key_events -->
-      <div
-        class="thread"
-        class:resolved={!!t.root.resolution}
-        onmouseenter={() => onhover?.(t.root.id)}
-        onmouseleave={() => onhover?.(null)}
-      >
-        <button
-          class="thread-quote"
-          class:is-suggestion={t.root.kind === 'suggestion'}
-          onclick={() => t.root.from !== undefined && onjump?.(t.root.from)}
-          title="Jump to selection"
-        >
-          {#if t.root.kind === 'suggestion' && t.root.suggestion}
-            <span class="sugg-del">{t.root.anchor.selection}</span>
-            <span class="sugg-add">{t.root.suggestion.replacement}</span>
-          {:else}
-            {t.root.anchor.selection || '(empty selection)'}
-          {/if}
-        </button>
-        {#each [t.root, ...t.replies] as c (c.id)}
-          <div class="comment">
-            <div class="comment-meta">
-              <span class="author">{c.author}</span>
-              <span class="age">{fmtAge(c.createdAt)}</span>
-            </div>
-            <div class="comment-body">{@html renderMarkdown(c.body)}</div>
-          </div>
-        {/each}
-        <div class="thread-actions">
-          <input
-            class="modal-input reply-input"
-            placeholder="Reply…"
-            bind:value={replyDrafts[t.root.id]}
-            onkeydown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), submitReply(t.root.id))}
-          />
-          {#if !t.root.resolution}
-            {#if t.root.kind === 'suggestion' && t.root.suggestion}
-              <button class="btn btn-sm btn-primary" disabled={t.root.orphaned} onclick={() => onaccept?.(t.root.id)}>Accept</button>
-              <button class="btn btn-sm" onclick={() => session.resolveComment(t.root.id, 'wontfix')}>Reject</button>
-            {:else}
-              <button class="btn btn-sm" onclick={() => session.resolveComment(t.root.id, 'addressed')}>Resolve</button>
-            {/if}
-          {:else}
-            <span class="resolved-badge" class:wontfix={t.root.resolution === 'wontfix'}>{t.root.resolution === 'wontfix' ? '✗' : '✓'} {t.root.resolution}</span>
-            {#if t.root.kind === 'suggestion' && t.root.resolution === 'addressed'}
-              <button class="btn btn-sm" onclick={() => session.resolveComment(t.root.id, 'wontfix')} title="Mark rejected instead (text change stays — ⌘Z in the editor to undo it)">Reject</button>
-            {/if}
-          {/if}
-          <button class="btn btn-sm btn-danger" onclick={() => session.removeComment(t.root.id)} title="Delete thread (and replies)">✕</button>
-        </div>
-      </div>
+    {#each visibleThreads as t (t.root.id)}
+      <CommentCard
+        review={fromDocComment(t.root)}
+        replies={t.replies.map(fromDocComment)}
+        anchorText={t.root.anchor.selection}
+        orphaned={t.root.orphaned}
+        onjump={t.root.from !== undefined ? () => onjump?.(t.root.from!) : undefined}
+        onhover={(id) => onhover?.(id)}
+        onresolve={(id, r) => session.resolveComment(id, r)}
+        onreply={(rootId, body) => {
+          const root = session.comments.find((c) => c.id === rootId)
+          if (root?.from !== undefined && root.to !== undefined) {
+            void session.addComment(root.from, root.to, body, rootId)
+          }
+        }}
+        onaccept={t.root.kind === 'suggestion' ? onaccept : undefined}
+        ondelete={(id) => session.removeComment(id)}
+        onhideauthor={vis ? (a) => vis.hideAuthor(a) : undefined}
+      />
     {:else}
       <div class="placeholder-text">No comments yet. Select text to add one, or paste the Agent hint into a coding agent to request a review.</div>
     {/each}
@@ -125,15 +97,12 @@
         <span class="rail-count">{session.orphanedComments.length}</span>
       </div>
       {#each session.orphanedComments as c (c.id)}
-        <div class="thread orphaned">
-          <div class="thread-quote orphan-quote">{c.anchor.selection}</div>
-          <div class="comment">
-            <div class="comment-body">{@html renderMarkdown(c.body)}</div>
-          </div>
-          <div class="thread-actions">
-            <button class="btn btn-sm btn-danger" onclick={() => session.removeComment(c.id)} title="Delete comment">✕</button>
-          </div>
-        </div>
+        <CommentCard
+          review={fromDocComment(c)}
+          anchorText={c.anchor.selection}
+          orphaned
+          ondelete={(id) => session.removeComment(id)}
+        />
       {/each}
     {/if}
   </div>
@@ -149,72 +118,11 @@
     border-left: 1px solid var(--surface1);
     background: var(--mantle);
   }
-  .rail-body { flex: 1; overflow-y: auto; padding: 8px; }
+  .rail-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
   .rail-count { font-size: var(--fs-xs); color: var(--subtext0); }
-
-  .thread {
-    border: 1px solid var(--surface1);
-    border-radius: 4px;
-    margin-bottom: 8px;
-    background: var(--base);
-    overflow: hidden;
-  }
-  .thread.resolved { opacity: 0.55; }
-  .thread.orphaned { border-color: var(--surface2); border-style: dashed; }
-
-  .thread-quote {
-    display: block;
-    width: 100%;
-    text-align: left;
-    border: none;
-    border-left: 3px solid var(--amber);
-    background: var(--bg-warning);
-    padding: 4px 8px;
-    font-family: var(--font-ui);
-    font-size: var(--fs-xs);
-    color: var(--subtext1);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    cursor: pointer;
-  }
-  .thread-quote:hover { background: var(--bg-active); }
-  .thread-quote.is-suggestion {
-    white-space: normal;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-family: var(--font-mono);
-    border-left-color: var(--green);
-  }
-  .sugg-del, .sugg-add {
-    display: block;
-    overflow-wrap: break-word;
-  }
-  .sugg-del { color: var(--red); text-decoration: line-through; }
-  .sugg-add { color: var(--green); }
+  .rail-filter { font-size: var(--fs-2xs); color: var(--subtext0); margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
   .orphan-header { margin-top: 12px; }
   .orphan-header .panel-title { color: var(--amber); }
-  .orphan-quote { border-left-color: var(--surface2); background: var(--surface0); cursor: default; }
-
-  .comment { padding: 6px 8px; border-top: 1px solid var(--surface0); }
-  .comment:first-of-type { border-top: none; }
-  .comment-meta { display: flex; gap: 6px; font-size: var(--fs-2xs); color: var(--subtext0); margin-bottom: 2px; }
-  .author { font-weight: 600; }
-  .comment-body { font-size: var(--fs-sm); }
-  .comment-body :global(p) { margin: 0.2em 0; }
-  .comment-body :global(code) { font-family: var(--font-mono); font-size: 0.92em; }
-
-  .thread-actions {
-    display: flex;
-    gap: 4px;
-    padding: 4px 6px;
-    border-top: 1px solid var(--surface0);
-    align-items: center;
-  }
-  .reply-input { flex: 1; font-size: var(--fs-xs); padding: 2px 6px; }
-  .resolved-badge { font-size: var(--fs-2xs); color: var(--green); }
-  .resolved-badge.wontfix { color: var(--subtext0); }
 
   @media (max-width: 900px) {
     .rail { width: 240px; }

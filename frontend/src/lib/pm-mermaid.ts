@@ -23,6 +23,7 @@ class MermaidNodeView implements NodeView {
   private svgHost: HTMLElement
   private toggle: HTMLButtonElement
   private showingSource = false
+  private forcedByFailure = false
   private lastSrc = ''
   private panzoomCleanup?: () => void
 
@@ -38,6 +39,7 @@ class MermaidNodeView implements NodeView {
     this.toggle.addEventListener('mousedown', (e) => {
       e.preventDefault()
       this.showingSource = !this.showingSource
+      this.forcedByFailure = false
       this.applyMode()
     })
     this.dom.append(this.toggle, this.svgHost, pre)
@@ -63,11 +65,17 @@ class MermaidNodeView implements NodeView {
       this.svgHost.innerHTML = svg
       this.panzoomCleanup = wirePanzoom(this.dom)
       // A prior failure forced source view; flip back so the now-valid render
-      // is visible without a manual toggle.
-      if (this.showingSource) { this.showingSource = false; this.applyMode() }
+      // is visible without a manual toggle. NOT for user-initiated ⟨⟩ — that
+      // would auto-exit source mode on the first valid keystroke mid-edit.
+      if (this.forcedByFailure) {
+        this.showingSource = false
+        this.forcedByFailure = false
+        this.applyMode()
+      }
     } else {
       this.svgHost.textContent = '(mermaid render failed — edit source)'
       this.showingSource = true
+      this.forcedByFailure = true
       this.applyMode()
     }
   }

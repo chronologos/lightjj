@@ -17,6 +17,7 @@
     staleness,
     replies = [],
     orphaned = false,
+    compact = false,
     onresolve,
     onreply,
     onaccept,
@@ -30,6 +31,9 @@
     staleness?: number
     replies?: Review[]
     orphaned?: boolean
+    /** Inline-in-diff: hide the quote bar for non-suggestions (the line is
+     *  directly above). Suggestions still show del/ins. */
+    compact?: boolean
     onresolve?: (id: string, r: Resolution) => void
     onreply?: (id: string, body: string) => void
     onaccept?: (id: string) => void
@@ -61,20 +65,22 @@
   onmouseenter={() => onhover?.(review.id)}
   onmouseleave={() => onhover?.(null)}
 >
-  <button
-    class="cmt-quote"
-    class:is-suggestion={isSugg}
-    onclick={onjump}
-    disabled={!onjump}
-    title={onjump ? 'Jump to anchor' : undefined}
-  >
-    {#if isSugg}
-      <span class="sugg-del">{anchorText}</span>
-      <span class="sugg-add">{review.suggestion?.replacement}</span>
-    {:else}
-      {anchorText || '(no anchor text)'}
-    {/if}
-  </button>
+  {#if isSugg || !compact}
+    <button
+      class="cmt-quote"
+      class:is-suggestion={isSugg}
+      onclick={onjump}
+      disabled={!onjump}
+      title={onjump ? 'Jump to anchor' : undefined}
+    >
+      {#if isSugg}
+        <span class="sugg-del">{anchorText}</span>
+        <span class="sugg-add">{review.suggestion?.replacement}</span>
+      {:else}
+        {anchorText || '(no anchor text)'}
+      {/if}
+    </button>
+  {/if}
 
   {#each [review, ...replies] as c, i (c.id)}
     <div class="cmt-entry" class:is-reply={i > 0}>
@@ -128,6 +134,7 @@
     border-left: 3px solid var(--sev);
     border-radius: 4px;
     background: var(--base);
+    font-family: var(--font-ui);
     overflow: hidden;
     transition: opacity var(--anim-duration) var(--anim-ease);
   }
