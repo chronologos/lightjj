@@ -586,11 +586,17 @@ body {
    lines stand out at a glance. Static :has() (not :hover) — only invalidates
    on annotation add/remove, not on scroll/layout. CSS vars don't bubble UP
    from child to parent, so the per-severity :has() rules are irreducible. */
+.diff-line:has(> .review-bubble.severity-must-fix),
 .diff-line:has(> .annotation-badge.severity-must-fix)   { --ann-accent: var(--red); }
+.diff-line:has(> .review-bubble.severity-suggestion),
 .diff-line:has(> .annotation-badge.severity-suggestion) { --ann-accent: var(--amber); }
+.diff-line:has(> .review-bubble.severity-question),
 .diff-line:has(> .annotation-badge.severity-question)   { --ann-accent: var(--blue); }
+.diff-line:has(> .review-bubble.severity-nitpick),
 .diff-line:has(> .annotation-badge.severity-nitpick)    { --ann-accent: var(--surface2); }
+.diff-line:has(> .review-bubble.severity-reviewed),
 .diff-line:has(> .annotation-badge.severity-reviewed)   { --ann-accent: var(--green); }
+.diff-line:has(> .review-bubble:not(.resolved)),
 .diff-line:has(> .annotation-badge:not(.resolved)) {
   box-shadow: inset 3px 0 0 var(--ann-accent);
   background-image: linear-gradient(color-mix(in srgb, var(--ann-accent) 8%, transparent), color-mix(in srgb, var(--ann-accent) 8%, transparent));

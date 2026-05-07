@@ -50,6 +50,23 @@ func TestAnnotations_SideRoundTrips(t *testing.T) {
 	assert.Equal(t, "old", anns[0].Side)
 }
 
+func TestAnnotations_ResolutionRoundTrips(t *testing.T) {
+	srv := newAnnotationsServer(t)
+	ann := Annotation{ID: "a1", ChangeId: "abc", FilePath: "f.go", Status: "resolved", Resolution: "wontfix"}
+	body, _ := json.Marshal(ann)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/annotations", body))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	w = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/annotations?changeId=abc", nil))
+	var anns []Annotation
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &anns))
+	require.Len(t, anns, 1)
+	assert.Equal(t, "wontfix", anns[0].Resolution)
+	assert.Equal(t, "resolved", anns[0].Status)
+}
+
 func TestAnnotations_CRUD(t *testing.T) {
 	srv := newAnnotationsServer(t)
 

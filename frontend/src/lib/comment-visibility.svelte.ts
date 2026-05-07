@@ -46,9 +46,10 @@ export function createCommentVisibility() {
       mode = ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length]
       overrides.clear()
     },
-    toggleThread(id: string, want?: boolean) {
-      const next = want ?? !(overrides.get(id) ?? mode !== 'hide')
-      overrides.set(id, next)
+    /** `want` should be the caller's `!isVisible(r)` — the store can't derive
+     *  the current render state from `id` alone (depends on r.resolution). */
+    toggleThread(id: string, want: boolean) {
+      overrides.set(id, want)
     },
     hideAuthor(a: string) {
       if (!config.hiddenCommentAuthors.includes(a)) {

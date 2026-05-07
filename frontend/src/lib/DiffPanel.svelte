@@ -25,6 +25,9 @@
   import AnnotationBubble from './AnnotationBubble.svelte'
   import { createAnnotationStore, exportMarkdown, exportJSON, isReviewedMarker } from './annotations.svelte'
   import { FILE_LEVEL, type Annotation, type AnnotationSeverity } from './api'
+  import { anchorText, isReviewedReview, SEVERITY_VAR, type PlacedReview, type Severity } from './review'
+  import type { CommentMode, CommentVisibility } from './comment-visibility.svelte'
+  import { holdViewport } from './virtual.svelte'
 
   interface Props {
     diffContent: string
@@ -44,6 +47,7 @@
      *  path) where diffPending stays false but commit_id still churns. */
     diffContentKey?: string
     splitView: boolean
+    vis: CommentVisibility
     /** Revision metadata header (change_id, description, bookmarks, describe
      *  editor). Rendered in single-rev mode; multi-check shows a simpler
      *  built-in header. Extracted to a snippet because the describe/bookmark/
@@ -84,7 +88,7 @@
 
   let {
     diffContent, changedFiles, diffTarget,
-    diffLoading, diffPending = false, diffContentKey, splitView = $bindable(false), header,
+    diffLoading, diffPending = false, diffContentKey, splitView = $bindable(false), vis, header,
     fileSelectionMode, selectedFiles, ontogglefile, hunkReview = null,
     onfilesaved, onjjmutation, oncontextmenu, onopenfile, onfilehistory, onopendoc,
   }: Props = $props()
@@ -286,6 +290,7 @@
   // diffTarget changes. Multi-check mode (revset) doesn't support annotations
   // (which commit would they belong to?).
   const annotations = createAnnotationStore()
+  const MODE_GLYPH: Record<CommentMode, string> = { auto: '◐', hide: '○', show: '●' }
 
   interface AnnotationBubbleState {
     open: boolean
@@ -318,15 +323,16 @@
     })
   })
 
-  function openAnnotationBubble(filePath: string, lineNum: number, lineContent: string, x: number, y: number, editing?: Annotation, side: DiffSide = 'new') {
+  function openAnnotationBubble(filePath: string, lineNum: number, lineContent: string, x: number, y: number, editingId?: string, side: DiffSide = 'new') {
     if (diffTarget?.kind !== 'single') return
-    // File-level: skip the empty reviewed-marker so "Add file comment" opens
-    // a real note, not the checkbox state. (Marker is still toggleable via
-    // the checkbox; the bubble is for comments.) Explicit `editing` (from a
-    // per-note strip click) wins so note #2/#3 are editable, not just first.
-    const editTarget = editing ?? (lineNum === FILE_LEVEL
-      ? annotations.forFile(filePath).find(a => !isReviewedMarker(a))
-      : annotations.forLine(filePath, lineNum, side)[0])
+    // forLine/forFile now return PlacedReview[]; resolve to the underlying
+    // Annotation by id so saveAnnotation/resolveAnnotation can spread it.
+    // File-level default skips the reviewed-marker so "Add file comment"
+    // opens a real note, not the checkbox state.
+    const defaultId = editingId ?? (lineNum === FILE_LEVEL
+      ? annotations.forFile(filePath).find(r => !isReviewedReview(r))?.id
+      : annotations.forLine(filePath, lineNum, side)[0]?.id)
+    const editTarget = defaultId ? annotations.list.find(a => a.id === defaultId) : undefined
     annBubble = {
       open: true, x, y,
       editing: editTarget ?? null,
@@ -338,8 +344,8 @@
     }
   }
 
-  function handleAnnotationClick(filePath: string, lineNum: number, lineContent: string, e: MouseEvent, editing?: Annotation, side?: DiffSide) {
-    openAnnotationBubble(filePath, lineNum, lineContent, e.clientX, e.clientY, editing, side)
+  function handleAnnotationClick(filePath: string, lineNum: number, lineContent: string, e: MouseEvent, editingId?: string, side?: DiffSide) {
+    openAnnotationBubble(filePath, lineNum, lineContent, e.clientX, e.clientY, editingId, side)
   }
 
   async function saveAnnotation(comment: string, severity: AnnotationSeverity) {
@@ -379,24 +385,34 @@
     }
   }
 
-  // Summary counts — shown in a compact bar below the file list when non-zero.
-  // Reviewed markers (checkbox state) are progress, not feedback — exclude
-  // from chip strip; surface as N/M progress instead.
-  let openAnns = $derived(annotations.list.filter(a => a.status === 'open' && !isReviewedMarker(a)))
-  let orphanedAnns = $derived(annotations.list.filter(a => a.status === 'orphaned'))
+  // Per-severity counts for the toolbar strip + orphan row. Reviewed markers
+  // (checkbox state) are progress, not feedback — excluded.
+  let orphanedReviews = $derived(annotations.placed.filter(r => r.orphaned && !isReviewedReview(r)))
+  let orphansExpanded = $state(false)
+  let severityCounts = $derived.by(() => {
+    const m = new Map<Severity, number>()
+    for (const r of annotations.placed) {
+      if (r.resolution || r.orphaned || isReviewedReview(r) || !r.severity) continue
+      m.set(r.severity, (m.get(r.severity) ?? 0) + 1)
+    }
+    return m
+  })
   // Intersect with current diff so a file marked-reviewed-then-removed
   // doesn't push N > M (annotations persist per changeId across rewrites).
   let reviewedCount = $derived(parsedDiff.filter(f => annotations.isReviewed(f.filePath)).length)
 
-  function scrollToAnnotation(ann: Annotation) {
-    // Preview renders the badge too (wireAnnotations) — don't kick the user
-    // out of preview. Jump to the containing hunk when we can find it; fall
-    // back to the file header otherwise (annotation between hunks, preview
-    // mode, or file removed from diff).
-    const file = parsedDiff.find(f => f.filePath === ann.filePath)
-    const hi = file ? hunkIndexForLine(file.hunks, ann.lineNum, ann.side ?? 'new') : -1
-    if (hi >= 0) scrollToHunk(ann.filePath, hi)
-    else scrollToFile(ann.filePath)
+  function scrollToReview(r: PlacedReview) {
+    if (r.anchor.kind !== 'diff') return
+    vis.overrides.set(r.id, true)
+    const file = parsedDiff.find(f => f.filePath === r.anchor.filePath)
+    const hi = file ? hunkIndexForLine(file.hunks, r.line ?? 0, r.anchor.side) : -1
+    if (hi >= 0) scrollToHunk(r.anchor.filePath, hi)
+    else scrollToFile(r.anchor.filePath)
+  }
+
+  function jumpToFirstOfSeverity(sev: Severity) {
+    const r = navAnnotations.find(x => x.severity === sev)
+    if (r) scrollToReview(r)
   }
 
   // Export helpers for command palette (bound via bind:this in App)
@@ -423,6 +439,7 @@
    *  expanded-unified still has a target. Split-expanded has neither
    *  (no per-hunk wrapper) — degrades to scrollToFile. */
   function scrollToHunk(path: string, hunkIdx: number) {
+    vis.bumpScrollGen()
     collapsedFiles.delete(path)
     requestAnimationFrame(() => {
       const fileEl = document.querySelector(`[data-file-path="${CSS.escape(path)}"]`)
@@ -452,38 +469,46 @@
     scrollToHunk(t.path, t.hunkIdx)
   }
 
-  // Line-level annotations only, in file-render order then lineNum. The store
-  // doesn't know parsedDiff order so this lives here. Intersects with
+  // Line-level reviews only, in file-render order then line. Intersects with
   // parsedDiff (annotations persist per changeId across rewrites — files that
   // left the diff would otherwise sort to end and dead-step `}`).
   let navAnnotations = $derived.by(() => {
     const fileOrder = new Map(parsedDiff.map((f, i) => [f.filePath, i]))
-    return annotations.list
-      .filter(a => a.status !== 'resolved' && a.lineNum !== FILE_LEVEL && !isReviewedMarker(a)
-        && fileOrder.has(a.filePath))
+    return annotations.placed
+      .filter(r => r.anchor.kind === 'diff' && !r.resolution && !r.orphaned
+        && r.anchor.line !== FILE_LEVEL && !isReviewedReview(r)
+        && fileOrder.has(r.anchor.filePath))
       .slice()
-      .sort((a, b) => fileOrder.get(a.filePath)! - fileOrder.get(b.filePath)! || a.lineNum - b.lineNum)
+      .sort((a, b) =>
+        fileOrder.get((a.anchor as { filePath: string }).filePath)! -
+        fileOrder.get((b.anchor as { filePath: string }).filePath)! ||
+        (a.line ?? 0) - (b.line ?? 0))
   })
   let annNavIdx = $state(-1)
 
   /** Returns false when there's nothing to step to — caller (App) shows the
-   *  "No annotations" hint. Jumps to the containing hunk; line-level scroll
-   *  would need per-line DOM attrs (deferred — same note as scrollToAnnotation). */
+   *  "No annotations" hint. Expands the target (overrides) before scroll so
+   *  a bubbled review opens. */
   export function stepAnnotation(dir: 1 | -1): boolean {
     if (navAnnotations.length === 0) return false
     if (annNavIdx < 0) annNavIdx = dir > 0 ? -1 : navAnnotations.length
     annNavIdx = Math.max(0, Math.min(navAnnotations.length - 1, annNavIdx + dir))
-    const a = navAnnotations[annNavIdx]
-    const file = parsedDiff.find(f => f.filePath === a.filePath)
-    const hi = file ? hunkIndexForLine(file.hunks, a.lineNum, a.side ?? 'new') : -1
-    if (hi >= 0) scrollToHunk(a.filePath, hi)
-    else scrollToFile(a.filePath)
+    scrollToReview(navAnnotations[annNavIdx])
     return true
+  }
+
+  /** ⇧C — viewport-anchored cycle so the line under the user's eye stays put. */
+  export function cycleVisibility() {
+    if (panelContentEl) holdViewport(panelContentEl, '.diff-file', () => vis.cycle(), () => vis.scrollGen)
+    else vis.cycle()
   }
 
   let annCountByPath = $derived.by(() => {
     const m = new Map<string, number>()
-    for (const a of navAnnotations) m.set(a.filePath, (m.get(a.filePath) ?? 0) + 1)
+    for (const r of navAnnotations) {
+      if (r.anchor.kind !== 'diff') continue
+      m.set(r.anchor.filePath, (m.get(r.anchor.filePath) ?? 0) + 1)
+    }
     return m
   })
 
@@ -1515,28 +1540,29 @@
       </div>
     </div>
   {/if}
-  {#if diffTarget?.kind === 'single' && (openAnns.length > 0 || orphanedAnns.length > 0 || reviewedCount > 0)}
+  {#if diffTarget?.kind === 'single' && (severityCounts.size > 0 || orphanedReviews.length > 0 || reviewedCount > 0 || vis.hiddenAuthors.size > 0)}
     <div class="annotations-bar">
-      <span class="annotations-label">
-        {#if reviewedCount > 0}<span class="reviewed-progress" title="{reviewedCount} of {parsedDiff.length} files reviewed">✓ {reviewedCount}/{parsedDiff.length}</span>{/if}
-        {#if openAnns.length > 0 || orphanedAnns.length > 0}{#if reviewedCount > 0} · {/if}💬 {openAnns.length} open{#if orphanedAnns.length > 0} · <span class="orphaned-count">{orphanedAnns.length} possibly addressed</span>{/if}{/if}
-      </span>
-      <div class="annotations-chips">
-        {#each openAnns as ann (ann.id)}
-          {@const lineSuffix = ann.lineNum === FILE_LEVEL ? '' : `:${ann.lineNum}`}
-          <button class="ann-chip severity-{ann.severity}" onclick={() => scrollToAnnotation(ann)} title="{ann.filePath}{lineSuffix} — {ann.comment}">
-            {ann.filePath.split('/').pop()}{lineSuffix}
-          </button>
+      {#if reviewedCount > 0}<span class="reviewed-progress" title="{reviewedCount} of {parsedDiff.length} files reviewed">✓ {reviewedCount}/{parsedDiff.length}</span>{/if}
+      <div class="sev-strip">
+        {#each (['must-fix', 'suggestion', 'question', 'nitpick'] as const) as sev}
+          {@const n = severityCounts.get(sev) ?? 0}
+          {#if n > 0}
+            <button class="sev-dot" style:color={`var(${SEVERITY_VAR[sev]})`} onclick={() => jumpToFirstOfSeverity(sev)} title="{n} {sev} — jump to first">●{n}</button>
+          {/if}
         {/each}
-        {#each orphanedAnns as ann (ann.id)}
-          <button class="ann-chip orphaned" onclick={() => openAnnotationBubble(ann.filePath, ann.lineNum, ann.lineContent, 200, 200)} title="(possibly addressed) {ann.comment}">
-            {ann.filePath.split('/').pop()}:?
-          </button>
+        {#if orphanedReviews.length > 0}
+          <span class="sev-dot orphan-dot" title="{orphanedReviews.length} possibly addressed">⊘{orphanedReviews.length}</span>
+        {/if}
+      </div>
+      {#each vis.hiddenAuthors as a}
+        <button class="hidden-author-chip" onclick={() => vis.showAuthor(a)} title="Show {a}">⟐ {a} ×</button>
+      {/each}
+      <div class="seg" role="radiogroup" aria-label="Comment visibility">
+        {#each (['auto', 'hide', 'show'] as const) as m}
+          <button class="seg-btn" class:active={vis.mode === m} onclick={() => panelContentEl && holdViewport(panelContentEl, '.diff-file', () => { vis.mode = m; vis.overrides.clear() }, () => vis.scrollGen)} title="{m === 'auto' ? 'Resolved auto-collapse' : m === 'hide' ? 'All bubbled' : 'All expanded'} (⇧C cycles)">{MODE_GLYPH[m]} {m}</button>
         {/each}
       </div>
-      <button class="btn btn-sm" onclick={() => navigator.clipboard.writeText(exportAnnotationsMarkdown())} title="Copy markdown for agent prompt">
-        Export ↗
-      </button>
+      <button class="btn btn-sm" onclick={() => navigator.clipboard.writeText(exportAnnotationsMarkdown())} title="Copy markdown for agent prompt">Export ↗</button>
       <button
         class="btn btn-sm btn-danger"
         onclick={() => confirm(`Clear all ${annotations.list.length} annotations on this change?`) && annotations.clear()}
@@ -1694,6 +1720,9 @@
             annotationsForFile={diffTarget?.kind === 'single' ? annotations.forFile : undefined}
             annotationCount={annCountByPath.get(filePath) ?? 0}
             docCommentCount={docCommentCounts.get(filePath) ?? 0}
+            vis={diffTarget?.kind === 'single' && !splitView ? vis : undefined}
+            onreviewresolve={(id, res) => annotations.resolveAs(id, res)}
+            onreviewdelete={(id) => annotations.remove(id)}
             onannotationclick={diffTarget?.kind === 'single' ? (ln, content, e, ed, side) => handleAnnotationClick(filePath, ln, content, e, ed, side) : undefined}
             onreviewedtoggle={diffTarget?.kind === 'single' ? toggleReviewed : undefined}
           />
@@ -1735,6 +1764,22 @@
             </div>
           {/if}
         {/each}
+        {#if diffTarget?.kind === 'single' && orphanedReviews.length > 0}
+          <div class="orphan-row">
+            <button class="orphan-toggle" onclick={() => orphansExpanded = !orphansExpanded}>
+              {orphansExpanded ? '▾' : '▸'} {orphanedReviews.length} possibly addressed
+            </button>
+            {#if orphansExpanded}
+              {#each orphanedReviews as r (r.id)}
+                <div class="orphan-item">
+                  <span class="ctx" title={anchorText(r)}>{anchorText(r)}</span>
+                  <span>{r.body}</span>
+                  <button class="btn btn-sm btn-danger" onclick={() => annotations.remove(r.id)} title="Delete">✕</button>
+                </div>
+              {/each}
+            {/if}
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
@@ -1956,28 +2001,33 @@
     font-size: var(--fs-sm);
     flex-shrink: 0;
   }
-  .annotations-label { color: var(--subtext0); white-space: nowrap; }
-  .orphaned-count { color: var(--green); }
-  .annotations-chips {
-    display: flex;
-    gap: 4px;
-    overflow-x: auto;
-    flex: 1;
+  .reviewed-progress { color: var(--green); font-weight: 600; font-size: var(--fs-sm); }
+  .sev-strip { display: flex; gap: 8px; flex: 1; align-items: center; }
+  .sev-dot {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font: 600 var(--fs-sm)/1 var(--font-mono);
   }
-  .ann-chip {
-    background: var(--surface0);
-    border: 1px solid var(--surface1);
-    border-left: 3px solid var(--ann-accent, var(--surface2));
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-size: var(--fs-xs);
-    font-family: var(--font-mono);
-    cursor: pointer;
-    white-space: nowrap;
+  .sev-dot:hover { text-decoration: underline; }
+  .orphan-dot { color: var(--green); cursor: default; }
+  .hidden-author-chip {
+    background: var(--surface0); border: 1px solid var(--surface2);
+    border-radius: 9px; padding: 1px 6px; font-size: var(--fs-xs);
+    cursor: pointer; color: var(--subtext0);
   }
-  .ann-chip:hover { background: var(--surface1); }
-  .reviewed-progress { color: var(--green); font-weight: 600; }
-  .ann-chip.orphaned { opacity: 0.6; border-style: dashed; }
+  .hidden-author-chip:hover { color: var(--text); }
+  .orphan-row {
+    padding: 6px 12px; border-top: 1px solid var(--surface0);
+    font-size: var(--fs-sm); background: var(--mantle);
+  }
+  .orphan-toggle {
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--green); font: inherit;
+  }
+  .orphan-item {
+    display: flex; align-items: baseline; gap: 8px; padding: 4px 0;
+    border-top: 1px solid var(--surface0); font-size: var(--fs-xs);
+  }
+  .orphan-item .ctx { font-family: var(--font-mono); color: var(--subtext0); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* --- Diff toolbar --- */
   .diff-toolbar {

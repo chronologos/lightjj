@@ -5,7 +5,7 @@
 // stores by id. No Review→wire inverse mappers — CommentCard emits intent
 // callbacks and the parent surface wires them to its own store.
 
-import type { Annotation, AnnotationSeverity, DiffSide, DocComment } from './api'
+import { FILE_LEVEL, type Annotation, type AnnotationSeverity, type DiffSide, type DocComment } from './api'
 
 export type ReviewAnchor =
   | {
@@ -70,9 +70,7 @@ export function fromAnnotation(a: Annotation): Review {
     severity: a.severity,
     kind: 'note',
     // Prefer the new optional field; fall back to legacy status mapping.
-    resolution:
-      (a as { resolution?: Resolution }).resolution ??
-      (a.status === 'resolved' ? 'addressed' : undefined),
+    resolution: a.resolution ?? (a.status === 'resolved' ? 'addressed' : undefined),
     // status:'orphaned' is dropped — recomputed into PlacedReview.orphaned.
   }
 }
@@ -102,6 +100,17 @@ export function fromDocComment(d: DocComment): Review {
  *  comment is about, surface-independent. */
 export function anchorText(r: Review): string {
   return r.anchor.kind === 'diff' ? r.anchor.lineContent : r.anchor.selection
+}
+
+/** Review-side equivalent of annotations.isReviewedMarker — the file-viewed
+ *  checkbox sentinel. Excluded from nav, counts, and CommentCard rendering. */
+export const isReviewedReview = (r: Review): boolean =>
+  r.severity === 'reviewed' && r.body === '' &&
+  r.anchor.kind === 'diff' && r.anchor.line === FILE_LEVEL
+
+/** Severity rank for "worst-first" bubble color when a line has multiple. */
+export const SEVERITY_RANK: Record<Severity, number> = {
+  'must-fix': 0, suggestion: 1, question: 2, nitpick: 3, reviewed: 4,
 }
 
 export const SEVERITY_VAR: Record<Severity, string> = {

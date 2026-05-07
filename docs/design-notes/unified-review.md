@@ -123,10 +123,10 @@ Resolution order (first match wins):
 Cycling `mode` adds or removes hundreds of px above the viewport. Compensation:
 
 ```ts
-holdViewport(scrollEl: HTMLElement, fn: () => void): Promise<void>
+holdViewport(scrollEl: HTMLElement, anchorSel: string, fn: () => void, gen?: () => number): Promise<void>
 ```
 
-Pick `anchorEl` = first child with `getBoundingClientRect().top ≥ 0` → capture its `top` → run `fn()` → `await tick()` → re-read `top` → `scrollEl.scrollTop += delta`. `tick()` (microtask, post-DOM-flush, pre-paint) is the right barrier; double-rAF would let frame N paint at the shifted position before correcting in N+1. The store owns a `scrollGen` that `holdViewport` checks post-tick and `scrollToHunk`/`DocView.scrollTo` bump, so a nav during the toggle wins.
+Pick `anchorEl` = first `scrollEl.querySelectorAll(anchorSel)` match with `top ≥ scrollEl.top` → capture its `top` → run `fn()` → `await tick()` → re-read `top` → `scrollEl.scrollTop += delta`. `anchorSel` must be per-row (DiffPanel passes `'.diff-file'`) — a single wrapper div's top doesn't move when its contents reflow. `tick()` (microtask, post-DOM-flush, pre-paint) is the right barrier; double-rAF would let frame N paint at the shifted position before correcting in N+1. The store owns a `scrollGen` that `holdViewport` checks post-tick and `scrollToHunk`/`DocView.scrollTo` bump, so a nav during the toggle wins.
 
 Second caller: `DiffPanel.refreshPreviews` currently does absolute `scrollTop` save/restore, which drifts when content above the viewport reflows — switch it to `holdViewport`.
 

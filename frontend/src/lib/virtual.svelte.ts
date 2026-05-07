@@ -67,21 +67,26 @@ export function createWindower(opts: {
 }
 
 /** Run `fn` (a layout-shifting state mutation) without the line under the
- *  user's eye moving. Captures the first child of `scrollEl` whose top ≥ 0,
- *  flushes Svelte's DOM updates, then corrects scrollTop by the delta.
- *  `tick()` is the right barrier (microtask, post-DOM-flush, pre-paint) —
- *  rAF would let the shifted frame paint before correcting. `gen()` lets a
- *  concurrent scrollToHunk/scrollTo win. */
+ *  user's eye moving. Captures the first `anchorSel` match inside `scrollEl`
+ *  whose top ≥ the container's top, flushes Svelte's DOM updates, then
+ *  corrects scrollTop by the delta. `tick()` is the right barrier (microtask,
+ *  post-DOM-flush, pre-paint) — rAF would let the shifted frame paint before
+ *  correcting. `gen()` lets a concurrent scrollToHunk/scrollTo win.
+ *
+ *  `anchorSel` MUST select per-row elements (e.g. `.diff-file`), not a
+ *  wrapper — a single wrapper's top doesn't move when its contents reflow. */
 export async function holdViewport(
   scrollEl: HTMLElement,
+  anchorSel: string,
   fn: () => void,
   gen?: () => number,
 ): Promise<void> {
   const { tick } = await import('svelte')
   const g0 = gen?.()
+  const containerTop = scrollEl.getBoundingClientRect().top
   let anchor: Element | undefined
-  for (const el of scrollEl.children) {
-    if (el.getBoundingClientRect().top >= 0) { anchor = el; break }
+  for (const el of scrollEl.querySelectorAll(anchorSel)) {
+    if (el.getBoundingClientRect().top >= containerTop) { anchor = el; break }
   }
   const before = anchor?.getBoundingClientRect().top
   fn()

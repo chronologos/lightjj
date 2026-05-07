@@ -42,6 +42,9 @@ type Annotation struct {
 	CreatedAt         int64  `json:"createdAt"`
 	CreatedAtCommitId string `json:"createdAtCommitId"`
 	Status            string `json:"status,omitempty"`
+	// Resolution distinguishes addressed-vs-wontfix; Status:'resolved' alone
+	// can't. fromAnnotation prefers this over Status when present.
+	Resolution         string `json:"resolution,omitempty"`
 	ResolvedAtCommitId string `json:"resolvedAtCommitId,omitempty"`
 }
 

@@ -15,6 +15,7 @@
 
 import { api, FILE_LEVEL, type Annotation, type AnnotationSeverity, type DiffSide } from './api'
 import { parseDiffContent, expandTabs } from './diff-parser'
+import { fromAnnotation, type PlacedReview, type Resolution } from './review'
 
 /** A file-level annotation that exists purely as a "viewed" checkbox state —
  *  green severity, no comment body. Excluded from export + chip bar (it's
@@ -24,7 +25,7 @@ export const isReviewedMarker = (a: Annotation) =>
   a.lineNum === FILE_LEVEL && a.severity === 'reviewed' && a.comment === ''
 
 const FUZZY_WINDOW = 5 // ±lines to search for content match
-const NO_ANN: readonly Annotation[] = [] // shared empty result for forLine misses
+const NO_ANN: readonly PlacedReview[] = [] // shared empty result for forLine misses
 
 // changeIds known to have zero annotations — skip the GET on settled j/k.
 // add() is the only path that makes a changeId non-empty, so invalidation is
@@ -176,17 +177,20 @@ export function exportJSON(anns: Annotation[], changeId: string, commitId: strin
 // --- Reactive store ---
 
 interface AnnotationStore {
-  /** Annotations for the currently-loaded changeId. */
+  /** Annotations for the currently-loaded changeId (wire-shape, for export +
+   *  mutation). Render paths read `placed` instead. */
   readonly list: Annotation[]
+  /** Read-model projection of `list` (see review.ts). */
+  readonly placed: PlacedReview[]
   /** changeId of the currently-loaded set (for stale-check). */
   readonly loadedChangeId: string | null
   /** True while a load/save/delete request is in flight. */
   readonly busy: boolean
   /** Lookup annotations for a specific line (for gutter badge). Multiple
    *  annotations may share a line if the user annotated it twice. */
-  forLine(filePath: string, lineNum: number, side?: DiffSide): readonly Annotation[]
+  forLine(filePath: string, lineNum: number, side?: DiffSide): readonly PlacedReview[]
   /** File-level annotations (lineNum=0). */
-  forFile(filePath: string): readonly Annotation[]
+  forFile(filePath: string): readonly PlacedReview[]
   /** Whether the file has a "reviewed" marker (the viewed-checkbox state). */
   isReviewed(filePath: string): boolean
   /** Toggle the reviewed marker for a file. Resolves true if state changed,
@@ -209,6 +213,9 @@ interface AnnotationStore {
   }): Promise<void>
   /** Update comment/severity/status. Re-anchored lineNum is set via load(). */
   update(ann: Annotation): Promise<void>
+  /** Resolve by id — writes both legacy `status:'resolved'` and the new
+   *  `resolution` so older readers and the unified model agree. */
+  resolveAs(id: string, resolution: Resolution): Promise<void>
   remove(id: string): Promise<void>
   clear(): Promise<void>
 }
@@ -218,18 +225,27 @@ export function createAnnotationStore(): AnnotationStore {
   let loadedChangeId = $state<string | null>(null)
   let busy = $state(false)
 
-  // Cache: (filePath + side + lineNum) → Annotation[]. Rebuilt on every list
-  // change. forLine() is called per-diff-line during render; O(1) lookup keeps
-  // the DiffFileView hot path fast. `side ?? 'new'` so pre-side stored entries
-  // (no `side` field) bucket with new-side and existing 2-arg forLine() calls
-  // (MarkdownPreview) keep working.
+  // Read-model projection. PlacedReview.line/orphaned mirror the persisted
+  // post-reanchor lineNum/status (load() persists reanchor results).
+  let placed = $derived(list.map((a): PlacedReview => ({
+    ...fromAnnotation(a),
+    orphaned: a.status === 'orphaned',
+    line: a.lineNum,
+  })))
+
+  // Cache: (filePath + side + lineNum) → PlacedReview[]. Rebuilt on every
+  // list change. forLine() is called per-diff-line during render; O(1) lookup
+  // keeps the DiffFileView hot path fast. `side ?? 'new'` so pre-side stored
+  // entries (no `side` field) bucket with new-side and existing 2-arg
+  // forLine() calls (MarkdownPreview) keep working.
   const lineKey = (path: string, side: DiffSide, line: number) => `${path}:${side}:${line}`
   let byLine = $derived.by(() => {
-    const m = new Map<string, Annotation[]>()
-    for (const a of list) {
-      const k = lineKey(a.filePath, a.side ?? 'new', a.lineNum)
+    const m = new Map<string, PlacedReview[]>()
+    for (const r of placed) {
+      if (r.anchor.kind !== 'diff') continue
+      const k = lineKey(r.anchor.filePath, r.anchor.side, r.line!)
       if (!m.has(k)) m.set(k, [])
-      m.get(k)!.push(a)
+      m.get(k)!.push(r)
     }
     return m
   })
@@ -354,6 +370,12 @@ export function createAnnotationStore(): AnnotationStore {
     })
   }
 
+  async function resolveAs(id: string, resolution: Resolution) {
+    const a = list.find(x => x.id === id)
+    if (!a) return
+    return update({ ...a, status: 'resolved', resolution })
+  }
+
   async function remove(id: string) {
     if (!loadedChangeId) return
     return withBusy(async () => {
@@ -422,6 +444,7 @@ export function createAnnotationStore(): AnnotationStore {
 
   return {
     get list() { return list },
+    get placed() { return placed },
     get loadedChangeId() { return loadedChangeId },
     get busy() { return busy },
     // forLine excludes FILE_LEVEL — split-view's right column for deleted files
@@ -431,6 +454,6 @@ export function createAnnotationStore(): AnnotationStore {
       lineNum === FILE_LEVEL ? NO_ANN : byLine.get(lineKey(filePath, side, lineNum)) ?? NO_ANN,
     forFile: (filePath) => byLine.get(lineKey(filePath, 'new', FILE_LEVEL)) ?? NO_ANN,
     isReviewed: (filePath) => reviewedFiles.has(filePath),
-    load, add, update, remove, clear, setReviewed,
+    load, add, update, resolveAs, remove, clear, setReviewed,
   }
 }

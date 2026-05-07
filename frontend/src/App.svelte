@@ -59,6 +59,7 @@
   import { computeSlide, type SlideDir } from './lib/slide'
   import { createLoader } from './lib/loader.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
+  import { createCommentVisibility } from './lib/comment-visibility.svelte'
   import { config, FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT } from './lib/config.svelte'
   import { THEMES, isThemeDark, loadGhosttyThemes, applyGhosttyTheme, type GhosttyTheme } from './lib/themes'
   import { APP_VERSION, CURRENT_RELEASE_URL, RELEASES_URL, parseSemver, semverMinorGt, checkForUpdate, type UpdateInfo } from './lib/version'
@@ -156,6 +157,7 @@
   // aliases preserve the existing references across the component.
   const nav = createRevisionNavigator({ onError: showError })
   const { diff, files, description, singleTarget } = nav
+  const commentVis = createCommentVisibility()
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
   const bookmarksPanel = createLoader(() => api.bookmarks(), [] as Bookmark[])
@@ -466,8 +468,8 @@
   let inlineMode = $derived(rebase.active || squash.active || split.active)
   // Which mode (if any). `inlineMode` answers "is ANY mode active?" for
   // toolbar gates; `activeInlineMode.diffFollows` answers the per-mode
-  // question — whether nav should reload the diff or freeze it. The 5-0
-  // /bughunt regression (onselect using `inlineMode`) was conflating these.
+  // question — whether nav should reload the diff or freeze it. onselect
+  // previously read `inlineMode` and conflated these.
   let activeInlineMode = $derived(rebase.active ? rebase : squash.active ? squash : split.active ? split : null)
   let diffFrozen = $derived(activeInlineMode ? !activeInlineMode.diffFollows : false)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
@@ -2283,6 +2285,7 @@
       case '[': e.preventDefault(); diffPanelRef?.stepHunk(-1); break
       case '}': e.preventDefault(); if (diffPanelRef?.stepAnnotation(1) === false) setMessage({ kind: 'warning', text: 'No annotations on this revision' }); break
       case '{': e.preventDefault(); if (diffPanelRef?.stepAnnotation(-1) === false) setMessage({ kind: 'warning', text: 'No annotations on this revision' }); break
+      case 'C': e.preventDefault(); diffPanelRef?.cycleVisibility(); break
       case 'm': e.preventDefault(); diffPanelRef?.togglePreviewActive(); break
       case 'E': e.preventDefault(); switchToLogView(); toggleEvolog(); break
       case 'O': e.preventDefault(); switchToLogView(); toggleOplog(); break
@@ -2922,6 +2925,7 @@
             {diffLoading}
             {diffContentKey}
             bind:splitView={() => config.splitView, (v) => config.splitView = v}
+            vis={commentVis}
             fileSelectionMode={squash.active ? 'squash' : (split.active && !split.review) ? 'split' : false}
             {hunkReview}
             selectedFiles={fileSel.set}

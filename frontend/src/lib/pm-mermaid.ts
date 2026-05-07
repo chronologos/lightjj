@@ -53,15 +53,18 @@ class MermaidNodeView implements NodeView {
   private render() {
     const src = this.node.textContent
     if (src === this.lastSrc) return
+    this.lastSrc = src
     const svg = tryRenderDiagram(src)
     if (svg) {
-      this.lastSrc = src
       this.panzoomCleanup?.()
       // Same trust boundary as markdown-render.ts:345 — beautiful-mermaid emits
       // structured SVG (label text goes through escapeHtml in its renderer),
       // not pass-through HTML. CSP script-src covers the remaining surface.
       this.svgHost.innerHTML = svg
       this.panzoomCleanup = wirePanzoom(this.dom)
+      // A prior failure forced source view; flip back so the now-valid render
+      // is visible without a manual toggle.
+      if (this.showingSource) { this.showingSource = false; this.applyMode() }
     } else {
       this.svgHost.textContent = '(mermaid render failed — edit source)'
       this.showingSource = true

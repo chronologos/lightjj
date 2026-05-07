@@ -2,8 +2,9 @@
   import { newSideAddedLines, type DiffFile, type DiffHunk, type DiffLine } from './diff-parser'
   import { toSplitView, type SplitLine } from './split-view'
   import type { WordSpan } from './word-diff'
-  import { api, FILE_LEVEL, FILE_TYPE_LABELS, IMAGE_RE, type FileChange, type Annotation, type DiffSide } from './api'
-  import { isReviewedMarker } from './annotations.svelte'
+  import { api, FILE_LEVEL, FILE_TYPE_LABELS, IMAGE_RE, type FileChange, type DiffSide } from './api'
+  import { anchorText, isReviewedReview, SEVERITY_RANK, type PlacedReview, type Resolution } from './review'
+  import type { CommentVisibility } from './comment-visibility.svelte'
   import { findConflicts } from './conflict-parser'
   import { hunkKey, fileSelectionState, type SelectionState } from './hunk-apply'
   import type { SearchMatch } from './DiffPanel.svelte'
@@ -57,22 +58,27 @@
      *  O(1) (backed by a Map, not a filter). Stable reference (the store's
      *  forLine method directly) — a fresh closure per render would defeat
      *  MarkdownPreview's gutterRows $derived short-circuit. */
-    annotationsForLine?: (filePath: string, lineNum: number, side?: DiffSide) => readonly Annotation[]
+    annotationsForLine?: (filePath: string, lineNum: number, side?: DiffSide) => readonly PlacedReview[]
     /** File-level (lineNum=0) annotations. Separate from forLine so the
      *  FILE_LEVEL sentinel never reaches per-line render paths. */
-    annotationsForFile?: (filePath: string) => readonly Annotation[]
+    annotationsForFile?: (filePath: string) => readonly PlacedReview[]
     /** Count of line-level annotations on this file (excluding the reviewed
      *  marker) — drives the header chip. */
     annotationCount?: number
     docCommentCount?: number
-    /** Click handler for the annotation gutter badge. Receives the line number
-     *  on `side`, the line's raw content (without diff prefix), and the
-     *  click event (for positioning the bubble). Also fires on left-click of
-     *  an unannotated line when Alt is held — quick-annotate shortcut.
+    /** Tri-state visibility + per-thread overrides. undefined = bubbles only
+     *  (multi-rev mode, split view) — inline rows gated on this. */
+    vis?: CommentVisibility
+    /** CommentCard intent callbacks — DiffPanel wires these to the store. */
+    onreviewresolve?: (id: string, r: Resolution) => void
+    onreviewdelete?: (id: string) => void
+    /** Click handler for the annotation gutter badge / Alt+click quick-add.
+     *  Receives the line number on `side`, the line's raw content (without
+     *  diff prefix), and the click event (for positioning the bubble).
      *  lineNum=0 (FILE_LEVEL) for file-level comments via Alt+click on header.
-     *  `editing` set when a specific annotation was clicked (file-note strip,
-     *  multi-annotation lines) so the bubble edits THAT one, not first-match. */
-    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent, editing?: Annotation, side?: DiffSide) => void
+     *  `editingId` set when a specific annotation was clicked so the bubble
+     *  edits THAT one, not first-match. */
+    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent, editingId?: string, side?: DiffSide) => void
     /** Toggle the file's "reviewed" marker (GitHub-style viewed checkbox).
      *  undefined = checkbox hidden (multi-rev mode). */
     onreviewedtoggle?: (filePath: string, next: boolean) => void
@@ -97,7 +103,7 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, vis, onreviewresolve, onreviewdelete, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
 
   // Translate effective (rendered) gap index → original. When no gaps are
   // revealed, gapMap is undefined → identity. After revealing, hunks merge so
@@ -130,12 +136,25 @@
 
   let filePath = $derived(file.filePath)
 
-  // File-level annotations (lineNum=0). The reviewed MARKER (isReviewedMarker:
-  // severity='reviewed' AND empty comment) is the checkbox state; everything
-  // else — including a 'reviewed'+comment note — renders in the strip below.
+  // File-level annotations (lineNum=0). The reviewed MARKER (severity=reviewed
+  // + empty body) is the checkbox state; everything else renders inline below.
   let fileAnns = $derived(annotationsForFile?.(filePath) ?? [])
-  let reviewed = $derived(fileAnns.some(isReviewedMarker))
-  let fileNotes = $derived(fileAnns.filter(a => !isReviewedMarker(a)))
+  let reviewed = $derived(fileAnns.some(isReviewedReview))
+  let fileNotes = $derived(fileAnns.filter(r => !isReviewedReview(r)))
+
+  function reviewsAt(annOld: number | null, annNew: number | null): readonly PlacedReview[] {
+    if (!annotationsForLine) return []
+    const o = annOld ? annotationsForLine(filePath, annOld, 'old') : []
+    const n = annNew ? annotationsForLine(filePath, annNew, 'new') : []
+    return o.length || n.length ? [...o, ...n] : n
+  }
+  /** Worst-first open review for bubble color/count; falls back to first. */
+  function worstOpen(anns: readonly PlacedReview[]): PlacedReview {
+    const open = anns.filter(r => !r.resolution)
+    const pool = open.length ? open : anns
+    return pool.reduce((a, b) =>
+      SEVERITY_RANK[a.severity ?? 'nitpick'] <= SEVERITY_RANK[b.severity ?? 'nitpick'] ? a : b)
+  }
   let isConflict = $derived(fileStats?.conflict ?? false)
   let isMarkdown = $derived(/\.md$/i.test(filePath))
   let isExcalidraw = $derived(/\.excalidraw$/i.test(filePath))
@@ -431,30 +450,45 @@
   })
 </script>
 
-{#snippet annGlyph(allResolved: boolean, count: number)}
-  <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-    {#if allResolved}
-      <path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    {:else}
-      <path d="M1.5 2 C1.5 1.2 2.2 .5 3 .5 H9 C9.8 .5 10.5 1.2 10.5 2 V7 C10.5 7.8 9.8 8.5 9 8.5 H5.5 L2.5 11.5 V8.5 C1.9 8.4 1.5 7.8 1.5 7 Z" fill="currentColor"/>
-      {#if count > 1}<text x="6" y="5.8" text-anchor="middle" class="ann-count">{count}</text>{/if}
-    {/if}
-  </svg>
-{/snippet}
-
 {#snippet gutter(lineNumbers: (number | null)[], rawContent: string, annOld: number | null, annNew: number | null)}
-  {@const annsNew = annNew && annotationsForLine ? annotationsForLine(filePath, annNew, 'new') : []}
-  {@const annsOld = annOld && annotationsForLine ? annotationsForLine(filePath, annOld, 'old') : []}
-  {@const anns = annsNew.length || annsOld.length ? [...annsOld, ...annsNew] : annsNew}
+  {@const anns = reviewsAt(annOld, annNew)}
   {#each lineNumbers as n}<span class="line-num">{n ?? ''}</span>{/each}{#if anns.length > 0}<!--
-  -->{@const firstOpen = anns.find(a => a.status !== 'resolved') ?? anns[0]}{@const allResolved = anns.every(a => a.status === 'resolved')}<button
-        class="annotation-badge severity-{firstOpen.severity}"
-        class:orphaned={firstOpen.status === 'orphaned'}
+  -->{@const top = worstOpen(anns)}{@const allResolved = anns.every(r => !!r.resolution)}<button
+        class="review-bubble severity-{top.severity ?? 'nitpick'}"
         class:resolved={allResolved}
-        onclick={(e) => { e.stopPropagation(); onannotationclick?.(firstOpen.lineNum, rawContent, e, firstOpen, firstOpen.side ?? 'new') }}
-        title="{anns.length} annotation{anns.length > 1 ? 's' : ''}: {firstOpen.comment}"
-        aria-label="View annotation"
-      >{@render annGlyph(allResolved, anns.length)}</button>{/if}{/snippet}
+        class:orphaned={top.orphaned}
+        data-review-id={top.id}
+        onclick={(e) => {
+          e.stopPropagation()
+          if (vis) {
+            const want = !vis.isVisible(top)
+            for (const r of anns) vis.toggleThread(r.id, want)
+          } else onannotationclick?.(top.line ?? 0, rawContent, e, top.id, top.anchor.kind === 'diff' ? top.anchor.side : 'new')
+        }}
+        title="{anns.length} comment{anns.length > 1 ? 's' : ''}: {top.body}"
+        aria-label="Toggle review thread"
+      >{anns.length > 1 ? anns.length : ''}</button>{/if}{/snippet}
+
+{#snippet inlineReviews(anns: readonly PlacedReview[])}
+  {#if vis && anns.some((r) => vis!.isVisible(r))}
+    {#await import('./CommentCard.svelte') then { default: CommentCard }}
+      {#each anns as r (r.id)}
+        {#if vis.isVisible(r)}
+          <div class="inline-review-row" data-review-id={r.id}>
+            <CommentCard
+              review={r}
+              anchorText={anchorText(r)}
+              orphaned={r.orphaned}
+              onresolve={onreviewresolve}
+              ondelete={onreviewdelete}
+              onhideauthor={vis.hideAuthor}
+            />
+          </div>
+        {/if}
+      {/each}
+    {/await}
+  {/if}
+{/snippet}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- annOld/annNew defaults derive from lineNumbers shape: unified=[old,new] →
@@ -573,18 +607,18 @@
     {/if}
     {#if annotationCount > 0}
       <span class="ann-count-chip" title="{annotationCount} line annotation{annotationCount > 1 ? 's' : ''} — { '{' }/{ '}' } to step">
-        {@render annGlyph(false, annotationCount)}
+        💬 {annotationCount}
       </span>
     {/if}
     {#if fileNotes.length > 0}
-      {@const firstOpen = fileNotes.find(a => a.status !== 'resolved') ?? fileNotes[0]}
-      {@const allResolved = fileNotes.every(a => a.status === 'resolved')}
+      {@const top = worstOpen(fileNotes)}
+      {@const allResolved = fileNotes.every(r => !!r.resolution)}
       <button
-        class="annotation-badge file-note-badge severity-{firstOpen.severity}"
+        class="review-bubble file-note-badge severity-{top.severity ?? 'nitpick'}"
         class:resolved={allResolved}
-        onclick={(e: MouseEvent) => { e.stopPropagation(); onannotationclick?.(FILE_LEVEL, '', e, firstOpen) }}
-        title="{fileNotes.length} file comment{fileNotes.length > 1 ? 's' : ''}: {firstOpen.comment}"
-      >{@render annGlyph(allResolved, fileNotes.length)}</button>
+        onclick={(e: MouseEvent) => { e.stopPropagation(); onannotationclick?.(FILE_LEVEL, '', e, top.id) }}
+        title="{fileNotes.length} file comment{fileNotes.length > 1 ? 's' : ''}: {top.body}"
+      >{fileNotes.length > 1 ? fileNotes.length : ''}</button>
     {/if}
     {#if onreviewedtoggle && !hunkReview}
       <button
@@ -637,18 +671,7 @@
       {/if}
     {/if}
   </div>
-  {#each fileNotes as note (note.id)}
-    <button
-      class="file-note severity-{note.severity}"
-      class:note-resolved={note.status === 'resolved'}
-      onclick={(e: MouseEvent) => onannotationclick?.(FILE_LEVEL, '', e, note)}
-      title="Click to edit"
-    >
-      <span class="file-note-sev">{note.severity}</span>
-      <span class="file-note-body">{note.comment}</span>
-      {#if note.status === 'resolved'}<span class="file-note-status">resolved</span>{/if}
-    </button>
-  {/each}
+  {@render inlineReviews(fileNotes)}
   {#if !isCollapsed}
     {#if previewContent !== undefined}
       {#if isImage && previewRevision}
@@ -805,6 +828,8 @@
               </div>
             {:else}
               {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
+              {@const lineAnns = reviewsAt(ln.old, ln.new)}
+              {#if lineAnns.length > 0}{@render inlineReviews(lineAnns)}{/if}
             {/if}
           {/each}
         </div>
@@ -1027,6 +1052,8 @@
     display: inline-flex;
     flex-shrink: 0;
     color: var(--amber);
+    font-size: var(--fs-xs);
+    gap: 2px;
   }
 
   .has-doc-comments { border-color: var(--amber); }
@@ -1042,7 +1069,7 @@
     text-align: center;
   }
 
-  /* In-header annotation badge — flow position (override theme.css absolute). */
+  /* In-header bubble — flow position (override the absolute used in-gutter). */
   .file-note-badge {
     position: static;
     flex-shrink: 0;
@@ -1076,43 +1103,12 @@
     box-shadow: inset 3px 0 0 var(--green);
   }
 
-  .file-note {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 12px;
-    background: color-mix(in srgb, var(--ann-accent, var(--amber)) 8%, var(--mantle));
-    border: none;
-    border-left: 3px solid var(--ann-accent, var(--amber));
+  .inline-review-row {
+    padding: 6px 8px 6px 56px;
+    background: color-mix(in srgb, var(--text) 2%, transparent);
     border-bottom: 1px solid var(--surface0);
-    font-family: inherit;
-    font-size: var(--fs-md);
-    color: var(--text);
-    text-align: left;
-    cursor: pointer;
   }
-  .file-note:hover { background: color-mix(in srgb, var(--ann-accent, var(--amber)) 14%, var(--mantle)); }
-  .file-note.note-resolved { opacity: 0.5; text-decoration: line-through; }
-  .file-note-sev {
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--ann-accent, var(--amber));
-    flex-shrink: 0;
-  }
-  .file-note-body {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .file-note-status {
-    font-size: var(--fs-xs);
-    color: var(--subtext0);
-  }
+  .inline-review-row :global(.cmt) { max-width: 720px; }
 
   .stat-add {
     color: var(--green);
@@ -1234,20 +1230,33 @@
     --line-gutter-border: var(--surface0);
   }
 
-  /* Annotation gutter badge — sits in the line-number gutter (left), in the
-     right-align slack of the first .line-num column. SVG fill reads
-     --ann-accent directly so the icon is the EXACT theme severity color. */
-  /* The left 3px accent bar + wash (theme.css :has()) is the at-a-glance
-     marker; the badge here is the click target, positioned right-edge where
-     there's reserved space (12px right padding). */
+  /* Review bubble — 14px filled circle in the line-number gutter. Absolute in
+     the right-align slack of the first .line-num column. Reads --ann-accent
+     (set by .severity-* in theme.css) for fill. */
   .diff-line { position: relative; }
-  :global(.diff-line .annotation-badge) {
+  .review-bubble {
+    position: absolute;
     right: 4px;
-    top: 3px;
-    text-indent: 0;
+    top: 2px;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--ann-accent, var(--amber));
+    color: var(--base);
+    font: 700 9px/14px var(--font-mono);
+    text-align: center;
+    cursor: pointer;
     transition: transform var(--anim-duration) var(--anim-ease);
   }
-  :global(.diff-line .annotation-badge:hover) { transform: scale(1.2); }
+  .review-bubble:hover { transform: scale(1.2); }
+  .review-bubble.resolved {
+    background: transparent;
+    border: 1.5px solid var(--green);
+    color: var(--green);
+  }
+  .review-bubble.orphaned { opacity: 0.5; border: 1.5px dashed var(--ann-accent, var(--overlay0)); background: transparent; color: var(--ann-accent, var(--overlay0)); }
 
   .diff-add {
     background: var(--diff-add-bg);

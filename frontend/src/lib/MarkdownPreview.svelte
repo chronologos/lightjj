@@ -10,7 +10,7 @@
 <script lang="ts">
   import { renderMarkdown, renderMarkdownAnnotated, stampedBlocks, type PreviewContext } from './markdown-render'
   import { wirePanzoom } from './mermaid'
-  import type { Annotation } from './api'
+  import { anchorText, SEVERITY_RANK, type PlacedReview } from './review'
 
   interface Props {
     content: string
@@ -18,8 +18,8 @@
     filePath?: string
     // Stable reference (the store's forLine method) — fresh-closure-per-render
     // would defeat gutterRows $derived's reference-equality short-circuit.
-    annotationsForLine?: (filePath: string, lineNum: number) => readonly Annotation[]
-    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent, editing?: Annotation) => void
+    annotationsForLine?: (filePath: string, lineNum: number) => readonly PlacedReview[]
+    onannotationclick?: (lineNum: number, lineContent: string, e: MouseEvent, editingId?: string) => void
     addedLines?: ReadonlySet<number>
   }
 
@@ -50,8 +50,6 @@
   // instead of a re-run-everything $effect. All gutter elements at one x —
   // no per-element-type offset CSS (li/pre/mermaid special cases deleted).
 
-  const SEV_ORDER: Record<string, number> = { 'must-fix': 0, suggestion: 1, question: 2, nitpick: 3, reviewed: 4 }
-
   // Geometry (DOM measurement — depends on layout only) is split from data
   // (annotation/added lookup — depends on store). Annotation add/remove
   // re-derives gutterRows without re-querying offsetTop; resize re-measures
@@ -68,13 +66,13 @@
   })
 
   let gutterRows = $derived(blockGeometry.map(b => {
-    const anns: Annotation[] = []
+    const anns: PlacedReview[] = []
     let added = false
     for (let n = b.srcLine; n < b.end; n++) {
       if (annotationsForLine) anns.push(...annotationsForLine(filePath, n))
       if (addedLines?.has(n)) added = true
     }
-    anns.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
+    anns.sort((a, b) => SEVERITY_RANK[a.severity ?? 'nitpick'] - SEVERITY_RANK[b.severity ?? 'nitpick'])
     return { ...b, added, anns }
   }))
 
@@ -196,14 +194,14 @@
           <div class="md-gutter-row" style:top="{row.top}px" style:height="{row.height}px">
             {#if row.added}<span class="md-strip-add"></span>{/if}
             {#if row.anns.length}
-              {@const a = row.anns.find(x => x.status !== 'resolved') ?? row.anns[0]}
-              {@const allResolved = row.anns.every(x => x.status === 'resolved')}
+              {@const a = row.anns.find(x => !x.resolution) ?? row.anns[0]}
+              {@const allResolved = row.anns.every(x => !!x.resolution)}
               <button
-                class="annotation-badge severity-{a.severity}"
-                class:orphaned={a.status === 'orphaned'}
+                class="annotation-badge severity-{a.severity ?? 'nitpick'}"
+                class:orphaned={a.orphaned}
                 class:resolved={allResolved}
-                onclick={(e) => onannotationclick?.(a.lineNum, a.lineContent, e, a)}
-                title="{row.anns.length} annotation{row.anns.length > 1 ? 's' : ''}: {a.comment}"
+                onclick={(e) => onannotationclick?.(a.line ?? row.srcLine, anchorText(a), e, a.id)}
+                title="{row.anns.length} annotation{row.anns.length > 1 ? 's' : ''}: {a.body}"
                 aria-label="View annotation"
               ><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
                 {#if allResolved}

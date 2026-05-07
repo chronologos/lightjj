@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
 import MarkdownPreview from './MarkdownPreview.svelte'
-import type { Annotation } from './api'
+import { fromAnnotation, type PlacedReview } from './review'
 
 vi.mock('beautiful-mermaid', () => ({ renderMermaidSVG: vi.fn(() => '<svg/>') }))
 
-const ann = (lineNum: number): Annotation => ({
-  id: 'a', changeId: 'c', filePath: 'f', lineNum, lineContent: 'x',
-  comment: 'test', severity: 'suggestion', status: 'open',
-  createdAt: 0, createdAtCommitId: 'c',
+const ann = (lineNum: number): PlacedReview => ({
+  ...fromAnnotation({
+    id: 'a', changeId: 'c', filePath: 'f', lineNum, lineContent: 'x',
+    comment: 'test', severity: 'suggestion', status: 'open',
+    createdAt: 0, createdAtCommitId: 'c',
+  }),
+  orphaned: false, line: lineNum,
 })
 
 describe('MarkdownPreview — explicit gutter', () => {

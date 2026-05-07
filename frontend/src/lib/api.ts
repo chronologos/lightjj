@@ -71,6 +71,9 @@ export interface Annotation {
   createdAt: number
   createdAtCommitId: string // for evolog attribution + diffRange re-anchor
   status: AnnotationStatus
+  /** Distinguishes addressed-vs-wontfix; status:'resolved' alone can't.
+   *  See review.ts fromAnnotation. */
+  resolution?: 'addressed' | 'wontfix'
   resolvedAtCommitId?: string
 }
 

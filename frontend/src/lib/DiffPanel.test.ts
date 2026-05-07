@@ -26,6 +26,7 @@ vi.mock('./api', async (importOriginal) => {
 import DiffPanel from './DiffPanel.svelte'
 import { api, type DiffTarget, type FileChange } from './api'
 import { clearDiffCaches } from './diff-cache'
+import { createCommentVisibility } from './comment-visibility.svelte'
 
 const mockEdit = api.edit as Mock
 const mockFileShow = api.fileShow as Mock
@@ -54,6 +55,7 @@ function props(overrides: Record<string, unknown> = {}) {
     diffTarget: target('co-A', 'ch-A'),
     diffLoading: false,
     splitView: false,
+    vis: createCommentVisibility(),
     fileSelectionMode: false as const,
     selectedFiles: new SvelteSet<string>(),
     ontogglefile: vi.fn(),
@@ -271,7 +273,7 @@ describe('DiffPanel', () => {
       //   if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
       // — does NOT set searchOpen = false. Bar stays visible so user can
       // re-type for the new revision without re-opening. A factory `close()`
-      // would have changed this behavior (deep-review finding).
+      // would have changed this behavior.
       await rerender(props({
         diffTarget: target('co-B', 'ch-B'),
         diffContent: tinyDiff('a.go'),
