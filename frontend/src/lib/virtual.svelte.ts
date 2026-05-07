@@ -65,3 +65,29 @@ export function createWindower(opts: {
     scrollToIndex,
   }
 }
+
+/** Run `fn` (a layout-shifting state mutation) without the line under the
+ *  user's eye moving. Captures the first child of `scrollEl` whose top ≥ 0,
+ *  flushes Svelte's DOM updates, then corrects scrollTop by the delta.
+ *  `tick()` is the right barrier (microtask, post-DOM-flush, pre-paint) —
+ *  rAF would let the shifted frame paint before correcting. `gen()` lets a
+ *  concurrent scrollToHunk/scrollTo win. */
+export async function holdViewport(
+  scrollEl: HTMLElement,
+  fn: () => void,
+  gen?: () => number,
+): Promise<void> {
+  const { tick } = await import('svelte')
+  const g0 = gen?.()
+  let anchor: Element | undefined
+  for (const el of scrollEl.children) {
+    if (el.getBoundingClientRect().top >= 0) { anchor = el; break }
+  }
+  const before = anchor?.getBoundingClientRect().top
+  fn()
+  await tick()
+  if (gen && gen() !== g0) return
+  if (anchor && before !== undefined && anchor.isConnected) {
+    scrollEl.scrollTop += anchor.getBoundingClientRect().top - before
+  }
+}

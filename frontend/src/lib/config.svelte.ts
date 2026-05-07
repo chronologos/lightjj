@@ -43,6 +43,9 @@ interface Config {
    *  = independent visibility. Pre-1.0 stored this flat (keyed by remote name);
    *  old entries become orphaned keys that no repo_path will match — harmless. */
   remoteVisibility: RemoteVisibilityByRepo
+  /** Authors whose review comments render as hidden/stub. Cross-repo by
+   *  design (hiding a bot in one repo hides it everywhere). */
+  hiddenCommentAuthors: string[]
   /** Frequency counters keyed by namespace. Replaces the old localStorage-only
    *  recent-actions — `localhost:0` randomizes port so localStorage was cold
    *  every launch. Server-side survives port changes (same config file). */
@@ -62,6 +65,7 @@ const defaults: Config = {
   editorArgs: [],
   editorArgsRemote: [],
   remoteVisibility: {},
+  hiddenCommentAuthors: [],
   recentActions: {},
 }
 
@@ -289,6 +293,9 @@ function createConfig() {
 
     get remoteVisibility() { return state.remoteVisibility },
     set remoteVisibility(v: RemoteVisibilityByRepo) { state.remoteVisibility = v },
+
+    get hiddenCommentAuthors() { return state.hiddenCommentAuthors },
+    set hiddenCommentAuthors(v: string[]) { state.hiddenCommentAuthors = v },
 
     get recentActions() { return state.recentActions },
     set recentActions(v: Record<string, Record<string, number>>) { state.recentActions = v },

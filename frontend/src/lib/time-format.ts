@@ -2,17 +2,24 @@
 // regex + Date parse result is invariant. Only the Date.now() delta changes.
 const parsedMs = new Map<string, number>()
 
-/** Format jj timestamp ("2026-03-17 22:05:32.000 -07:00") as compact relative age.
- *  Shared by RevisionGraph, FileHistoryRail, FileHistoryPanel cards. */
-export function relativeTime(ts: string | undefined): string {
-  if (!ts) return ''
-  let t = parsedMs.get(ts)
-  if (t === undefined) {
-    // jj → ISO 8601: space→T, drop millis-timezone space
-    const isoish = ts.replace(' ', 'T').replace(/\.(\d{3})\s+([+-])/, '.$1$2')
-    t = new Date(isoish).getTime()
-    if (isNaN(t)) return ''
-    parsedMs.set(ts, t)
+/** Format jj timestamp ("2026-03-17 22:05:32.000 -07:00") or epoch-ms as
+ *  compact relative age. Shared by RevisionGraph, FileHistory*, CommentCard. */
+export function relativeTime(ts: string | number | undefined): string {
+  if (ts == null || ts === '') return ''
+  let t: number
+  if (typeof ts === 'number') {
+    t = ts
+  } else {
+    const cached = parsedMs.get(ts)
+    if (cached !== undefined) {
+      t = cached
+    } else {
+      // jj → ISO 8601: space→T, drop millis-timezone space
+      const isoish = ts.replace(' ', 'T').replace(/\.(\d{3})\s+([+-])/, '.$1$2')
+      t = new Date(isoish).getTime()
+      if (isNaN(t)) return ''
+      parsedMs.set(ts, t)
+    }
   }
   const secs = Math.floor((Date.now() - t) / 1000)
   if (secs < 60) return 'now'
