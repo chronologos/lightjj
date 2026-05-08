@@ -198,6 +198,7 @@ func (s *Server) routes() {
 	reg("POST /api/alias", s.handleRunAlias)
 
 	reg("GET /api/pull-requests", s.handlePullRequests)
+	reg("GET /api/symbol", s.handleSymbol)
 
 	reg("GET /api/config", handleConfigGet)
 	reg("POST /api/config", handleConfigSet)

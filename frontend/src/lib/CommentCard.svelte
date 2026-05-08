@@ -136,6 +136,10 @@
     background: var(--base);
     font-family: var(--font-ui);
     overflow: hidden;
+    /* DocCommentRail's .rail-body is flex-column; with overflow:hidden + the
+     * default flex-shrink:1 cards compress below content height and clip the
+     * action row. Harmless when not a flex child. */
+    flex-shrink: 0;
     transition: opacity var(--anim-duration) var(--anim-ease);
   }
   .cmt.resolved { opacity: 0.55; }

@@ -12,6 +12,8 @@
   // import type: erased at build — keeps editorRef typed without bundling CM6.
   import type FileEditor from './FileEditor.svelte'
   import { escapeHtml } from './highlighter'
+  import { detectLanguage } from './languages'
+  import { symbolTarget, type SymbolHover } from './symbol-hover.svelte'
 
   interface Props {
     file: DiffFile
@@ -94,6 +96,7 @@
      *  already undefined in this mode (DiffPanel gates it — context
      *  expansion merges adjacent hunks → invalidates keys). */
     hunkReview?: HunkReviewState | null
+    symbolHover?: SymbolHover
   }
 
   export interface HunkReviewState {
@@ -108,7 +111,20 @@
     lines: { lineNum: number | null, content: string }[]
   }
 
-  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, vis, onreviewresolve, onreviewdelete, composer, draftLine, onannotationclick, onreviewedtoggle, hunkReview = null }: Props = $props()
+  let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, vis, onreviewresolve, onreviewdelete, composer, draftLine, onannotationclick, onreviewedtoggle, hunkReview = null, symbolHover }: Props = $props()
+
+  const lang = $derived(detectLanguage(file.filePath))
+  function handleSymbolMove(e: PointerEvent) {
+    if (!symbolHover) return
+    // Cmd/Ctrl-gate: per-hunk highlighting loses parser context (a /** opener
+    // outside the hunk window → comment body parsed as code → every word gets
+    // tok-variableName → data-sym). Requiring the modifier matches IDE
+    // convention and makes the false-positive class unreachable in normal use.
+    if (!(e.metaKey || e.ctrlKey)) { symbolHover.leave(); return }
+    const el = symbolTarget(e)
+    if (el) symbolHover.enter(el, lang)
+    else symbolHover.leave()
+  }
 
   // Translate effective (rendered) gap index → original. When no gaps are
   // revealed, gapMap is undefined → identity. After revealing, hunks merge so
@@ -324,8 +340,8 @@
     if (!e.altKey || !onannotationclick) return
     // Prefer new-side (current behavior); fall back to old-side for pure-remove
     // lines so "why was this deleted?" is finally annotatable. 0/FILE_LEVEL on
-    // either side (split-view deleted-file rows, `\ No newline`) is dropped —
-    // FILE_LEVEL is reserved for the header path.
+    // either side (split-view deleted-file rows) is dropped — FILE_LEVEL is
+    // reserved for the header path.
     const [line, side]: [number, DiffSide] = annNew ? [annNew, 'new'] : annOld ? [annOld, 'old'] : [0, 'new']
     if (!line) return
     e.preventDefault()
@@ -566,7 +582,8 @@
   {/if}
 {/snippet}
 
-<div class="diff-file" data-file-path={filePath} bind:this={fileEl} class:hunk-reviewing={!!hunkReview} class:file-reviewed={reviewed}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="diff-file" data-file-path={filePath} bind:this={fileEl} class:hunk-reviewing={!!hunkReview} class:file-reviewed={reviewed} onpointermove={symbolHover ? handleSymbolMove : undefined} onpointerleave={symbolHover ? () => symbolHover.leave() : undefined}>
   <div
     class="diff-file-header"
     onclick={(e: MouseEvent) => {

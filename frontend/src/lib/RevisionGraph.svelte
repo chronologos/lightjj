@@ -999,7 +999,7 @@
     flex-shrink: 0;
     line-height: 1.15;
     vertical-align: baseline;
-    background: var(--badge-danger-bg, rgba(235, 100, 100, 0.15));
+    background: var(--bg-error);
     color: var(--red);
     border: 1px solid var(--red);
     margin-right: 4px;

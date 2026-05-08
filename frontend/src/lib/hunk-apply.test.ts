@@ -14,12 +14,12 @@ function h(oldStart: number, newStart: number, body: string): DiffHunk {
         : 'context' as const,
     content,
   }))
-  const newCount = lines.filter(l => l.type !== 'remove' && !l.content.startsWith('\\')).length
+  const newCount = lines.filter(l => l.type !== 'remove').length
   return { header: `@@ -${oldStart} +${newStart},${newCount} @@`, oldStart, newStart, newCount, lines }
 }
 
 function df(filePath: string, hunks: DiffHunk[]): DiffFile {
-  return { header: `diff --git a/${filePath} b/${filePath}`, filePath, hunks }
+  return { header: `diff --git a/${filePath} b/${filePath}`, filePath, hunks, isBinary: false }
 }
 
 function sel(...keys: string[]): Set<string> {
@@ -99,22 +99,9 @@ describe('applyHunks — trailing newline', () => {
     expect(applyHunks('a\nb', [h(2, 2, '-b\n+B')])).toBe('a\nB')
   })
 
-  it('KNOWN LIMITATION: hunk changes EOF-newline-ness → left\'s state wins', () => {
-    // Diff says: old file ended `b` (no \n), new ends `B\n`. The `\ No newline`
-    // marker after `-b` encodes this. We skip the marker → result inherits
-    // left's no-trailing-\n. This is a 1-byte loss. Pinned so it doesn't
-    // silently regress into emitting a literal `\ No newline...` line (which
-    // WOULD happen if the skip were removed — see next test).
-    const hunk = h(2, 2, '-b\n\\ No newline at end of file\n+B')
-    expect(applyHunks('a\nb', [hunk])).toBe('a\nB') // not 'a\nB\n'
-  })
-
-  it('skips `\\ No newline` marker — does NOT emit it as content', () => {
-    // Without the startsWith('\\') guard, the marker (typed as context by
-    // diff-parser) would be emitted verbatim. Guard makes it invisible.
-    const hunk = h(2, 2, '-b\n+B\n\\ No newline at end of file')
-    expect(applyHunks('a\nb\n', [hunk])).not.toContain('No newline')
-  })
+  // EOF-newline-ness: diff-parser drops the `\ No newline` marker before it
+  // reaches hunk.lines, so applyHunks can't observe it — result inherits
+  // left's trailing-newline state (1-byte loss, doc'd on the function).
 })
 
 describe('applyHunks — hunk shapes', () => {

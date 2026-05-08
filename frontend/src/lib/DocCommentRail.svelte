@@ -101,6 +101,7 @@
           review={fromDocComment(c)}
           anchorText={c.anchor.selection}
           orphaned
+          onresolve={(id, r) => session.resolveComment(id, r)}
           ondelete={(id) => session.removeComment(id)}
         />
       {/each}

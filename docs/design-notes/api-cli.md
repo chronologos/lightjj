@@ -190,9 +190,9 @@ not create directories. `verifyOwnedDir` failure is a hard error (Security §1).
 2. Filter `pidAlive(pid)` — freshness, not trust (Security §3).
 3. **Filter `Mode == "local"`.** SSH-mode sessions hold the *remote* path in
    `RepoDir`; if a remote path string coincidentally exists locally (synced
-   dotfiles, same `~/code/foo` layout on laptop and homespace — common), a
+   dotfiles, same `~/code/foo` layout on laptop and remote dev box — common), a
    containment match would silently route the agent's writes to the *wrong
-   machine's repo*. Three readers independently flagged this. SSH sessions
+   machine's repo*. SSH sessions
    stay reachable via `--addr` and are listed in `lightjj sessions` and in the
    no-match error message.
 4. **Validate `Addr`** per Security §2. Reject and skip on failure.

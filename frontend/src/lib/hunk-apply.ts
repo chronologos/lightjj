@@ -50,9 +50,8 @@ export function fileSelectionState(
  *  KNOWN LIMITATION — trailing newline: result inherits left's
  *  trailing-newline-ness. If an accepted hunk changes EOF newline state
  *  (diff has a `\ No newline at end of file` marker on one side only) the
- *  1-byte difference is lost. diff-parser currently types the `\` marker as
- *  context; we skip it here. Pinned by a test so it doesn't silently regress
- *  into something worse. */
+ *  1-byte difference is lost — diff-parser drops the marker before it
+ *  reaches hunk.lines, so the signal is gone by the time we run. */
 export function applyHunks(leftContent: string, accepted: readonly DiffHunk[]): string {
   const left = leftContent.split('\n')
   const out: string[] = []
@@ -74,11 +73,6 @@ export function applyHunks(leftContent: string, accepted: readonly DiffHunk[]): 
     while (pos < hunk.oldStart - 1) out.push(left[pos++])
 
     for (const line of hunk.lines) {
-      // `\ No newline at end of file` — diff metadata, not content. Parser
-      // types it as context; treating it as one would emit a literal `\ No...`
-      // line into the output.
-      if (line.content.startsWith('\\')) continue
-
       if (line.type === 'remove') {
         pos++
       } else if (line.type === 'add') {

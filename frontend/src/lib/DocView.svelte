@@ -4,7 +4,8 @@
   import { EditorView, Decoration, DecorationSet } from 'prosemirror-view'
   import { keymap } from 'prosemirror-keymap'
   import { history, undo, redo } from 'prosemirror-history'
-  import { baseKeymap } from 'prosemirror-commands'
+  import { baseKeymap, toggleMark } from 'prosemirror-commands'
+  import { inputRules, textblockTypeInputRule, wrappingInputRule } from 'prosemirror-inputrules'
   import { splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list'
   import { docSchema } from './pm-schema'
   import { mermaidNodeViews } from './pm-mermaid'
@@ -35,11 +36,27 @@
       'Mod-y': redo,
       'Mod-Shift-z': redo,
       'Mod-s': () => { onsave?.(); return true },
+      'Mod-b': toggleMark(docSchema.marks.strong),
+      'Mod-i': toggleMark(docSchema.marks.em),
+      'Mod-`': toggleMark(docSchema.marks.code),
       'Enter': splitListItem(docSchema.nodes.list_item),
       'Tab': sinkListItem(docSchema.nodes.list_item),
       'Shift-Tab': liftListItem(docSchema.nodes.list_item),
     }),
     keymap(baseKeymap),
+    // Markdown-ish typing: `# `, `> `, `- `, `1. `, ``` at line start convert
+    // the block in place. Backspace immediately after reverts (built into
+    // inputRules). prosemirror-inputrules: same author as the other 8 PM
+    // packages, transitives are state+transform (already installed).
+    inputRules({ rules: [
+      textblockTypeInputRule(/^(#{1,6})\s$/, docSchema.nodes.heading, (m) => ({ level: m[1].length })),
+      textblockTypeInputRule(/^```$/, docSchema.nodes.code_block),
+      wrappingInputRule(/^>\s$/, docSchema.nodes.blockquote),
+      wrappingInputRule(/^[-*]\s$/, docSchema.nodes.bullet_list),
+      wrappingInputRule(/^(\d+)\.\s$/, docSchema.nodes.ordered_list,
+        (m) => ({ order: +m[1] }),
+        (m, node) => node.childCount + (node.attrs.order as number) === +m[1]),
+    ] }),
   ]
 
   let mount: HTMLDivElement
@@ -210,6 +227,9 @@
     right: 4px;
     z-index: 2;
     font-family: var(--font-ui);
+    /* Same as .doc-add-comment: .btn is transparent; floats over the diagram. */
+    background: var(--mantle);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   }
   .doc-view :global(.pm-mermaid-src) {
     margin: 0;
@@ -226,5 +246,10 @@
     /* .prose sets weight 370 / fs-lg on the container; reassert UI chrome. */
     font-family: var(--font-ui);
     font-weight: 500;
+    /* .btn is transparent (ghost) — fine in toolbars, illegible when floating
+     * over highlighted prose. Opaque + shadow lifts it off the selection. */
+    background: var(--mantle);
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   }
 </style>

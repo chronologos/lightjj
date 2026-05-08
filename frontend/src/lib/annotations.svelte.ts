@@ -448,8 +448,8 @@ export function createAnnotationStore(): AnnotationStore {
     get loadedChangeId() { return loadedChangeId },
     get busy() { return busy },
     // forLine excludes FILE_LEVEL — split-view's right column for deleted files
-    // (and the `\ No newline` marker line) can yield annLine===0; without this
-    // guard the file-level annotation would leak into the gutter as a line badge.
+    // yields annLine===0; without this guard the file-level annotation would
+    // leak into the gutter as a line badge.
     forLine: (filePath, lineNum, side = 'new') =>
       lineNum === FILE_LEVEL ? NO_ANN : byLine.get(lineKey(filePath, side, lineNum)) ?? NO_ANN,
     forFile: (filePath) => byLine.get(lineKey(filePath, 'new', FILE_LEVEL)) ?? NO_ANN,

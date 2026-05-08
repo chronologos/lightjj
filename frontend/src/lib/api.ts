@@ -818,6 +818,15 @@ export interface PullRequest {
   is_draft: boolean
 }
 
+export interface SymbolHit {
+  file: string
+  line: number
+  /** Matching line — typically the signature. */
+  text: string
+  /** Lines immediately preceding the match (doc comment), source order. */
+  context: string[]
+}
+
 export interface RemoteVisibilityEntry {
   visible: boolean
   hidden?: string[]
@@ -1127,6 +1136,9 @@ export const api = {
 
   openFile: (path: string, line?: number) =>
     post<{ ok: boolean }>('/api/open-file', { path, line }),
+
+  symbol: (name: string, lang: string) =>
+    request<{ hits: SymbolHit[] }>(`/api/symbol?name=${encodeURIComponent(name)}&lang=${lang}`).then(r => r.hits),
 
   snapshot: () => post<MutationResult>('/api/snapshot', {}),
 

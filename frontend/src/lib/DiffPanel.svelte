@@ -28,6 +28,8 @@
   import { anchorText, isReviewedReview, SEVERITY_VAR, type PlacedReview, type Severity } from './review'
   import type { CommentMode, CommentVisibility } from './comment-visibility.svelte'
   import { holdViewport } from './virtual.svelte'
+  import { createSymbolHover } from './symbol-hover.svelte'
+  import SymbolHover from './SymbolHover.svelte'
 
   interface Props {
     diffContent: string
@@ -112,6 +114,7 @@
 
   // --- Local state ---
   let panelContentEl: HTMLElement | undefined = $state(undefined)
+  const symbolHover = createSymbolHover()
   let fileTabsEl: HTMLElement | undefined = $state(undefined)
   let fileTabsOverflow = $state(false)
   function measureTabsOverflow() {
@@ -1128,6 +1131,7 @@
     hunkNavIdx = -1
     annNavIdx = -1
     annBubble = { open: false, x: 0, y: 0, editing: null, lineContext: null }
+    symbolHover.clear()
     if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
 
     // Suppress chevron transition during diff switch (prevents j/k flapping)
@@ -1638,7 +1642,8 @@
       {/if}
     </div>
   {/if}
-  <div class="panel-content" bind:this={panelContentEl}>
+  <div class="panel-content" bind:this={panelContentEl} onscrollcapture={() => symbolHover.clear()}>
+    <SymbolHover hover={symbolHover} />
     {#if mergeSides && mergingPath}
       <!-- {#key} enforces fresh-mount per file — MergePanel's $effect has no
            centerView guard and relies on this for props-never-change-mid-mount. -->
@@ -1678,7 +1683,7 @@
       {#if editError}
         <div class="edit-error-banner" role="alert">
           {editError}
-          <button class="edit-error-dismiss" onclick={() => editError = ''}>×</button>
+          <button class="close-btn edit-error-dismiss" onclick={() => editError = ''} aria-label="Dismiss">×</button>
         </div>
       {/if}
       <div class="diff-content">
@@ -1696,6 +1701,7 @@
             gapMap={expanded?.gapMap}
             splitView={hunkReview ? false : splitView}
             {hunkReview}
+            {symbolHover}
             highlightedLines={highlights.byFile.get(filePath) ?? EMPTY_HL}
             wordDiffs={wordDiffs.byFile.get(filePath) ?? EMPTY_WD}
             ontoggle={toggleFile}
@@ -1748,6 +1754,7 @@
               isCollapsed={collapsedFiles.has(cf.path)}
               isExpanded={false}
               {splitView}
+              {symbolHover}
               highlightedLines={EMPTY_HL}
               wordDiffs={EMPTY_WD}
               ontoggle={toggleFile}
@@ -2174,17 +2181,5 @@
     font-size: var(--fs-md);
     font-weight: 600;
   }
-  .edit-error-dismiss {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: inherit;
-    font-size: var(--fs-xl);
-    cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.7;
-  }
-  .edit-error-dismiss:hover {
-    opacity: 1;
-  }
+  .edit-error-dismiss { margin-left: auto; color: inherit; }
 </style>

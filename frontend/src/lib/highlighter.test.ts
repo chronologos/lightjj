@@ -166,9 +166,17 @@ describe('highlightLines', () => {
     // A regression in the tokenizer (@ matched as operator, atoms as keyword)
     // would flip these classes, so pin them.
     expect(out[0]).toContain('>@sizeOf</span>')
-    expect(out[0]).toMatch(/class="tok-variableName">@sizeOf/)
-    expect(out[0]).toContain('tok-typeName">u8')
+    expect(out[0]).toMatch(/class="tok-variableName"[^>]*>@sizeOf/)
+    expect(out[0]).toMatch(/tok-typeName"[^>]*>u8/)
     expect(out[0]).toContain('tok-atom">true')
+  })
+
+  it('emits data-sym only on identifier-ish token classes', () => {
+    const out = highlightLines(['const Foo = true'], 'typescript')
+    // typeName/variableName get the marker; keyword/atom do not.
+    expect(out[0]).toMatch(/data-sym>Foo/)
+    expect(out[0]).not.toMatch(/data-sym>const/)
+    expect(out[0]).not.toMatch(/data-sym>true/)
   })
 
   it('protobuf via StreamLanguage', async () => {
