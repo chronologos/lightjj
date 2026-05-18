@@ -226,7 +226,9 @@
   /* Typography (font, leading, h1-6/code/table/etc) comes from theme.css
      .prose — shared with DocView. Here: layout + preview-specific overrides. */
   .md-preview {
-    padding: 20px 24px 40px 0;
+    padding: 28px 24px 56px 0;
+    /* Same value in DocView's .ProseMirror so the preview ↔ doc-mode toggle
+       doesn't reflow the line under the cursor. */
     max-width: 920px;
     margin: 0 auto;
   }
@@ -257,6 +259,11 @@
     pointer-events: auto;
     margin-top: 2px;
   }
+  /* The 2.2em heading top margin from .prose is a section *separator*; the
+     first element in the doc has the container padding for that. Mirrors
+     DocView's `.ProseMirror > :first-child` rule so the two surfaces read
+     identically when toggling View↔Edit. */
+  .md-content > :global(:first-child) { margin-top: 0; }
   .md-content {
     padding-left: 36px;
     /* Containing block for fixed-position descendants — neutralizes the

@@ -15,7 +15,10 @@ The config file lives in your local config directory regardless of mode — only
 | `fontSize` | `number` | `13` | Base font size in px (clamped 10–16). All UI text scales relative to this — see [Typography](#typography) |
 | `fontUI` | `string` | `""` | CSS `font-family` stack for UI text. Empty = built-in default |
 | `fontMono` | `string` | `""` | CSS `font-family` stack for code, diffs, change IDs. Empty = built-in default |
-| `fontMdBody` | `string` | `""` | Markdown preview body text (headings inherit; `code`/`pre` use `fontMono`). Empty = `system-ui` |
+| `fontMdBody` | `string` | `""` | Markdown prose body text (preview *and* doc mode — both render through `.prose`). Empty = `system-ui` |
+| `fontMdHeading` | `string` | `""` | Markdown prose headings (h2–h6). Empty = falls back to `fontMdBody` |
+| `fontMdDisplay` | `string` | `""` | Markdown prose title (h1) — the editorial display voice. Empty = falls back to `fontMdHeading` → `fontMdBody` |
+| `fontMdCode` | `string` | `""` | Markdown inline code and fenced code blocks. Empty = falls back to `fontMono` |
 | `revisionPanelWidth` | `number` | `420` | Revision panel width in px |
 | `evologPanelHeight` | `number` | `360` | Evolog panel height in px |
 | `tutorialVersion` | `string` | `""` | Last-seen "what's new" version; managed by the UI |
@@ -38,11 +41,31 @@ The upper clamp (`16`) exists because graph rows and diff lines have a fixed `18
   "fontSize": 14,
   "fontUI": "'SF Pro Text', system-ui, sans-serif",
   "fontMono": "'Berkeley Mono', 'JetBrains Mono', monospace",
-  "fontMdBody": "'Charter', 'Georgia', serif"
+
+  "fontMdBody": "'Avenir Next', 'Helvetica Neue', sans-serif",
+  "fontMdHeading": "'Avenir Next', 'Helvetica Neue', sans-serif",
+  "fontMdDisplay": "'New York', 'Georgia', serif",
+  "fontMdCode": "'IBM Plex Mono', 'JetBrains Mono', monospace"
 }
 ```
 
-Markdown preview body is intentionally separate from `fontUI` — prose reads better in a book-style face than a UI font. Headings inherit it; code blocks use `fontMono`.
+Markdown prose is intentionally separate from `fontUI` — it reads better in a humanist/book face than a UI font. `.prose` is the shared typography contract between markdown preview and doc-mode (the ProseMirror WYSIWYG editor), so both honor every `fontMd*` key.
+
+The four `fontMd*` keys form a fallback chain so a one-face config sets only `fontMdBody`:
+
+```
+fontMdDisplay  (h1, the title voice)
+  ↓ falls back to
+fontMdHeading  (h2–h6)
+  ↓ falls back to
+fontMdBody     (paragraphs, lists, tables)
+
+fontMdCode     (inline code + fenced blocks)
+  ↓ falls back to
+fontMono       (the global mono — diffs, terminal-ish UI)
+```
+
+A common editorial setup is a high-contrast display serif for `fontMdDisplay` over a humanist sans for `fontMdBody`/`fontMdHeading` (the example above). For a one-face document-style preview, set only `fontMdBody`.
 
 The font must be installed locally — lightjj does not download webfonts. From the UI: **Cmd+K → "Font size"** for increase/decrease/reset; font families are config-file only.
 

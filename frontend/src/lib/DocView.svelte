@@ -191,7 +191,9 @@
     overflow-y: auto;
     padding: 24px 32px;
   }
-  /* Typography comes from theme.css .prose. Here: PM-specific layout only. */
+  /* Typography comes from theme.css .prose. Here: PM-specific layout only.
+     max-width matches MarkdownPreview's .md-preview so the View↔Edit toggle
+     doesn't reflow text. */
   .doc-view :global(.ProseMirror) {
     outline: none;
     max-width: 920px;

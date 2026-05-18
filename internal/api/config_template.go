@@ -30,8 +30,16 @@ const configTemplate = `{
   // CSS font-family stack for code, diffs, change IDs.
   "fontMono": "",
 
-  // Markdown preview body font (headings inherit; code uses fontMono).
+  // Markdown prose fonts — applied to BOTH the preview pane and doc-mode
+  // (the WYSIWYG markdown editor; they share the same typography rules).
+  // Each falls back to the next when empty, so a one-face config sets only
+  // fontMdBody:
+  //   fontMdDisplay (h1) → fontMdHeading (h2-h6) → fontMdBody (paragraphs)
+  //   fontMdCode (inline + fenced blocks) → fontMono
   "fontMdBody": "",
+  "fontMdHeading": "",
+  "fontMdDisplay": "",
+  "fontMdCode": "",
 
   "revisionPanelWidth": 420,
   "evologPanelHeight": 360,

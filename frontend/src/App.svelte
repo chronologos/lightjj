@@ -563,10 +563,17 @@
   // style > stylesheet); removeProperty falls back to them. Empty string = "use
   // default", so a hand-edited config.json with the key absent and one with ""
   // behave identically. Clamping lives in the config.fontSize getter.
+  // The four --font-md-* vars form a fallback chain in theme.css :root
+  // (display → heading → body; code → mono). Empty config → removeProperty →
+  // the theme.css default var() chain takes over, so a one-face config sets
+  // only fontMdBody and the rest cascade.
   const FONT_VARS = [
-    ['--font-ui',      () => config.fontUI],
-    ['--font-mono',    () => config.fontMono],
-    ['--font-md-body', () => config.fontMdBody],
+    ['--font-ui',         () => config.fontUI],
+    ['--font-mono',       () => config.fontMono],
+    ['--font-md-body',    () => config.fontMdBody],
+    ['--font-md-heading', () => config.fontMdHeading],
+    ['--font-md-display', () => config.fontMdDisplay],
+    ['--font-md-code',    () => config.fontMdCode],
   ] as const
   $effect(() => {
     const s = document.documentElement.style

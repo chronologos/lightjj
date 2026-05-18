@@ -28,9 +28,20 @@ interface Config {
   fontUI: string
   /** CSS font-family stack for code/diffs. Empty → theme.css default. */
   fontMono: string
-  /** Markdown preview body font (headings inherit it; code uses --font-mono).
+  /** Markdown prose body font (preview AND doc mode — both use .prose).
    *  Empty → system-ui. */
   fontMdBody: string
+  /** Markdown prose heading font (h2..h6). Empty → falls back to fontMdBody so
+   *  one-face configs (the common case) need only set the body. */
+  fontMdHeading: string
+  /** Markdown prose display/title font (h1 only — the big editorial title
+   *  voice, e.g. a high-contrast serif over a sans body). Empty → falls back
+   *  to fontMdHeading, which falls back to fontMdBody. */
+  fontMdDisplay: string
+  /** Markdown prose code font (inline code and ``` blocks). Empty → falls
+   *  back to fontMono so the diff view and prose code blocks match unless you
+   *  want them to differ (e.g. a lighter mono in long-form text). */
+  fontMdCode: string
   revisionPanelWidth: number
   evologPanelHeight: number
   tutorialVersion: string
@@ -59,6 +70,9 @@ const defaults: Config = {
   fontUI: '',
   fontMono: '',
   fontMdBody: '',
+  fontMdHeading: '',
+  fontMdDisplay: '',
+  fontMdCode: '',
   revisionPanelWidth: 420,
   evologPanelHeight: 360,
   tutorialVersion: '',
@@ -275,6 +289,15 @@ function createConfig() {
 
     get fontMdBody() { return state.fontMdBody },
     set fontMdBody(v: string) { state.fontMdBody = v },
+
+    get fontMdHeading() { return state.fontMdHeading },
+    set fontMdHeading(v: string) { state.fontMdHeading = v },
+
+    get fontMdDisplay() { return state.fontMdDisplay },
+    set fontMdDisplay(v: string) { state.fontMdDisplay = v },
+
+    get fontMdCode() { return state.fontMdCode },
+    set fontMdCode(v: string) { state.fontMdCode = v },
 
     get revisionPanelWidth() { return state.revisionPanelWidth },
     set revisionPanelWidth(v: number) { state.revisionPanelWidth = v },
