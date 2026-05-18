@@ -108,7 +108,11 @@
 
   export interface DiffLineInfo {
     filePath: string
-    lines: { lineNum: number | null, content: string }[]
+    /** `side` defaults to `'new'` when omitted (unified, split-right). Split-LEFT
+     *  rows are old-side — downstream consumers that assume new-side (open-in-
+     *  editor jump line, annotation `side: 'new'` default) need this to anchor
+     *  correctly. */
+    lines: { lineNum: number | null, content: string, side?: DiffSide }[]
   }
 
   let { file, fileStats, isCollapsed, isExpanded, gapMap, splitView, highlightedLines, wordDiffs, ontoggle, onexpand, onmerge, searchMatches = [], currentMatchIdx = 0, editing = false, editContent, editBusy = false, onedit, onpreview, previewContent, previewRevision, ondiscard, onsavefile, oncanceledit, onlinecontext, oncontextmenu, onopenfile, onfilehistory, onopendoc, oncompare, annotationsForLine, annotationsForFile, annotationCount = 0, docCommentCount = 0, vis, onreviewresolve, onreviewdelete, composer, draftLine, onannotationclick, onreviewedtoggle, hunkReview = null, symbolHover }: Props = $props()
@@ -322,55 +326,76 @@
   // Extract line number + text content from a .diff-line DOM element.
   // Unified has [old, new] spans — take new-side unconditionally; remove
   // lines yield null (they don't exist in the current file, so copy-ref
-  // and open-in-editor correctly skip them). Split has one span.
-  function extractLineFromDom(el: Element): { lineNum: number | null, content: string } {
+  // and open-in-editor correctly skip them). Split has one span; the LEFT
+  // column's span is the OLD-side number (caller passes `isOldSide`).
+  function extractLineFromDom(el: Element, isOldSide: boolean): { lineNum: number | null, content: string, side: DiffSide } {
     const spans = el.querySelectorAll('.line-num')
-    const t = spans[spans.length - 1]?.textContent?.trim()
+    // Unified [old, new] → spans[1] (new); split-left [old] → spans[0] (old);
+    // split-right [new] → spans[0] (new). isOldSide picks the correct cell.
+    const t = spans[isOldSide ? 0 : spans.length - 1]?.textContent?.trim()
     const lineNum = t ? parseInt(t, 10) : null
     let content = ''
     for (const child of el.childNodes) {
-      if (child instanceof Element && (child.classList.contains('line-num') || child.classList.contains('diff-prefix'))) continue
+      // Exclude every chrome element rendered as a direct sibling of the line
+      // text — line numbers, the +/-/␣ prefix, AND the review-bubble badge
+      // (its textContent is the annotation count when ≥2; without this guard
+      // Copy-reference yields e.g. "2foo bar"). Anything new added to the
+      // gutter snippet must be excluded here too.
+      if (child instanceof Element && (child.classList.contains('line-num') || child.classList.contains('diff-prefix') || child.classList.contains('review-bubble'))) continue
       content += child.textContent ?? ''
     }
-    return { lineNum, content }
+    return { lineNum, content, side: isOldSide ? 'old' : 'new' }
+  }
+
+  /** Side-resolution shared by every per-line interaction (Alt+click,
+   *  right-click context menu). Prefers new-side; falls back to old-side so
+   *  pure-remove lines (and split-LEFT clicks) anchor to the old column.
+   *  TRUTHY checks, not `!= null` — `0`/FILE_LEVEL is the file-level sentinel
+   *  reserved for the header path; split-view deleted-file rows carry it on
+   *  one side and must NOT yield a per-line anchor (feedback_sentinel_collision).
+   *  Any new entry point that turns annOld/annNew into `(line, side)` must
+   *  call this so the sentinel handling stays uniform. */
+  function pickAnnotationSide(annOld: number | null, annNew: number | null): [number | null, DiffSide] {
+    return annNew ? [annNew, 'new'] : annOld ? [annOld, 'old'] : [null, 'new']
   }
 
   /** Alt+click on any diff line → quick-annotate (mirrors markdown preview's wireAnnotations). */
   function handleAltClick(e: MouseEvent, annOld: number | null, annNew: number | null, rawContent: string): void {
     if (!e.altKey || !onannotationclick) return
-    // Prefer new-side (current behavior); fall back to old-side for pure-remove
-    // lines so "why was this deleted?" is finally annotatable. 0/FILE_LEVEL on
-    // either side (split-view deleted-file rows) is dropped — FILE_LEVEL is
-    // reserved for the header path.
-    const [line, side]: [number, DiffSide] = annNew ? [annNew, 'new'] : annOld ? [annOld, 'old'] : [0, 'new']
+    const [line, side] = pickAnnotationSide(annOld, annNew)
     if (!line) return
     e.preventDefault()
     onannotationclick(line, rawContent, e, undefined, side)
   }
 
-  function handleLineContextMenu(e: MouseEvent, line: DiffLine, lineNumbers: (number | null)[]): void {
+  function handleLineContextMenu(e: MouseEvent, line: DiffLine, annOld: number | null, annNew: number | null): void {
     if (!onlinecontext) return
     e.preventDefault()
 
     // Detect native text selection spanning multiple diff lines
     const selection = window.getSelection()
     const fileEl = (e.currentTarget as HTMLElement).closest('.diff-file')
-    let lines: { lineNum: number | null, content: string }[] = []
+    let lines: { lineNum: number | null, content: string, side?: DiffSide }[] = []
 
     if (selection && !selection.isCollapsed && fileEl) {
       const range = selection.getRangeAt(0)
       for (const el of fileEl.querySelectorAll('.diff-line:not(.conflict-marker-line)')) {
         if (range.intersectsNode(el)) {
-          lines.push(extractLineFromDom(el))
+          // Split-LEFT rows carry old-side line numbers; everything else is new-side.
+          lines.push(extractLineFromDom(el, !!el.closest('.split-left')))
         }
       }
     }
 
-    // Fallback: single right-clicked line. Unified = [old, new]; split = [num].
-    // new-side is what exists in the file — remove lines (new=null) skip ref.
+    // Fallback: single right-clicked line. annOld/annNew are passed explicitly
+    // by the diffLine snippet — unified=[old,new], split-left=[old,null],
+    // split-right=[null,new] — so the OLD-side number from a split-LEFT click
+    // isn't silently treated as new-side downstream. Same pickAnnotationSide
+    // call as handleAltClick keeps sentinel handling and side preference
+    // uniform across both per-line gestures.
     if (lines.length === 0) {
-      const lineNum = lineNumbers[lineNumbers.length - 1] ?? null
-      lines = [{ lineNum, content: line.content.replace(/^[-+ ]/, '') }]
+      const [lineNum, side] = pickAnnotationSide(annOld, annNew)
+      lines = [{ lineNum, content: line.content.replace(/^[-+ ]/, ''), side }]
     }
 
     onlinecontext(e, { filePath, lines })
@@ -543,7 +568,7 @@
       class:conflict-inner-remove={innerType === 'remove'}
       data-search-match-current={hasCurrent ? 'true' : undefined}
       onclick={(e) => handleAltClick(e, annOld, annNew, rawContent)}
-      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, annOld, annNew)}
     >{@render gutter(lineNumbers, rawContent, annOld, annNew)}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm, currentMatchIdx)}</div>
   {:else if highlightedLines.has(hlKey)}
     <div
@@ -554,7 +579,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       onclick={(e) => handleAltClick(e, annOld, annNew, rawContent)}
-      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, annOld, annNew)}
     >{@render gutter(lineNumbers, rawContent, annOld, annNew)}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
@@ -564,7 +589,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       onclick={(e) => handleAltClick(e, annOld, annNew, rawContent)}
-      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, annOld, annNew)}
     >{@render gutter(lineNumbers, rawContent, annOld, annNew)}<span class="diff-prefix">{displayPrefix}</span>{#each spans as span}{#if span.changed}<span
           class="word-change"
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
@@ -577,7 +602,7 @@
       class:conflict-inner-add={innerType === 'add'}
       class:conflict-inner-remove={innerType === 'remove'}
       onclick={(e) => handleAltClick(e, annOld, annNew, rawContent)}
-      oncontextmenu={(e) => handleLineContextMenu(e, line, lineNumbers)}
+      oncontextmenu={(e) => handleLineContextMenu(e, line, annOld, annNew)}
     >{@render gutter(lineNumbers, rawContent, annOld, annNew)}<span class="diff-prefix">{displayPrefix}</span>{displayContent}</div>
   {/if}
 {/snippet}

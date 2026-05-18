@@ -48,6 +48,12 @@ describe('parseDiffContent', () => {
     expect(parseDiffContent('')).toEqual([])
   })
 
+  it('returns empty array for newline-only input', () => {
+    // The trailing-'' pop guard short-circuits the degenerate single-newline
+    // case to an empty array, same as empty input.
+    expect(parseDiffContent('\n')).toEqual([])
+  })
+
   it('parses a single file with one hunk', () => {
     const raw = `Modified regular file src/main.go:
 @@ -1,3 +1,4 @@
@@ -461,6 +467,85 @@ index abc123..def456 100644
     const f = parseDiffContent(raw)[0]
     expect(f.header).toContain('index abc123..def456 100644')
     expect(f.hunks[0].lines).toHaveLength(2)
+  })
+
+  it('removed line whose content starts with -- is a hunk line, not a file marker', () => {
+    // `--counter`, Lua/SQL/Haskell `--` comments etc render as `---…` in
+    // unified diff. The `---`/`+++` file-marker branch must be gated on
+    // !currentHunk or these lines disappear from the diff and skew newCount.
+    const raw = `diff --git a/f.lua b/f.lua
+--- a/f.lua
++++ b/f.lua
+@@ -1,3 +1,2 @@
+ keep
+--- a comment was here
+ keep2`
+    const f = parseDiffContent(raw)[0]
+    expect(f.hunks[0].lines).toHaveLength(3)
+    expect(f.hunks[0].lines[1]).toEqual({ type: 'remove', content: '--- a comment was here' })
+    expect(f.hunks[0].newCount).toBe(2)
+    // Real file markers (before @@) still attach to the header.
+    expect(f.header).toContain('--- a/f.lua')
+    expect(f.header).toContain('+++ b/f.lua')
+    expect(f.header).not.toContain('a comment was here')
+  })
+
+  it('added line whose content starts with ++ is a hunk line, not a file marker', () => {
+    const raw = `Modified regular file f.c:
+@@ -1,2 +1,3 @@
+ keep
++++counter;
+ keep2`
+    const f = parseDiffContent(raw)[0]
+    expect(f.hunks[0].lines).toHaveLength(3)
+    expect(f.hunks[0].lines[1]).toEqual({ type: 'add', content: '+++counter;' })
+    expect(f.hunks[0].newCount).toBe(3)
+  })
+
+  it('drops the trailing empty string from a newline-terminated diff', () => {
+    // jj's `--tool :git` output is newline-terminated; raw.split('\n') leaves
+    // a final '' that previously fell through to the hunk branch as a phantom
+    // {type:'context', content:''} line, over-counting newCount by 1 in the
+    // last hunk and shifting context-expand's trailing-gap boundary.
+    const raw = 'Modified regular file f.go:\n@@ -1,2 +1,2 @@\n-old\n+new\n line2\n'
+    const f = parseDiffContent(raw)[0]
+    expect(f.hunks[0].lines).toHaveLength(3)
+    expect(f.hunks[0].lines.map(l => l.type)).toEqual(['remove', 'add', 'context'])
+    expect(f.hunks[0].newCount).toBe(2)
+  })
+
+  it('does not drop a trailing added-blank-line', () => {
+    // `+` alone is a real added blank line. It precedes the trailing '' from
+    // the terminating newline; only the latter should be dropped.
+    const raw = 'Modified regular file f.go:\n@@ -1,1 +1,2 @@\n keep\n+\n'
+    const f = parseDiffContent(raw)[0]
+    expect(f.hunks[0].lines).toHaveLength(2)
+    expect(f.hunks[0].lines[1]).toEqual({ type: 'add', content: '+' })
+    expect(f.hunks[0].newCount).toBe(2)
+  })
+
+  it('parse(raw + "\\n") deep-equals parse(raw) — pop is a pure normalization', () => {
+    // Locks the invariant: the trailing-newline pop only removes the spurious
+    // '' from split() and never alters the parse of the actual content.
+    const raw = `diff --git a/f.lua b/f.lua
+--- a/f.lua
++++ b/f.lua
+@@ -1,3 +1,2 @@
+ keep
+--- a comment was here
+ keep2`
+    expect(parseDiffContent(raw + '\n')).toEqual(parseDiffContent(raw))
+  })
+
+  it('--/++ content as the LAST hunk line of a newline-terminated diff', () => {
+    // The only place the trailing-newline pop and the !currentHunk gate
+    // interact: the '' after the final `---…` content line must be dropped,
+    // and the `---…` line itself must not be misclassified as a file marker.
+    const raw = '@@ -1,2 +1,1 @@\n keep\n--- comment\n'
+    const f = parseDiffContent(raw)[0]
+    expect(f.hunks[0].lines).toHaveLength(2)
+    expect(f.hunks[0].lines[1]).toEqual({ type: 'remove', content: '--- comment' })
+    expect(f.hunks[0].newCount).toBe(1)
   })
 })
 

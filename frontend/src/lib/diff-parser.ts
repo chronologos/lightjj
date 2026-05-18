@@ -59,6 +59,15 @@ export function parseDiffContent(raw: string): DiffFile[] {
 
   const files: DiffFile[] = []
   const lines = raw.split('\n')
+  // jj's `diff --tool :git` output is newline-terminated; split() leaves a
+  // trailing '' that would otherwise fall through to the hunk branch as a
+  // phantom `{type:'context', content:''}` line in the LAST hunk of the LAST
+  // file — newCount over-counts by 1, hunkIndexForLine maps one line past the
+  // hunk into it, and context-expand's trailing-gap boundary shifts. A real
+  // hunk line is never the empty string (every content line carries a
+  // ` `/`+`/`-` prefix), so dropping it is unconditionally safe. (`!raw`
+  // already returned above, so `lines` is non-empty.)
+  if (lines[lines.length - 1] === '') lines.pop()
   let currentFile: DiffFile | null = null
   let currentHunk: DiffHunk | null = null
 
@@ -83,8 +92,17 @@ export function parseDiffContent(raw: string): DiffFile[] {
         currentFile = { header: '(unknown file)', filePath: '(unknown file)', hunks: [currentHunk], isBinary: false }
         files.push(currentFile)
       }
-    } else if (line.startsWith('---') || line.startsWith('+++')) {
-      // file markers — attach to current file header
+    } else if (!currentHunk && (line.startsWith('---') || line.startsWith('+++'))) {
+      // File markers — attach to current file header. Gated on !currentHunk:
+      // real `---`/`+++` markers only appear between `diff --git` and the
+      // first `@@`. Inside a hunk, a removed line whose CONTENT starts with
+      // `--` (C/JS `--x`, Lua/SQL/Haskell `--` comments) renders as `---…`
+      // and would otherwise be silently swallowed into the header — losing
+      // the diff row and skewing the newCount reconciliation below.
+      // Safe because every file-header branch above resets currentHunk=null,
+      // so by the time `---`/`+++` arrive between files it's always null.
+      // (Combined-diff `@@@` headers never match the `@@` regex and were
+      // already unparsed; this gate doesn't change that.)
       if (currentFile) {
         currentFile.header += '\n' + line
       }

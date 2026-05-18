@@ -141,9 +141,58 @@
   // expandGaps() merges adjacent hunks with revealed gaps between them.
   let expandedDiffs: Map<string, DiffFile> = $state(new Map())
   let revealedGaps: Map<string, Set<number>> = $state(new Map())
+  // Bumped by resetExpandState() so an in-flight refreshExpandedDiffs() or
+  // expandGap() resolving after a reset doesn't write stale full-context
+  // diffs back into a freshly-cleared map. Plays the same role as previewGen
+  // for previewContents but is NOT a true sibling: previewGen is bumped
+  // unconditionally in the nav reset effect (covering sameChange→sameChange
+  // double-snapshots), expandGen only inside resetExpandState(). That gap is
+  // closed by the `activeRevisionId !== commitId` clause in
+  // refreshExpandedDiffs — do not delete it as redundant; it covers a
+  // commitId churn that doesn't bump expandGen.
+  let expandGen = 0
   function resetExpandState() {
+    expandGen++
     expandedDiffs = new Map()
     revealedGaps = new Map()
+  }
+
+  // Sibling of refreshPreviews (see feedback_sibling_asymmetry — the explicit
+  // refreshPreviews call in the sameChange branch was proof expandedDiffs
+  // needed the same treatment). On snapshot/amend/describe (same change_id,
+  // new commit_id), the cached `--context 10000` full was fetched at the OLD
+  // commit_id; expandGaps(NEW_parsedDiff_file, OLD_full, gaps) splices
+  // pre-edit content into post-edit hunks. Re-fetch each open path at the new
+  // commit_id. On per-path failure or path-no-longer-in-diff, drop both the
+  // full and its revealed gaps so DiffFileView falls back to collapsed gap
+  // buttons rather than rendering a torn merge.
+  async function refreshExpandedDiffs(commitId: string, paths: string[]) {
+    const gen = expandGen
+    await Promise.all(paths.map(async (path) => {
+      try {
+        const result = await api.diff(commitId, path, 10000)
+        // Hard-reset (nav away) bumps expandGen; sameChange-again bumps
+        // commitId. Either bounces this write.
+        if (gen !== expandGen || activeRevisionId !== commitId) return
+        const parsed = parseDiffContent(result.diff)
+        if (parsed.length > 0) {
+          expandedDiffs = new Map(expandedDiffs).set(path, parsed[0])
+        } else {
+          dropExpandPath(path)
+        }
+      } catch {
+        if (gen !== expandGen || activeRevisionId !== commitId) return
+        dropExpandPath(path)
+      }
+    }))
+  }
+  function dropExpandPath(path: string) {
+    if (expandedDiffs.has(path)) {
+      const m = new Map(expandedDiffs); m.delete(path); expandedDiffs = m
+    }
+    if (revealedGaps.has(path)) {
+      const m = new Map(revealedGaps); m.delete(path); revealedGaps = m
+    }
   }
 
   // Expansion merges adjacent hunks into one — but hunkReview's cursor/
@@ -255,11 +304,20 @@
     // In multi-check mode the line could be from ANY commit in the revset —
     // omit the @ changeId suffix rather than attribute it to the wrong one.
     const changeId = diffTarget?.kind === 'single' ? diffTarget.changeId : ''
+    // Side comes through DiffLineInfo: split-LEFT rows carry old-side line
+    // numbers, everything else new-side. Open-in-editor jumps in the CURRENT
+    // (post-change) tree — old-side line numbers are off by the cumulative
+    // add/remove delta, so drop the jump line entirely. Annotate stores the
+    // side so the comment renders/jumps on the correct column. Copy-reference
+    // keeps the raw numbers (the user selected from that column; appending
+    // `(old)` keeps the ref unambiguous downstream).
+    const allOldSide = info.lines.length > 0 && info.lines.every(l => l.side === 'old')
 
     // Build reference: path:line(-end) @ changeId
     let ref = info.filePath
     if (start !== null) {
       ref += end !== null && end !== start ? `:${start}-${end}` : `:${start}`
+      if (allOldSide) ref += ' (old)'
     }
     if (changeId) ref += ` @ ${changeId}`
 
@@ -269,7 +327,7 @@
     const items: ContextMenuItem[] = [
       { label: 'Copy file path', action: () => navigator.clipboard.writeText(info.filePath) },
       onopenfile
-        ? { label: 'Open in editor', action: () => onopenfile(info.filePath, start ?? undefined) }
+        ? { label: 'Open in editor', action: () => onopenfile(info.filePath, allOldSide ? undefined : (start ?? undefined)) }
         : { label: 'Open in editor (not configured)', disabled: true },
       ...(onfilehistory ? [{ label: 'View history', action: () => onfilehistory(info.filePath) }] : []),
       { separator: true },
@@ -281,7 +339,7 @@
       items.push({ separator: true })
       items.push({
         label: '💬 Annotate',
-        action: () => openAnnotationBubble(info.filePath, start, info.lines[0].content, e.clientX, e.clientY),
+        action: () => openAnnotationBubble(info.filePath, start, info.lines[0].content, e.clientX, e.clientY, undefined, info.lines[0].side ?? 'new'),
       })
     }
 
@@ -491,14 +549,40 @@
         (a.line ?? 0) - (b.line ?? 0))
   })
   let annNavIdx = $state(-1)
+  // Last-stepped annotation's id — re-anchor key for stepAnnotation. Plain
+  // `let`, not $state: it's never read from a template/$derived (only written
+  // and read inside stepAnnotation between presses).
+  let annNavId: string | null = null
 
   /** Returns false when there's nothing to step to — caller (App) shows the
    *  "No annotations" hint. Expands the target (overrides) before scroll so
    *  a bubbled review opens. */
   export function stepAnnotation(dir: 1 | -1): boolean {
     if (navAnnotations.length === 0) return false
+    // Re-anchor by id BEFORE stepping. navAnnotations is a live $derived —
+    // resolving/deleting (or adding) an annotation between presses shifts
+    // every positional index. Without re-anchoring, resolve A at idx 0 →
+    // [B,C] → idx 0 now aliases B → `}` lands on C, B silently skipped.
+    // (Same shape exists for hunkNavIdx + context-expand merges; lower
+    // probability, deferred — `[`/`]` rarely interleave with gap clicks.)
+    if (annNavId !== null && annNavIdx >= 0) {
+      const found = navAnnotations.findIndex(r => r.id === annNavId)
+      if (found >= 0) {
+        annNavIdx = found
+      } else if (dir > 0) {
+        // Anchored entry was removed (just resolved). In the sorted list, the
+        // entry now at min(annNavIdx, length-1) is the first one PAST the
+        // removed slot — `}` should land ON it, not step over it. Back off
+        // one so `+dir` resolves there. `{` already lands at-or-before that
+        // slot via the existing clamp (exactly one before when not at the
+        // start; at slot 0 when the removed entry was first), so no
+        // adjustment.
+        annNavIdx -= 1
+      }
+    }
     if (annNavIdx < 0) annNavIdx = dir > 0 ? -1 : navAnnotations.length
     annNavIdx = Math.max(0, Math.min(navAnnotations.length - 1, annNavIdx + dir))
+    annNavId = navAnnotations[annNavIdx].id
     scrollToReview(navAnnotations[annNavIdx])
     return true
   }
@@ -960,13 +1044,35 @@
   }
 
   // Per-file expanded result (merged hunks + gapMap). Undefined = no expansion.
+  //
+  // PERF memo, not the correctness fix. Memoized per (file, full, gaps)
+  // ref-identity so files whose inputs didn't change keep STABLE OUTPUT REFS,
+  // which keeps the drive effect on the cheap single-file-delta `update()`
+  // path when expanding additional gaps. The CORRECTNESS guard against
+  // tryRestore()-ing the un-expanded memo over merged-hunk indices is
+  // `cacheKey = undefined` in the drive effect below — without that, a
+  // full-recompute path (rare while expanded, but reachable via search or
+  // hot-reload) would restore wrong highlight HTML. Removing this memo is a
+  // perf regression (full re-derive on every gap click), not a wrong-text bug.
+  // WeakMap keyed on the DiffFile object: parsedDiff replacement (new
+  // revision) GCs old keys automatically; revealedGaps/expandedDiffs only
+  // swap the touched file's value ref so unchanged files hit the memo.
+  let expandGapsMemo = new WeakMap<DiffFile, { full: DiffFile; gaps: ReadonlySet<number>; result: ExpandedDiff }>()
   let expandedByPath: Map<string, ExpandedDiff> = $derived.by(() => {
     if (revealedGaps.size === 0) return new Map()
     const m = new Map<string, ExpandedDiff>()
     for (const f of parsedDiff) {
       const gaps = revealedGaps.get(f.filePath)
       const full = expandedDiffs.get(f.filePath)
-      if (gaps && full) m.set(f.filePath, expandGaps(f, full, gaps))
+      if (!gaps || !full) continue
+      const cached = expandGapsMemo.get(f)
+      if (cached && cached.full === full && cached.gaps === gaps) {
+        m.set(f.filePath, cached.result)
+      } else {
+        const result = expandGaps(f, full, gaps)
+        expandGapsMemo.set(f, { full, gaps, result })
+        m.set(f.filePath, result)
+      }
     }
     return m
   })
@@ -998,7 +1104,16 @@
   let lastDerivationFiles: DiffFile[] | undefined
   $effect(() => {
     const files = effectiveFiles
-    const cacheKey = activeRevisionId
+    // CORRECTNESS guard: when any file is context-expanded, effectiveFiles
+    // diverges from parsedDiff (merged hunks → different line indices) and the
+    // commit_id-keyed memo — written by the un-expanded initial run — must not
+    // be read OR written. tryRestore()ing it would render stale highlight HTML
+    // against merged-hunk keys: wrong source text on screen. The expandGaps
+    // memo above keeps the cheap single-file-delta `update()` path hot for the
+    // common case; this guard covers the full-recompute path. `effectiveFiles
+    // !== parsedDiff` expresses "is anything expanded" without an extra direct
+    // read of expandedByPath (already a transitive dep via effectiveFiles).
+    const cacheKey = effectiveFiles !== parsedDiff ? undefined : activeRevisionId
     clearTimeout(highlightTimer)
 
     // Skip while parsedDiff is stale vs activeRevisionId: `loadedTarget` (→
@@ -1112,6 +1227,14 @@
       if (openPreviews.length > 0) {
         refreshPreviews(incoming.commitId, openPreviews, panelContentEl?.scrollTop)
       }
+      // Same lifecycle as refreshPreviews: the cached `--context 10000`
+      // diff is keyed by filePath but FETCHED for the prior commit_id.
+      // Re-fetch at the new commit_id so expandGaps() splices fresh
+      // context, not pre-edit content.
+      const openExpands = [...untrack(() => expandedDiffs).keys()]
+      if (openExpands.length > 0) {
+        refreshExpandedDiffs(incoming.commitId, openExpands)
+      }
       return
     }
 
@@ -1130,6 +1253,7 @@
     activeFilePath = null
     hunkNavIdx = -1
     annNavIdx = -1
+    annNavId = null
     annBubble = { open: false, x: 0, y: 0, editing: null, lineContext: null }
     symbolHover.clear()
     if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
@@ -1202,6 +1326,14 @@
   // -1 = reveal ALL gaps (context-menu "full context" action).
   async function expandGap(filePath: string, gapIdx: number) {
     const capturedId = activeRevisionId
+    // gen + activeRevisionId together cover the full reset surface: nav to a
+    // different change bumps activeRevisionId (and gen); review-mode entry
+    // calls resetExpandState() which bumps ONLY gen — without this check, an
+    // in-flight expandGap passing the id check would write a stale
+    // expandedDiffs entry into the freshly-cleared map (orphan: its
+    // revealedGaps entry never lands because of the reviewActive check below).
+    // Mirrors refreshExpandedDiffs.
+    const gen = expandGen
     if (!capturedId) return
     const orig = parsedDiff.find(f => f.filePath === filePath)
     if (!orig) return
@@ -1210,7 +1342,7 @@
     if (!expandedDiffs.has(filePath)) {
       try {
         const result = await api.diff(capturedId, filePath, 10000)
-        if (activeRevisionId !== capturedId) return
+        if (gen !== expandGen || activeRevisionId !== capturedId) return
         const parsed = parseDiffContent(result.diff)
         if (parsed.length === 0) return
         expandedDiffs = new Map(expandedDiffs).set(filePath, parsed[0])
@@ -1221,7 +1353,7 @@
 
     // Re-check after potential await: nav OR review-mode entry mid-fetch
     // clears state; re-adding here would shift hunkReview indices.
-    if (activeRevisionId !== capturedId || reviewActive) return
+    if (gen !== expandGen || activeRevisionId !== capturedId || reviewActive) return
     const next = new Set(revealedGaps.get(filePath) ?? [])
     if (gapIdx < 0) {
       for (let i = 0; i <= orig.hunks.length; i++) next.add(i)
