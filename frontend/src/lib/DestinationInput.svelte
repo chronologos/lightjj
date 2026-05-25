@@ -148,6 +148,6 @@
     cursor: pointer;
   }
   .dest-suggestion:hover, .dest-suggestion.active { background: var(--surface0); }
-  .dest-cid { color: var(--surface2); font-family: var(--font-mono); font-size: var(--fs-sm); }
-  .dest-hint { padding: 6px 16px; font-size: var(--fs-sm); color: var(--surface2); border-top: 1px solid var(--surface0); }
+  .dest-cid { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-sm); }
+  .dest-hint { padding: 6px 16px; font-size: var(--fs-sm); color: var(--text-faint); border-top: 1px solid var(--surface0); }
 </style>

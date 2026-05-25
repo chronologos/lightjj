@@ -248,7 +248,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--fs-xs);
   }
 

@@ -223,7 +223,7 @@
   }
 
   .oplog-time {
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--fs-sm);
     flex-shrink: 0;
     white-space: nowrap;
@@ -251,7 +251,7 @@
     justify-content: center;
     gap: 8px;
     padding: 48px 24px;
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--font-size);
   }
 

@@ -15,7 +15,7 @@ const STORAGE_KEY = 'lightjj-config'
 // 18px graph-row height is the hard ceiling — see theme.css and CLAUDE.md.
 export const FONT_SIZE_MIN = 10
 export const FONT_SIZE_MAX = 16
-export const FONT_SIZE_DEFAULT = 13
+export const FONT_SIZE_DEFAULT = 14
 
 interface Config {
   theme: string  // matches THEMES[].id in themes.ts; legacy 'dark'|'light' values are valid ids
@@ -66,7 +66,7 @@ interface Config {
 const defaults: Config = {
   theme: 'dark',
   splitView: false,
-  fontSize: 13,
+  fontSize: 14,
   fontUI: '',
   fontMono: '',
   fontMdBody: '',

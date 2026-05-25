@@ -766,7 +766,7 @@
   .file-count { color: var(--overlay0); font-size: var(--fs-xs); margin-left: auto; }
 
   .diff-loading, .diff-empty {
-    color: var(--surface2); font-size: var(--fs-md); padding: 12px 0; text-align: center;
+    color: var(--text-faint); font-size: var(--fs-md); padding: 12px 0; text-align: center;
   }
   .diff-error { color: var(--red); }
   .cross-diff { margin-top: 4px; }
@@ -801,7 +801,7 @@
 
   .empty-state {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 8px; padding: 48px 24px; color: var(--surface2); font-size: var(--font-size);
+    gap: 8px; padding: 48px 24px; color: var(--text-faint); font-size: var(--font-size);
   }
   .error-message { color: var(--red); font-size: var(--fs-md); padding: 12px; }
 

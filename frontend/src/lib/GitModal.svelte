@@ -320,7 +320,7 @@
     font-weight: 400;
     text-transform: none;
     letter-spacing: 0;
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 
   .git-remotes {
@@ -331,7 +331,7 @@
     align-items: center;
   }
   .git-remotes-label { font-size: var(--fs-sm); color: var(--overlay0); }
-  .git-remotes-hint { font-size: var(--fs-xs); color: var(--surface2); margin-left: auto; }
+  .git-remotes-hint { font-size: var(--fs-xs); color: var(--text-faint); margin-left: auto; }
   .git-remote-pill {
     padding: 2px 8px;
     border: 1px solid var(--surface1);
@@ -477,7 +477,7 @@
 
   .git-empty {
     padding: 16px;
-    color: var(--surface2);
+    color: var(--text-faint);
     text-align: center;
     font-size: var(--font-size);
   }

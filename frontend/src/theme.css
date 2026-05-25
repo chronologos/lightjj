@@ -86,8 +86,8 @@ body {
      components reference. Additive offsets (not ratios) so default 13 yields
      the exact px values the UI was tuned for. max() floors on the smallest
      tiers stop badge/hint text underflowing to 5-7px when base is lowered for
-     density. Keep the 13px in sync with FONT_SIZE_DEFAULT (config.svelte.ts). */
-  --font-size: 13px;
+     density. Keep this in sync with FONT_SIZE_DEFAULT (config.svelte.ts). */
+  --font-size: 14px;
   --fs-3xs: max( 8px, calc(var(--font-size) - 5px));
   --fs-2xs: max( 9px, calc(var(--font-size) - 4px));
   --fs-xs:  max(10px, calc(var(--font-size) - 3px));
@@ -100,6 +100,16 @@ body {
      tint on black) and light (black tint on white) without per-theme hex. */
   --surface0: color-mix(in srgb, var(--text) 4%, transparent);
   --surface1: color-mix(in srgb, var(--text) 7%, transparent);
+
+  /* Faint/tertiary TEXT color (timestamps, placeholders, empty states, line
+     numbers, dimmed id tails, hunk ranges). Derived from --text — NOT a step
+     of the gray ramp — so it keeps consistent legibility across every theme.
+     History: these elements used --surface2, the ramp's darkest step (meant
+     for borders). That read fine in light themes but collapsed into the
+     background in dark themes (#4e4e58 on #0f0f13 ≈ invisible). 45% keeps it
+     clearly secondary while staying readable on both polarities. Borders that
+     legitimately want the dark divider tone still use --surface2. */
+  --text-faint: color-mix(in srgb, var(--text) 45%, transparent);
 
   --bg-hover: var(--surface0);
   --bg-selected:         color-mix(in srgb, var(--amber) 8%, transparent);
@@ -422,7 +432,7 @@ body {
   font-size: var(--font-size);
   outline: none;
 }
-.modal-input::placeholder { color: var(--surface2); }
+.modal-input::placeholder { color: var(--text-faint); }
 
 /* Borderless × close button. DivergencePanel/FileHistoryPanel/AnnotationBubble. */
 .close-btn {

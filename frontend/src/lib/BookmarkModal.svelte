@@ -349,7 +349,7 @@
     font-weight: 400;
     text-transform: none;
     letter-spacing: 0;
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 
   .modal-input {
@@ -436,7 +436,7 @@
 
   .bm-empty {
     padding: 16px;
-    color: var(--surface2);
+    color: var(--text-faint);
     text-align: center;
     font-size: var(--font-size);
   }

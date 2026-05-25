@@ -3248,7 +3248,7 @@
   }
 
   .revset-icon {
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--fs-md);
     font-weight: 700;
     flex-shrink: 0;
@@ -3302,7 +3302,7 @@
   .revset-clear {
     background: transparent;
     border: none;
-    color: var(--surface2);
+    color: var(--text-faint);
     cursor: pointer;
     font-family: inherit;
     font-size: var(--fs-lg);
@@ -3522,7 +3522,7 @@
 
   .toolbar-ws-chevron {
     font-size: var(--fs-2xs);
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 
   .toolbar-ws-dropdown {
@@ -3570,7 +3570,7 @@
 
   .toolbar-ws-open {
     font-size: var(--fs-xs);
-    color: var(--surface2);
+    color: var(--text-faint);
     margin-left: auto;
     opacity: 0;
   }
@@ -3627,7 +3627,7 @@
     background: var(--surface0);
     border: none;
     border-radius: 4px;
-    color: var(--surface2);
+    color: var(--text-faint);
     font-family: inherit;
     font-size: var(--fs-sm);
     cursor: pointer;
@@ -3640,7 +3640,7 @@
   .toolbar-search-kbd {
     font-family: var(--font-mono);
     font-size: var(--fs-2xs);
-    color: var(--surface2);
+    color: var(--text-faint);
     background: none;
     border: 1px solid var(--surface1);
     padding: 0 4px;

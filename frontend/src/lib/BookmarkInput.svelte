@@ -184,7 +184,7 @@
   }
 
   .bm-set-input::placeholder {
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 
   .bm-set-suggestions {
@@ -229,6 +229,6 @@
   .bm-set-hint {
     padding: 6px 16px;
     font-size: var(--fs-sm);
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 </style>

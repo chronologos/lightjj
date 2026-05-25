@@ -219,7 +219,7 @@
   .ctx-shortcut {
     font-family: inherit;
     font-size: var(--fs-sm);
-    color: var(--surface2);
+    color: var(--text-faint);
     background: var(--surface0);
     border: 1px solid var(--surface1);
     padding: 1px 5px;

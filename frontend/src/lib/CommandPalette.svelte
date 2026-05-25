@@ -278,13 +278,13 @@
   }
 
   .palette-input::placeholder {
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 
   .palette-esc {
     font-family: inherit;
     font-size: var(--fs-xs);
-    color: var(--surface2);
+    color: var(--text-faint);
     background: var(--surface0);
     border: 1px solid var(--surface1);
     padding: 1px 5px;
@@ -365,7 +365,7 @@
   .cheatsheet-hint {
     column-span: all;
     text-align: center;
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--fs-sm);
     padding: 8px 0 4px;
   }
@@ -457,7 +457,7 @@
     height: 12px;
   }
   .palette-hint {
-    color: var(--surface2);
+    color: var(--text-faint);
     font-family: var(--font-mono);
     font-size: var(--fs-sm);
     margin-left: auto;
@@ -478,7 +478,7 @@
 
   .palette-empty {
     padding: 16px;
-    color: var(--surface2);
+    color: var(--text-faint);
     text-align: center;
     font-size: var(--font-size);
   }

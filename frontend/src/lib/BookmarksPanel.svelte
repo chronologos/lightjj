@@ -714,7 +714,7 @@
   }
 
   .bp-filter:focus { border-color: var(--blue); }
-  .bp-filter::placeholder { color: var(--surface2); }
+  .bp-filter::placeholder { color: var(--text-faint); }
 
   .bp-count {
     font-size: var(--fs-sm);
@@ -906,7 +906,7 @@
 
   .bp-ago {
     font-size: var(--fs-xs);
-    color: var(--surface2);
+    color: var(--text-faint);
     flex-shrink: 0;
     margin-right: 4px;
   }
@@ -955,7 +955,7 @@
 
   .bp-empty {
     padding: 24px;
-    color: var(--surface2);
+    color: var(--text-faint);
     text-align: center;
     font-size: var(--font-size);
   }

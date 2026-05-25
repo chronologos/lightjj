@@ -157,7 +157,7 @@
     padding: 0;
     background: transparent;
     border: none;
-    color: var(--surface2);
+    color: var(--text-faint);
     font: inherit;
     font-size: var(--fs-lg);
     line-height: 1;
@@ -185,6 +185,6 @@
     border-color: var(--amber);
   }
   .tab-path-input::placeholder {
-    color: var(--surface2);
+    color: var(--text-faint);
   }
 </style>

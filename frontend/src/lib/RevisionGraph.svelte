@@ -785,7 +785,7 @@
   }
 
   .id-rest {
-    color: var(--surface2);
+    color: var(--text-faint);
     font-weight: 400;
   }
 
@@ -804,7 +804,7 @@
   }
 
   .elided-label {
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--fs-xs);
     letter-spacing: 0.04em;
     flex-shrink: 0;
@@ -1049,7 +1049,7 @@
     justify-content: center;
     gap: 8px;
     padding: 48px 24px;
-    color: var(--surface2);
+    color: var(--text-faint);
     font-size: var(--font-size);
   }
 
