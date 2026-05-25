@@ -86,6 +86,7 @@ jobs:
           GOOS=darwin GOARCH=arm64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-macos-arm64 ./cmd/lightjj
           GOOS=linux  GOARCH=amd64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-x86_64 ./cmd/lightjj
           GOOS=linux  GOARCH=arm64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-linux-arm64 ./cmd/lightjj
+          GOOS=windows GOARCH=amd64 go build -tags embed -trimpath -ldflags "$LDFLAGS" -o dist/lightjj-windows-x86_64.exe ./cmd/lightjj
 
       - name: Generate checksums
         working-directory: dist
@@ -103,6 +104,7 @@ jobs:
             dist/lightjj-macos-arm64
             dist/lightjj-linux-x86_64
             dist/lightjj-linux-arm64
+            dist/lightjj-windows-x86_64.exe
 
       - uses: actions/upload-artifact@v4
         with:
@@ -184,8 +186,11 @@ jobs:
             | macOS (Apple Silicon) | [lightjj-macos-arm64](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-macos-arm64) |
             | Linux (x86_64)        | [lightjj-linux-x86_64](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-linux-x86_64) |
             | Linux (arm64)         | [lightjj-linux-arm64](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-linux-arm64) |
+            | Windows (x86_64) — *experimental* | [lightjj-windows-x86_64.exe](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/lightjj-windows-x86_64.exe) |
 
-            Then `chmod +x` and put it on your `PATH`. On macOS, also clear quarantine and ad-hoc sign:
+            The Windows build is cross-compiled but not yet exercised by CI or maintainer testing — reports welcome.
+
+            Then `chmod +x` and put it on your `PATH` (macOS/Linux). On macOS, also clear quarantine and ad-hoc sign:
 
             ```bash
             xattr -cr lightjj && codesign -s - -f lightjj
@@ -205,4 +210,5 @@ jobs:
             dist/lightjj-macos-arm64
             dist/lightjj-linux-x86_64
             dist/lightjj-linux-arm64
+            dist/lightjj-windows-x86_64.exe
             dist/checksums.sha256

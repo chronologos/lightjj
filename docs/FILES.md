@@ -14,11 +14,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the system-level design these files i
 Command builders + data models (PURE — no I/O, no side effects)
 
 - **`commands.go`** — Functions that return []string args for jj subcommands
-- **`commands_test.go`** — Command builder tests
 - **`commit.go`** — Commit model with ChangePrefix/CommitPrefix, Immutable, Divergent, WorkingCopies, Mine, AuthorEmail, Timestamp
-- **`commit_test.go`** — Commit model tests
 - **`bookmark.go`** — Bookmark model + output parsers; ParseBookmarkListOutput/ParseRemoteListOutput take defaultRemote param for sort order
-- **`bookmark_test.go`** — Bookmark parser tests
 - **`alias.go`** — jj config alias parser
 - **`file_change.go`** — FileChange model, FilesTemplate (single-call file stats + conflict info), ParseFilesTemplate
 - **`divergence.go`** — DivergenceEntry, Divergence() template builder, ParseDivergence. committer_ts DELIBERATELY absent (structurally inverted for --at-op). splitNonEmpty helper.
@@ -34,7 +31,6 @@ CommandRunner interface + implementations
 - **`runner.go`** — Interface definition (Run, RunWithInput, RunForMutation, StreamCombined, RunRaw, WriteFile)
 - **`local.go`** — LocalRunner: exec("jj", args) with configurable Binary. WriteFile does symlink-escape hardening (EvalSymlinks on parent + Lstat leaf) before os.WriteFile.
 - **`ssh.go`** — SSHRunner: wraps jj args in ssh command. WriteFile pipes content via `cd <repo> && cat > <path>` over stdin — no symlink check (same trust boundary as remote shell).
-- **`ssh_test.go`** — SSH arg escaping tests
 
 ## internal/api/
 
@@ -62,7 +58,6 @@ HTTP handlers
 Graph log parser
 
 - **`graph.go`** — Parses jj log graph output with _PREFIX: markers into GraphRow[]
-- **`graph_test.go`** — Graph parser tests
 
 ## testutil/
 
@@ -84,11 +79,10 @@ Svelte 5 SPA (Vite + TypeScript + pnpm)
 ## frontend/src/lib/
 
 - **`api.ts`** — Typed API client, op-id tracking, commit_id-keyed LRU cache. `wireAutoRefresh` SSE reconnects on backend restart via `everSawEvent` heuristic (mirrors Go's `everSawLine`): handleEvents pushes op-id immediately on connect, so CLOSED-before-event = watcher absent → give up; CLOSED-after-event = transient → backoff retry.
-- **`api.test.ts`** — API client tests
 - **`RevisionGraph.svelte`** — Revision list with graph gutter rendering; JS-tracked hoveredIndex (mousemove-driven, not :hover). Virtualized via `createWindower` (virtual.svelte.ts) above VIRTUALIZE_THRESHOLD=150 flatLines (~50 commits). Fixed 18px rows → pure-arithmetic windowing (no per-row measurement). Row template is a {#snippet} shared by virtual/eager paths. Pure display — no revset filter input (that lives in App.svelte above RevisionGraph inside `revision-panel-wrapper`).
 - **`virtual.svelte.ts`** — `createWindower()` fixed-row-height virtualization. count/scrollEl passed as getters → reactive without $effect glue. `items` is $derived reading count directly → no lag-frame between count shrink and item re-render (the tanstack setOptions-via-$effect problem). `scrollToIndex` implements align:'auto'. `holdViewport(scrollEl, anchorSel, fn, gen?)` runs a layout-shifting mutation without the line under the user's eye moving: capture first `anchorSel` match with top ≥ container-top → fn() → `await tick()` → correct scrollTop by delta (tick = post-DOM-flush pre-paint; rAF would paint shifted first). `anchorSel` MUST be per-row (e.g. `.diff-file`) — a wrapper div's top doesn't move when its contents reflow. gen() lets a concurrent scrollTo win.
 - **`GraphSvg.svelte`** — SVG renderer for graph gutter characters (pipes, curves, node dots)
-- **`DiffPanel.svelte`** — Diff viewer: unified/split toggle, syntax highlighting, edit-state management. Reset effect (activeRevisionId change) clears edit/search/expanded state + saves/restores collapseStateCache (change_id-keyed). startEdit/discardFile guard against navigation-during-await by comparing captured changeId vs LIVE diffTarget prop. `quickResolve(path, 'ours'|'theirs')` = one-click whole-file conflict resolve: reuses `fetchFileForEdit` (auto-`jj edit` non-`@`) + `reconstructSides` then writes the WHOLE side (sides.ours/theirs) via `api.fileWrite` — NOT planTake's incremental surgery, so it sidesteps the planTake blank-line gap; N-way/git-style/auto-resolved-race falls back to the editor (mirrors startMerge). `[`/`]` → `stepHunk(dir)` over `flatHunks` (cross-file); `{`/`}` → `stepAnnotation(dir)` over `navAnnotations` (file-order sorted). Both via `scrollToHunk(path, hunkIdx)` (collapsedFiles.delete → rAF → data-attr query).
+- **`DiffPanel.svelte`** — Diff viewer: unified/split toggle, syntax highlighting, edit-state management. Reset effect (activeRevisionId change) clears edit/search/expanded state + saves/restores collapseStateCache (change_id-keyed). startEdit/discardFile guard against navigation-during-await by comparing captured changeId vs LIVE diffTarget prop. `quickResolve(path, 'ours'|'theirs')` = one-click whole-file conflict resolve: reuses `fetchFileForEdit` (auto-`jj edit` non-`@`) + `reconstructSides` then writes the WHOLE side (sides.ours/theirs) via `api.fileWrite` — NOT planTake's incremental surgery, so it sidesteps the planTake blank-line gap; N-way/git-style/auto-resolved-race falls back to the editor (mirrors startMerge); an EMPTY chosen side (modify/delete — jj materializes the deleted side as empty) is refused with an editError instead of written, since fileWrite has no delete and a zero-byte write would mis-resolve the tree. `toggleSplitView()` is EXPORTED and is the only sanctioned way to flip split/unified from outside (App's Cmd+K palette routes through it) — it confirms before discarding an open FileEditor buffer; writing `config.splitView` directly bypasses that confirm. `[`/`]` → `stepHunk(dir)` over `flatHunks` (cross-file); `{`/`}` → `stepAnnotation(dir)` over `navAnnotations` (file-order sorted). Both via `scrollToHunk(path, hunkIdx)` (collapsedFiles.delete → rAF → data-attr query).
 - **`diff-cache.ts`** — App-lifetime caches: derivedCache (highlight+word-diff, commit_id-keyed), parsedDiffCache (diff-text-keyed for ref-identity on revisit), collapseStateCache (change_id-keyed). Previously DiffPanel `<script module>`; hoisted so clearDiffCaches() is callable from hard-refresh. NOT wired into clearAllCaches() (would create api.ts ↔ diff-cache cycle); App calls both.
 - **`FileSelectionPanel.svelte`** — Squash/split/review file checkbox panel. j/k/Space/a/n keys, auto-focus on mount. Mounted via `{#if fileSelectionMode}` so mount = mode entry.
 - **`RevisionHeader.svelte`** — Header slot rendered by DiffPanel via `{@render header()}`: change_id, description expand, bookmark/PR badges, Describe/Divergence buttons, DescriptionEditor
