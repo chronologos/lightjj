@@ -436,6 +436,36 @@ func TestHandleWorkspaceAdd(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleWorkspaceAddFromSecondaryWorkspace(t *testing.T) {
+	// Issue #15: adding a workspace while a SECONDARY workspace tab is active
+	// must base the new dir on the DEFAULT workspace, not the current one —
+	// otherwise suffixes compound (repo-withclaude-withcodex).
+	parent := t.TempDir()
+	primary := filepath.Join(parent, "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, ".jj", "repo"), 0o755))
+
+	// Secondary workspace `repo-withclaude`: .jj/repo is a pointer file back to
+	// the primary's store (what `jj workspace add` creates).
+	secondary := filepath.Join(parent, "repo-withclaude")
+	require.NoError(t, os.MkdirAll(filepath.Join(secondary, ".jj"), 0o755))
+	rel, err := filepath.Rel(filepath.Join(secondary, ".jj"), filepath.Join(primary, ".jj", "repo"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(secondary, ".jj", "repo"), []byte(rel), 0o644))
+
+	runner := testutil.NewMockRunner(t)
+	// dest resolves to a sibling of the PRIMARY (parent/repo-withcodex), not
+	// parent/repo-withclaude-withcodex.
+	runner.Expect(jj.WorkspaceAdd(filepath.Join(parent, "repo-withcodex"), "withcodex")).
+		SetOutput([]byte("Created workspace"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = secondary
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/add", []byte(`{"name":"withcodex"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestHandleWorkspaceAddValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, repoDir string

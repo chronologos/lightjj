@@ -1075,10 +1075,21 @@ type workspaceAddRequest struct {
 var workspaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // handleWorkspaceAdd creates a new workspace as a sibling directory of the
-// current repo: <repoDir>/../<repoBasename>-<name>. Local-fs only — SSH mode
-// would need remote path resolution and the user can run `jj workspace add`
-// directly there. Response is the standard MutationResult; the frontend
-// refreshes /api/workspaces afterward and opens the new path as a tab.
+// PRIMARY (default) workspace: <defaultRoot>/../<defaultBasename>-<name>.
+// Local-fs only — SSH mode would need remote path resolution and the user can
+// run `jj workspace add` directly there. Response is the standard
+// MutationResult; the frontend refreshes /api/workspaces afterward and opens
+// the new path as a tab.
+//
+// The base is the default workspace, NOT s.RepoDir (the current tab's
+// workspace). Deriving from s.RepoDir compounds suffixes when adding from
+// within a secondary workspace tab (repo-withclaude → repo-withclaude-withcodex
+// instead of repo-withcodex — issue #15). All workspaces share one repo store,
+// and a secondary's .jj/repo is a pointer file back to the default's store, so
+// repoStorePath() resolves to <defaultRoot>/.jj/repo regardless of which
+// workspace this tab views. Stripping /.jj/repo (two path levels) recovers the
+// default root — name- and jj-version-independent (no store-index parsing,
+// which is additive-only and most likely to omit the oldest default workspace).
 func (s *Server) handleWorkspaceAdd(w http.ResponseWriter, r *http.Request) {
 	var req workspaceAddRequest
 	if err := decodeBody(w, r, &req); err != nil {
@@ -1093,7 +1104,8 @@ func (s *Server) handleWorkspaceAdd(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "workspace add not supported in SSH mode — run `jj workspace add` on the remote")
 		return
 	}
-	dest := filepath.Join(filepath.Dir(s.RepoDir), filepath.Base(s.RepoDir)+"-"+req.Name)
+	baseRoot := filepath.Dir(filepath.Dir(s.repoStorePath())) // <defaultRoot>/.jj/repo → <defaultRoot>
+	dest := filepath.Join(filepath.Dir(baseRoot), filepath.Base(baseRoot)+"-"+req.Name)
 	s.runMutation(w, r, jj.WorkspaceAdd(dest, req.Name))
 }
 
