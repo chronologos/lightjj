@@ -28,7 +28,7 @@
   import { anchorText, isReviewedReview, SEVERITY_VAR, type PlacedReview, type Severity } from './review'
   import type { CommentMode, CommentVisibility } from './comment-visibility.svelte'
   import { holdViewport } from './virtual.svelte'
-  import { createSymbolHover } from './symbol-hover.svelte'
+  import { createSymbolHover, symbolTarget } from './symbol-hover.svelte'
   import SymbolHover from './SymbolHover.svelte'
 
   interface Props {
@@ -115,6 +115,9 @@
   // --- Local state ---
   let panelContentEl: HTMLElement | undefined = $state(undefined)
   const symbolHover = createSymbolHover()
+  // Toolbar-hint label for the symbol-peek modifier — handleSymbolMove
+  // (DiffFileView) accepts metaKey OR ctrlKey, so label per platform.
+  const symbolModKey = typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'
   let fileTabsEl: HTMLElement | undefined = $state(undefined)
   let fileTabsOverflow = $state(false)
   function measureTabsOverflow() {
@@ -353,6 +356,29 @@
       { separator: true },
       { label: 'Copy reference', action: () => navigator.clipboard.writeText(fullRef) },
     ]
+    // Symbol peek — same token-extraction as the ⌘-hover path (symbolTarget on
+    // the [data-sym] span). composedPath() is only populated during dispatch,
+    // so the element is captured here, not inside the item action. The length
+    // guard mirrors enter()'s own minimum so we never offer a no-op item.
+    const symEl = symbolTarget(e)
+    const symName = symEl?.textContent ?? ''
+    if (symEl && symName.length >= 2) {
+      const symLang = detectLanguage(info.filePath)
+      items.push(
+        { separator: true },
+        { label: 'Peek definition', action: () => symbolHover.enter(symEl, symLang) },
+        {
+          label: 'Open definition in editor',
+          action: async () => {
+            try {
+              const hits = await api.symbol(symName, symLang)
+              if (hits.length > 0) { await api.openFile(hits[0].file, hits[0].line); return }
+            } catch { /* fall through — the peek card has its own error surface */ }
+            symbolHover.enter(symEl, symLang)
+          },
+        },
+      )
+    }
     // Annotate only makes sense in single-rev mode (needs a stable changeId)
     // and when selection is a single line (annotations are per-line).
     if (diffTarget?.kind === 'single' && start !== null && start === end) {
@@ -2005,7 +2031,11 @@
           aria-label={anyCollapsed ? 'Expand all files' : 'Collapse all files'}
         >{anyCollapsed ? '⊞' : '⊟'}</button>
         {#if diffTarget?.kind === 'single'}
-          <span class="ann-hint"><kbd class="nav-hint">Alt</kbd>+click line to annotate</span>
+          <span class="ann-hint"><kbd class="nav-hint">Alt</kbd>+click annotate · <kbd class="nav-hint">{symbolModKey}</kbd> hover definition</span>
+        {:else}
+          <!-- Symbol peek isn't single-rev gated (symbolHover is passed to every
+               DiffFileView), so keep advertising it in multi-check mode too. -->
+          <span class="ann-hint"><kbd class="nav-hint">{symbolModKey}</kbd> hover definition</span>
         {/if}
       </div>
       <button

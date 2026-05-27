@@ -75,8 +75,9 @@ export function createSymbolHover() {
 }
 
 /** Walk composedPath() for the innermost `[data-sym]` span. Returns null if
- *  the pointer isn't over a hoverable token. */
-export function symbolTarget(e: PointerEvent): Element | null {
+ *  the pointer isn't over a hoverable token. Accepts any mouse-family event
+ *  (pointermove hover path, contextmenu peek path). */
+export function symbolTarget(e: MouseEvent): Element | null {
   for (const n of e.composedPath()) {
     if (n instanceof Element && n.hasAttribute('data-sym')) return n
     // Stop at the line container — no point walking up to <body>.
