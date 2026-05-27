@@ -23,9 +23,8 @@ do not start it yourself.
 ```
 
 `GET /api/agent` is the source of truth for endpoints, request/response schemas,
-and the comment/suggestion model. Read it before guessing routes — it's ~200
-lines and describes the doc-comment store, the navigate endpoint, and the
-review-comment store.
+and the comment/suggestion model. Read it before guessing routes — it describes
+the doc-comment store, the navigate endpoint, and the review-comment store.
 
 ## Synopsis
 
@@ -36,14 +35,9 @@ lightjj api [flags] METHOD PATH [BODY]
   PATH     verbatim — most routes are tab-scoped: /tab/{N}/api/...
            Root-only: /tabs, /api/config. Tab 0 is the launch repo.
   BODY     literal JSON | @file | "-" for stdin
-
-flags:
-  --addr   host:port — bypass discovery (multiple sessions, SSH tunnel). Loopback only.
-  --repo   path — match a different repo than cwd
-  -H       "Key: Value" — extra header (repeatable)
-
-exit codes: 0 = 2xx, 1 = connection/discovery, 2 = usage, 4 = HTTP 4xx, 5 = HTTP 5xx
 ```
+
+Full reference (flags, exit codes): `lightjj api --help` / `GET /api/agent`.
 
 Quote query strings — bare `&` backgrounds the shell:
 

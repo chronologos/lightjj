@@ -23,7 +23,14 @@ One line per file; routine `*_test.go` / `*.test.ts` files are omitted (they sit
 
 ```
 cmd/lightjj/main.go       — CLI entry point, flag parsing, embeds frontend-dist/
+cmd/lightjj/frontend_embed.go — go:embed frontend-dist/ handler (-tags embed)
+cmd/lightjj/frontend_stub.go — No-embed fallback: static "frontend not bundled" help page
 cmd/lightjj/session_file.go — Agent port-discovery session files ($XDG_RUNTIME_DIR/lightjj/sessions/<pid>.json)
+cmd/lightjj/session_file_unix.go — verifyOwner uid check on the session dir (unix)
+cmd/lightjj/session_file_other.go — verifyOwner no-op stub (non-unix)
+cmd/lightjj/api_cmd.go    — lightjj api / lightjj sessions subcommands: loopback HTTP client for agent harnesses
+cmd/lightjj/skill_cmd.go  — lightjj skill [install]: prints/installs embedded SKILL.md agent guide
+cmd/lightjj/apply_hunks.go — --apply-hunks re-entry for `jj split --tool lightjj-hunks` (writes hunk spec into $right)
 internal/
   jj/                     — Command builders + data models (PURE — no I/O, no side effects)
     commands.go            — Functions that return []string args for jj subcommands
@@ -51,7 +58,11 @@ internal/
     annotations.go         — CRUD for per-changeId review comments
     doc_comments.go        — CRUD for doc-mode range-anchored comments/suggestions
     agent_docs.go          — GET /api/agent serves embedded agent_api.md (doc/route drift guard test)
+    symbol.go              — rg-backed go-to-definition (GET /api/symbol) via RunRaw rg --json
+    focus.go               — GET/POST /api/focus: frontend view-state report for agent steering
     open.go                — Open-in-$EDITOR ({file}/{line} substitution, detached process)
+    open_unix.go           — detachProcess via Setsid (!windows)
+    open_windows.go        — detachProcess no-op (windows)
     gzip.go                — Gzip response middleware (Flush passthrough for SSE)
   parser/                  — Graph log parser
     graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[]
@@ -60,6 +71,7 @@ testutil/                  — Go test infrastructure
 frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
   src/testutil/            — mock-api.ts (vi.mock netStubs + builders), wait-for.ts (frame/predicate waits)
   src/App.interactions.test.ts — In-process keyboard-gate tests
+  src/main.ts              — Vite entry point: mounts AppShell, imports theme.css
   src/AppShell.svelte      — Tab-switch host ({#key activeTabId} remount + state snapshot)
   src/App.svelte           — Main app shell: layout, keyboard routing, state, revset filter bar
   src/lib/
@@ -69,9 +81,13 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     GraphSvg.svelte        — SVG renderer for graph gutter characters
     DiffPanel.svelte       — Diff viewer: unified/split, edit state, hunk/annotation nav, quick conflict resolve
     diff-cache.ts          — App-lifetime caches: derived highlights, parsed diffs, collapse state
+    SearchResults.svelte   — Diff search match jump-list dropdown (capped render, snippet windowing)
     FileSelectionPanel.svelte — Squash/split/review file checkbox panel
+    hunk-apply.ts          — PURE — hunk selection model + forward-apply accepted hunks (spec for apply_hunks.go)
     RevisionHeader.svelte  — Header slot: change_id, description, badges, Describe/Divergence buttons
     DiffFileView.svelte    — Per-file diff: collapse, context expansion, conflict badges, Alt+click annotate
+    SymbolHover.svelte     — Go-to-definition hover card (signature + doc context, click → open in $EDITOR)
+    symbol-hover.svelte.ts — createSymbolHover() hover controller (span dedup, exit grace, gen-guarded fetch)
     FileEditor.svelte      — CodeMirror 6 wrapper for inline editing
     MergePanel.svelte      — 3-pane conflict editor (ours | result | theirs)
     merge-surgery.ts       — PURE — planTake/planTakeBoth/remapBlock position surgery
@@ -79,6 +95,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     conflict-extract.ts    — reconstructSides(): jj conflict markers → {base, ours, theirs, blocks}
     merge-diff.ts          — ChangeBlock/LineDiff types; diffBlocks() LCS is test-only
     ConflictQueue.svelte   — Merge-mode left rail: conflicted files grouped by commit
+    merge-controller.svelte.ts — createMergeController(): merge-mode queue/sides/save orchestration (shared gen)
     DocView.svelte         — Doc-mode ProseMirror editor (View|Edit)
     DocCommentRail.svelte  — Doc-mode comment rail (threads → CommentCard)
     review.ts              — Unified read-model over Annotation + DocComment
@@ -89,6 +106,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     pm-mermaid.ts          — Mermaid code_block NodeView
     reanchor.ts            — Content-addressed anchor capture/refind
     FileHistoryPanel.svelte — Two-cursor file history overlay
+    FileHistoryRail.svelte — Reusable file-history revision rail (two-tier mutable→full loading)
+    FileComparePicker.svelte — Compare a file against another revision (FileHistoryRail + diffRange)
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K) with submenus
     ContextMenu.svelte     — Reusable right-click context menu
@@ -103,6 +122,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     jj-features.svelte.ts  — Frontend jj version gates (optimistic on unknown)
     confirm-gate.svelte.ts — createConfirmGate() double-press confirm factory
     BookmarkInput.svelte   — Bookmark name input with autocomplete
+    DestinationInput.svelte — Destination picker (/) for inline rebase/squash (bookmark or raw revset)
     ConfigModal.svelte     — Cmd+K → "Edit config" CodeMirror JSON editor
     GitModal.svelte        — Git push/fetch modal
     EvologPanel.svelte     — Evolution log with inline per-entry diffs
@@ -111,6 +131,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     divergence.ts          — classify() + buildKeepPlan() (see docs/jj-divergence.md)
     divergence-refined.ts  — PURE — refined-kind taxonomy + cross-column merge detection
     divergence-strategy.ts — recommend(): ranked resolution strategies
+    divergence-actions.ts  — executeKeepPlan/splitIdentity/squashDivergent/abandonMutable (api-calling execution)
+    divergence.fixtures.ts — Shared DivergenceEntry/DivergenceGroup test builders
     diff-parser.ts         — Unified diff parser
     context-expand.ts      — PURE — expandGaps() merges revealed context gaps
     conflict-parser.ts     — jj conflict marker parser (diff-side label semantics)
@@ -118,6 +140,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     word-diff.ts           — Word-level inline diff computation
     perf-fixtures.ts       — Synthetic diff generators for diff-compute.bench.ts (`pnpm run bench`)
     languages.ts           — SINGLE language registry (one LANGUAGES entry per language)
+    lang-zig.ts            — Zig StreamLanguage tokenizer (legacy simple-mode, lazy-loaded)
     highlighter.ts         — Lezer highlightCode → tok-* spans + escapeHtml/escapeAttr
     markdown-render.ts     — marked (GFM) + DOMPurify renderMarkdown + gutter block stamping
     mermaid.ts             — beautiful-mermaid lazy-load + render
@@ -127,11 +150,14 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     MarkdownPreview.svelte — .md preview toggle with annotation gutter
     fuzzy.ts               — Fuzzy string matching
     group-by.ts            — groupByWithIndex utility
+    time-format.ts         — relativeTime() compact ages + firstLine()
+    scroll-into-view.ts    — scrollIdxIntoView() data-idx row scroll helper
     loader.svelte.ts       — createLoader() async factory with generation counter
     revision-navigator.svelte.ts — createRevisionNavigator(): diff/files/description load orchestration
     diff-derivation.svelte.ts — createDiffDerivation() per-file progressive computation
     keyboard-gate.ts       — PURE — routeKeydown() gate-priority router
     modes.svelte.ts        — Rebase/squash/split mode state factories (diffFollows semantics)
+    slide.ts               — computeSlide(): Shift+J/K single-step reorder along linear graph segments
     config.svelte.ts       — Reactive config singleton (server config + localStorage cache)
     recent-actions.svelte.ts — Config-backed last-used timestamps for bookmark recency sort
     annotations.svelte.ts  — Per-line review comment store (server-backed, agent workflows)
@@ -148,7 +174,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 
 **Go**: 3 direct (`fsnotify` for cross-platform fs watch, `tailscale/hujson` for comment-preserving JSONC config edits, `testify` test-only). Don't add more without strong justification.
 
-**Frontend**: CodeMirror/Lezer (editor core, one author), `marked`+`dompurify` (markdown+XSS — don't hand-roll sanitization), `beautiful-mermaid` (lazy-loaded, opt-in), `jsonc-parser` (lazy-loaded, ~30KB gzip — only used by ConfigModal save path), `prosemirror-*` (8 packages, one author, lazy-loaded via doc-mode `await import` — ~31KB gzip), `fast-check` (dev-only, 1 transitive — property tests for data-loss paths). Versions pinned exact (no `^`). `pnpm.onlyBuiltDependencies: ["esbuild"]` allowlists the ONE package permitted to run install scripts — everything else is blocked. Run `pnpm audit` before shipping a dep bump.
+**Frontend**: CodeMirror/Lezer (editor core, one author), `marked`+`dompurify` (markdown+XSS — don't hand-roll sanitization), `beautiful-mermaid` (lazy-loaded, opt-in), `jsonc-parser` (lazy-loaded, ~30KB gzip — only used by ConfigModal save path), `prosemirror-*` (9 packages, one author, lazy-loaded via doc-mode `await import` — ~31KB gzip), `fast-check` (dev-only, 1 transitive — property tests for data-loss paths). Versions pinned exact (no `^`). `pnpm.onlyBuiltDependencies: ["esbuild"]` allowlists the ONE package permitted to run install scripts — everything else is blocked. Run `pnpm audit` before shipping a dep bump.
 
 ## Code Conventions
 
@@ -245,7 +271,7 @@ func TestHandleAbandon(t *testing.T) {
 1. Add a command builder function in `internal/jj/commands.go`
 2. Add tests for it in `internal/jj/commands_test.go`
 3. Add a request struct + handler in `internal/api/handlers.go`
-4. Register the route in `internal/api/server.go` → `routes()`. **Path must start with `/api/`** — `tabScoped()` in api.ts uses that prefix to route per-tab; anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
+4. Register the route in `internal/api/server.go` → `routes()`. **Path must start with `/api/`** — `tabScoped()` in api.ts uses that prefix to route per-tab; anything else 404s in production (tests hit `srv.Mux` directly and won't catch it). Also add the endpoint to the table in `docs/ARCHITECTURE.md`.
 5. Add handler tests in `internal/api/handlers_test.go`. **For decode→validate→runMutation handlers, use a factory** — `opMutation`/`bookmarkMutation`/`bookmarkRevMutation`/`bookmarkRemoteMutation` (handlers.go) take a `func(...) jj.CommandArgs` and return `http.HandlerFunc`; the route line in server.go IS the handler. Don't unify across request shapes (one factory per struct — generic would need reflection and break typed test marshaling).
 6. Add the API call to `frontend/src/lib/api.ts`
 7. Wire it into the Svelte UI

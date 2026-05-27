@@ -22,7 +22,7 @@ const configTemplate = `{
   // Diff viewer: false = unified (one column), true = side-by-side.
   "splitView": false,
 
-  "fontSize": 13,
+  "fontSize": 14,
 
   // CSS font-family stack for UI text. Empty string = built-in default.
   "fontUI": "",

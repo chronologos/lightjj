@@ -54,26 +54,158 @@ flowchart TD
 
 **API endpoints:**
 
+*Generated from `internal/api/server.go` routes() — update when adding a route (see CLAUDE.md "Adding a new operation").*
+
+**Log & revision data**
+
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/log` | Graph log with revset + limit |
-| GET | `/api/diff`, `/api/diff-range` | Unified diff (single revision or from/to range) |
-| GET | `/api/files` | File list + stats + conflict status (single `FilesTemplate` subprocess — status char, exact +/- counts, conflict side-counts in one `jj log -T` call) |
-| GET | `/api/bookmarks`, `/api/remotes`, `/api/description` | Metadata reads |
-| GET | `/api/oplog`, `/api/evolog` | Operation/evolution history — structured `\x1F`-delimited template output. Evolog entries include predecessor commit IDs; the frontend shows per-step diffs via `/api/diff-range` (hidden evolution commits are addressable by `jj diff --from X --to Y`). |
-| GET | `/api/file-show` | Raw file content at revision (for conflict viewing + inline editor) |
-| GET | `/api/workspaces`, `/api/aliases`, `/api/pull-requests` | Environment info |
-| POST | `/api/new`, `/api/edit`, `/api/abandon`, `/api/undo`, `/api/commit` | Basic mutations |
-| POST | `/api/rebase`, `/api/squash`, `/api/split`, `/api/resolve` | Structured mutations |
-| POST | `/api/split-hunks` | Hunk-level split via `jj split --tool` binary re-entry. Local-only (501 in SSH — jj can't exec us on the remote). Spec is opaque `json.RawMessage` couriered to `apply_hunks.go`; 64MB body limit (carries synthesized file content). |
-| POST | `/api/describe` | Set description (uses `RunWithInput` for stdin) |
-| POST | `/api/bookmark/{set,delete,move,advance,forget,track,untrack}` | Bookmark ops |
-| POST | `/api/git/{push,fetch}` | Git remote ops (flag-whitelisted) |
-| POST | `/api/alias` | Run a user-configured jj alias (validated against config) |
-| POST | `/api/file-write` | Write file directly to working copy (inline editor save). Local mode only — path validation rejects `..`, absolute paths, `.jj/`, `.git/`, null bytes, symlink escapes. |
-| GET | `/tabs` | List open tabs (host-level, no `/tab/{id}/` prefix) |
-| POST | `/tabs` | Open a repo in a new tab. `TabResolve` closure validates path via `jj workspace root` (local or SSH round trip), returns canonical root for dedup. |
-| DELETE | `/tabs/{id}` | Close a tab (shuts down its watcher). Refuses the last tab. |
+| GET | `/api/log` | Graph log for a revset (with limit) |
+| GET | `/api/revision` | Batched diff + files + description for one revision |
+| GET | `/api/revision-meta` | Files + description without diff (progressive rendering) |
+| GET | `/api/description` | Commit description text |
+| GET | `/api/divergence` | Divergent commits + descendants dataset (classified client-side) |
+| GET | `/api/stale-immutable` | Immutable divergent commits (force-push leftovers), grouped |
+
+**Files & diffs**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/diff` | Unified diff for a revision or revset |
+| GET | `/api/diff-range` | Diff between two commits (`--from`/`--to`) |
+| GET | `/api/files` | File list + stats + conflict status (one `FilesTemplate` call) |
+| GET | `/api/files-batch` | Files for multiple revisions in one call (prefetch) |
+| GET | `/api/file-show` | File content at a revision (conflict view, inline editor) |
+| GET | `/api/file-raw` | Raw bytes with Content-Type (markdown images; CSP-hardened) |
+| GET | `/api/file-history` | Log scoped to commits touching one file |
+| POST | `/api/index-paths` | Build jj's changed-path index (streamed output) |
+| POST | `/api/file-write` | Write file to working copy (inline editor save; path-validated) |
+| POST | `/api/open-file` | Open file in the user's editor (`{file}`/`{line}` substitution) |
+
+**Mutations**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/new` | Create child revision (`jj new`) |
+| POST | `/api/edit` | Check out a revision (`jj edit`) |
+| POST | `/api/abandon` | Abandon revisions |
+| POST | `/api/metaedit-change-id` | Assign fresh change-id (divergence "split identity") |
+| POST | `/api/describe` | Set description (stdin via `RunWithInput`) |
+| POST | `/api/restore` | Reset listed files to parent content |
+| POST | `/api/restore-from` | Restore content from one revision into another |
+| POST | `/api/rebase` | Rebase (`-r`/`-s`/`-b` × `-d`/`--insert-after`/`--insert-before`) |
+| POST | `/api/squash` | Squash selected files into a target revision |
+| POST | `/api/split` | Split revision by file selection |
+| POST | `/api/split-hunks` | Hunk-level split via `jj split --tool` re-entry (local-only) |
+| POST | `/api/undo` | Undo the last operation |
+| POST | `/api/commit` | Commit working copy with a message |
+| POST | `/api/snapshot` | On-demand working-copy snapshot (tab focus) |
+| POST | `/api/unlock-repo` | Remove stale `.git/index.lock` |
+
+**Bookmarks**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/bookmarks` | Local + remote bookmark list with sync state |
+| POST | `/api/bookmark/set` | Create or set bookmark at a revision |
+| POST | `/api/bookmark/delete` | Delete bookmark (deletes remote on next push) |
+| POST | `/api/bookmark/move` | Move bookmark (`--allow-backwards`) |
+| POST | `/api/bookmark/advance` | Advance bookmark to a revision |
+| POST | `/api/bookmark/forget` | Forget bookmark (no remote deletion) |
+| POST | `/api/bookmark/track` | Track a remote bookmark |
+| POST | `/api/bookmark/untrack` | Untrack a remote bookmark |
+| POST | `/api/bookmark/set-to-remote` | Reset local bookmark to its remote position |
+
+**Git**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/remotes` | Git remotes list |
+| POST | `/api/git/push` | `jj git push` (streamed; flag-whitelisted) |
+| POST | `/api/git/fetch` | `jj git fetch` (streamed; flag-whitelisted) |
+
+**Conflicts & merge**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/conflicts` | Conflicted files across mutable commits (merge view) |
+| POST | `/api/resolve` | Resolve a conflicted file with `:ours`/`:theirs` |
+| POST | `/api/merge-resolve` | Apply MergePanel result via `jj resolve --tool` (local-only) |
+
+**Operation & evolution log**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/oplog` | Operation log entries |
+| GET | `/api/op/show` | Single operation detail (`jj op show`) |
+| POST | `/api/op/undo` | Undo a specific operation |
+| POST | `/api/op/restore` | Restore repo to an operation |
+| GET | `/api/evolog` | Evolution log with predecessor commit IDs (per-step diffs via `/api/diff-range`) |
+
+**Annotations & doc comments**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/annotations` | List review comments for a change |
+| POST | `/api/annotations` | Upsert a review comment |
+| DELETE | `/api/annotations` | Delete one comment, or all for a change |
+| GET | `/api/doc-comments` | List doc-mode comments for a path |
+| POST | `/api/doc-comments` | Upsert a doc-mode comment |
+| DELETE | `/api/doc-comments` | Delete a doc-mode comment (cascades to replies) |
+| POST | `/api/doc-comments/batch` | Upsert many doc comments atomically (all-or-nothing) |
+
+**Workspaces & tabs**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/workspaces` | Current workspace + list with paths |
+| POST | `/api/workspace/add` | Create sibling-directory workspace (local-only) |
+| POST | `/api/workspace/update-stale` | Recover a stale working copy |
+
+Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `routes()`):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/tabs` | List open tabs |
+| POST | `/tabs` | Open a repo path as a new tab (`TabResolve` validates/canonicalizes) |
+| DELETE | `/tabs/{id}` | Close a tab (refuses the last one) |
+| any | `/tab/{id}/*` | Dispatch to that tab's per-repo Server routes |
+
+**Config**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/config` | Parsed config values (JSON) |
+| POST | `/api/config` | Patch config keys (comment-preserving merge) |
+| GET | `/api/config/raw` | Raw JSONC config text (ConfigModal) |
+| POST | `/api/config/raw` | Save raw JSONC config text |
+
+**Metadata & integrations**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/info` | Hostname, repo path, mode, default remote, jj version |
+| GET | `/api/aliases` | User-configured jj aliases |
+| POST | `/api/alias` | Run a configured alias (validated against config) |
+| GET | `/api/pull-requests` | Open PR info per bookmark via `gh` |
+| GET | `/api/symbol` | rg-backed symbol definition lookup |
+
+**Agent & automation**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api` | Discovery index pointing at docs + capabilities |
+| GET | `/api/agent` | Embedded agent API documentation (markdown) |
+| GET | `/api/capabilities` | API version + registered action list |
+| POST | `/api/navigate` | Broadcast navigation hint to connected UIs (via SSE) |
+| GET | `/api/focus` | Last view reported by the frontend |
+| POST | `/api/focus` | Frontend reports its current view |
+
+**Events (SSE)**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/events` | SSE stream: op-id changes, warnings, navigation hints |
 
 ## Layer Responsibilities
 

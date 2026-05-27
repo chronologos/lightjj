@@ -45,7 +45,7 @@ Release binaries are signed via [SLSA build provenance](https://slsa.dev/) (Sigs
 gh attestation verify lightjj-macos-arm64 --repo chronologos/lightjj
 ```
 
-**Building from source** (requires Go >= 1.21 and pnpm):
+**Building from source** (requires Go 1.25+ — older toolchains auto-fetch it via GOTOOLCHAIN — and pnpm):
 
 ```bash
 git clone https://github.com/chronologos/lightjj
@@ -100,7 +100,7 @@ SSH proxy mode adds ~400ms per command (reduce to ~20ms with ControlMaster). Aut
 ## Requirements
 
 - **jj >= 0.39**
-- **Go >= 1.21** — only if building from source
+- **Go 1.25+** — only if building from source (older toolchains auto-fetch it via GOTOOLCHAIN)
 - **gh** (optional) — for PR badges; must be authed wherever the repo lives
 
 ## Development

@@ -50,6 +50,8 @@ Tested in isolation. No dependency on the rendering layer.
 
 ### For lightjj
 
+**Status: shipped v1.25.0** — `[` / `]` hunk-step navigation is implemented (App.svelte routes `[`/`]` to `DiffPanel.stepHunk`). Design notes below kept for reference.
+
 `[` / `]` are unbound in normal mode (we use them inside MergePanel for block nav, but that's mode-scoped). Hunk-step navigation across the visible diff is genuinely missing — to skim a 50-file diff you currently scroll line-by-line or jump file-to-file.
 
 Compose from existing `parsedDiffs`:
@@ -156,6 +158,8 @@ The agent doesn't need to render anything. It needs to:
 That's exactly Hunk's verb set, and the user keeps total visual control.
 
 ### Mapping to lightjj
+
+**Status: shipped v1.25.0** — the `lightjj api` / `lightjj sessions` / `lightjj skill` subcommands now cover the rows below marked "Doesn't exist" / "We don't ship one"; see [docs/design-notes/api-cli.md](../docs/design-notes/api-cli.md). The comparison is kept as written for historical context.
 
 We already have most of the infrastructure:
 

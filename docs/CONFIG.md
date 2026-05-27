@@ -12,7 +12,7 @@ The config file lives in your local config directory regardless of mode — only
 |---|---|---|---|
 | `theme` | `string` | `"dark"` | Theme id — one of 7 builtins (`dark`, `light`, `nord`, `gruvbox-dark`, `dracula`, `tokyo-night`, `rose-pine`) or any Ghostty theme slug |
 | `splitView` | `boolean` | `false` | Diff viewer: unified vs side-by-side |
-| `fontSize` | `number` | `13` | Base font size in px (clamped 10–16). All UI text scales relative to this — see [Typography](#typography) |
+| `fontSize` | `number` | `14` | Base font size in px (clamped 10–16). All UI text scales relative to this — see [Typography](#typography) |
 | `fontUI` | `string` | `""` | CSS `font-family` stack for UI text. Empty = built-in default |
 | `fontMono` | `string` | `""` | CSS `font-family` stack for code, diffs, change IDs. Empty = built-in default |
 | `fontMdBody` | `string` | `""` | Markdown prose body text (preview *and* doc mode — both render through `.prose`). Empty = `system-ui` |
@@ -25,12 +25,13 @@ The config file lives in your local config directory regardless of mode — only
 | `editorArgs` | `string[]` | `[]` | Open-in-editor command for local mode — see below |
 | `editorArgsRemote` | `string[]` | `[]` | Open-in-editor command for `--remote` mode — see below |
 | `remoteVisibility` | `{[repoPath]: {[remote]: {visible, hidden?}}}` | `{}` | Per-remote bookmark visibility in the revision graph, keyed by repo path so multi-repo tabs stay independent. `visible: true` adds that remote's bookmarks to the revset; `hidden: string[]` excludes specific bookmark names. |
+| `hiddenCommentAuthors` | `string[]` | `[]` | Authors whose review comments render as collapsed stubs — cross-repo by design, so hiding a bot in one repo hides it everywhere. |
 | `recentActions` | `{[namespace]: {[key]: lastUsedMs}}` | `{}` | Last-used timestamps for recency-sorting (e.g. bookmark modal). Namespaced per feature. Server-side so port changes and browser switches don't lose history. |
 | `openTabs` | `[{path, mode}]` | `[]` | Open tabs to restore on launch. Managed by the UI (written on tab create/close). Tab 0 (the `-R` flag) is excluded — persisting it would fight a different `-R` on next launch. |
 
 ## Typography
 
-`fontSize` sets the CSS var `--font-size`, from which a 7-step scale (`--fs-3xs` … `--fs-xl`) is derived by fixed pixel offsets. At the default `13`, the scale yields exactly `8/9/10/11/12/14/16` — the values the UI was hand-tuned for. Bumping `fontSize` shifts the entire scale.
+`fontSize` sets the CSS var `--font-size`, from which a 7-step scale (`--fs-3xs` … `--fs-xl`) is derived by fixed pixel offsets (the offsets live in `frontend/src/theme.css` — that file is the source of truth for the exact derived values). At the default `14`, the scale yields `9/10/11/12/13/15/17`. Bumping `fontSize` shifts the entire scale.
 
 The upper clamp (`16`) exists because graph rows and diff lines have a fixed `18px` height (required for graph-pipe continuity and virtualization arithmetic). Layout heights do **not** scale with `fontSize` — only text does.
 

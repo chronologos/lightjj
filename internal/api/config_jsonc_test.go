@@ -81,7 +81,7 @@ func TestConfigTemplate_StandardizesToValidJSON(t *testing.T) {
 	// Keep this list in sync with frontend/src/lib/config.svelte.ts#defaults.
 	assert.Equal(t, "dark", m["theme"])
 	assert.Equal(t, false, m["splitView"])
-	assert.Equal(t, float64(13), m["fontSize"])
+	assert.Equal(t, float64(14), m["fontSize"])
 	assert.Equal(t, "", m["fontUI"])
 	assert.Equal(t, "", m["fontMono"])
 	_, hasEditorArgs := m["editorArgs"]

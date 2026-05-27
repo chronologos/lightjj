@@ -1,6 +1,6 @@
 # Unified review model
 
-**Status:** proposed · **Supersedes:** parts of [ANNOTATIONS.md](../ANNOTATIONS.md) (data model only; the agent-iteration workflow there stays)
+**Status:** implemented (v1.25.0; the [Open questions](#open-questions) below remain open) · **Supersedes:** parts of [ANNOTATIONS.md](../ANNOTATIONS.md) (data model only; the agent-iteration workflow there stays)
 
 ## Problem
 

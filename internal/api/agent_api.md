@@ -24,6 +24,9 @@ lightjj api GET /tab/0/api/log
   `-` to read from stdin. Sets `Content-Type: application/json` automatically.
 - **`--addr host:port`** — bypass discovery. Use for SSH-tunnel endpoints or
   to disambiguate when several lightjj instances are running. Loopback only.
+- **`--repo path`** — match a different repo than the cwd (discovery normally
+  matches your cwd against each session's repo dir).
+- **`-H "Key: Value"`** — extra request header (repeatable).
 - **`lightjj sessions`** — lists running instances (PID, addr, mode, repo) so
   you can pick an `--addr`.
 

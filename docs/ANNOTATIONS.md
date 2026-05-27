@@ -97,4 +97,3 @@ If delta-adjusted line's content doesn't match the snapshot and no spanning hunk
 - **Evolog badge counts** — `💬 5→3` per evolog step showing how many annotations each iteration addressed
 - **Levenshtein re-anchor** — current `reanchor()` does exact content match only; edited-but-similar lines orphan
 - **Inline bubble** — currently overlay popup. True inline insertion between diff lines needs `DiffFileView` hunk-loop changes
-- **"Mark resolved" from orphaned panel** — currently only delete/edit; no one-click resolve flow

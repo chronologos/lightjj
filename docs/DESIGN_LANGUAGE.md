@@ -78,38 +78,9 @@ Adding a builtin theme = one `:root[data-theme="X"]` block (~14 lines packed) + 
 
 When adding a derived var, put it in the `:root` block as `color-mix(in srgb, var(--<primary>) N%, ...)` — NOT a per-theme hex. Per-theme hex means every new theme must define it; color-mix means zero work per theme.
 
-### Buttons
+### Shared component primitives
 
-| Class | Look | Use |
-|---|---|---|
-| `.btn` | Ghost (border-only, fills on hover) | Default action |
-| `.btn.btn-sm` | Compact padding | Toolbars, inline actions |
-| `.btn.btn-primary` | Filled amber | Primary/confirm action |
-| `.btn.btn-danger` | Red outline → fill on hover | Destructive action |
-| `.btn.btn-success` | Green tinted → fill on hover | Completes a workflow (Save in merge, Keep in divergence) |
-
-### Segmented toggle
-
-`.seg` container + `.seg-btn` children + `.active` modifier. Amber active state.
-
-### Panel & modal chrome
-
-| Class | |
-|---|---|
-| `.panel-header` | Top bar of a panel (flex, border-bottom) |
-| `.panel-title` | Panel header text |
-| `.modal-backdrop` | Full-screen dimmer |
-| `.modal` | Centered dialog box |
-| `.modal-header` | Modal title bar |
-| `.modal-input` | Text input inside a modal |
-
-### Misc
-
-| Class | |
-|---|---|
-| `.close-btn` | Borderless × dismiss button |
-| `.placeholder-text` | Dimmed italic "(no description)" |
-| `.nav-hint` | `<kbd>` badge for keyboard shortcuts |
+The canonical class-by-class list of shared primitives (buttons, segmented toggle, panel/modal chrome, prose, misc) lives in the project CLAUDE.md ("Shared UI primitives in `theme.css`") and in `frontend/src/theme.css` itself — don't duplicate it here. The design intent: one ghost-button family with amber primary / red danger / green success variants, amber `.active` states on segmented toggles, and shared panel/modal chrome so component CSS only adds layout/positioning overrides.
 
 ---
 
@@ -119,6 +90,23 @@ Both conflict sides use **red** — because conflict = needs attention = red.
 - Side A (current): full red intensity
 - Side B (incoming): muted red (50% opacity border, reduced background)
 - Distinguish by **label text** and **border weight**
+
+---
+
+## Discoverability
+
+Every user-facing feature ships with a discoverability decision, not just the capability. A `tutorial-content.ts` What's-new entry is an announcement, not an affordance — it shows once.
+
+Pick at least one **persistent** surface:
+
+- **Toolbar inline hint** — the `.ann-hint` pattern ("Alt+click line to annotate") next to where the gesture applies
+- **`<kbd class="nav-hint">` badge** on the control that triggers it
+- **Right-click context menu entry** — also gives a non-modifier path to the same action
+- **Cmd+K palette command** — makes the feature findable by name
+- **StatusBar contextual shortcut** for mode-specific keys
+- **One-time dismissible tip** (persisted seen-flag) — reserve for gesture-only features with no natural surface
+
+Modifier-gesture-only or keyboard-only features (⌘+hover, bare keybinds) are not done until one of the above exists. Cautionary example: symbol peek (⌘+hover go-to-definition) shipped in v1.25.0 with only a What's-new entry and went unnoticed.
 
 ---
 
