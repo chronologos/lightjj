@@ -127,6 +127,10 @@ func (m *TabManager) addLocked(srv *Server, path string) *Tab {
 		handler: http.StripPrefix("/tab/"+id, srv.Mux),
 	}
 	m.tabs[id] = t
+	// Every mounted Server can see all open tab roots — feeds the workspace-
+	// forget cross-tab guard. Assignment only (no call) under m.mu; the
+	// method takes RLock at request time.
+	srv.OpenTabRoots = m.OpenTabRoots
 	// Wire this tab's SSE subscriber count into the cross-tab total. Nil-safe:
 	// --no-watch or NewWatcher failure means no SSE → this tab contributes
 	// nothing to idle detection (can't detect "browser closed" without SSE).
@@ -318,6 +322,20 @@ func (m *TabManager) persistTabs() {
 	if err := writePersistedTabs(m.Mode, m.Host, out); err != nil {
 		log.Printf("failed to persist tabs: %v", err)
 	}
+}
+
+// OpenTabRoots returns the canonical repo root of every open tab (startup -R
+// tab included). Injected into each tab's Server (addLocked) so the workspace-
+// forget handler can refuse to orphan a tab that is viewing the workspace
+// being forgotten.
+func (m *TabManager) OpenTabRoots() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	roots := make([]string, 0, len(m.tabs))
+	for _, t := range m.tabs {
+		roots = append(roots, t.Path)
+	}
+	return roots
 }
 
 // FindByPath checks for an existing tab with the given canonical path.

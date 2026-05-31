@@ -57,6 +57,12 @@ type Server struct {
 	// failure. Set by main.go after NewServer; routes() tolerates nil.
 	Watcher *Watcher
 
+	// OpenTabRoots reports the canonical repo root of every open tab. Injected
+	// by TabManager.addLocked on every Server it mounts (startup -R tab and
+	// dynamic tabs alike). Nil = no tab manager (tests, standalone Server) →
+	// cross-tab guards (forgetOpenTabGuard) are skipped.
+	OpenTabRoots func() []string
+
 	// apiRoutes is the list of patterns registered via routes()'s reg closure.
 	// Feeds GET /api/capabilities so agents can negotiate instead of 404-probing.
 	apiRoutes []string
@@ -178,8 +184,10 @@ func (s *Server) routes() {
 	reg("POST /api/restore-from", s.handleRestoreFrom)
 	reg("POST /api/snapshot", s.handleSnapshot)
 	reg("POST /api/workspace/add", s.handleWorkspaceAdd)
-	reg("POST /api/workspace/forget", s.handleWorkspaceForget)
-	reg("POST /api/workspace/rename", s.handleWorkspaceRename)
+	// forget carries the cross-tab guard (409 when the workspace is open as a
+	// tab); rename has no guard — it acts on the current workspace only.
+	reg("POST /api/workspace/forget", s.workspaceNameMutation(jj.WorkspaceForget, s.forgetOpenTabGuard))
+	reg("POST /api/workspace/rename", s.workspaceNameMutation(jj.WorkspaceRename, nil))
 	reg("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale)
 	reg("POST /api/unlock-repo", s.handleUnlockRepo)
 	reg("POST /api/commit", s.handleCommit)

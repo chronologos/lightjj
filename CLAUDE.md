@@ -44,7 +44,7 @@ internal/
     workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (<0.40 fallback)
   runner/                  — CommandRunner interface + implementations
     runner.go              — Interface (Run, RunWithInput, RunForMutation, StreamCombined, RunRaw, WriteFile)
-    local.go               — LocalRunner: exec("jj", args); WriteFile symlink-escape hardening
+    local.go               — LocalRunner: exec("jj", args); WriteFile symlink-escape hardening; resolve rejects forgotten workspaces
     ssh.go                 — SSHRunner: wraps jj args in an ssh command
   api/                     — HTTP handlers
     server.go              — Route registration, runMutation, op-id caching, helpers

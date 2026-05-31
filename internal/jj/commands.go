@@ -736,21 +736,26 @@ func WorkspaceAdd(dest, name, revision string) CommandArgs {
 	return args
 }
 
-// WorkspaceForget returns args for `jj workspace forget <name>`.
+// WorkspaceForget returns args for `jj workspace forget -- <name>`.
 // Stops tracking the named workspace's working-copy commit. The on-disk
 // directory is NOT touched (jj leaves it for the user to delete). Takes a name
 // so any workspace can be forgotten from the shared repo store — unlike rename/
 // update-stale which only act on the current workspace.
+//
+// The "--" separator is load-bearing: without it, a name like "--quiet" is
+// parsed by jj as a flag and `jj workspace forget --quiet` forgets the CURRENT
+// workspace instead of erroring (same precedent as ResolveApply's file arg).
 func WorkspaceForget(name string) CommandArgs {
-	return []string{"workspace", "forget", name}
+	return []string{"workspace", "forget", "--", name}
 }
 
-// WorkspaceRename returns args for `jj workspace rename <newName>`.
+// WorkspaceRename returns args for `jj workspace rename -- <newName>`.
 // jj renames the CURRENT workspace (the one `-R` points at) — there is no
 // argument to select which workspace, so callers must already be operating in
-// the workspace they want to rename.
+// the workspace they want to rename. "--" prevents flag-like names from being
+// parsed as flags (see WorkspaceForget).
 func WorkspaceRename(newName string) CommandArgs {
-	return []string{"workspace", "rename", newName}
+	return []string{"workspace", "rename", "--", newName}
 }
 
 // WorkspaceUpdateStale returns args for `jj workspace update-stale`.

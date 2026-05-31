@@ -691,18 +691,19 @@ func pickCurrentWorkspace(candidates []string, pathMap map[string]string, ourRoo
 	return ""
 }
 
-func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
-	withRoot := s.jjSupports(r.Context(), jj.WorkspaceRootTmpl)
-	output, err := s.Runner.Run(r.Context(), jj.WorkspaceList(withRoot))
+// workspacePathMap returns the parsed workspace list plus a name→absolute-root
+// map. jj ≥ 0.40: paths come from the WorkspaceList template (self.root() —
+// authoritative + complete). Older jj: protobuf workspace store fallback
+// (additive-only; entries may be missing → empty path). Shared by
+// handleWorkspaces (Path enrichment + current-workspace tiebreak) and
+// forgetOpenTabGuard (cross-tab conflict check).
+func (s *Server) workspacePathMap(ctx context.Context) ([]jj.Workspace, map[string]string, error) {
+	withRoot := s.jjSupports(ctx, jj.WorkspaceRootTmpl)
+	output, err := s.Runner.Run(ctx, jj.WorkspaceList(withRoot))
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, nil, err
 	}
 	workspaces := jj.ParseWorkspaceList(string(output))
-
-	// pathMap feeds both Path enrichment AND pickCurrentWorkspace tiebreak.
-	// jj ≥ 0.40: template emits self.root() — authoritative + complete (no
-	// additive-only gap). Older jj: fall back to the protobuf store parser.
 	var pathMap map[string]string
 	if withRoot {
 		pathMap = make(map[string]string, len(workspaces))
@@ -710,7 +711,17 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 			pathMap[ws.Name] = ws.Path
 		}
 	} else {
-		pathMap, _ = s.readWorkspaceStore(r.Context())
+		pathMap, _ = s.readWorkspaceStore(ctx)
+	}
+	return workspaces, pathMap, nil
+}
+
+func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	// pathMap feeds both Path enrichment AND pickCurrentWorkspace tiebreak.
+	workspaces, pathMap, err := s.workspacePathMap(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	// ws.Current = target.current_working_copy() = "is this workspace's target
@@ -1075,6 +1086,10 @@ type workspaceAddRequest struct {
 	Revision string `json:"revision,omitempty"`
 }
 
+// workspaceNameRe is ADD-only validation: the name becomes a directory suffix
+// (<defaultBasename>-<name>), so it must be filesystem-safe. References to
+// EXISTING workspaces (forget/rename) use validateWorkspaceRefName instead —
+// jj allows names this regex rejects (dots, slashes).
 var workspaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // handleWorkspaceAdd creates a new workspace as a sibling directory of the
@@ -1116,40 +1131,101 @@ type workspaceNameRequest struct {
 	Name string `json:"name"`
 }
 
-// handleWorkspaceForget stops tracking the named workspace. Works on any
-// workspace (forget takes a name) and in SSH mode (pure jj mutation, no local
-// fs needed). The on-disk directory is left intact. The frontend gates this to
-// non-current workspaces — forgetting the workspace you're viewing orphans the
-// tab — but the backend doesn't enforce that (jj allows it; the name is the
-// only contract). After the op the frontend reloads /api/workspaces so the
-// dropdown + badges drop the forgotten entry.
-func (s *Server) handleWorkspaceForget(w http.ResponseWriter, r *http.Request) {
-	var req workspaceNameRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+// validateWorkspaceRefName validates a name that REFERENCES an existing
+// workspace (forget/rename). Looser than workspaceNameRe (add-time): jj's
+// default workspace name is the destination dir's basename, so legal existing
+// names include dots and slashes ("app-v2.0", "feat/x") that the add regex
+// rejects — strict validation here makes forget/rename 400 on workspaces the
+// UI legitimately lists. Flag injection is impossible (WorkspaceForget/
+// WorkspaceRename emit "--" before the name), so this only blocks input that
+// can't be a real name: empty/whitespace, control characters, absurd length.
+func validateWorkspaceRefName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("name is required")
 	}
-	if !workspaceNameRe.MatchString(req.Name) {
-		s.writeError(w, http.StatusBadRequest, "workspace name must match [A-Za-z0-9_-]+")
-		return
+	if len(name) > 256 {
+		return fmt.Errorf("workspace name too long (max 256 bytes)")
 	}
-	s.runMutation(w, r, jj.WorkspaceForget(req.Name))
+	for i := 0; i < len(name); i++ {
+		if name[i] < 0x20 || name[i] == 0x7f {
+			return fmt.Errorf("workspace name must not contain control characters")
+		}
+	}
+	return nil
 }
 
-// handleWorkspaceRename renames the CURRENT workspace (the one `-R` points at).
-// jj has no argument to pick which workspace, so the frontend only offers
-// rename on the current-workspace badge. Pure jj mutation — works in SSH mode.
-func (s *Server) handleWorkspaceRename(w http.ResponseWriter, r *http.Request) {
-	var req workspaceNameRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+// workspaceNameMutation is the workspace analogue of opMutation/bookmarkMutation:
+// decode {name} → validate → optional guard → runMutation. The guard hook (nil
+// = none) exists for forget's cross-tab conflict check; it returns a non-zero
+// HTTP status + message to abort with, or (0, "") to proceed.
+//
+// Both wrapped operations are pure jj mutations — they work in SSH mode and
+// leave on-disk directories intact. Forget works on any workspace by name;
+// rename only acts on the CURRENT workspace (jj has no selector argument), so
+// the frontend only offers rename on the current-workspace badge. After either
+// op the frontend reloads /api/workspaces so the dropdown + badges update.
+func (s *Server) workspaceNameMutation(build func(name string) jj.CommandArgs, guard func(ctx context.Context, name string) (status int, msg string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req workspaceNameRequest
+		if err := decodeBody(w, r, &req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateWorkspaceRefName(req.Name); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if guard != nil {
+			if status, msg := guard(r.Context(), req.Name); status != 0 {
+				s.writeError(w, status, msg)
+				return
+			}
+		}
+		s.runMutation(w, r, build(req.Name))
 	}
-	if !workspaceNameRe.MatchString(req.Name) {
-		s.writeError(w, http.StatusBadRequest, "workspace name must match [A-Za-z0-9_-]+")
-		return
+}
+
+// forgetOpenTabGuard blocks forgetting a workspace that an open tab is viewing.
+// Forgetting it would orphan the tab: its per-tab Server points at a now-
+// untracked directory, every /api/log 500s, and tab restore re-creates the
+// broken tab on every launch. 409 tells the user to close the tab first.
+//
+// Path resolution reuses workspacePathMap (the same enrichment handleWorkspaces
+// does). When the target's path can't be resolved (older jj + additive-only
+// store gap, or list failure), the forget is ALLOWED — we can't guard what we
+// can't see, and blocking on unknown would make forget unusable on older jj;
+// jj itself surfaces real errors (e.g. nonexistent name).
+func (s *Server) forgetOpenTabGuard(ctx context.Context, name string) (int, string) {
+	if s.OpenTabRoots == nil {
+		return 0, "" // no tab manager wired (tests / standalone Server)
 	}
-	s.runMutation(w, r, jj.WorkspaceRename(req.Name))
+	_, pathMap, err := s.workspacePathMap(ctx)
+	if err != nil {
+		return 0, ""
+	}
+	wsPath := pathMap[name]
+	if wsPath == "" {
+		return 0, ""
+	}
+	target := canonicalFSPath(wsPath)
+	for _, root := range s.OpenTabRoots() {
+		if canonicalFSPath(root) == target {
+			return http.StatusConflict, fmt.Sprintf("workspace %q is open as a tab — close the tab first", name)
+		}
+	}
+	return 0, ""
+}
+
+// canonicalFSPath normalizes a path for equality comparison: Clean always,
+// EvalSymlinks when the path resolves locally (macOS /var → /private/var).
+// Nonexistent or remote (SSH-mode) paths fall back to Clean only, so the
+// comparison degrades to string equality of already-canonical roots.
+func canonicalFSPath(p string) string {
+	cleaned := filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved
+	}
+	return cleaned
 }
 
 // handleWorkspaceUpdateStale recovers a stale working copy. The watcher's

@@ -524,18 +524,123 @@ func TestHandleWorkspaceRename(t *testing.T) {
 }
 
 func TestHandleWorkspaceForgetRenameValidation(t *testing.T) {
+	// Reference-name validation is looser than add's regex: jj's default
+	// workspace name is the destination dir's basename, so dots and slashes
+	// are legal in EXISTING names ("app-v2.0", "feat/x"). Only empty/
+	// whitespace, control characters, and oversized names are rejected; flag
+	// injection is structurally impossible (builders emit "--" before the name).
+	rejected := []struct{ label, body string }{
+		{"empty", `{"name":""}`},
+		{"whitespace only", `{"name":"   "}`},
+		{"newline", `{"name":"a\nb"}`},
+		{"too long", `{"name":"` + strings.Repeat("x", 257) + `"}`},
+	}
 	for _, path := range []string{"/api/workspace/forget", "/api/workspace/rename"} {
-		for _, body := range []string{`{"name":""}`, `{"name":"a/b"}`, `{"name":".."}`} {
-			t.Run(path+" "+body, func(t *testing.T) {
+		for _, tc := range rejected {
+			t.Run(path+" rejects "+tc.label, func(t *testing.T) {
 				runner := testutil.NewMockRunner(t)
 				defer runner.Verify()
 				srv := newTestServer(runner)
 				w := httptest.NewRecorder()
-				srv.Mux.ServeHTTP(w, jsonPost(path, []byte(body)))
+				srv.Mux.ServeHTTP(w, jsonPost(path, []byte(tc.body)))
 				assert.Equal(t, http.StatusBadRequest, w.Code)
 			})
 		}
 	}
+
+	// Names the ADD regex rejects but jj allows for existing workspaces.
+	for _, name := range []string{"app-v2.0", "my.ws", "feat/x"} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			runner := testutil.NewMockRunner(t)
+			runner.Expect(jj.WorkspaceForget(name)).SetOutput([]byte(""))
+			runner.Expect(jj.WorkspaceRename(name)).SetOutput([]byte(""))
+			defer runner.Verify()
+			srv := newTestServer(runner)
+			body, err := json.Marshal(map[string]string{"name": name})
+			require.NoError(t, err)
+			for _, path := range []string{"/api/workspace/forget", "/api/workspace/rename"} {
+				w := httptest.NewRecorder()
+				srv.Mux.ServeHTTP(w, jsonPost(path, body))
+				assert.Equal(t, http.StatusOK, w.Code, "POST %s name=%q: %s", path, name, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleWorkspaceForget_OpenTabConflict(t *testing.T) {
+	// Forgetting a workspace that another open tab is viewing would orphan
+	// that tab (its Server points at an untracked dir; every request 500s and
+	// the broken tab is restored on every launch) → 409, mutation never runs.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F/home/u/repo-feat\n" +
+			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
+	// No Expect for jj.WorkspaceForget — MockRunner fails the test if it runs.
+	defer runner.Verify()
+
+	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv.OpenTabRoots = func() []string { return []string{"/home/u/repo", "/home/u/repo-feat"} }
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/forget", []byte(`{"name":"feat"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "close the tab")
+}
+
+func TestHandleWorkspaceForget_NonTabWorkspace(t *testing.T) {
+	// Workspace exists but no open tab is viewing it → forget proceeds.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F/home/u/repo-feat\n" +
+			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
+	runner.Expect(jj.WorkspaceForget("feat")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv.OpenTabRoots = func() []string { return []string{"/home/u/repo"} }
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/forget", []byte(`{"name":"feat"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceForget_UnknownPathAllowed(t *testing.T) {
+	// Older jj (no self.root() template) + workspace missing from the
+	// additive-only store → path unknown → can't guard → forget proceeds.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList(false)).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\ndefault\x1Fzz\x1Fww\x1Ftrue\n"))
+	runner.Expect(jj.WorkspaceForget("feat")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	// newTestServer = jj 0.39 → withRoot=false; RepoDir "" → no store read.
+	srv := newTestServer(runner)
+	srv.OpenTabRoots = func() []string { return []string{"/home/u/repo-feat"} }
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/forget", []byte(`{"name":"feat"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceForget_TabRootNormalization(t *testing.T) {
+	// Tab roots and workspace paths may differ by symlinks (macOS /var vs
+	// /private/var) or trailing path elements; canonicalFSPath must equate them.
+	wsDir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(wsDir)
+	require.NoError(t, err)
+
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F" + wsDir + "\n"))
+	defer runner.Verify()
+
+	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	// Tab root uses the symlink-resolved spelling; workspace path the raw one.
+	srv.OpenTabRoots = func() []string { return []string{resolved + string(filepath.Separator)} }
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/forget", []byte(`{"name":"feat"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
 func TestHandleWorkspaceUpdateStale(t *testing.T) {

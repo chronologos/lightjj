@@ -317,11 +317,15 @@ func TestWorkspaceAdd(t *testing.T) {
 }
 
 func TestWorkspaceForget(t *testing.T) {
-	assert.Equal(t, CommandArgs{"workspace", "forget", "feat"}, WorkspaceForget("feat"))
+	assert.Equal(t, CommandArgs{"workspace", "forget", "--", "feat"}, WorkspaceForget("feat"))
+	// Flag-like names stay positional: without "--", clap would parse this as
+	// a global flag and forget the CURRENT workspace.
+	assert.Equal(t, CommandArgs{"workspace", "forget", "--", "--quiet"}, WorkspaceForget("--quiet"))
 }
 
 func TestWorkspaceRename(t *testing.T) {
-	assert.Equal(t, CommandArgs{"workspace", "rename", "feat"}, WorkspaceRename("feat"))
+	assert.Equal(t, CommandArgs{"workspace", "rename", "--", "feat"}, WorkspaceRename("feat"))
+	assert.Equal(t, CommandArgs{"workspace", "rename", "--", "--quiet"}, WorkspaceRename("--quiet"))
 }
 
 func TestWorkspaceUpdateStale(t *testing.T) {

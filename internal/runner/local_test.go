@@ -202,6 +202,75 @@ func TestLocalRunner_prependJJFlags(t *testing.T) {
 	assert.Equal(t, []string{"pr", "list"}, gh.prependJJFlags([]string{"pr", "list"}))
 }
 
+// ResolveWorkspaceRoot / probeWorkspace tests — these exec "jj" by PATH
+// lookup, so a fake jj script installed ahead of the real one makes them
+// hermetic (no real repo, no real jj needed). The fake's behavior is keyed on
+// $1: "workspace" (the root resolution) vs anything else (the validity probe).
+
+// fakeJJOnPath installs a fake `jj` shell script at the front of PATH for the
+// duration of the test.
+func fakeJJOnPath(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "jj"), []byte("#!/bin/sh\n"+script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestResolveWorkspaceRoot_UsableWorkspace(t *testing.T) {
+	root := t.TempDir()
+	// `jj workspace root` resolves; the probe (`jj log -r @ ...`) succeeds.
+	fakeJJOnPath(t, "if [ \"$1\" = workspace ]; then echo '"+root+"'; fi\nexit 0\n")
+
+	got, err := ResolveWorkspaceRoot(root)
+	require.NoError(t, err)
+	assert.Equal(t, root, got)
+}
+
+func TestResolveWorkspaceRoot_ForgottenWorkspaceRejected(t *testing.T) {
+	// `jj workspace root` exits 0 inside a FORGOTTEN workspace's directory,
+	// but `@` doesn't resolve there. Without the probe, tab create/restore
+	// mounts a tab where every request fails — and the startup restore loop
+	// re-creates that broken tab on every launch.
+	root := t.TempDir()
+	fakeJJOnPath(t, "if [ \"$1\" = workspace ]; then echo '"+root+"'; exit 0; fi\n"+
+		"echo 'Error: The current workspace has no working-copy commit' >&2\nexit 1\n")
+
+	_, err := ResolveWorkspaceRoot(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "working-copy commit")
+	assert.Contains(t, err.Error(), root)
+}
+
+func TestResolveWorkspaceRoot_NotARepo(t *testing.T) {
+	fakeJJOnPath(t, "exit 1\n")
+	_, err := ResolveWorkspaceRoot(t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a jj repository")
+}
+
+func TestResolveWorkspaceRoot_ProbeFailureWithoutStderr(t *testing.T) {
+	// Probe failure with empty stderr falls back to the exec error so the
+	// message is never blank.
+	root := t.TempDir()
+	fakeJJOnPath(t, "if [ \"$1\" = workspace ]; then echo '"+root+"'; exit 0; fi\nexit 7\n")
+
+	_, err := ResolveWorkspaceRoot(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a usable jj workspace")
+}
+
+func TestResolveLocalTabPath_ForgottenWorkspaceRejected(t *testing.T) {
+	// The TabResolve entry point (tab creation + startup restore) must reject
+	// forgotten workspaces too — it delegates to ResolveWorkspaceRoot.
+	root := t.TempDir()
+	fakeJJOnPath(t, "if [ \"$1\" = workspace ]; then echo '"+root+"'; exit 0; fi\n"+
+		"echo 'Error: The current workspace has no working-copy commit' >&2\nexit 1\n")
+
+	_, err := ResolveLocalTabPath(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "working-copy commit")
+}
+
 // WriteFile symlink-escape tests — moved from handler tests when the check
 // migrated from handleFileWrite to LocalRunner.WriteFile (SSH-mode file-write
 // support). The handler does lexical validation; the runner owns filesystem

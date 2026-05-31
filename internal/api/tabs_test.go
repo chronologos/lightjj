@@ -184,6 +184,33 @@ func TestTabManager_SharedSnapshotPause(t *testing.T) {
 	assert.EqualValues(t, 0, b.Watcher.snapshotPaused.Load())
 }
 
+func TestTabManager_OpenTabRoots(t *testing.T) {
+	tm := NewTabManager(nil, nil)
+	mkSrv := func() *Server {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		return NewServer(r, "")
+	}
+
+	s0 := mkSrv()
+	tm.AddTab(s0, "/repo/main")
+	s1 := mkSrv()
+	tm.AddTab(s1, "/repo/feat")
+
+	// Every mounted Server gets the injection (startup tab included) and they
+	// all see the same live tab set.
+	require.NotNil(t, s0.OpenTabRoots)
+	require.NotNil(t, s1.OpenTabRoots)
+	assert.ElementsMatch(t, []string{"/repo/main", "/repo/feat"}, s0.OpenTabRoots())
+	assert.ElementsMatch(t, []string{"/repo/main", "/repo/feat"}, s1.OpenTabRoots())
+
+	// Closing a tab drops its root from the report.
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/tabs/1", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.ElementsMatch(t, []string{"/repo/main"}, s0.OpenTabRoots())
+}
+
 func TestTabFindByPath(t *testing.T) {
 	tm := NewTabManager(nil, nil)
 	runner := testutil.NewMockRunner(t)

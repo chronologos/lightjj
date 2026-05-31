@@ -58,16 +58,23 @@ func (r *LocalRunner) prependJJFlags(args []string) []string {
 // waitDelay force-closes pipes when a grandchild process (SSH ControlMaster
 // mux master) inherits them — ctx expiry kills the direct child, but Wait()
 // blocks in awaitGoroutines until the pipe-copier sees EOF. Applied to every
-// exec.CommandContext path below. ResolveWorkspaceRoot is excluded: local
-// `jj workspace root` has no SSH, no ctx, no grandchild that could hold fds.
+// exec.CommandContext path below. ResolveWorkspaceRoot/probeWorkspace are
+// excluded: local `jj workspace root` / `jj log` probes have no SSH, no ctx,
+// no grandchild that could hold fds.
 // Observed 2026-03-17: Tailscale down → ssh hangs → 10s ctx fires → process
 // stuck 90+s at ResolveWorkspaceRoot (the SSH-mode caller of runSeparate).
 const waitDelay = 3 * time.Second
 
 // ResolveWorkspaceRoot returns the jj workspace root for dir, or an error if
-// dir is not inside a jj repository. Used for tab-open validation (fail fast
-// with a 400 instead of constructing a Server that errors on every request)
+// dir is not inside a usable jj workspace. Used for tab-open validation (fail
+// fast with a 400 instead of constructing a Server that errors on every request)
 // and canonical-path dedup (opening /repo/src/ and /repo/ should be one tab).
+//
+// "Usable" matters: `jj workspace root` still exits 0 inside a FORGOTTEN
+// workspace's directory (jj leaves the dir and its .jj on disk; only the repo's
+// tracking is removed). Without probeWorkspace, both tab creation and the
+// startup tab-restore loop would mount a tab whose every request fails — and
+// restore would re-create that broken tab on every launch.
 func ResolveWorkspaceRoot(dir string) (string, error) {
 	cmd := exec.Command("jj", "workspace", "root")
 	cmd.Dir = dir
@@ -75,7 +82,31 @@ func ResolveWorkspaceRoot(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("not a jj repository: %s", dir)
 	}
-	return strings.TrimSpace(string(out)), nil
+	root := strings.TrimSpace(string(out))
+	if err := probeWorkspace(root); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+// probeWorkspace checks that the workspace at root can resolve `@` — a cheap
+// validity probe that catches forgotten workspaces ("doesn't have a working-copy
+// commit") and similar untracked-but-on-disk states. --ignore-working-copy keeps
+// it read-only and off the working-copy lock; output is discarded.
+func probeWorkspace(root string) error {
+	cmd := exec.Command("jj", "log", "-r", "@", "-n", "1",
+		"--no-graph", "--ignore-working-copy", "--color", "never", "-T", "commit_id.short()")
+	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("not a usable jj workspace (forgotten?): %s: %s", root, msg)
+	}
+	return nil
 }
 
 // ResolveLocalTabPath is the local-mode TabResolve: ~ expansion, abs check,
