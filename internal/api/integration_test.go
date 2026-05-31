@@ -21,6 +21,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestMain isolates the test process's jj environment from the developer's
+// user-level config. The Server's LocalRunner runs jj with the inherited
+// process environment; without this, a machine with commit signing configured
+// (signing.behavior="own" + an SSH agent that requires user interaction) fails
+// every mutation endpoint with a signing error, and user aliases/revset
+// customizations can leak into assertions. The jjExec setup helper already
+// isolates its own invocations per-call; this extends the same isolation to
+// the system under test. Set before m.Run() so it is safe with t.Parallel().
+func TestMain(m *testing.M) {
+	os.Setenv("JJ_CONFIG", "")
+	os.Setenv("JJ_USER", "Test User")
+	os.Setenv("JJ_EMAIL", "test@test")
+	os.Exit(m.Run())
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -766,7 +781,7 @@ func TestJourneyFeatureBranch(t *testing.T) {
 	wc := rows[0]
 	assert.True(t, wc.Commit.IsWorkingCopy)
 	assert.Equal(t, "add feature module", wc.Description)
-	assert.Contains(t, wc.Bookmarks, "feature-branch")
+	assert.Contains(t, wc.Bookmarks, parser.LocalRef{Name: "feature-branch"})
 
 	// Files should show the two new files.
 	gw := apiGet(t, srv, "/api/files?revision=@")
@@ -906,7 +921,7 @@ func TestJourneyBookmarkLifecycle(t *testing.T) {
 	// Verify bookmark is in the log on v2.
 	rows = getLogRows(t, srv, "")
 	v2Row := findRow(t, rows, "version 2")
-	assert.Contains(t, v2Row.Bookmarks, "release", "bookmark should be on v2")
+	assert.Contains(t, v2Row.Bookmarks, parser.LocalRef{Name: "release"}, "bookmark should be on v2")
 
 	// 3. Delete bookmark.
 	w = apiPost(t, srv, "/api/bookmark/delete", map[string]any{
@@ -920,7 +935,7 @@ func TestJourneyBookmarkLifecycle(t *testing.T) {
 	// Log should no longer show the bookmark.
 	rows = getLogRows(t, srv, "")
 	v2Row = findRow(t, rows, "version 2")
-	assert.NotContains(t, v2Row.Bookmarks, "release")
+	assert.NotContains(t, v2Row.Bookmarks, parser.LocalRef{Name: "release"})
 }
 
 // TestJourneyAbandonAndUndo exercises abandoning a commit and then undoing it.
