@@ -4,7 +4,7 @@
   import { classifyBookmark, syncPriority, syncLabel, syncLabelAction, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
   import { fuzzyMatch } from './fuzzy'
   import { createConfirmGate } from './confirm-gate.svelte'
-  import { scrollIdxIntoView } from './scroll-into-view'
+  import { createListCursor } from './list-cursor.svelte'
   import type { BookmarkOp } from './BookmarkModal.svelte'
 
   /** Gates for context-menu items — same source of truth as the d/f/t keys.
@@ -73,12 +73,48 @@
   let { bookmarks, loading, error, defaultRemote, allRemotes, remoteVisibility, prByBookmark, graphCommitId, onjump, onexecute, onrefresh, onclose, onvisibilitychange, oncontextmenu, ontrackmenu }: Props = $props()
 
   let query: string = $state('')
-  let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let listEl: HTMLDivElement | undefined = $state(undefined)
   let inputFocused: boolean = $state(false)
 
   const confirm = createConfirmGate<'d' | 'f' | 't'>()
+
+  // Cursor/hover/keydown core via the shared factory. The factory also owns
+  // the bounds clamp (collapsing a group via Enter shrinks panelRows without
+  // changing bookmarks — without the clamp, the cursor lands past the end and
+  // d/f/t/e silently no-op). Domain keys (e/d/f/t/r) layer on in handleKeydown.
+  // Disarm-on-selection-change comes from the `selected` $effect below, NOT
+  // from an onNav hook — clamped nav (j at the last row) keeps a pending
+  // confirm armed, matching pre-factory behavior.
+  const cursor = createListCursor({
+    count: () => panelRows.length,
+    container: () => listEl,
+    inputFocused: () => inputFocused,
+    onLeaveInput: () => listEl?.focus(),
+    onEnter: (e) => {
+      e.stopPropagation()
+      confirm.disarm()
+      if (selected?.kind === 'group') {
+        const next = new Set(expandedGroups)
+        if (next.has(selected.remote)) next.delete(selected.remote)
+        else next.add(selected.remote)
+        expandedGroups = next
+      } else if (can.jump && selected?.kind === 'bookmark') {
+        onjump(selected.bm, selected.jumpTarget)
+      }
+    },
+    onEscape: (e) => {
+      e.stopPropagation()
+      if (confirm.armed) { confirm.disarm(); return }
+      if (query) { query = ''; listEl?.focus(); return }
+      onclose()
+    },
+    onSlash: () => {
+      confirm.disarm()
+      inputEl?.focus()
+    },
+    hoverMovesCursor: true,
+  })
 
   let expandedGroups = $state(new Set<string>(['.']))
 
@@ -192,7 +228,7 @@
     return result
   })
 
-  let selected = $derived(panelRows[index] as PanelRow | undefined)
+  let selected = $derived(panelRows[cursor.index] as PanelRow | undefined)
 
   // Per-bookmark action gates. Factored out of the keyboard-selection
   // $derived so context-menu can compute them for the RIGHT-CLICKED row
@@ -252,6 +288,7 @@
   // both fields means selecting `main` in the UPSTREAM group restores there,
   // not to the LOCAL row with the same name. untrack() on index/panelRows so
   // j/k doesn't trigger this (would immediately restore the pre-j index).
+  // (The bounds clamp for group-collapse shrinkage lives in the cursor factory.)
   let lastSelectedName: string | undefined
   let lastSelectedRemote: string | undefined
   $effect(() => {
@@ -261,18 +298,8 @@
         const i = panelRows.findIndex(r =>
           r.kind === 'bookmark' && r.bm.name === lastSelectedName && r.remote === lastSelectedRemote
         )
-        if (i >= 0) index = i
+        if (i >= 0) cursor.index = i
       }
-    })
-  })
-  // Clamp is a SEPARATE effect tracking panelRows.length — collapsing a group
-  // via Enter shrinks panelRows without changing bookmarks; the restore effect
-  // above wouldn't fire, leaving index past the end → selected undefined →
-  // d/f/t/e silently no-op.
-  $effect(() => {
-    const len = panelRows.length
-    untrack(() => {
-      if (index >= len && len > 0) index = len - 1
     })
   })
   $effect(() => {
@@ -293,10 +320,6 @@
     listEl?.focus()
   })
 
-  function scrollActiveIntoView() {
-    scrollIdxIntoView(listEl, index)
-  }
-
   function fire(op: BookmarkOp) {
     confirm.disarm()
     onexecute(op)
@@ -307,62 +330,22 @@
   // does — it calls this directly. Returns true if handled (App checks
   // e.defaultPrevented).
   export function handleKeydown(e: KeyboardEvent) {
+    // Nav (j/k/arrows), Enter, Escape, '/' route through the cursor factory.
+    if (cursor.handleKey(e)) return
+
     const row = selected
 
-    switch (e.key) {
-      case 'ArrowDown':
-      case 'j':
-        if (e.key === 'j' && inputFocused) return
-        e.preventDefault()
-        if (inputFocused) listEl?.focus()
-        index = Math.min(index + 1, Math.max(panelRows.length - 1, 0))
-        scrollActiveIntoView()
-        return
-      case 'ArrowUp':
-      case 'k':
-        if (e.key === 'k' && inputFocused) return
-        e.preventDefault()
-        index = Math.max(index - 1, 0)
-        scrollActiveIntoView()
-        return
-      case 'Enter':
-        e.preventDefault()
-        e.stopPropagation()
-        confirm.disarm()
-        if (selected?.kind === 'group') {
-          const next = new Set(expandedGroups)
-          if (next.has(selected.remote)) next.delete(selected.remote)
-          else next.add(selected.remote)
-          expandedGroups = next
-        } else if (can.jump && selected?.kind === 'bookmark') {
-          onjump(selected.bm, selected.jumpTarget)
-        }
-        return
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        if (confirm.armed) { confirm.disarm(); return }
-        if (query) { query = ''; listEl?.focus(); return }
-        onclose()
-        return
-      case '/':
-        if (inputFocused) return
-        e.preventDefault()
-        confirm.disarm()
-        inputEl?.focus()
-        return
-      case 'e': {
-        if (inputFocused) return
-        e.preventDefault()
-        const eRow = panelRows[index]
-        if (!eRow) return
-        if (eRow.kind === 'group' && eRow.visibility) {
-          toggleGroupVisibility(eRow.remote)
-        } else if (eRow.kind === 'bookmark' && eRow.remote !== '.') {
-          toggleBookmarkVisibility(eRow.remote, eRow.bm.name)
-        }
-        return
+    if (e.key === 'e') {
+      if (inputFocused) return
+      e.preventDefault()
+      const eRow = panelRows[cursor.index]
+      if (!eRow) return
+      if (eRow.kind === 'group' && eRow.visibility) {
+        toggleGroupVisibility(eRow.remote)
+      } else if (eRow.kind === 'bookmark' && eRow.remote !== '.') {
+        toggleBookmarkVisibility(eRow.remote, eRow.bm.name)
       }
+      return
     }
 
     // Claim panel-owned keys even when nothing is selected (empty list,
@@ -417,7 +400,7 @@
         }
         // Multi-remote: open submenu at the active row's right edge.
         confirm.disarm()
-        const rect = listEl?.querySelector('.bp-row-active')?.getBoundingClientRect()
+        const rect = listEl?.querySelector(`[data-idx="${cursor.index}"]`)?.getBoundingClientRect()
         ontrackmenu?.(selected.bm, opts,
           rect ? rect.right - 40 : window.innerWidth / 2,
           rect ? rect.top + rect.height / 2 : window.innerHeight / 2)
@@ -475,20 +458,24 @@
       class="bp-filter"
       type="text"
       placeholder="Filter bookmarks... (press / to focus)"
-      oninput={() => { index = 0 }}
+      oninput={() => { cursor.index = 0 }}
       onfocus={() => { inputFocused = true }}
       onblur={() => { inputFocused = false }}
     />
     <span class="bp-count">{panelRows.filter(r => r.kind === 'bookmark').length}</span>
   </div>
 
+  <!-- Hover moves the cursor via the factory's delegated mousemove (no
+       per-row handlers, no :hover). -->
   <div
     bind:this={listEl}
     class="bp-list"
     role="listbox"
     tabindex="0"
     aria-label="Bookmarks"
-    aria-activedescendant={selected ? `bp-row-${index}` : undefined}
+    aria-activedescendant={selected ? `bp-row-${cursor.index}` : undefined}
+    onmousemove={cursor.onRowsMouseMove}
+    onmouseleave={cursor.onRowsMouseLeave}
   >
     {#if loading && bookmarks.length === 0}
       <div class="bp-empty">Loading...</div>
@@ -503,9 +490,8 @@
           <div
             id="bp-row-{i}"
             class="bp-group-row"
-            class:bp-row-active={i === index}
+            class:bp-row-active={i === cursor.index}
             data-idx={i}
-            onmousemove={() => { if (index !== i) index = i }}
             onclick={() => {
               const next = new Set(expandedGroups)
               if (next.has(row.remote)) next.delete(row.remote)
@@ -514,7 +500,7 @@
             }}
             role="option"
             tabindex="-1"
-            aria-selected={i === index}
+            aria-selected={i === cursor.index}
           >
             <span class="bp-chevron">{row.expanded ? '▼' : '▶'}</span>
             <span class="bp-group-label">{row.label}</span>
@@ -548,21 +534,20 @@
           <div
             id="bp-row-{i}"
             class="bp-row bp-bookmark-row"
-            class:bp-row-active={i === index}
+            class:bp-row-active={i === cursor.index}
             class:bp-row-matches-graph={matchesGraph}
             class:bp-row-hidden={!row.visibleInLog && row.remote !== '.'}
             data-idx={i}
-            onmousemove={() => { if (index !== i) index = i }}
             onclick={() => { if (row.jumpTarget ?? row.bm.commit_id) onjump(row.bm, row.jumpTarget) }}
             oncontextmenu={oncontextmenu ? (e: MouseEvent) => {
               e.preventDefault()
               confirm.disarm() // right-click cancels any pending double-press confirm
-              index = i        // sync keyboard selection to right-clicked row
+              cursor.index = i // sync keyboard selection to right-clicked row
               oncontextmenu!(row.bm, computeActions(row.bm, row.jumpTarget), e.clientX, e.clientY, row.jumpTarget)
             } : undefined}
             role="option"
             tabindex="-1"
-            aria-selected={i === index}
+            aria-selected={i === cursor.index}
           >
             <span class="bp-dot {DOT_CLASS[row.sync.kind]}"></span>
             <span class="bp-name">

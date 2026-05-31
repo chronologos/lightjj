@@ -140,6 +140,51 @@ describe('CommandPalette', () => {
     })
   })
 
+  describe('submenu', () => {
+    it('selecting a command with children drills in; breadcrumb click backs out and resets cursor', async () => {
+      const cmds: PaletteCommand[] = [
+        { label: 'Theme', children: [
+          { label: 'Dark', action: vi.fn() },
+          { label: 'Light', action: vi.fn() },
+        ] },
+        { label: 'Other', action: vi.fn() },
+      ]
+      const { container } = render(CommandPalette, { props: { commands: cmds, open: true } })
+
+      // Drill in
+      await fireEvent.click(screen.getByText('Theme'))
+      expect(container.querySelector('.palette-crumb')?.textContent).toContain('Theme')
+      expect(screen.getByText('Dark')).toBeInTheDocument()
+      expect(screen.queryByText('Other')).not.toBeInTheDocument()
+
+      // Move the cursor inside the submenu, then back out via breadcrumb
+      const input = screen.getByPlaceholderText('Type a command...')
+      await fireEvent.keyDown(input, { key: 'ArrowDown' })
+      await fireEvent.click(container.querySelector('.palette-crumb')!)
+
+      // Back at root with the cursor reset to the first item
+      expect(screen.getByText('Other')).toBeInTheDocument()
+      const items = document.querySelectorAll('.palette-item')
+      expect(items[0]).toHaveClass('palette-item-active')
+    })
+
+    it('Escape in a submenu backs out; second Escape closes', async () => {
+      const cmds: PaletteCommand[] = [
+        { label: 'Theme', children: [{ label: 'Dark', action: vi.fn() }] },
+      ]
+      const { container } = render(CommandPalette, { props: { commands: cmds, open: true } })
+      await fireEvent.click(screen.getByText('Theme'))
+
+      const input = screen.getByPlaceholderText('Type a command...')
+      await fireEvent.keyDown(input, { key: 'Escape' })
+      expect(container.querySelector('[role="dialog"]')).toBeInTheDocument()
+      expect(screen.getByText('Theme')).toBeInTheDocument() // back at root
+
+      await fireEvent.keyDown(input, { key: 'Escape' })
+      expect(container.querySelector('[role="dialog"]')).not.toBeInTheDocument()
+    })
+  })
+
   describe('execution', () => {
     it('clicking a command calls its action', async () => {
       const action = vi.fn()

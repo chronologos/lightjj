@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fuzzyMatch } from './fuzzy'
-  import { scrollIdxIntoView } from './scroll-into-view'
+  import { createListCursor } from './list-cursor.svelte'
 
   export interface PaletteCommand {
     label: string
@@ -28,7 +28,6 @@
   let { commands, open = $bindable(false) }: Props = $props()
 
   let query: string = $state('')
-  let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let resultsEl: HTMLElement | undefined = $state(undefined)
   // Label of the drilled-into command (stable key — the cmd OBJECT is fresh
@@ -66,11 +65,31 @@
     return availableCommands.filter(c => !inCheatsheet(c)).length
   })
 
+  // Cursor/hover/keydown core via the shared factory. The palette is
+  // typing-first — the input always holds focus, so inputFocused: () => true
+  // makes j/k fall through (they type into the query) while ArrowUp/ArrowDown
+  // still navigate the list.
+  const cursor = createListCursor({
+    count: () => filteredCommands.length,
+    container: () => resultsEl,
+    inputFocused: () => true,
+    onEnter: () => {
+      if (filteredCommands[cursor.index]) {
+        execute(filteredCommands[cursor.index])
+      }
+    },
+    onEscape: () => {
+      if (submenuLabel) { submenuLabel = null; query = ''; cursor.index = 0 }
+      else close()
+    },
+    hoverMovesCursor: true,
+  })
+
   // Focus input when palette opens
   $effect(() => {
     if (open) {
       query = ''
-      index = 0
+      cursor.index = 0
       submenuLabel = null
       inputEl?.focus()
     }
@@ -87,16 +106,12 @@
       cmd.action?.()  // optional side-effect (e.g. kick a lazy load)
       submenuLabel = cmd.label
       query = ''
-      index = 0
+      cursor.index = 0
       inputEl?.focus()
       return
     }
     close()
     cmd.action?.()
-  }
-
-  function scrollActiveIntoView() {
-    scrollIdxIntoView(resultsEl, index)
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -108,29 +123,7 @@
       }
       return
     }
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        index = Math.min(index + 1, filteredCommands.length - 1)
-        scrollActiveIntoView()
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        index = Math.max(index - 1, 0)
-        scrollActiveIntoView()
-        break
-      case 'Enter':
-        e.preventDefault()
-        if (filteredCommands[index]) {
-          execute(filteredCommands[index])
-        }
-        break
-      case 'Escape':
-        e.preventDefault()
-        if (submenuLabel) { submenuLabel = null; query = ''; index = 0 }
-        else close()
-        break
-    }
+    cursor.handleKey(e)
   }
 </script>
 
@@ -139,7 +132,7 @@
   <div class="palette" class:palette-wide={isCheatsheet} role="dialog" aria-modal="true" aria-label="Command palette">
     <div class="palette-input-wrap">
       {#if submenu}
-        <button class="palette-crumb" onclick={() => { submenuLabel = null; query = ''; index = 0; inputEl?.focus() }} title="Back (Esc)">
+        <button class="palette-crumb" onclick={() => { submenuLabel = null; query = ''; cursor.index = 0; inputEl?.focus() }} title="Back (Esc)">
           {submenu.label} ›
         </button>
       {:else}
@@ -152,7 +145,7 @@
         type="text"
         placeholder={isCheatsheet ? 'Filter commands...' : 'Type a command...'}
         onkeydown={handleKeydown}
-        oninput={() => { index = 0 }}
+        oninput={() => { cursor.index = 0 }}
       />
       <kbd class="palette-esc">esc</kbd>
     </div>
@@ -187,14 +180,21 @@
         {/if}
       </div>
     {:else}
-      <div class="palette-results" bind:this={resultsEl}>
+      <!-- Hover moves the cursor via the factory's delegated mousemove. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -- container only
+           delegates hover tracking; the buttons inside are the interactive bits -->
+      <div
+        class="palette-results"
+        bind:this={resultsEl}
+        onmousemove={cursor.onRowsMouseMove}
+        onmouseleave={cursor.onRowsMouseLeave}
+      >
         {#each filteredCommands as cmd, i}
           <button
             class="palette-item"
-            class:palette-item-active={i === index}
+            class:palette-item-active={i === cursor.index}
             data-idx={i}
             onclick={() => execute(cmd)}
-            onmouseenter={() => { index = i }}
           >
             {#if cmd.swatch}
               <span class="palette-swatch">

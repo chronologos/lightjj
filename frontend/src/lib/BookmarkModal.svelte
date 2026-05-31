@@ -5,7 +5,7 @@
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
   import { createConfirmGate } from './confirm-gate.svelte'
-  import { scrollIdxIntoView } from './scroll-into-view'
+  import { createListCursor } from './list-cursor.svelte'
   import { trackOptions, type TrackOption } from './bookmark-sync'
 
   export interface BookmarkOp {
@@ -27,7 +27,6 @@
   let { open = $bindable(false), currentCommitId, filterBookmark, logOrder = [], onexecute, ontrackmenu }: Props = $props()
 
   let query: string = $state('')
-  let index: number = $state(0)
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let modalEl: HTMLDivElement | undefined = $state(undefined)
   let inputFocused: boolean = $state(false)
@@ -83,7 +82,34 @@
     )
   })
 
-  let selected = $derived(filtered[index] as Bookmark | undefined)
+  // Cursor/hover/keydown core via the shared factory. Hooks layer the modal's
+  // domain semantics (confirm-gate disarm, tiered Escape, filter focus) on top.
+  const cursor = createListCursor({
+    count: () => filtered.length,
+    container: () => modalEl,
+    inputFocused: () => inputFocused,
+    onLeaveInput: () => modalEl?.focus(),
+    onNav: () => disarm(),
+    onEnter: (e) => {
+      e.stopPropagation()
+      moveSelected(selected)
+    },
+    onEscape: (e) => {
+      e.stopPropagation()
+      if (armed) { disarm(); return }
+      if (query) { query = ''; modalEl?.focus(); return }
+      close()
+    },
+    onSlash: (e) => {
+      e.stopPropagation()
+      disarm()
+      inputEl?.focus()
+    },
+    hoverMovesCursor: true,
+    onHoverCursor: () => disarm(),
+  })
+
+  let selected = $derived(filtered[cursor.index] as Bookmark | undefined)
 
   // Per-selection action availability. Drives footer hint dimming and key
   // handler guards. No forget entry — forget is always available for any
@@ -102,7 +128,7 @@
     if (open) {
       previousFocus = document.activeElement as HTMLElement | null
       query = ''
-      index = 0
+      cursor.index = 0
       confirm.disarm()
       // Snapshot nearby-sort inputs (untracked — see logRows comment).
       const byCommit = new Map(untrack(() => logOrder).map((id, i) => [id, i]))
@@ -111,12 +137,6 @@
       // {#if open} hasn't mounted yet on this tick — modalEl is undefined.
       // tick() resolves after DOM flush. Same pattern as ContextMenu/AnnotationBubble.
       tick().then(() => modalEl?.focus())
-    }
-  })
-
-  $effect(() => {
-    if (open && index >= filtered.length && filtered.length > 0) {
-      index = filtered.length - 1
     }
   })
 
@@ -138,51 +158,11 @@
     if (bm && can.move) fire({ action: 'move', bookmark: bm.name })
   }
 
-  function scrollActiveIntoView() {
-    scrollIdxIntoView(modalEl, index)
-  }
-
   function handleKeydown(e: KeyboardEvent) {
-    const bm = selected
+    // Nav (j/k/arrows), Enter, Escape, '/' route through the cursor factory.
+    if (cursor.handleKey(e)) return
 
-    switch (e.key) {
-      case 'ArrowDown':
-      case 'j':
-        if (e.key === 'j' && inputFocused) return
-        e.preventDefault()
-        disarm()
-        if (inputFocused) modalEl?.focus()
-        index = Math.min(index + 1, Math.max(filtered.length - 1, 0))
-        scrollActiveIntoView()
-        return
-      case 'ArrowUp':
-      case 'k':
-        if (e.key === 'k' && inputFocused) return
-        e.preventDefault()
-        disarm()
-        index = Math.max(index - 1, 0)
-        scrollActiveIntoView()
-        return
-      case 'Enter':
-        e.preventDefault()
-        e.stopPropagation()
-        moveSelected(bm)
-        return
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        if (armed) { disarm(); return }
-        if (query) { query = ''; modalEl?.focus(); return }
-        close()
-        return
-      case '/':
-        if (inputFocused) return
-        e.preventDefault()
-        e.stopPropagation()
-        disarm()
-        inputEl?.focus()
-        return
-    }
+    const bm = selected
 
     // Action keys — only when not typing in the filter. preventDefault
     // unconditionally so guarded-off keys don't bubble to App.svelte's
@@ -222,7 +202,7 @@
         // ContextMenu can receive focus — tick() ensures unmount completes
         // before the menu's own mount-focus effect fires.
         disarm()
-        const rect = modalEl?.querySelector('.bm-item-active')?.getBoundingClientRect()
+        const rect = modalEl?.querySelector(`[data-idx="${cursor.index}"]`)?.getBoundingClientRect()
         const x = rect ? rect.right - 40 : window.innerWidth / 2
         const y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2
         close()
@@ -264,18 +244,22 @@
       placeholder="Filter..."
       tabindex={inputCollapsed ? -1 : 0}
       aria-hidden={inputCollapsed}
-      oninput={() => { index = 0; disarm() }}
+      oninput={() => { cursor.index = 0; disarm() }}
       onfocus={() => { inputFocused = true }}
       onblur={() => { inputFocused = false }}
     />
     <!-- tabindex=-1: programmatically focusable (satisfies aria-activedescendant
-         requirement) but not in tab order. Same pattern as RevisionGraph. -->
+         requirement) but not in tab order. Same pattern as RevisionGraph.
+         Hover moves the cursor via the factory's delegated mousemove (no
+         per-row handlers, no :hover). -->
     <div
       class="bm-results"
       role="listbox"
       tabindex="-1"
       aria-label="Bookmarks"
-      aria-activedescendant={selected ? `bm-opt-${index}` : undefined}
+      aria-activedescendant={selected ? `bm-opt-${cursor.index}` : undefined}
+      onmousemove={cursor.onRowsMouseMove}
+      onmouseleave={cursor.onRowsMouseLeave}
     >
       {#if bms.loading}
         <div class="bm-empty">Loading...</div>
@@ -292,13 +276,12 @@
           <div
             id="bm-opt-{i}"
             class="bm-item"
-            class:bm-item-active={i === index}
+            class:bm-item-active={i === cursor.index}
             data-idx={i}
-            onmousemove={() => { if (index !== i) { index = i; disarm() } }}
             onclick={() => moveSelected(bm)}
             role="option"
             tabindex="-1"
-            aria-selected={i === index}
+            aria-selected={i === cursor.index}
           >
             <span class="bm-name">{bm.name}</span>
             {#if here}

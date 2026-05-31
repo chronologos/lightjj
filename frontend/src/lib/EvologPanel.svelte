@@ -2,6 +2,7 @@
   import type { LogEntry, EvologEntry } from './api'
   import { parseDiffContent } from './diff-parser'
   import DiffFileView from './DiffFileView.svelte'
+  import { createListCursor } from './list-cursor.svelte'
   import type { ContextMenuHandler } from './ContextMenu.svelte'
 
   interface Props {
@@ -17,23 +18,27 @@
 
   let { entries, loading, selectedRevision, height, onrefresh, onclose, onrestoreversion, oncontextmenu }: Props = $props()
 
-  let selectedIdx: number = $state(-1)
-  let hoveredIdx = $state(-1)
   let entryListEl: HTMLDivElement | undefined = $state()
+
+  // Cursor (-1 = nothing selected) + hover + j/k/arrow keys + data-idx
+  // scroll-into-view via the shared factory. This replaced a hand-rolled
+  // selectedIdx/hoveredIdx pair whose scroll effect queried '.selected' by
+  // class — the documented anti-pattern (scroll-into-view.ts).
+  const cursor = createListCursor({
+    count: () => entries.length,
+    initialIndex: -1,
+    container: () => entryListEl,
+  })
 
   // Diff arrives inline with each entry (rebase-safe inter_diff from the backend
   // template) — no per-click fetch needed.
-  let selectedEntry = $derived(selectedIdx >= 0 ? entries[selectedIdx] : null)
+  let selectedEntry = $derived(cursor.index >= 0 ? entries[cursor.index] : null)
   let parsedDiff = $derived(selectedEntry ? parseDiffContent(selectedEntry.diff) : [])
-
-  function selectEntry(i: number) {
-    selectedIdx = i
-  }
 
   function handleEntryContextMenu(e: MouseEvent, entry: EvologEntry, i: number) {
     if (!oncontextmenu) return
     e.preventDefault()
-    selectedIdx = i
+    cursor.moveTo(i)
     // Gate restore: i===0 is the current version (no-op); divergent change_id
     // means restore --to change_id is ambiguous (which /N?). jj undo recovers
     // from a fat-finger so no confirm gate — explicit wording is enough.
@@ -49,16 +54,7 @@
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') { e.preventDefault(); onclose(); return }
     if (entries.length === 0) return
-    switch (e.key) {
-      case 'j': case 'ArrowDown':
-        e.preventDefault()
-        selectEntry(selectedIdx === -1 ? 0 : Math.min(selectedIdx + 1, entries.length - 1))
-        break
-      case 'k': case 'ArrowUp':
-        e.preventDefault()
-        selectEntry(selectedIdx === -1 ? 0 : Math.max(selectedIdx - 1, 0))
-        break
-    }
+    cursor.handleKey(e)
   }
 
   // Auto-focus entry list once when entries first load — enables immediate arrow-key
@@ -69,13 +65,6 @@
     if (!didAutoFocus && entries.length > 0 && entryListEl) {
       didAutoFocus = true
       entryListEl.focus()
-    }
-  })
-
-  // Scroll selected entry into view on keyboard nav.
-  $effect(() => {
-    if (selectedIdx >= 0) {
-      entryListEl?.querySelector('.evolog-entry.selected')?.scrollIntoView({ block: 'nearest' })
     }
   })
 </script>
@@ -101,11 +90,8 @@
 
   <div class="evolog-body">
     <div class="entry-list" role="listbox" tabindex="-1" bind:this={entryListEl} onkeydown={handleKeydown}
-      onmousemove={(e) => {
-        const t = (e.target as Element).closest('[data-idx]')
-        hoveredIdx = t ? Number(t.getAttribute('data-idx')) : -1
-      }}
-      onmouseleave={() => hoveredIdx = -1}>
+      onmousemove={cursor.onRowsMouseMove}
+      onmouseleave={cursor.onRowsMouseLeave}>
       {#if loading && entries.length === 0}
         <div class="empty-state">
           <div class="spinner"></div>
@@ -118,12 +104,12 @@
           {@const extraPreds = entry.predecessor_ids.length - 1}
           <button
             class="evolog-entry"
-            class:selected={i === selectedIdx}
-            class:hovered={i === hoveredIdx}
+            class:selected={i === cursor.index}
+            class:hovered={i === cursor.hovered}
             class:current={i === 0}
             class:origin={entry.predecessor_ids.length === 0}
             data-idx={i}
-            onclick={() => selectEntry(i)}
+            onclick={() => cursor.moveTo(i)}
             oncontextmenu={(e) => handleEntryContextMenu(e, entry, i)}
           >
             <span class="entry-id">{entry.commit_id}</span>

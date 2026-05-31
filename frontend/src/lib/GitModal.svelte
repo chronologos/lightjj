@@ -4,7 +4,7 @@
   import { createLoader } from './loader.svelte'
   import { fuzzyMatch } from './fuzzy'
   import { groupByWithIndex } from './group-by'
-  import { scrollIdxIntoView } from './scroll-into-view'
+  import { createListCursor } from './list-cursor.svelte'
 
   // Structured op — presentation decided in template, not here.
   // Raw command line is derived: `git ${type} ${flags.join(' ')}`
@@ -36,7 +36,6 @@
   let { open = $bindable(false), currentChangeId, currentBookmarks = [], onexecute }: Props = $props()
 
   let query: string = $state('')
-  let index: number = $state(0)
   // null = "use default" (remotes[0]); set on user cycle/click. Derived
   // selectedRemote means it tracks remotes[0] the same tick data lands —
   // no .then() side-effect, no microtask gap.
@@ -120,22 +119,39 @@
     }))
   )
 
-  let selected = $derived(filtered[index] as GitOp | undefined)
+  // Cursor/hover/keydown core via the shared factory; h/l remote cycling and
+  // single-char hotkeys layer on top in handleKeydown.
+  const cursor = createListCursor({
+    count: () => filtered.length,
+    container: () => modalEl,
+    inputFocused: () => inputFocused,
+    onLeaveInput: () => modalEl?.focus(),
+    onEnter: (e) => {
+      e.stopPropagation()
+      if (selected) execute(selected)
+    },
+    onEscape: (e) => {
+      e.stopPropagation()
+      if (query) { query = ''; modalEl?.focus(); return }
+      close()
+    },
+    onSlash: (e) => {
+      e.stopPropagation()
+      inputEl?.focus()
+    },
+    hoverMovesCursor: true,
+  })
+
+  let selected = $derived(filtered[cursor.index] as GitOp | undefined)
 
   $effect(() => {
     if (open) {
       previousFocus = document.activeElement as HTMLElement | null
       query = ''
-      index = 0
+      cursor.index = 0
       remoteOverride = null
       data.load()
       tick().then(() => modalEl?.focus())
-    }
-  })
-
-  $effect(() => {
-    if (open && index >= filtered.length && filtered.length > 0) {
-      index = filtered.length - 1
     }
   })
 
@@ -149,65 +165,30 @@
     onexecute(op.type, op.flags)
   }
 
-  function scrollActiveIntoView() {
-    scrollIdxIntoView(modalEl, index)
-  }
-
   function cycleRemote(delta: 1 | -1) {
     if (remotes.length <= 1) return
     const i = remotes.indexOf(selectedRemote)
     remoteOverride = remotes[(i + delta + remotes.length) % remotes.length]
-    index = 0
+    cursor.index = 0
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    // Nav (j/k/arrows), Enter, Escape, '/' route through the cursor factory.
+    if (cursor.handleKey(e)) return
+    if (inputFocused) return
     switch (e.key) {
-      case 'ArrowDown':
-      case 'j':
-        if (e.key === 'j' && inputFocused) return
-        e.preventDefault()
-        if (inputFocused) modalEl?.focus()
-        index = Math.min(index + 1, Math.max(filtered.length - 1, 0))
-        scrollActiveIntoView()
-        return
-      case 'ArrowUp':
-      case 'k':
-        if (e.key === 'k' && inputFocused) return
-        e.preventDefault()
-        index = Math.max(index - 1, 0)
-        scrollActiveIntoView()
-        return
       case 'ArrowLeft':
       case 'h':
-        if (inputFocused) return
         if (remotes.length > 1) { e.preventDefault(); cycleRemote(-1) }
         return
       case 'ArrowRight':
       case 'l':
-        if (inputFocused) return
         if (remotes.length > 1) { e.preventDefault(); cycleRemote(1) }
-        return
-      case 'Enter':
-        e.preventDefault()
-        e.stopPropagation()
-        if (selected) execute(selected)
-        return
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        if (query) { query = ''; modalEl?.focus(); return }
-        close()
-        return
-      case '/':
-        if (inputFocused) return
-        e.preventDefault()
-        e.stopPropagation()
-        inputEl?.focus()
         return
       default: {
         // Single-char hotkey — fires immediately. No modifier keys (they bubble
-        // for global shortcuts like Cmd+K). Guard against input focus.
-        if (inputFocused || e.ctrlKey || e.metaKey || e.altKey) break
+        // for global shortcuts like Cmd+K).
+        if (e.ctrlKey || e.metaKey || e.altKey) break
         const op = hotkeyMap.get(e.key)
         if (op) {
           e.preventDefault()
@@ -244,7 +225,7 @@
           <button
             class="git-remote-pill"
             class:active={r === selectedRemote}
-            onclick={() => { remoteOverride = r; index = 0 }}
+            onclick={() => { remoteOverride = r; cursor.index = 0 }}
           >{r}</button>
         {/each}
         <span class="git-remotes-hint">h/l</span>
@@ -259,16 +240,19 @@
       placeholder="Filter..."
       tabindex={inputCollapsed ? -1 : 0}
       aria-hidden={inputCollapsed}
-      oninput={() => { index = 0 }}
+      oninput={() => { cursor.index = 0 }}
       onfocus={() => { inputFocused = true }}
       onblur={() => { inputFocused = false }}
     />
+    <!-- Hover moves the cursor via the factory's delegated mousemove. -->
     <div
       class="git-results"
       role="listbox"
       tabindex="-1"
       aria-label="Git operations"
-      aria-activedescendant={selected ? `git-opt-${index}` : undefined}
+      aria-activedescendant={selected ? `git-opt-${cursor.index}` : undefined}
+      onmousemove={cursor.onRowsMouseMove}
+      onmouseleave={cursor.onRowsMouseLeave}
     >
       {#if data.loading}
         <div class="git-empty">Loading...</div>
@@ -284,13 +268,12 @@
             <div
               id="git-opt-{globalIndex}"
               class="git-item"
-              class:git-item-active={globalIndex === index}
+              class:git-item-active={globalIndex === cursor.index}
               data-idx={globalIndex}
-              onmousemove={() => { if (index !== globalIndex) index = globalIndex }}
               onclick={() => execute(op)}
               role="option"
               tabindex="-1"
-              aria-selected={globalIndex === index}
+              aria-selected={globalIndex === cursor.index}
             >
               <div class="git-title" class:is-push={op.type === 'push'} class:is-fetch={op.type === 'fetch'}>
                 {op.title}

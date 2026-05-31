@@ -2,7 +2,7 @@
   import type { SvelteSet } from 'svelte/reactivity'
   import { FILE_TYPE_LABELS, type FileChange } from './api'
   import type { ContextMenuHandler } from './ContextMenu.svelte'
-  import { scrollIdxIntoView } from './scroll-into-view'
+  import { createListCursor } from './list-cursor.svelte'
 
   interface Props {
     /** Drives title + count-suffix labels. All three modes use identical
@@ -17,17 +17,22 @@
 
   let { mode, files, selected, ontoggle, oncontextmenu }: Props = $props()
 
-  let cursorIdx: number = $state(0)
   let listEl: HTMLElement | undefined = $state(undefined)
+
+  // Cursor + j/k/arrow keys + data-idx scroll via the shared factory.
+  // hoverMovesCursor: hovering a row moves the cursor (one highlight serves
+  // keyboard and mouse). No Enter/Escape hooks — those must bubble to
+  // App.svelte's global handler, which executes/cancels the inline mode.
+  const cursor = createListCursor({
+    count: () => files.length,
+    container: () => listEl,
+    hoverMovesCursor: true,
+  })
 
   const LABELS = {
     squash: { title: 'Squash', countSuffix: 'to move' },
     split:  { title: 'Split',  countSuffix: 'stay' },
     review: { title: 'Review', countSuffix: 'accepted' },
-  }
-
-  function scrollCursorIntoView() {
-    scrollIdxIntoView(listEl, cursorIdx)
   }
 
   function selectAll() {
@@ -41,7 +46,7 @@
   function handleRowContextMenu(e: MouseEvent, i: number, path: string) {
     if (!oncontextmenu) return
     e.preventDefault()
-    cursorIdx = i
+    cursor.index = i
     oncontextmenu([
       { label: 'Copy path', action: () => navigator.clipboard.writeText(path) },
       { label: 'Copy all paths', action: () => navigator.clipboard.writeText(files.map(f => f.path).join('\n')) },
@@ -52,23 +57,14 @@
     ], e.clientX, e.clientY)
   }
 
-  // Enter/Escape NOT handled — they bubble to App.svelte's global keydown
-  // handler which executes/cancels the inline mode.
+  // Enter/Escape NOT handled (no factory hooks) — they bubble to App.svelte's
+  // global keydown handler which executes/cancels the inline mode.
   function handleKeydown(e: KeyboardEvent) {
+    if (cursor.handleKey(e)) return
     switch (e.key) {
-      case 'ArrowDown':
-      case 'j':
-        e.preventDefault()
-        if (cursorIdx < files.length - 1) { cursorIdx++; scrollCursorIntoView() }
-        break
-      case 'ArrowUp':
-      case 'k':
-        e.preventDefault()
-        if (cursorIdx > 0) { cursorIdx--; scrollCursorIntoView() }
-        break
       case ' ':
         e.preventDefault()
-        if (files[cursorIdx]) ontoggle(files[cursorIdx].path)
+        if (files[cursor.index]) ontoggle(files[cursor.index].path)
         break
       case 'a':
         e.preventDefault()
@@ -99,19 +95,21 @@
     <span class="file-selection-count">{selected.size}/{files.length} {LABELS[mode].countSuffix}</span>
   </div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- Hover moves the cursor via the factory's delegated mousemove. -->
   <div class="file-selection-list" tabindex="-1"
     onkeydown={handleKeydown}
+    onmousemove={cursor.onRowsMouseMove}
+    onmouseleave={cursor.onRowsMouseLeave}
     bind:this={listEl}>
     {#each files as file, i (file.path)}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="file-select-row"
-        class:file-select-active={i === cursorIdx}
+        class:file-select-active={i === cursor.index}
         class:file-checked={selected.has(file.path)}
         data-idx={i}
-        onclick={() => { cursorIdx = i; ontoggle(file.path) }}
+        onclick={() => { cursor.index = i; ontoggle(file.path) }}
         oncontextmenu={(e) => handleRowContextMenu(e, i, file.path)}
-        onmouseenter={() => { cursorIdx = i }}
         role="option"
         tabindex="-1"
         aria-selected={selected.has(file.path)}

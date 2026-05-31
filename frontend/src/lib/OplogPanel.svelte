@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type OpEntry } from './api'
+  import { createListCursor } from './list-cursor.svelte'
   import type { ContextMenuHandler } from './ContextMenu.svelte'
 
   interface Props {
@@ -15,9 +16,21 @@
 
   let { entries, loading, error = '', onrefresh, onclose, onopundo, onoprestore, oncontextmenu }: Props = $props()
 
-  let selectedIdx = $state(-1)
-  let hoveredIdx = $state(-1)
   let contentEl: HTMLElement | undefined
+
+  // Cursor (-1 = nothing selected) + hover + j/k/Enter keys + data-idx
+  // scroll-into-view via the shared factory. This replaced a hand-rolled
+  // selectedIdx/hoveredIdx pair whose scroll effect queried '.selected' by
+  // class — the documented anti-pattern (scroll-into-view.ts).
+  const cursor = createListCursor({
+    count: () => entries.length,
+    initialIndex: -1,
+    container: () => contentEl,
+    onEnter: () => {
+      if (cursor.index < 0) return
+      toggleExpand(entries[cursor.index])
+    },
+  })
 
   // Single-op expansion — `jj op show` output, displayed verbatim below the
   // selected row. Keyed by op.id (not index) so j/k away-and-back doesn't
@@ -30,7 +43,7 @@
   // index points to a different operation after undo/restore. Also wipes
   // expansion — op IDs survive refresh but the content we'd show is stale
   // relative to what just happened.
-  $effect(() => { void entries; selectedIdx = -1; expandedId = ''; expandedOutput = '' })
+  $effect(() => { void entries; cursor.index = -1; expandedId = ''; expandedOutput = '' })
 
   async function toggleExpand(op: OpEntry) {
     if (expandedId === op.id) { expandedId = ''; return }
@@ -53,20 +66,7 @@
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') { e.preventDefault(); onclose(); return }
     if (entries.length === 0) return
-    const move = (delta: 1 | -1) => {
-      e.preventDefault()
-      selectedIdx = selectedIdx === -1 ? 0
-        : Math.max(0, Math.min(selectedIdx + delta, entries.length - 1))
-    }
-    switch (e.key) {
-      case 'j': case 'ArrowDown': move(1); break
-      case 'k': case 'ArrowUp': move(-1); break
-      case 'Enter':
-        if (selectedIdx < 0) return
-        e.preventDefault()
-        toggleExpand(entries[selectedIdx])
-        break
-    }
+    cursor.handleKey(e)
   }
 
   // Auto-focus when entries load so j/k works immediately. The {#if oplogOpen}
@@ -76,12 +76,6 @@
     if (!didAutoFocus && entries.length > 0 && contentEl) {
       didAutoFocus = true
       contentEl.focus()
-    }
-  })
-
-  $effect(() => {
-    if (selectedIdx >= 0) {
-      contentEl?.querySelector('.oplog-entry.selected')?.scrollIntoView({ block: 'nearest' })
     }
   })
 
@@ -109,11 +103,8 @@
   </div>
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="oplog-content" role="listbox" tabindex="-1" bind:this={contentEl} onkeydown={handleKeydown}
-    onmousemove={(e) => {
-      const t = (e.target as Element).closest('[data-idx]')
-      hoveredIdx = t ? Number(t.getAttribute('data-idx')) : -1
-    }}
-    onmouseleave={() => hoveredIdx = -1}>
+    onmousemove={cursor.onRowsMouseMove}
+    onmouseleave={cursor.onRowsMouseLeave}>
     {#if loading}
       <div class="empty-state">
         <div class="spinner"></div>
@@ -130,14 +121,14 @@
         <div
           class="oplog-entry"
           class:oplog-current={op.is_current}
-          class:selected={selectedIdx === i}
-          class:hovered={hoveredIdx === i}
+          class:selected={cursor.index === i}
+          class:hovered={cursor.hovered === i}
           data-idx={i}
-          onclick={() => { selectedIdx = i }}
-          ondblclick={() => { selectedIdx = i; toggleExpand(op) }}
-          oncontextmenu={(e) => { e.preventDefault(); selectedIdx = i; openMenuFor(op, e.clientX, e.clientY) }}
+          onclick={() => cursor.moveTo(i)}
+          ondblclick={() => { cursor.moveTo(i); toggleExpand(op) }}
+          oncontextmenu={(e) => { e.preventDefault(); cursor.moveTo(i); openMenuFor(op, e.clientX, e.clientY) }}
           role="option"
-          aria-selected={selectedIdx === i}
+          aria-selected={cursor.index === i}
           tabindex="-1"
         >
           <span class="oplog-id">{op.id}</span>

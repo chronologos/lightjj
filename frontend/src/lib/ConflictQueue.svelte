@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ConflictEntry } from './api'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
-  import { scrollIdxIntoView } from './scroll-into-view'
+  import { createListCursor } from './list-cursor.svelte'
 
   interface QueueItem {
     commitId: string
@@ -59,24 +59,27 @@
   // bug_009: O(1) group-header lookup instead of .find() per row in {#each}.
   let entryByCommit = $derived(new Map(entries.map(e => [e.commit_id, e])))
 
-  let idx = $state(0)
-  // bug_006/007: JS-tracked hover per CLAUDE.md — :hover recomputes on layout
-  // shift; mousemove only on physical pointer movement.
-  let hoveredIdx = $state(-1)
   let listEl: HTMLElement | undefined = $state()
 
-  function scrollTo(i: number) {
-    scrollIdxIntoView(listEl, i)
-  }
+  // Cursor + JS-tracked hover (bug_006/007: :hover recomputes on layout shift;
+  // mousemove only on physical pointer movement) + bounds clamp (bug_001:
+  // external resolve shortens flat) + data-idx scroll (bug_008: a .cq-selected
+  // class query after a $state write would find the OLD row) — all via the
+  // shared factory. onMove notifies the parent on keyboard nav; select() below
+  // notifies for mount auto-select and clicks (which must fire even when the
+  // index doesn't change).
+  const cursor = createListCursor({
+    count: () => flat.length,
+    container: () => listEl,
+    onMove: (i) => onselect(flat[i]),
+  })
 
-  // Keep idx synced with parent's current (for external jumps e.g. from DiffPanel).
-  // bug_001: also clamp idx when entries shrink (external resolve shortens flat).
+  // Keep the cursor synced with parent's current (for external jumps e.g.
+  // from DiffPanel).
   $effect(() => {
-    const len = flat.length
-    if (idx >= len) idx = Math.max(0, len - 1)
     if (!current) return
     const i = flat.findIndex(it => it.commitId === current.commitId && it.path === current.path)
-    if (i >= 0 && i !== idx) { idx = i; scrollTo(i) }
+    if (i >= 0 && i !== cursor.index) { cursor.index = i; cursor.scrollIntoView() }
   })
 
   // Track whether this commit header is first (for the group separator).
@@ -90,26 +93,18 @@
 
   function select(i: number) {
     if (i < 0 || i >= flat.length) return
-    idx = i
+    cursor.index = i
+    // Always notify — mount auto-select fires onselect for index 0 even though
+    // the cursor is already there (cursor.moveTo would skip the callback).
     onselect(flat[i])
-    // bug_008: scroll into view. Query by data-idx (static attr) not .cq-selected
-    // — idx=$state write hasn't re-rendered yet when this runs synchronously.
-    scrollTo(i)
+    cursor.scrollIntoView()
   }
 
   /** Exported so App can delegate regardless of DOM focus (BookmarksPanel pattern).
    *  Returns true if the key was consumed (even at a bound — j at last item is
    *  still "consumed", it just doesn't move). */
   export function handleKeydown(e: KeyboardEvent): boolean {
-    if (e.key === 'j' || e.key === 'ArrowDown') {
-      if (idx + 1 < flat.length) select(idx + 1)
-      return true
-    }
-    if (e.key === 'k' || e.key === 'ArrowUp') {
-      if (idx > 0) select(idx - 1)
-      return true
-    }
-    return false
+    return cursor.handleKey(e)
   }
 
   // Auto-select first item so MergePanel has something to show. Gated on
@@ -126,8 +121,8 @@
     // bug_017: DON'T call select() — it fires onselect → loadMergeFile →
     // {#key} remounts MergePanel → destroys unsaved edits. Right-click on a
     // different item should just show the menu; Copy/Open use flat[i].path
-    // directly. Sync idx only so subsequent j/k continues from here.
-    idx = i
+    // directly. Sync the cursor only so subsequent j/k continues from here.
+    cursor.index = i
     const path = flat[i].path
     const items: ContextMenuItem[] = [
       { label: 'Copy file path', action: () => navigator.clipboard.writeText(path) },
@@ -142,11 +137,8 @@
 <div class="cq-root">
   <!-- svelte-ignore a11y_no_static_element_interactions a11y_mouse_events_have_key_events -->
   <div class="cq-list" bind:this={listEl}
-    onmousemove={e => {
-      const t = (e.target as Element).closest('[data-idx]')
-      hoveredIdx = t ? Number(t.getAttribute('data-idx')) : -1
-    }}
-    onmouseleave={() => hoveredIdx = -1}
+    onmousemove={cursor.onRowsMouseMove}
+    onmouseleave={cursor.onRowsMouseLeave}
   >
     {#each flat as item, i (key(item))}
       {#if isNewGroup(i)}
@@ -158,8 +150,8 @@
       {/if}
       <button
         class="cq-item"
-        class:cq-selected={i === idx}
-        class:cq-hovered={i === hoveredIdx}
+        class:cq-selected={i === cursor.index}
+        class:cq-hovered={i === cursor.hovered}
         class:cq-resolved={resolved.has(key(item))}
         data-idx={i}
         onclick={() => select(i)}

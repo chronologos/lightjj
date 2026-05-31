@@ -121,12 +121,15 @@ describe('FileSelectionPanel', () => {
   })
 
   describe('mouse', () => {
-    it('click sets cursor + toggles; mouseenter sets cursor only', async () => {
+    it('click sets cursor + toggles; hover (mousemove) sets cursor only', async () => {
       const ontoggle = vi.fn()
       const { container } = render(FileSelectionPanel, { props: props({ ontoggle }) })
       const r = rows(container)
 
-      await fireEvent.mouseEnter(r[2])
+      // Hover is mousemove-delegated on the list container ([data-idx] rows),
+      // not per-row mouseenter — the no-:hover pattern (layout shift under a
+      // stationary pointer must not move the cursor).
+      await fireEvent.mouseMove(r[2])
       expect(activeRow(container)?.textContent).toContain('c.go')
       expect(ontoggle).not.toHaveBeenCalled()
 

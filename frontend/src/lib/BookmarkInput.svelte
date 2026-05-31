@@ -1,7 +1,12 @@
 <script lang="ts">
-  import { api, type Bookmark } from './api'
+  import type { Bookmark } from './api'
   import { fuzzyMatch } from './fuzzy'
   import { recentActions } from './recent-actions.svelte'
+  import BookmarkPicker from './BookmarkPicker.svelte'
+
+  // "Set bookmark HERE" modal — thin wrapper over the shared BookmarkPicker.
+  // This wrapper owns the ranking (conflict > trunk > recency), the row
+  // rendering (move/resolve verb + ?? marker), and recency recording.
 
   interface Props {
     open: boolean
@@ -20,15 +25,7 @@
   // revset function, not a bookmark query.
   const TRUNK_NAMES = new Set(['main', 'master', 'trunk'])
 
-  let value: string = $state('')
-  let inputEl: HTMLInputElement | undefined = $state(undefined)
-  let bookmarks: Bookmark[] = $state([])
-  let suggestionsError: string = $state('')
-  let selectedSuggestion: number = $state(-1)
-  let previousFocus: HTMLElement | null = null
-
-  let filtered = $derived.by(() => {
-    if (!open) return []
+  function rank(bookmarks: Bookmark[], value: string): Bookmark[] {
     if (value) return bookmarks.filter(b => fuzzyMatch(value, b.name)).slice(0, 8)
     // Empty input: surface conflicted bookmarks (why you'd open this dialog
     // mid-conflict) then trunk names (common advance target), then most
@@ -43,172 +40,35 @@
         ((last[b.name] ?? 0) - (last[a.name] ?? 0))
       )
       .slice(0, 5)
-  })
+  }
 
-  $effect(() => {
-    if (open) {
-      previousFocus = document.activeElement as HTMLElement | null
-      value = ''
-      selectedSuggestion = -1
-      suggestionsError = ''
-      api.bookmarks({ local: true }).then((bms: Bookmark[]) => {
-        bookmarks = bms
-      }).catch((e) => {
-        suggestionsError = e instanceof Error ? e.message : 'Failed to load bookmarks'
-      })
-      inputEl?.focus()
-    }
-  })
-
-  function submit() {
-    const name = filtered[selectedSuggestion]?.name ?? value.trim()
-    if (!name) return
+  function handlePick(name: string) {
+    // record() before onsave — if onsave throws, recency still updates.
     history.record(name)
     onsave(name)
   }
-
-  function close() {
-    open = false
-    previousFocus?.focus()
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    switch (e.key) {
-      case 'Enter':
-        e.preventDefault()
-        e.stopPropagation()
-        submit()
-        break
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        close()
-        break
-      // Arrows move the highlight only — they do NOT write `value`. Writing
-      // `value` would flip `filtered` from the default-sort branch to the
-      // fuzzy-filter branch, collapsing the list to items matching the first
-      // selection's name. submit() already reads filtered[selectedSuggestion]
-      // first, so the highlight alone is enough.
-      case 'ArrowDown':
-        if (filtered.length > 0) {
-          e.preventDefault()
-          selectedSuggestion = Math.min(selectedSuggestion + 1, filtered.length - 1)
-        }
-        break
-      case 'ArrowUp':
-        if (filtered.length > 0) {
-          e.preventDefault()
-          selectedSuggestion = Math.max(selectedSuggestion - 1, 0)
-        }
-        break
-    }
-  }
 </script>
 
-{#if open}
-  <div class="bm-set-backdrop" onclick={close} role="presentation"></div>
-  <div class="bm-set-modal">
-    <div class="bm-set-header">Set Bookmark</div>
-    <input
-      bind:this={inputEl}
-      bind:value
-      class="bm-set-input"
-      type="text"
-      placeholder="Type bookmark name..."
-      onkeydown={handleKeydown}
-      oninput={() => { selectedSuggestion = -1 }}
-    />
-    {#if suggestionsError}
-      <div class="bm-set-error">⚠ {suggestionsError}</div>
-    {:else if filtered.length > 0}
-      <div class="bm-set-suggestions">
-        {#each filtered as bm, i (bm.name)}
-          <button
-            class="bm-set-suggestion"
-            class:active={i === selectedSuggestion}
-            onmousedown={(e: MouseEvent) => { e.preventDefault(); value = bm.name; submit() }}
-          >
-            <span class="bm-set-move-hint" class:bm-set-resolve={bm.conflict}>
-              {bm.conflict ? 'resolve' : 'move'}
-            </span>
-            {bm.name}{#if bm.conflict}<span class="conflict-marker">??</span>{/if} → here
-          </button>
-        {/each}
-      </div>
-    {/if}
-    <div class="bm-set-hint">Enter to set · Escape to cancel · ↑↓ to select existing</div>
-  </div>
-{/if}
+<!-- Picker stays open on pick: App closes it once the bookmark-set mutation
+     lands (`before:` hook in handleBookmarkSet). -->
+<BookmarkPicker
+  bind:open
+  title="Set Bookmark"
+  placeholder="Type bookmark name..."
+  hint="Enter to set · Escape to cancel · ↑↓ to select existing"
+  {rank}
+  showError
+  onpick={handlePick}
+>
+  {#snippet row(bm: Bookmark)}
+    <span class="bm-set-move-hint" class:bm-set-resolve={bm.conflict}>
+      {bm.conflict ? 'resolve' : 'move'}
+    </span>
+    {bm.name}{#if bm.conflict}<span class="conflict-marker">??</span>{/if} → here
+  {/snippet}
+</BookmarkPicker>
 
 <style>
-  .bm-set-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--backdrop);
-    z-index: 100;
-  }
-
-  .bm-set-modal {
-    position: fixed;
-    top: 25%;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 400px;
-    background: var(--base);
-    border: 1px solid var(--surface1);
-    border-radius: 8px;
-    box-shadow: var(--shadow-heavy);
-    z-index: 101;
-    overflow: hidden;
-  }
-
-  .bm-set-header {
-    padding: 10px 16px 6px;
-    font-size: var(--fs-md);
-    font-weight: 700;
-    color: var(--subtext0);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .bm-set-input {
-    width: 100%;
-    background: var(--mantle);
-    color: var(--text);
-    border: none;
-    border-bottom: 1px solid var(--surface0);
-    padding: 10px 16px;
-    font-family: inherit;
-    font-size: var(--fs-lg);
-    outline: none;
-  }
-
-  .bm-set-input::placeholder {
-    color: var(--text-faint);
-  }
-
-  .bm-set-suggestions {
-    border-bottom: 1px solid var(--surface0);
-  }
-
-  .bm-set-suggestion {
-    display: block;
-    width: 100%;
-    padding: 6px 16px;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    font-family: inherit;
-    font-size: var(--font-size);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .bm-set-suggestion:hover,
-  .bm-set-suggestion.active {
-    background: var(--surface0);
-  }
-
   .bm-set-move-hint {
     color: var(--amber);
     font-size: var(--fs-sm);
@@ -217,18 +77,5 @@
   }
   .bm-set-move-hint.bm-set-resolve {
     color: var(--red);
-  }
-
-  .bm-set-error {
-    padding: 8px 16px;
-    font-size: var(--fs-md);
-    color: var(--red);
-    border-bottom: 1px solid var(--surface0);
-  }
-
-  .bm-set-hint {
-    padding: 6px 16px;
-    font-size: var(--fs-sm);
-    color: var(--text-faint);
   }
 </style>

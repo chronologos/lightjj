@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SearchMatch } from './DiffPanel.svelte'
+  import { scrollIdxIntoView } from './scroll-into-view'
 
   interface Props {
     matches: SearchMatch[]
@@ -19,10 +20,13 @@
   let shown = $derived(matches.slice(0, RENDER_CAP))
 
   // Keep current row visible in the dropdown as ↑/↓ cycles through.
+  // The cursor itself is parent-owned (DiffPanel's currentIdx prop + onjump)
+  // so this list does NOT use createListCursor — only the data-idx scroll
+  // helper and the delegated hover tracking below.
   $effect(() => {
     const i = currentIdx
     if (i >= RENDER_CAP) return
-    listEl?.querySelector(`[data-idx="${i}"]`)?.scrollIntoView({ block: 'nearest' })
+    scrollIdxIntoView(listEl, i)
   })
 
   function basename(p: string) {

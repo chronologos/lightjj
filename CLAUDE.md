@@ -122,8 +122,10 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     themes.ts              — 7 builtin themes + lazy Ghostty palettes + deriveTheme()
     jj-features.svelte.ts  — jj feature labels; booleans come from /api/info features (optimistic until loaded)
     confirm-gate.svelte.ts — createConfirmGate() double-press confirm factory
-    BookmarkInput.svelte   — Bookmark name input with autocomplete
-    DestinationInput.svelte — Destination picker (/) for inline rebase/squash (bookmark or raw revset)
+    list-cursor.svelte.ts  — createListCursor() keyboard-list cursor factory (nav/hover/clamp/scroll)
+    BookmarkPicker.svelte  — Shared autocomplete bookmark-picker modal (BookmarkInput/DestinationInput wrap it)
+    BookmarkInput.svelte   — Bookmark name input with autocomplete (BookmarkPicker wrapper)
+    DestinationInput.svelte — Destination picker (/) for inline rebase/squash (BookmarkPicker wrapper, raw revset pass-through)
     ConfigModal.svelte     — Cmd+K → "Edit config" CodeMirror JSON editor
     GitModal.svelte        — Git push/fetch modal
     EvologPanel.svelte     — Evolution log with inline per-entry diffs
@@ -227,6 +229,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
   - Modal chrome: `.modal-backdrop`, `.modal`, `.modal-header`, `.modal-input`
   - Prose: `.prose` — rendered-markdown typography (heading scale + h1/h2 underlines, leading, code/pre/blockquote, table stripes). MarkdownPreview + DocView both use it; don't redefine per-component.
   - Misc: `.close-btn` (borderless ×), `.placeholder-text` (dimmed "(no description)"), `.nav-hint` (kbd badge)
+- **Keyboard-navigable lists use `createListCursor`** (`list-cursor.svelte.ts`) — one factory for cursor + hovered state, j/k/Arrow routing with the filter-input guard, Enter/Escape/`/` hooks, delegated `[data-idx]` hover (the no-:hover rule), bounds clamping, and data-idx scroll-into-view. Don't hand-roll the skeleton; layer domain keys behind `if (cursor.handleKey(e)) return`. Works for both self-focused lists (element onkeydown) and delegated-key lists (exported handleKeydown the App router calls).
 - **Cache by `commit_id`, not `change_id`.** Per-revision data (diff, files, description) is keyed by `commit_id` — a content hash of tree + parents + message. If the commit_id hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants. Pass `commit.commit_id` to `api.diff()`/`files()`/`description()`/`revision()`; use `effectiveId()` (change_id) only for mutations and UI-state that should survive rewrites.
 - **pnpm, not npm** — the project uses pnpm for package management.
 - **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes. **Graph rows use a fixed `height: 18px`** to guarantee identical sizing across all modes (normal, rebase, squash, split). This prevents inline badges, buttons, or text from influencing row height. All inline elements (badges, `@` indicator, action buttons) must fit within 18px. Content is clipped by `overflow: hidden`. Never change this to `min-height` or remove the fixed height — it's the only way to prevent sub-pixel height differences between modes that break graph pipe continuity.
