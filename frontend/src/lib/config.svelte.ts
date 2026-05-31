@@ -266,10 +266,12 @@ function createConfig() {
     const gen = ++saveGen
     void saveRemote(partial, msg => { if (gen === saveGen) lastError = msg })
       .then(accepted => {
-        // A failed/indeterminate write keeps its keys dirty so the NEXT flush
-        // (next config change or unload) retries them. Without this, clearing
-        // dirtyKeys above would make a transient network failure silently drop
-        // these values from the server config forever.
+        // A failed/indeterminate write keeps its keys dirty so they ride along
+        // with the NEXT flush that has a snapshot (i.e. the next config
+        // change; the unload flush bails early when nothing new changed).
+        // Without this, clearing dirtyKeys above would make a transient
+        // network failure silently drop these values from the server config
+        // forever. localStorage still has them either way.
         if (!accepted) for (const k of flushedKeys) dirtyKeys.add(k)
       })
   }

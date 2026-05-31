@@ -1088,17 +1088,24 @@
   }
 
   // Slow-changing server-state mirrors: PR badges, palette aliases, remote
-  // list. External changes to these are rare, so staleness-driven refreshes
-  // are throttled to once per PR_REFRESH_MS. api.ts drops its aliases/remotes
-  // session memos on op-id change, so the loadAliases/remotes calls here hit
-  // the network only when an operation could actually have changed them and
-  // are memo-hits otherwise; the PR fetch is the expensive one and shares the
-  // throttle.
+  // list, and the stale-immutable scan. External changes to these are rare,
+  // so staleness-driven refreshes are throttled to once per PR_REFRESH_MS.
+  // api.ts drops its aliases/remotes session memos on op-id change, so the
+  // loadAliases/remotes calls here hit the network only when an operation
+  // could actually have changed them and are memo-hits otherwise. TWO calls
+  // here are genuinely expensive and must never run unthrottled on the
+  // op-id-change path: the PR fetch (a `gh` network call) and
+  // checkStaleImmutable (a `divergent() & immutable()` revset — seconds of
+  // CPU on monorepo-scale repos; it cannot use the `mutable() &` index
+  // speedup because it targets immutable commits by definition). Both also
+  // keep their explicit post-git-op triggers (handleGitOp's after hook) for
+  // immediacy when WE caused the change.
   function refreshSlowMirrors() {
     if (Date.now() - lastPrFetch < PR_REFRESH_MS) return
     void loadPullRequests()
     void loadAliases()
     api.remotes().then(r => { allRemotes = r }).catch(() => {})
+    checkStaleImmutable()
   }
 
   function handleRunAlias(name: string) {
@@ -2589,10 +2596,13 @@
       if (loading || mutating || anyModalOpen || inlineMode) return
       loadLog()
       // Server-state mirrors that external operations can change. loadLog
-      // covers the graph + (in branches view) the bookmarks panel; these
-      // cover the rest. All fire-and-forget and error-swallowing.
+      // covers the graph + (in branches view) the bookmarks panel.
+      // loadWorkspaces is O(workspaces) — cheap and load-bearing for the
+      // workspace context-menu gating, so it runs every time. The expensive
+      // mirrors (PR badges, aliases/remotes, the stale-immutable revset
+      // scan) live behind refreshSlowMirrors' 60s throttle — see that
+      // function for the cost analysis.
       void loadWorkspaces()
-      checkStaleImmutable()
       refreshSlowMirrors()
     }, 0)
     return () => clearTimeout(t)

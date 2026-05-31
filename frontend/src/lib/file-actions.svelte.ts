@@ -329,6 +329,12 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
         if (outcome.reason === 'error') {
           const e = outcome.error
           editError = `${errorPrefix} failed: ${e instanceof Error ? e.message : String(e)}`
+          // The SSH fallback's `jj edit` may have run BEFORE the failure —
+          // the working copy moved even though the write failed. Append the
+          // fact so the user isn't left with a silently relocated @.
+          if (outcome.movedWorkingCopy) {
+            editError += ` Working copy was moved to ${revId.slice(0, 8)} (remote mode); the file there is still conflicted.`
+          }
         }
         return false
       }

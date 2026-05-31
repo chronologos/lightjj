@@ -68,7 +68,16 @@ export type ResolveOutcome =
        *  (remote mode)"). */
       movedWorkingCopy: boolean
     }
-  | { ok: false; reason: 'stale' | 'error'; error?: unknown }
+  | {
+      ok: false
+      reason: 'stale' | 'error'
+      error?: unknown
+      /** True when the failure happened AFTER the SSH fallback's `jj edit` —
+       *  the working copy has already moved even though the resolution did
+       *  not complete (the worst state: relocated @ AND a still-conflicted
+       *  file). Callers MUST surface this alongside the error. */
+      movedWorkingCopy?: boolean
+    }
 
 /** True for the backend's "requires local mode" 501 rejection (api.ts post()
  *  surfaces the response body's error string as Error.message). */
@@ -108,7 +117,14 @@ export async function resolveConflictFile(
       // copy, and it reports doing so.
       if (deps.isStale?.()) return { ok: false, reason: 'stale' }
       await deps.api.edit(target.revision)
-      await deps.api.fileWrite(path, content)
+      try {
+        await deps.api.fileWrite(path, content)
+      } catch (writeErr) {
+        // @ has already moved. A failed write here is the worst state
+        // (relocated working copy + still-conflicted file) — report BOTH
+        // facts so the caller can tell the user, never silently.
+        return { ok: false, reason: 'error', error: writeErr, movedWorkingCopy: true }
+      }
       return { ok: true, movedWorkingCopy: true }
     }
   } catch (e) {

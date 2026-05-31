@@ -138,12 +138,15 @@ describe('resolveConflictFile — error handling (never throws)', () => {
     expect(fileWrite).not.toHaveBeenCalled()
   })
 
-  it('SSH fallback: fileWrite failure after edit → error outcome (caller surfaces; @ has moved)', async () => {
+  it('SSH fallback: fileWrite failure after edit → error outcome CARRIES movedWorkingCopy (@ has moved)', async () => {
     mergeResolve.mockRejectedValueOnce(localModeError())
     const boom = new Error('write failed')
     fileWrite.mockRejectedValueOnce(boom)
     const r = await resolveConflictFile(deps(), target, 'a.go', 'x')
-    expect(r).toEqual({ ok: false, reason: 'error', error: boom })
+    // The edit already ran, so the failure outcome must report the moved
+    // working copy — callers append it to their error message; without the
+    // flag the user is left with a silently relocated @ + a conflicted file.
+    expect(r).toEqual({ ok: false, reason: 'error', error: boom, movedWorkingCopy: true })
     expect(edit).toHaveBeenCalled()
   })
 })

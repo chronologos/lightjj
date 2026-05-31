@@ -145,7 +145,15 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
         )
         if (g !== gen) return false  // superseded — not an error
         if (!outcome.ok) {
-          if (outcome.reason === 'error') deps.onError(outcome.error)
+          if (outcome.reason === 'error') {
+            deps.onError(outcome.error)
+            // The SSH fallback's `jj edit` may have run BEFORE the failure —
+            // the working copy moved even though the resolution didn't
+            // complete. Never leave a relocated @ unreported.
+            if (outcome.movedWorkingCopy) {
+              deps.onWarning(`Working copy was moved to ${cur.changeId.slice(0, 8)} before the write failed (remote mode); the file there is still conflicted.`)
+            }
+          }
           return false  // 'stale' is silent: gen check above already covers it
         }
         if (outcome.movedWorkingCopy) {

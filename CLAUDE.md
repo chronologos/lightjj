@@ -302,7 +302,7 @@ Performance and async-correctness rules, mostly distilled from profiling j/k key
 - **Debounce expensive work, not selection state** — scheduling lives in `revision-navigator.svelte.ts` (double-rAF on cache hit, 50ms debounce on miss); rapid j/k renders only the destination.
 - **Opportunistic prefetch only when the current revision is already cached.**
 - **Scope expensive `$derived` to minimal dependencies.**
-- **Session-cache stable data** (`api.remotes()`/`api.aliases()` promise-memoized; error path clears the memo).
+- **Session-cache stable data, op-id-bounded** (`api.remotes()`/`api.aliases()` promise-memoized; `notifyOpId` drops both memos on op-id change so external CLI changes propagate; `_info` deliberately exempt — feature gates must not flap; error path clears the memo).
 - **Use `createLoader()`** for per-revision async fetches, not hand-rolled loading/error/generation state. (Not a fit for barrier-gens guarding per-key Map writes.)
 - **Generation counters must cover writes, not just competing loads** — mutators bump gen before await AND check after.
 - **Post-await identity guard is mandatory in inline-editor openers**; it can't catch synchronous staleness — don't trust loader state read in the same tick as `selectRevision`, fetch by commit_id instead.
