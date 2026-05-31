@@ -143,22 +143,21 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
           { changeId: cur.changeId, revision: cur.commitId },
           cur.path, content,
         )
-        if (g !== gen) return false  // superseded — not an error
-        if (!outcome.ok) {
-          if (outcome.reason === 'error') {
-            deps.onError(outcome.error)
-            // The SSH fallback's `jj edit` may have run BEFORE the failure —
-            // the working copy moved even though the resolution didn't
-            // complete. Never leave a relocated @ unreported.
-            if (outcome.movedWorkingCopy) {
-              deps.onWarning(`Working copy was moved to ${cur.changeId.slice(0, 8)} before the write failed (remote mode); the file there is still conflicted.`)
-            }
-          }
-          return false  // 'stale' is silent: gen check above already covers it
-        }
+        // A relocated working copy MUST be reported BEFORE any early return —
+        // including the gen-supersede one below. By the time the SSH
+        // fallback's `jj edit` has run, @ has moved on the remote; navigating
+        // away (gen bump) does not undo that. The MessageBar warning is
+        // app-level, not tied to the (possibly superseded) selection.
+        // conflict-resolve.ts contract: "Callers MUST surface this."
         if (outcome.movedWorkingCopy) {
-          // SSH fallback ran `jj edit` — surface it, never silently move @.
-          deps.onWarning(`Resolved ${cur.path}; working copy moved to ${cur.changeId.slice(0, 8)} (remote mode)`)
+          deps.onWarning(outcome.ok
+            ? `Resolved ${cur.path}; working copy moved to ${cur.changeId.slice(0, 8)} (remote mode)`
+            : `Working copy was moved to ${cur.changeId.slice(0, 8)} before the write failed (remote mode); the file there is still conflicted.`)
+        }
+        if (g !== gen) return false  // superseded — not an error (@ move reported above)
+        if (!outcome.ok) {
+          if (outcome.reason === 'error') deps.onError(outcome.error)
+          return false  // 'stale' is silent: gen check above already covers it
         }
         resolved = new Set([...resolved, `${cur.commitId}:${cur.path}`])
         await deps.reload()

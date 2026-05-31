@@ -219,6 +219,36 @@ describe('save()', () => {
     expect(mc.resolved.has('c_a.go:a.go')).toBe(false)
   })
 
+  it('non-@ SSH 501 + supersede AFTER the fallback edit ran → moved @ is still reported', async () => {
+    // Once the fallback's `jj edit` has run, the working copy HAS moved on
+    // the remote — a gen bump (user navigated to the next conflict) cannot
+    // undo that. The supersede early-return must not swallow the
+    // movedWorkingCopy warning: it goes to App's MessageBar, which is
+    // app-level, not selection-level.
+    mockApi.mergeResolve.mockRejectedValueOnce(
+      new Error('501: merge-resolve requires local mode'),
+    )
+    const dWrite = deferred<{ ok: boolean }>()
+    mockApi.fileWrite.mockImplementationOnce(() => dWrite.p)
+
+    const mc = createMergeController(deps)
+    mc.selectFile(item('a.go', 'aaa'))
+    await flush()
+
+    const savePromise = mc.save('fixed')
+    await flush()  // mergeResolve 501s → isStale passes → edit runs → fileWrite pending
+    expect(mockApi.edit).toHaveBeenCalledWith('c_a.go')  // @ has already moved
+
+    mc.selectFile(item('b.go', 'bbb'))  // supersede AFTER the point of no return
+    await flush()
+
+    dWrite.resolve({ ok: true })
+    expect(await savePromise).toBe(false)  // superseded — no resolved-add, no reload for it
+    // ...but the relocated working copy is reported, never silent:
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('working copy moved'))
+    expect(mc.resolved.has('c_a.go:a.go')).toBe(false)
+  })
+
   it('bug_051: save goes through withMutation', async () => {
     const mc = createMergeController(deps)
     mc.selectFile(item('a.go'))

@@ -214,10 +214,22 @@ endpoint belongs to:
 Don't normalize one style to the other when constructing requests; check the
 per-endpoint examples in this document.
 
-Success responses share one envelope: every mutation POST returns
-`{"output": "...", "warnings": "..."}` — `warnings` only when jj warned,
-`output` empty for non-jj actions (`navigate`, `file-write`, `open-file`,
-`unlock-repo`). Errors are `{"error": "..."}` with a 4xx/5xx status.
+Success-response shapes by endpoint family:
+
+- **jj mutation POSTs** (`new`, `edit`, `abandon`, `describe`, `rebase`,
+  `squash`, `split`, `resolve`, `restore`, `restore-from`, `commit`, `undo`,
+  `snapshot`, `bookmark/*`, `workspace/*`, `op/*`, `git/*`) and the four
+  non-jj actions `navigate`, `file-write`, `open-file`, `unlock-repo` return
+  one envelope: `{"output": "...", "warnings": "..."}` — `warnings` present
+  only when jj warned, `output` empty for the non-jj actions.
+- **Review-store POSTs return the stored record**, not the envelope:
+  `POST /api/annotations` and `POST /api/doc-comments` echo the upserted
+  object (with server-stamped fields like `createdAt`/`id`);
+  `POST /api/doc-comments/batch` returns the stamped array.
+- `POST /api/config` and `POST /api/state/recent-actions` return an empty
+  200 body. `POST /api/focus` echoes the stored focus state.
+
+Errors are `{"error": "..."}` with a 4xx/5xx status everywhere.
 `GET <base>/api/capabilities` reports `api_version`, which bumps when an
 existing shape changes incompatibly.
 

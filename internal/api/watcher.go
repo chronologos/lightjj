@@ -174,9 +174,10 @@ func pauseCounterFor(path string) *atomic.Int32 {
 
 // pauseKey is the canonical path identifying which working copy a server's
 // snapshots act on — the sharing key for pauseCounterFor. RepoDir in local
-// mode, RepoPath over SSH, "" in tests (private counter).
+// mode, RepoPath over SSH, "" in tests (private counter). Mode is checked
+// via the documented accessor, not raw field comparison (CLAUDE.md rule).
 func pauseKey(srv *Server) string {
-	if srv.RepoDir != "" {
+	if srv.hasLocalFS() {
 		return srv.RepoDir
 	}
 	return srv.RepoPath
