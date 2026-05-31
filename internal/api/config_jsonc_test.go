@@ -131,8 +131,9 @@ func TestConfigTemplate_ContainsTeachingComments(t *testing.T) {
 func TestStandardizeJSONC_DoesNotMutateInput(t *testing.T) {
 	// hujson.Standardize aliases the input buffer's Extra slices and writes
 	// spaces over comment bytes in place. standardizeJSONC clones first so
-	// callers can reuse the input — load-bearing for writePersistedTabs which
-	// decodes openTabs from `existing` then re-patches the SAME buffer.
+	// callers can reuse the input — load-bearing for MigrateStateIfNeeded
+	// which decodes config bytes via unmarshalJSONC then re-patches the SAME
+	// buffer with removeConfigKeys.
 	orig := []byte(`{"a":1, // comment
 	"b":2}`)
 	snap := string(orig)

@@ -218,6 +218,11 @@ func (s *Server) routes() {
 	reg("GET /api/config/raw", handleConfigGetRaw)
 	reg("POST /api/config/raw", handleConfigSetRaw)
 
+	// Machine state (state.json — see state.go). Host-scoped like config;
+	// also registered on TabManager.Mux for prefix-less access.
+	reg("GET /api/state/recent-actions", handleStateRecentActionsGet)
+	reg("POST /api/state/recent-actions", handleStateRecentActionsSet)
+
 	reg("GET /api/annotations", s.handleAnnotationsGet)
 	reg("POST /api/annotations", s.handleAnnotationsPost)
 	reg("DELETE /api/annotations", s.handleAnnotationsDelete)

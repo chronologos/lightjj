@@ -299,98 +299,8 @@ func TestIsLocalOrigin(t *testing.T) {
 	assert.False(t, isLocalOrigin("null")) // iframe sandbox, file://
 }
 
-func TestReadPersistedTabs(t *testing.T) {
-	t.Run("missing file → empty", func(t *testing.T) {
-		withConfigDir(t)
-		assert.Empty(t, ReadPersistedTabs())
-	})
-
-	t.Run("field absent → empty", func(t *testing.T) {
-		path := withConfigDir(t)
-		seedConfig(t, path, `{"theme":"dark"}`)
-		assert.Empty(t, ReadPersistedTabs())
-	})
-
-	t.Run("corrupt json → empty", func(t *testing.T) {
-		path := withConfigDir(t)
-		seedConfig(t, path, `{not json`)
-		assert.Empty(t, ReadPersistedTabs())
-	})
-
-	t.Run("wrong type → empty", func(t *testing.T) {
-		path := withConfigDir(t)
-		// openTabs is a string, not an array — Unmarshal fails, return nil
-		seedConfig(t, path, `{"openTabs":"oops"}`)
-		assert.Empty(t, ReadPersistedTabs())
-	})
-
-	t.Run("round trip", func(t *testing.T) {
-		withConfigDir(t)
-		want := []PersistedTab{
-			{Path: "/repo/a", Mode: "local"},
-			{Path: "/repo/b", Mode: "local"},
-		}
-		require.NoError(t, writePersistedTabs("local", "", want))
-		assert.Equal(t, want, ReadPersistedTabs())
-	})
-
-	t.Run("write preserves other keys", func(t *testing.T) {
-		// Persisting tabs must NOT stomp theme/editorArgs/etc — whole-config
-		// RawMessage read → overlay → write.
-		path := withConfigDir(t)
-		seedConfig(t, path, `{"theme":"light","editorArgs":["zed"]}`)
-
-		require.NoError(t, writePersistedTabs("ssh", "u@h", []PersistedTab{{Path: "/x", Mode: "ssh", Host: "u@h"}}))
-
-		data, err := os.ReadFile(path)
-		require.NoError(t, err)
-		var got map[string]any
-		require.NoError(t, json.Unmarshal(data, &got))
-		assert.Equal(t, "light", got["theme"])
-		assert.Equal(t, []any{"zed"}, got["editorArgs"])
-		assert.Len(t, got["openTabs"], 1)
-	})
-
-	t.Run("filter-merge preserves other sessions", func(t *testing.T) {
-		// The multi-host scenario: session A (hostA) has a tab, session B
-		// (hostB) opens/closes a tab. A whole-array overwrite would erase
-		// A's entry. The filter-merge only touches (mode,host)-matching
-		// entries — A's entry must survive B's write.
-		withConfigDir(t)
-
-		// Session A writes.
-		a := []PersistedTab{{Path: "/work", Mode: "ssh", Host: "u@hostA"}}
-		require.NoError(t, writePersistedTabs("ssh", "u@hostA", a))
-
-		// Session B writes (different host).
-		b := []PersistedTab{{Path: "/proj", Mode: "ssh", Host: "u@hostB"}}
-		require.NoError(t, writePersistedTabs("ssh", "u@hostB", b))
-
-		got := ReadPersistedTabs()
-		require.Len(t, got, 2)
-		// Order: A's kept entry first (filter preserves order), B's appended.
-		assert.Equal(t, "u@hostA", got[0].Host)
-		assert.Equal(t, "u@hostB", got[1].Host)
-
-		// Session A closes its last tab → writes empty slice for its session.
-		require.NoError(t, writePersistedTabs("ssh", "u@hostA", nil))
-
-		got = ReadPersistedTabs()
-		require.Len(t, got, 1)
-		assert.Equal(t, "u@hostB", got[0].Host) // B untouched
-	})
-
-	t.Run("accepts JSONC with comments", func(t *testing.T) {
-		path := withConfigDir(t)
-		seedConfig(t, path, `{
-  // user note
-  "openTabs": [{"path":"/x","mode":"local"}]
-}`)
-		got := ReadPersistedTabs()
-		require.Len(t, got, 1)
-		assert.Equal(t, "/x", got[0].Path)
-	})
-}
+// Persisted-tab and recent-action storage tests live in state_test.go —
+// those sections moved from config.json to state.json (see state.go).
 
 func TestHandleConfigGetRaw_ReturnsRawJSONC(t *testing.T) {
 	path := withConfigDir(t)
@@ -465,26 +375,6 @@ func TestHandleConfigSetRaw_RejectsInvalidJSONC(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 		})
 	}
-}
-
-func TestWritePersistedTabs_PreservesComments(t *testing.T) {
-	// Regression: pre-fix, unmarshalJSONC mutated `existing` in place (hujson
-	// aliasing) so the subsequent patchConfigKeys saw a comment-stripped buffer
-	// and every tab open/close erased all comments.
-	path := withConfigDir(t)
-	seedConfig(t, path, `{
-  // user's theme comment
-  "theme": "dark",
-  "openTabs": []
-}`)
-	require.NoError(t, writePersistedTabs("local", "",
-		[]PersistedTab{{Path: "/repo/a", Mode: "local"}}))
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "// user's theme comment",
-		"tab persistence must not strip user comments")
-	assert.Contains(t, string(data), `"/repo/a"`)
 }
 
 func TestReadOrTemplate_ZeroByteFile(t *testing.T) {

@@ -218,12 +218,18 @@ func main() {
 		}
 	}
 
-	// One-shot migration: pre-1.20 plain-JSON configs get reseeded through
-	// the teaching-comment template (values preserved via patchConfigKeys).
-	// Runs before HTTP starts so the first request sees the migrated file;
-	// configMu inside serializes against any concurrent write anyway.
-	// Host-scoped, so called unconditionally in both local and SSH modes.
+	// One-shot migrations, both host-scoped (called unconditionally in local
+	// and SSH modes), both before HTTP starts so the first request sees the
+	// migrated files; the mutexes inside serialize against concurrent writes
+	// anyway.
+	//   1. Pre-1.20 plain-JSON configs get reseeded through the teaching-
+	//      comment template (values preserved via patchConfigKeys).
+	//   2. Legacy machine-state keys (openTabs, recentActions) move out of
+	//      config.json into state.json. Must run BEFORE ReadPersistedTabs
+	//      below or existing users' tabs wouldn't restore on first launch
+	//      after the upgrade.
 	api.MigrateConfigIfNeeded()
+	api.MigrateStateIfNeeded()
 
 	srv := makeServer(cmdRunner, resolvedRepoDir, displayPath, sshRunner != nil)
 	tm := api.NewTabManager(newTab, resolve)

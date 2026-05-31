@@ -50,9 +50,10 @@ func hasJSONCComments(data []byte) bool {
 //
 // hujson.Standardize MUTATES its input (Parse aliases the buffer's Extra
 // slices; Standardize then writes spaces into them). We clone first so callers
-// can safely reuse `data` afterwards — writePersistedTabs decodes openTabs then
-// re-patches the SAME buffer; without the clone every tab open/close would
-// strip every comment from config.json. ~10KB allocation, negligible.
+// can safely reuse `data` afterwards — MigrateStateIfNeeded decodes config
+// bytes via unmarshalJSONC then re-patches the SAME buffer with
+// removeConfigKeys; without the clone the migration would strip every comment
+// from config.json. ~10KB allocation, negligible.
 func standardizeJSONC(data []byte) ([]byte, error) {
 	return hujson.Standardize(bytes.Clone(data))
 }
@@ -83,6 +84,35 @@ func patchConfigKeys(existing []byte, keys map[string][]byte) ([]byte, error) {
 		return nil, fmt.Errorf("parse existing config: %w", err)
 	}
 	patch, err := buildAddPatch(keys)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.Patch(patch); err != nil {
+		return nil, fmt.Errorf("patch config: %w", err)
+	}
+	return v.Pack(), nil
+}
+
+// removeConfigKeys applies an RFC 6902 "remove" patch for each key, returning
+// the Pack()'d bytes. Comments on the REMAINING members survive (same AST
+// preservation as patchConfigKeys). Only pass keys that exist in `existing` —
+// per RFC 6902, removing an absent path is an error, and hujson surfaces it.
+// Used by the one-shot state migration (state.go) to strip legacy
+// openTabs/recentActions keys out of config.json.
+func removeConfigKeys(existing []byte, keys []string) ([]byte, error) {
+	v, err := hujson.Parse(existing)
+	if err != nil {
+		return nil, fmt.Errorf("parse existing config: %w", err)
+	}
+	type op struct {
+		Op   string `json:"op"`
+		Path string `json:"path"`
+	}
+	ops := make([]op, 0, len(keys))
+	for _, k := range keys {
+		ops = append(ops, op{Op: "remove", Path: "/" + escapePointer(k)})
+	}
+	patch, err := json.Marshal(ops)
 	if err != nil {
 		return nil, err
 	}

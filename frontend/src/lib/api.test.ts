@@ -920,3 +920,21 @@ describe('diffRange caching', () => {
     expect(files).toEqual(['b.ts', 'a.ts']) // unsorted
   })
 })
+
+describe('machine-state endpoints (state.json)', () => {
+  it('recentActions GETs the tab-scoped state route', async () => {
+    mockFetch.mockResolvedValue(mockResponse({ 'bookmark-modal': { main: 1 } }))
+    const result = await api.recentActions()
+    expect(mockFetch).toHaveBeenCalledWith('/tab/0/api/state/recent-actions', expect.anything())
+    expect(result).toEqual({ 'bookmark-modal': { main: 1 } })
+  })
+
+  it('saveRecentActions POSTs the full map as JSON', async () => {
+    mockFetch.mockResolvedValue(mockResponse({}))
+    await api.saveRecentActions({ ns: { key: 42 } })
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/tab/0/api/state/recent-actions')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ ns: { key: 42 } })
+  })
+})

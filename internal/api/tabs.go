@@ -58,12 +58,12 @@ type TabManager struct {
 	newTab  TabFactory
 	resolve TabResolve
 
-	// Mode+Host tag tabs persisted to config.json. All tabs in one session
-	// share one mode+host so these live on the manager, not per-Tab. Set by
-	// main.go; Mode="" means tabs won't round-trip (tests, or future modes
-	// that don't want persistence). Host is the full user@host spec for ssh
-	// mode, empty for local — two `lightjj --remote` sessions on different
-	// hosts share one config.json, so the restore loop must filter by host.
+	// Mode+Host tag tabs persisted to state.json (state.go). All tabs in one
+	// session share one mode+host so these live on the manager, not per-Tab.
+	// Set by main.go; Mode="" means tabs won't round-trip (tests, or future
+	// modes that don't want persistence). Host is the full user@host spec for
+	// ssh mode, empty for local — two `lightjj --remote` sessions on different
+	// hosts share one state.json, so the restore loop must filter by host.
 	Mode string
 	Host string
 
@@ -103,6 +103,10 @@ func NewTabManager(newTab TabFactory, resolve TabResolve) *TabManager {
 	m.Mux.HandleFunc("POST /api/config", handleConfigSet)
 	m.Mux.HandleFunc("GET /api/config/raw", handleConfigGetRaw)
 	m.Mux.HandleFunc("POST /api/config/raw", handleConfigSetRaw)
+	// Machine state (state.json) is host-scoped like config. Also registered
+	// on each Server.Mux so the frontend's tab-scoped api client reaches it.
+	m.Mux.HandleFunc("GET /api/state/recent-actions", handleStateRecentActionsGet)
+	m.Mux.HandleFunc("POST /api/state/recent-actions", handleStateRecentActionsSet)
 	return m
 }
 
@@ -298,11 +302,13 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	m.persistTabs()
 }
 
-// persistTabs snapshots the current non-startup tabs to config.json. Tab 0
-// (the -R flag tab) is excluded: it's implicit from CLI flags, persisting it
-// would conflict when the user launches with a different -R path. Best-effort:
-// logs on failure, never blocks the HTTP response (callers invoke this AFTER
-// writing their response). Mode=="" (tests) → skip entirely.
+// persistTabs snapshots the current non-startup tabs to state.json (the
+// machine-state store — see state.go; NOT config.json, so tab churn never
+// touches the user's commented config). Tab 0 (the -R flag tab) is excluded:
+// it's implicit from CLI flags, persisting it would conflict when the user
+// launches with a different -R path. Best-effort: logs on failure, never
+// blocks the HTTP response (callers invoke this AFTER writing their
+// response). Mode=="" (tests) → skip entirely.
 func (m *TabManager) persistTabs() {
 	if m.Mode == "" {
 		return
@@ -319,7 +325,7 @@ func (m *TabManager) persistTabs() {
 	for i, t := range tabs {
 		out[i] = PersistedTab{Path: t.Path, Mode: m.Mode, Host: m.Host}
 	}
-	if err := writePersistedTabs(m.Mode, m.Host, out); err != nil {
+	if err := SetOpenTabs(m.Mode, m.Host, out); err != nil {
 		log.Printf("failed to persist tabs: %v", err)
 	}
 }
@@ -387,8 +393,8 @@ func (m *TabManager) handleClose(w http.ResponseWriter, r *http.Request) {
 	delete(m.tabs, id)
 	m.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
-	// Persist after response written — config I/O shouldn't delay the UI,
-	// and holding m.mu across mergeAndWriteConfig would nest it with configMu
+	// Persist after response written — state I/O shouldn't delay the UI,
+	// and holding m.mu across SetOpenTabs would nest it with stateMu
 	// (harmless today but a lock-ordering smell).
 	m.persistTabs()
 }

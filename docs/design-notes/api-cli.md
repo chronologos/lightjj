@@ -239,7 +239,7 @@ discovery says "no session" even though the running instance has it open at
 `/tab/2/`. The agent can't `GET /tabs` to find the tab number because it
 doesn't have the addr. **Documented v1 gap.** v2 candidate: write a
 `tabs: [{path}]` array to the session file on tab create/close (the data
-already flows through `writePersistedTabs`). Until then: zero-match error
+already flows through `SetOpenTabs` in state.go). Until then: zero-match error
 output lists running sessions' addrs so the user can `--addr` and `GET /tabs`
 manually.
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -407,9 +408,9 @@ func TestTabManager_ConfigAtTopLevel(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/plain")
 }
 
-// TestTabPersistence exercises the create → config.json → close cycle.
+// TestTabPersistence exercises the create → state.json → close cycle.
 // persistTabs() skips tab 0 (it's the CLI -R flag, implicit on every launch)
-// and preserves unrelated config keys via mergeAndWriteConfig.
+// and writes through SetOpenTabs (state.go) — config.json is never touched.
 func TestTabPersistence(t *testing.T) {
 	withConfigDir(t)
 
@@ -456,7 +457,8 @@ func TestTabPersistence(t *testing.T) {
 func TestTabPersistence_ModeEmptySkips(t *testing.T) {
 	// Tests leave Mode="" — persistTabs should no-op. Otherwise every existing
 	// tabs_test.go case would suddenly require a withConfigDir(t) call.
-	path := withConfigDir(t)
+	configFile := withConfigDir(t)
+	stateFile := filepath.Join(filepath.Dir(configFile), "state.json")
 
 	newTab := func(root string) *Server {
 		r := testutil.NewMockRunner(t)
@@ -473,7 +475,44 @@ func TestTabPersistence_ModeEmptySkips(t *testing.T) {
 	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/x"}`)))
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// Config file should not exist — persistTabs() returned early.
-	_, err := os.Stat(path)
-	assert.True(t, os.IsNotExist(err), "Mode=\"\" should skip config write, got file at %s", path)
+	// State file should not exist — persistTabs() returned early.
+	_, err := os.Stat(stateFile)
+	assert.True(t, os.IsNotExist(err), "Mode=\"\" should skip state write, got file at %s", stateFile)
+}
+
+// TestTabPersistence_NeverTouchesConfig is the structural guarantee behind
+// the config/state split: tab churn must not run any config.json write path.
+// A user's commented config must be byte-identical before and after tab
+// open/close.
+func TestTabPersistence_NeverTouchesConfig(t *testing.T) {
+	configFile := withConfigDir(t)
+	original := `{
+  // user's hand-written comment
+  "theme": "dark",
+}`
+	seedConfig(t, configFile, original)
+
+	newTab := func(root string) *Server {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		return NewServer(r, "")
+	}
+	tm := NewTabManager(newTab, func(p string) (string, error) { return p, nil })
+	tm.Mode = "local"
+	r := testutil.NewMockRunner(t)
+	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+	tm.AddTab(NewServer(r, ""), "/startup-repo")
+
+	// Open then close a tab — both persistTabs() call sites fire.
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/repo-a"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+	w = httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/tabs/1", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	data, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(data),
+		"tab persistence must never rewrite config.json")
 }

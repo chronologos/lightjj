@@ -1,5 +1,6 @@
 // Persistent user preferences, reactive via Svelte 5 runes.
-import type { RemoteVisibilityByRepo } from './api'
+import type { RemoteVisibilityByRepo, RecentActionsState } from './api'
+import { recentActionsStore } from './recent-actions.svelte'
 //
 // Primary storage: $XDG_CONFIG_HOME/lightjj/config.json via the backend.
 // Survives port changes — spawned workspace instances on different ports
@@ -9,6 +10,11 @@ import type { RemoteVisibilityByRepo } from './api'
 // localStorage stays as a write-through cache: instant initial paint (no
 // flash of default theme while the GET is in flight) + fallback when the
 // backend is unreachable.
+//
+// Machine-written state is NOT here: recentActions lives in
+// recent-actions.svelte.ts (state.json via /api/state/recent-actions), and
+// openTabs is backend-only. This store covers only the keys a human might
+// also edit by hand in config.json.
 
 const STORAGE_KEY = 'lightjj-config'
 
@@ -57,10 +63,6 @@ interface Config {
   /** Authors whose review comments render as hidden/stub. Cross-repo by
    *  design (hiding a bot in one repo hides it everywhere). */
   hiddenCommentAuthors: string[]
-  /** Last-used timestamps keyed by namespace. Replaces the old localStorage-only
-   *  recent-actions — `localhost:0` randomizes port so localStorage was cold
-   *  every launch. Server-side survives port changes (same config file). */
-  recentActions: Record<string, Record<string, number>>
 }
 
 const defaults: Config = {
@@ -80,12 +82,19 @@ const defaults: Config = {
   editorArgsRemote: [],
   remoteVisibility: {},
   hiddenCommentAuthors: [],
-  recentActions: {},
 }
 
 function loadLocal(): Partial<Config> {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') as Record<string, unknown>
+    // Keep only known keys. Stray keys (e.g. recentActions cached by versions
+    // that stored it in config) would otherwise ride along in every snapshot
+    // and localStorage write forever.
+    const out: Partial<Config> = {}
+    for (const k of Object.keys(defaults) as (keyof Config)[]) {
+      if (k in raw) (out as Record<string, unknown>)[k] = raw[k]
+    }
+    return out
   } catch {
     return {}
   }
@@ -97,9 +106,11 @@ function saveLocal(c: Config) {
   } catch { /* private mode, quota */ }
 }
 
-// Raw fetch (not api.ts) — config.svelte.ts is imported at module load time
-// before api.ts's auto-refresh setup should run, and we don't want op-id
-// tracking on a non-jj endpoint.
+// Raw fetch (not api.ts) for config reads/writes — /api/config is host-scoped
+// (TabManager routes it without a tab prefix) and we don't want op-id
+// tracking on a non-jj endpoint. (recent-actions.svelte.ts, imported above
+// for the recentActions delegation, does use api.ts — its endpoint is
+// registered per-tab too, so the prefix is harmless there.)
 //
 // loadRemote returns { config, error }. 422 = file exists but has a syntax
 // error — config is null (don't clobber in-memory state with defaults), error
@@ -129,8 +140,11 @@ async function loadRemote(): Promise<LoadResult> {
 
 // saveRemote captures 422 → lastError via the closure. Other failures are
 // silent (network blip != syntax error; localStorage is the durable cache).
+// Takes a PARTIAL config — only the keys dirtied locally since the last
+// flush. The backend merges per-key (mergeAndWriteConfig), so a partial POST
+// is safe and is what prevents the cross-instance lost update (see dirtyKeys).
 async function saveRemote(
-  c: Config,
+  c: Partial<Config>,
   onError: (msg: string | null) => void,
 ): Promise<void> {
   try {
@@ -157,8 +171,8 @@ function createConfig() {
   // the effect's initial fire writes localStorage-derived values back to
   // disk before the real disk values arrive — disk config becomes
   // unreachable. Reactive so the effect re-runs when it flips to true,
-  // guaranteeing one post-hydration save even if remote values were
-  // identical to localStorage (no-op on disk, confirms sync).
+  // guaranteeing one post-hydration flush: it refreshes localStorage with the
+  // merged view but POSTs nothing (hydration marks no keys dirty).
   let hydrated = $state(false)
   let resolveReady: () => void
   const ready = new Promise<void>(r => { resolveReady = r })
@@ -174,15 +188,33 @@ function createConfig() {
   // binds the type per key.
   const applyKey = <K extends keyof Config>(k: K, v: Config[K]) => { state[k] = v }
 
+  // Keys changed by LOCAL setters since the last flush. The debounced save
+  // POSTs only these keys (the backend merges per-key), never the full
+  // snapshot. Two lightjj instances (different ports, same config.json) each
+  // hydrate at startup; if instance A then changes fontSize while instance B
+  // changes theme, full-snapshot flushes would have each instance silently
+  // reverting the other's key to its own stale hydrated value (lost update).
+  // Dirty-key flushes make the instances converge instead.
+  //
+  // applyKey (hydration, ConfigModal live-apply, cross-tab storage sync)
+  // deliberately does NOT mark dirty: those values came FROM disk or are
+  // already ON disk — re-posting them is exactly the stale-overwrite this
+  // mechanism exists to prevent.
+  const dirtyKeys = new Set<keyof Config>()
+  const setKey = <K extends keyof Config>(k: K, v: Config[K]) => {
+    state[k] = v
+    dirtyKeys.add(k)
+  }
+
   // Narrow unknown-shape partial to known keys. Backend preserves unknown
   // fields for forward-compat, but we only apply fields we understand.
   // Clears lastError — ConfigModal calls this after a successful raw POST,
   // which means the on-disk file just parsed; the syntax-error warning would
   // otherwise persist until the next debounced typed-endpoint save.
-  // Mutating state here also triggers the debounced save-effect → a redundant
-  // POST /api/config 500ms after the raw POST. Intentional: that flush is
-  // what writes localStorage (cross-tab sync), and the per-key patch is
-  // comment-safe so the disk write is a no-op overlay.
+  // Mutating state here also triggers the debounced save-effect → that flush
+  // writes localStorage (cross-tab sync) but does NOT POST: applyKey doesn't
+  // mark keys dirty, and these values are already on disk (raw POST / remote
+  // load), so re-posting them would be the stale-overwrite dirtyKeys prevents.
   function applyPartial(partial: Partial<Config>) {
     for (const k of Object.keys(defaults) as (keyof Config)[]) {
       if (k in partial && partial[k] !== undefined) {
@@ -208,13 +240,23 @@ function createConfig() {
   let saveGen = 0
   const flush = () => {
     if (!pendingSnap) return
+    // localStorage gets the FULL snapshot (it's this browser's cache of the
+    // whole config); the network write gets only the dirty keys.
     saveLocal(pendingSnap)
+    const partial: Partial<Config> = {}
+    for (const k of dirtyKeys) {
+      (partial as Record<string, unknown>)[k] = pendingSnap[k]
+    }
+    dirtyKeys.clear()
+    pendingSnap = undefined
+    // Nothing locally changed (hydration / applyPartial / storage-sync write)
+    // → no POST. This also kills the old "one post-hydration save" echo.
+    if (Object.keys(partial).length === 0) return
     // Gen-guard: overlapping flushes (panel-drag burst) resolving out-of-order
     // would let a stale 422 stomp a fresh ok's null-clear, leaving the warning
     // up after the user fixed their file.
     const gen = ++saveGen
-    saveRemote(pendingSnap, msg => { if (gen === saveGen) lastError = msg })
-    pendingSnap = undefined
+    saveRemote(partial, msg => { if (gen === saveGen) lastError = msg })
   }
   // Flush on unload so a mid-drag close doesn't lose the last 500ms of writes.
   // saveLocal (sync localStorage) is the one that matters here — saveRemote
@@ -248,9 +290,11 @@ function createConfig() {
         // Drop any pending write too — it holds a PRE-sync snapshot. Letting
         // it flush would regress the other tab's change and trigger the echo
         // we're here to prevent. Easy to hit during panel-resize drags
-        // (60 writes/s into a 500ms window).
+        // (60 writes/s into a 500ms window). Dirty keys go with it: the other
+        // tab's write already persisted the merged view of those keys.
         clearTimeout(saveTimer)
         pendingSnap = undefined
+        dirtyKeys.clear()
         return
       }
       // Debounce BOTH saves. Panel-resize drags set revisionPanelWidth on
@@ -262,12 +306,14 @@ function createConfig() {
     })
   })
 
+  // All public setters go through setKey (state write + dirty mark) so the
+  // debounced flush knows which keys this instance actually changed.
   return {
     get theme() { return state.theme },
-    set theme(v: Config['theme']) { state.theme = v },
+    set theme(v: Config['theme']) { setKey('theme', v) },
 
     get splitView() { return state.splitView },
-    set splitView(v: boolean) { state.splitView = v },
+    set splitView(v: boolean) { setKey('splitView', v) },
 
     // Getter clamps so every read site (CSS var, palette label, ±1 arithmetic)
     // sees a sane value regardless of how it was loaded — applyKey/loadLocal
@@ -279,49 +325,53 @@ function createConfig() {
         ? Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, n))
         : FONT_SIZE_DEFAULT
     },
-    set fontSize(v: number) { state.fontSize = v },
+    set fontSize(v: number) { setKey('fontSize', v) },
 
     get fontUI() { return state.fontUI },
-    set fontUI(v: string) { state.fontUI = v },
+    set fontUI(v: string) { setKey('fontUI', v) },
 
     get fontMono() { return state.fontMono },
-    set fontMono(v: string) { state.fontMono = v },
+    set fontMono(v: string) { setKey('fontMono', v) },
 
     get fontMdBody() { return state.fontMdBody },
-    set fontMdBody(v: string) { state.fontMdBody = v },
+    set fontMdBody(v: string) { setKey('fontMdBody', v) },
 
     get fontMdHeading() { return state.fontMdHeading },
-    set fontMdHeading(v: string) { state.fontMdHeading = v },
+    set fontMdHeading(v: string) { setKey('fontMdHeading', v) },
 
     get fontMdDisplay() { return state.fontMdDisplay },
-    set fontMdDisplay(v: string) { state.fontMdDisplay = v },
+    set fontMdDisplay(v: string) { setKey('fontMdDisplay', v) },
 
     get fontMdCode() { return state.fontMdCode },
-    set fontMdCode(v: string) { state.fontMdCode = v },
+    set fontMdCode(v: string) { setKey('fontMdCode', v) },
 
     get revisionPanelWidth() { return state.revisionPanelWidth },
-    set revisionPanelWidth(v: number) { state.revisionPanelWidth = v },
+    set revisionPanelWidth(v: number) { setKey('revisionPanelWidth', v) },
 
     get evologPanelHeight() { return state.evologPanelHeight },
-    set evologPanelHeight(v: number) { state.evologPanelHeight = v },
+    set evologPanelHeight(v: number) { setKey('evologPanelHeight', v) },
 
     get tutorialVersion() { return state.tutorialVersion },
-    set tutorialVersion(v: string) { state.tutorialVersion = v },
+    set tutorialVersion(v: string) { setKey('tutorialVersion', v) },
 
     get editorArgs() { return state.editorArgs },
-    set editorArgs(v: string[]) { state.editorArgs = v },
+    set editorArgs(v: string[]) { setKey('editorArgs', v) },
 
     get editorArgsRemote() { return state.editorArgsRemote },
-    set editorArgsRemote(v: string[]) { state.editorArgsRemote = v },
+    set editorArgsRemote(v: string[]) { setKey('editorArgsRemote', v) },
 
     get remoteVisibility() { return state.remoteVisibility },
-    set remoteVisibility(v: RemoteVisibilityByRepo) { state.remoteVisibility = v },
+    set remoteVisibility(v: RemoteVisibilityByRepo) { setKey('remoteVisibility', v) },
 
     get hiddenCommentAuthors() { return state.hiddenCommentAuthors },
-    set hiddenCommentAuthors(v: string[]) { state.hiddenCommentAuthors = v },
+    set hiddenCommentAuthors(v: string[]) { setKey('hiddenCommentAuthors', v) },
 
-    get recentActions() { return state.recentActions },
-    set recentActions(v: Record<string, Record<string, number>>) { state.recentActions = v },
+    /** Back-compat surface: recentActions moved to the machine-state store
+     *  (state.json via /api/state/recent-actions; see recent-actions.svelte.ts).
+     *  These delegate so existing readers/writers keep working — the value is
+     *  NOT part of the config save path and never reaches config.json. */
+    get recentActions(): RecentActionsState { return recentActionsStore.all },
+    set recentActions(v: RecentActionsState) { recentActionsStore.all = v },
 
     /** Resolves when the remote config has been loaded and merged. Callers that
      *  need the "real" config (not just localStorage defaults) should await this

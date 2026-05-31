@@ -56,8 +56,10 @@ func configPath() (string, error) {
 // migrated file and subsequent calls no-op.
 //
 // The user's existing values are preserved via patchConfigKeys — template
-// keys get the user's values, extra keys (openTabs, recentActions, etc.)
-// land as compact JSON after the template block.
+// keys get the user's values, extra keys (remoteVisibility, legacy
+// openTabs/recentActions, etc.) land as compact JSON after the template
+// block. Legacy machine-state keys are then moved out to state.json by
+// MigrateStateIfNeeded, which main.go runs right after this.
 //
 // Failure modes are best-effort and logged: missing file is normal (fresh
 // install → template seeds on first write); parse error is left alone (the
@@ -102,7 +104,7 @@ func MigrateConfigIfNeeded() {
 	if err := os.WriteFile(path+".pre-jsonc.bak", data, 0o644); err != nil {
 		log.Printf("warning: failed to write pre-migration backup: %v", err)
 	}
-	if err := writeConfigBytesLocked(path, migrated); err != nil {
+	if err := atomicWriteFile(path, migrated); err != nil {
 		log.Printf("warning: failed to write migrated config: %v", err)
 		return
 	}
@@ -205,7 +207,7 @@ func handleConfigSet(w http.ResponseWriter, r *http.Request) {
 // incoming key as an RFC 6902 `add` patch (replaces if present, inserts if
 // missing), and atomic-writes back. Holds configMu for the whole cycle.
 // Comments attached to EXISTING members survive; added-by-patch members get
-// no comments (acceptable — they're typically openTabs/recentActions).
+// no comments (acceptable — nobody hand-comments programmatic values).
 //
 // If the file doesn't exist, configTemplate seeds it (fresh install gets
 // teaching comments on first save). If it's unparseable, the error propagates
@@ -213,8 +215,10 @@ func handleConfigSet(w http.ResponseWriter, r *http.Request) {
 // bad file. A debounced panel-drag that blew away a carefully commented
 // config on every mousemove would be unrecoverable.
 //
-// Used by handleConfigSet; writePersistedTabs needs filter-merge so it builds
-// its own patch and calls writeConfigBytesLocked directly.
+// This is the single write path for USER config keys (handleConfigSet).
+// Machine-written state (openTabs, recentActions) does NOT go through here —
+// it lives in state.json (state.go), precisely so machine writes never touch
+// the comment-preservation machinery.
 func mergeAndWriteConfig(path string, incoming map[string]json.RawMessage) error {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -231,7 +235,7 @@ func mergeAndWriteConfig(path string, incoming map[string]json.RawMessage) error
 	if err != nil {
 		return err
 	}
-	return writeConfigBytesLocked(path, out)
+	return atomicWriteFile(path, out)
 }
 
 // readOrTemplate returns the on-disk JSONC bytes if the file exists and parses.
@@ -260,125 +264,10 @@ func readOrTemplate(path string) ([]byte, error) {
 	return data, nil
 }
 
-// writeConfigBytesLocked atomic-writes raw bytes. Caller must hold configMu.
-// The bytes are written verbatim (no re-Marshal) — callers compose them
-// through patchConfigKeys, which preserves comments.
-func writeConfigBytesLocked(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
-}
-
-// PersistedTab is an openTabs entry. Mode + Host together tag the session
-// that created it. Two concurrent `lightjj --remote` sessions on different
-// hosts share one config.json — without Host, session B's write stomps A's
-// persisted tabs, and A's next restart would try to open B's path on A's
-// host (path-collision possible; silent wrong-repo).
-type PersistedTab struct {
-	Path string `json:"path"`
-	Mode string `json:"mode"`           // "local" | "ssh"
-	Host string `json:"host,omitempty"` // full user@host for ssh; empty for local
-}
-
-// ReadPersistedTabs returns the openTabs array from config.json, or an empty
-// slice on any error (missing file, corrupt JSON, field absent). Startup
-// restoration is best-effort — a bad tab shouldn't block launch.
-func ReadPersistedTabs() []PersistedTab {
-	path, err := configPath()
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		// ErrNotExist is the normal first-run state; anything else (EACCES,
-		// EIO) means the user won't know why tabs never persist — log it.
-		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("warning: cannot read persisted tabs: %v", err)
-		}
-		return nil
-	}
-	var cfg struct {
-		OpenTabs []PersistedTab `json:"openTabs"`
-	}
-	if err := unmarshalJSONC(data, &cfg); err != nil {
-		log.Printf("warning: corrupt config, skipping tab restore: %v", err)
-		return nil
-	}
-	return cfg.OpenTabs
-}
-
-// writePersistedTabs updates config.json with this session's current tab list
-// WITHOUT stomping other sessions' entries. A filter-merge: entries matching
-// (mode, host) are replaced with `tabs`; entries for other sessions pass
-// through untouched. Two `lightjj --remote` processes on hostA/hostB share
-// one config — a whole-array overwrite would lose the other's state on every
-// tab open.
-//
-// Cross-process races (two lightjj instances writing simultaneously) are NOT
-// fully serialized — configMu is per-process. The filter-merge at least
-// confines lost-write damage: each process only rewrites its own (mode,host)
-// entries, so a collision loses at most one process's DELTA since its last
-// write, not the other process's entire state. Acceptable for user prefs.
-func writePersistedTabs(mode, host string, tabs []PersistedTab) error {
-	path, err := configPath()
-	if err != nil {
-		return err
-	}
-	configMu.Lock()
-	defer configMu.Unlock()
-
-	existing, err := readOrTemplate(path)
-	if err != nil {
-		// Unparseable config shouldn't eat this session's tab persistence —
-		// but reseeding would stomp user edits. Log and bail; next launch
-		// re-runs ReadPersistedTabs which is also lenient, so the net effect
-		// is "tabs don't persist until the user fixes their syntax error".
-		// tabs.go:persistTabs already log.Printf's the return error.
-		return err
-	}
-
-	// Decode existing openTabs into typed form, filter out this session's
-	// entries, append fresh. Same filter-merge as before; see docstring.
-	var currentOpenTabs []PersistedTab
-	if err := unmarshalJSONC(existing, &struct {
-		OpenTabs *[]PersistedTab `json:"openTabs"`
-	}{OpenTabs: &currentOpenTabs}); err != nil {
-		// Config exists but openTabs field absent or wrong-typed — treat as empty.
-		currentOpenTabs = nil
-	}
-	kept := currentOpenTabs[:0]
-	for _, pt := range currentOpenTabs {
-		if pt.Mode == mode && pt.Host == host {
-			continue
-		}
-		kept = append(kept, pt)
-	}
-	kept = append(kept, tabs...)
-
-	raw, err := json.Marshal(kept)
-	if err != nil {
-		return err
-	}
-	out, err := patchConfigKeys(existing, map[string][]byte{"openTabs": raw})
-	if err != nil {
-		return err
-	}
-	return writeConfigBytesLocked(path, out)
-}
+// Tab persistence (openTabs) and recency timestamps (recentActions) used to
+// live in config.json; they are machine-written state and now live in
+// state.json — see state.go (PersistedTab, SetOpenTabs, ReadPersistedTabs,
+// SetRecentActions). MigrateStateIfNeeded moves legacy keys over on startup.
 
 // handleConfigGetRaw returns the config file bytes verbatim as text/plain.
 // Used by ConfigModal so the user sees (and can edit) their actual JSONC
@@ -456,7 +345,7 @@ func handleConfigSetRaw(w http.ResponseWriter, r *http.Request) {
 	}
 	configMu.Lock()
 	defer configMu.Unlock()
-	if err := writeConfigBytesLocked(path, body); err != nil {
+	if err := atomicWriteFile(path, body); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -218,16 +218,27 @@ func atomicWriteJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return atomicWriteFile(path, out)
+}
+
+// atomicWriteFile writes data to path via temp-file + rename so a crash
+// mid-write can't leave a torn file. The parent directory is created if
+// missing. This is the single atomic-write primitive shared by the JSON
+// stores (this file), config.go, and state.go — note that it prevents torn
+// writes only; preventing LOST updates (concurrent read-modify-write) is the
+// caller's job via a mutex held across the whole cycle.
+func atomicWriteFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".jsonstore-*.json")
+	tmp, err := os.CreateTemp(dir, ".lightjj-*.tmp")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(out); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
 	}

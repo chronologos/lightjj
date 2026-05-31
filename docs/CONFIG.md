@@ -1,6 +1,6 @@
 # Configuration
 
-lightjj stores user config at `$XDG_CONFIG_HOME/lightjj/config.json` (or the platform equivalent via Go's `os.UserConfigDir`). The file is **JSONC** — JSON with `// line comments`, `/* block comments */`, and trailing commas. Fresh installs receive a commented template on first save; any comments you add survive future programmatic writes (theme toggle, panel resize, tab persistence) because the backend uses an AST-preserving patch instead of re-serialising.
+lightjj stores user config at `$XDG_CONFIG_HOME/lightjj/config.json` (or the platform equivalent via Go's `os.UserConfigDir`). The file is **JSONC** — JSON with `// line comments`, `/* block comments */`, and trailing commas. Fresh installs receive a commented template on first save; any comments you add survive future programmatic writes (theme toggle, panel resize) because the backend uses an AST-preserving patch instead of re-serialising. State that lightjj manages on its own (open tabs, recency timestamps) lives in a separate `state.json` — see [Machine state](#machine-state-statejson).
 
 Edit it via **Cmd+K → "Edit config (JSON)"** for an in-app CodeMirror editor with live-apply on save, or edit the file directly. If the file has a syntax error, a warning appears in the message bar and your in-memory settings stay as they are — the file is not silently overwritten.
 
@@ -26,8 +26,17 @@ The config file lives in your local config directory regardless of mode — only
 | `editorArgsRemote` | `string[]` | `[]` | Open-in-editor command for `--remote` mode — see below |
 | `remoteVisibility` | `{[repoPath]: {[remote]: {visible, hidden?}}}` | `{}` | Per-remote bookmark visibility in the revision graph, keyed by repo path so multi-repo tabs stay independent. `visible: true` adds that remote's bookmarks to the revset; `hidden: string[]` excludes specific bookmark names. |
 | `hiddenCommentAuthors` | `string[]` | `[]` | Authors whose review comments render as collapsed stubs — cross-repo by design, so hiding a bot in one repo hides it everywhere. |
-| `recentActions` | `{[namespace]: {[key]: lastUsedMs}}` | `{}` | Last-used timestamps for recency-sorting (e.g. bookmark modal). Namespaced per feature. Server-side so port changes and browser switches don't lose history. |
-| `openTabs` | `[{path, mode}]` | `[]` | Open tabs to restore on launch. Managed by the UI (written on tab create/close). Tab 0 (the `-R` flag) is excluded — persisting it would fight a different `-R` on next launch. |
+
+### Machine state (state.json)
+
+Values lightjj writes on its own — open tabs and recency timestamps — live in a **separate file**, `state.json`, next to config.json. It is plain JSON (no comments) and is entirely managed by lightjj; you should never need to edit it.
+
+| Field | Type | |
+|---|---|---|
+| `openTabs` | `[{path, mode, host?}]` | Open tabs to restore on launch. Written on tab create/close. Tab 0 (the `-R` flag) is excluded — persisting it would fight a different `-R` on next launch. |
+| `recentActions` | `{[namespace]: {[key]: lastUsedMs}}` | Last-used timestamps for recency-sorting (e.g. bookmark modal). Namespaced per feature. Server-side so port changes and browser switches don't lose history. |
+
+The split exists so that frequent machine writes (every tab open, every bookmark action) never run through the comment-preserving JSONC machinery that guards config.json — your comments cannot be collateral damage of a tab close. Older versions stored these two keys inside config.json; on first launch a one-time migration moves them to state.json and removes them from config.json (your comments and other keys are untouched).
 
 ## Typography
 
@@ -85,7 +94,7 @@ For larger text than 16px, use browser zoom (⌘/Ctrl +) — it scales the fixed
 
 Fresh installs receive a commented starter template on their first save — panel drag, theme toggle, or any programmatic write triggers the seed. If you hand-authored a plain-JSON config before upgrading, lightjj auto-migrates it to the commented template on the first 1.20 startup: your values are preserved; the template's teaching comments are added.
 
-Comments attached to **existing** keys are preserved across writes. The backend cannot attach comments to keys it adds for the first time (e.g. `openTabs` written on first tab-open) — add them yourself if you want them.
+Comments attached to **existing** keys are preserved across writes. The backend cannot attach comments to keys it adds for the first time (e.g. `remoteVisibility` written on the first eye-toggle) — add them yourself if you want them.
 
 **This document is the canonical field reference.** The template itself only carries short hints to get new users started; newer lightjj versions may introduce fields that aren't in the template — look them up in the table above.
 

@@ -6,9 +6,11 @@ package api
 // frontend/src/lib/config.svelte.ts expects. Comments are the point — they
 // teach new users how to fill in editorArgs, pick a theme, customise fonts.
 //
-// Keys the user rarely edits (openTabs, recentActions, remoteVisibility) stay
-// out. They're added later via Patch (without comments) — acceptable, since
-// nobody hand-edits those anyway.
+// Keys the user rarely edits (remoteVisibility, hiddenCommentAuthors,
+// tutorialVersion) stay out. They're added later via Patch (without comments)
+// — acceptable, since nobody hand-edits those anyway. Machine-written state
+// (openTabs, recentActions) never appears in config.json at all — it lives in
+// state.json (state.go).
 //
 // Keep in sync with:
 //   - frontend/src/lib/config.svelte.ts `defaults`

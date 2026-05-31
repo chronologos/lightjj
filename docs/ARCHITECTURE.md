@@ -182,6 +182,15 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 | GET | `/api/config/raw` | Raw JSONC config text (ConfigModal) |
 | POST | `/api/config/raw` | Save raw JSONC config text |
 
+**Machine state** (state.json — values lightjj writes itself; never mixed into the human-edited config.json)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/state/recent-actions` | Recency timestamps (namespace → key → ms) for recency-sorted UI |
+| POST | `/api/state/recent-actions` | Replace the recency-timestamp map |
+
+`openTabs` also lives in state.json but has no HTTP surface — it is written by the tab manager (`SetOpenTabs`) and read at startup (`ReadPersistedTabs`).
+
 **Metadata & integrations**
 
 | Method | Path | Purpose |
@@ -257,7 +266,7 @@ Thin HTTP handlers. Each handler: parses request → calls command builder → e
 
 **One success envelope.** Every mutation POST returns the `MutationResult` shape `{output, warnings?}`; non-jj actions (navigate, file-write, open-file, unlock-repo) return it with an empty `output`. Errors are `{error}` with a 4xx/5xx status. `/api/capabilities`'s `api_version` bumps when an existing shape changes incompatibly.
 
-**Multi-tab routing.** `TabManager` (`tabs.go`) owns the top-level mux; each tab is a complete `Server` mounted at `/tab/{id}/` via a pre-built `http.StripPrefix` handler. `Server` stays tab-agnostic except for one injected closure: `Server.OpenTabRoots` (set by `addLocked` on every mounted Server, startup tab included) reports all open tab roots so the workspace-forget handler can return 409 instead of orphaning a tab that's viewing the workspace being forgotten. Tab construction is mode-agnostic via two injected closures: `TabResolve` (user path → canonical workspace root; `jj workspace root` locally or over SSH — the local resolver also probes that `@` resolves, rejecting forgotten-workspace dirs that would otherwise mount as permanently broken tabs and be re-restored broken on every launch) and `TabFactory` (canonical root → `Server`; `LocalRunner`+fsnotify or `SSHRunner`+op-id polling). The factory runs **outside** the write lock; double-check dedup under lock, shut down the orphan if a concurrent create won. Workspaces are just repo paths — the workspace dropdown opens a tab via `POST /tabs` with `ws.path`. Host-scoped routes — `/tabs`, `/api/config`, static files — live on `TabManager.Mux` directly. The `/api/` URL prefix is the frontend's per-tab discriminant: `tabScoped()` in `api.ts` prefixes `/api/*` with `/tab/{id}` and leaves `/tabs` unchanged. One constraint this imposes: **all `Server.routes()` paths must start with `/api/`** — anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
+**Multi-tab routing.** `TabManager` (`tabs.go`) owns the top-level mux; each tab is a complete `Server` mounted at `/tab/{id}/` via a pre-built `http.StripPrefix` handler. `Server` stays tab-agnostic except for one injected closure: `Server.OpenTabRoots` (set by `addLocked` on every mounted Server, startup tab included) reports all open tab roots so the workspace-forget handler can return 409 instead of orphaning a tab that's viewing the workspace being forgotten. Tab construction is mode-agnostic via two injected closures: `TabResolve` (user path → canonical workspace root; `jj workspace root` locally or over SSH — the local resolver also probes that `@` resolves, rejecting forgotten-workspace dirs that would otherwise mount as permanently broken tabs and be re-restored broken on every launch) and `TabFactory` (canonical root → `Server`; `LocalRunner`+fsnotify or `SSHRunner`+op-id polling). The factory runs **outside** the write lock; double-check dedup under lock, shut down the orphan if a concurrent create won. Workspaces are just repo paths — the workspace dropdown opens a tab via `POST /tabs` with `ws.path`. Host-scoped routes — `/tabs`, `/api/config`, `/api/state/*`, static files — live on `TabManager.Mux` directly. The `/api/` URL prefix is the frontend's per-tab discriminant: `tabScoped()` in `api.ts` prefixes `/api/*` with `/tab/{id}` and leaves `/tabs` unchanged. One constraint this imposes: **all `Server.routes()` paths must start with `/api/`** — anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
 
 The server includes an operation ID cache (`cachedOp`) that tracks jj's current operation. Every JSON response includes an `X-JJ-Op-Id` header. Mutation endpoints refresh the cache asynchronously via `runMutation()`, which centralizes the post-mutation pattern (run command → refresh op ID → return output).
 

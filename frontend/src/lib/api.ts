@@ -193,6 +193,11 @@ export interface FocusState {
   updated_at?: number
 }
 
+/** Recency timestamps from the machine-state store (state.json):
+ *  namespace → key → last-used ms epoch. See api.recentActions /
+ *  api.saveRecentActions and recent-actions.svelte.ts. */
+export type RecentActionsState = Record<string, Record<string, number>>
+
 // Poll-failure subscribers. Server's watcher broadcasts `pollfail` with an
 // error payload after ≥ pollFailThreshold consecutive poll/snapshot errors
 // that aren't stale-WC, and `pollok` when polling recovers. Works in both
@@ -1260,6 +1265,19 @@ export const api = {
 
   getFocus: () =>
     request<FocusState>('/api/focus'),
+
+  // Machine state (state.json, next to config.json on the backend host).
+  // openTabs/recentActions live there, NOT in config.json — machine-written
+  // values must never run through the JSONC comment-preservation write path.
+  // Host-scoped like /api/config, but every per-tab Server registers the
+  // routes too, so the tab-scoped prefix from request() resolves to the same
+  // backing file. recent-actions.svelte.ts is the consumer; persistence is
+  // best-effort (callers catch).
+  recentActions: () =>
+    request<RecentActionsState>('/api/state/recent-actions'),
+
+  saveRecentActions: (data: RecentActionsState) =>
+    post<void>('/api/state/recent-actions', data),
 }
 
 // Test-only exports for cache inspection/reset
