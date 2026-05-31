@@ -277,6 +277,7 @@ function clearSessionMemos(): void {
   _remotes = undefined
   _aliases = undefined
   _info = undefined
+  _infoValue = undefined
 }
 
 /** Hard refresh: clear the cache. Use for explicit user-triggered refresh. */
@@ -749,6 +750,9 @@ export async function prefetchFilesBatch(commitIds: string[]): Promise<void> {
 let _remotes: Promise<string[]> | undefined
 let _aliases: Promise<Alias[]> | undefined
 let _info: Promise<InfoResponse> | undefined
+// Resolved value of _info for synchronous reads (jj-features reads the backend
+// feature map in the same tick App calls setDetectedJJVersion).
+let _infoValue: InfoResponse | undefined
 
 export interface InfoResponse {
   hostname: string
@@ -757,7 +761,20 @@ export interface InfoResponse {
   default_remote: string
   log_revset: string  // user's revsets.log config; empty = jj's built-in default
   jj_version: string  // `jj --version` output, e.g. "jj 0.39.0"; empty on failure
+  /** Backend-resolved jj feature gates (jj.FeatureGates → jjSupports booleans).
+   *  Pessimistic: unknown jj version reports false for every gate. Optional so
+   *  mocks/older backends without the field stay type-compatible — consumers
+   *  treat absence as "unknown" (optimistic, see jj-features.svelte.ts). */
+  features?: Record<string, boolean>
   watchman_snapshot_trigger: boolean  // jj config fsmonitor.watchman.register-snapshot-trigger
+}
+
+/** Synchronously read the already-resolved /api/info response. Undefined until
+ *  the first api.info() resolves (and after tab switch / hard refresh clears
+ *  the memo). Lets jj-features.svelte.ts pull the backend feature map without
+ *  an await — App calls setDetectedJJVersion right after awaiting api.info(). */
+export function resolvedInfo(): InfoResponse | undefined {
+  return _infoValue
 }
 
 /** Parse `jj 0.39.0` → [0, 39, 0]. Returns null on unparseable.
@@ -1000,7 +1017,7 @@ export const api = {
     tabScoped(`/api/file-raw?${new URLSearchParams({ revision, path })}`),
 
   fileWrite: (path: string, content: string) =>
-    post<{ ok: boolean }>('/api/file-write', { path, content }),
+    post<MutationResult>('/api/file-write', { path, content }),
 
   /** Commit MergePanel's resolved content at any mutable revision via
    *  `jj resolve --tool` (cp). Local-only — 501 in SSH; caller should fall
@@ -1010,7 +1027,9 @@ export const api = {
 
   remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
 
-  info: () => _info ??= request<InfoResponse>('/api/info').catch(e => { _info = undefined; throw e }),
+  info: () => _info ??= request<InfoResponse>('/api/info')
+    .then(i => { _infoValue = i; return i })
+    .catch(e => { _info = undefined; throw e }),
 
   // Workspaces is session-stable (changes only if user adds a workspace).
   // Plain request for now — promise-memoize later if load frequency warrants.
@@ -1139,7 +1158,7 @@ export const api = {
     post<MutationResult>('/api/restore-from', { from, to }),
 
   openFile: (path: string, line?: number) =>
-    post<{ ok: boolean }>('/api/open-file', { path, line }),
+    post<MutationResult>('/api/open-file', { path, line }),
 
   symbol: (name: string, lang: string) =>
     request<{ hits: SymbolHit[] }>(`/api/symbol?name=${encodeURIComponent(name)}&lang=${lang}`).then(r => r.hits),
@@ -1159,7 +1178,7 @@ export const api = {
 
   workspaceUpdateStale: () => post<MutationResult>('/api/workspace/update-stale', {}),
 
-  unlockRepo: () => post<{ status: string }>('/api/unlock-repo', {}),
+  unlockRepo: () => post<MutationResult>('/api/unlock-repo', {}),
 
   commit: (message: string = '') => post<MutationResult>('/api/commit', { message }),
 

@@ -192,5 +192,7 @@ func (s *Server) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 	// un-Waited child leaks a zombie until lightjj exits.
 	go func() { _ = cmd.Wait() }()
 
-	s.writeJSON(w, r, http.StatusOK, map[string]bool{"ok": true})
+	// Standard MutationResult envelope (empty output) — same success shape as
+	// every other POST (see handleNavigate in handlers.go).
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }

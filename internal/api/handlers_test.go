@@ -1332,6 +1332,62 @@ func TestHandleInfo(t *testing.T) {
 	assert.Equal(t, "", got["log_revset"])           // unset by newTestServer
 	assert.Equal(t, "jj 0.39.0", got["jj_version"])
 	assert.Equal(t, true, got["watchman_snapshot_trigger"])
+
+	// features: backend-resolved gate booleans. jj 0.39 → indexChangedPaths
+	// (≥0.30) true, workspaceRootTmpl (≥0.40) false. The frontend reads these
+	// instead of keeping its own version table.
+	features, ok := got["features"].(map[string]any)
+	require.True(t, ok, "features map missing from /api/info response")
+	assert.Equal(t, true, features["indexChangedPaths"])
+	assert.Equal(t, false, features["workspaceRootTmpl"])
+}
+
+// TestHandleInfo_Features verifies every named gate in jj.FeatureGates is
+// resolved into the /api/info features map, and that gates flip to true when
+// the detected jj version crosses their minimum.
+func TestHandleInfo_Features(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Allow(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte("false\n"))
+	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/info", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got struct {
+		Features map[string]bool `json:"features"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	for name := range jj.FeatureGates {
+		supported, present := got.Features[name]
+		assert.True(t, present, "gate %q missing from features map", name)
+		assert.True(t, supported, "jj 0.40 should support gate %q", name)
+	}
+}
+
+// TestHandleInfo_FeaturesUnknownVersionPessimistic locks the polarity contract:
+// an unparseable jj version reports FALSE for every gate (the backend's
+// pessimistic stance). The frontend's optimistic window only applies before
+// the info response arrives — once it has, these booleans are authoritative.
+func TestHandleInfo_FeaturesUnknownVersionPessimistic(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Allow(jj.Version()).SetOutput([]byte("not-a-version"))
+	runner.Allow(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte("false\n"))
+	srv := NewServer(runner, "")
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/info", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got struct {
+		Features map[string]bool `json:"features"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	for name := range jj.FeatureGates {
+		supported, present := got.Features[name]
+		assert.True(t, present, "gate %q missing from features map", name)
+		assert.False(t, supported, "unknown jj version must report gate %q as unsupported", name)
+	}
 }
 
 func TestHandleRemotes(t *testing.T) {
@@ -3478,6 +3534,63 @@ func TestHandleFileWrite(t *testing.T) {
 	// Symlink-escape tests moved to internal/runner/local_test.go
 	// (TestLocalRunner_WriteFile_*) — the check is now a LocalRunner
 	// concern, not a handler concern.
+}
+
+// assertOutputEnvelope asserts a success body is the standard MutationResult
+// shape: an "output" field present, and neither of the legacy {ok:true} /
+// {status:"ok"} keys. Locks the apiVersion-2 envelope unification.
+func assertOutputEnvelope(t *testing.T, body []byte) {
+	t.Helper()
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(body, &resp))
+	_, hasOutput := resp["output"]
+	assert.True(t, hasOutput, "response must carry MutationResult's output field, got: %s", body)
+	assert.NotContains(t, resp, "ok", "legacy ok field must not be present")
+	assert.NotContains(t, resp, "status", "legacy status field must not be present")
+}
+
+// TestUnifiedSuccessEnvelope — the endpoints that historically used ad-hoc
+// success shapes ({ok:true} for file-write/navigate, {status:"ok"} for
+// unlock-repo) now return the standard MutationResult envelope.
+func TestUnifiedSuccessEnvelope(t *testing.T) {
+	t.Run("file-write", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := testutil.NewMockRunner(t)
+		runner.WriteDir = dir
+		runner.Allow(jj.DebugSnapshot()).SetOutput([]byte(""))
+		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+		srv := NewServer(runner, dir)
+
+		body, _ := json.Marshal(fileWriteRequest{Path: "a.txt", Content: "x"})
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/file-write", body))
+		require.Equal(t, http.StatusOK, w.Code)
+		assertOutputEnvelope(t, w.Body.Bytes())
+	})
+
+	t.Run("unlock-repo", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect([]string{"rm", "-f", ".git/index.lock"}).SetOutput([]byte(""))
+		defer runner.Verify()
+		srv := newTestServer(runner)
+
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/unlock-repo", []byte("{}")))
+		require.Equal(t, http.StatusOK, w.Code)
+		assertOutputEnvelope(t, w.Body.Bytes())
+	})
+
+	t.Run("navigate", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		defer runner.Verify()
+		srv := newTestServer(runner)
+		srv.Watcher = &Watcher{subs: make(map[chan string]struct{}), srv: srv}
+
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"change_id":"abc"}`)))
+		require.Equal(t, http.StatusOK, w.Code)
+		assertOutputEnvelope(t, w.Body.Bytes())
+	})
 }
 
 func TestHandleOpUndo(t *testing.T) {

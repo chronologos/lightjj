@@ -518,6 +518,15 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	// features resolves every named gate (jj.FeatureGates) to a boolean via
+	// jjSupports — pessimistic, so an unknown jj version reports false for
+	// everything. The frontend reads these booleans instead of keeping its own
+	// version table (jj-features.svelte.ts); the backend is the single
+	// authority on minimum versions.
+	features := make(map[string]bool, len(jj.FeatureGates))
+	for name, min := range jj.FeatureGates {
+		features[name] = s.jjSupports(r.Context(), min)
+	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"hostname":                  s.Hostname,
 		"repo_path":                 s.RepoPath,
@@ -525,13 +534,18 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"default_remote":            s.DefaultRemote,
 		"log_revset":                s.ConfiguredLogRevset,
 		"jj_version":                s.resolveJJVersion(r.Context()),
+		"features":                  features,
 		"watchman_snapshot_trigger": s.jjConfigBool(r.Context(), "fsmonitor.watchman.register-snapshot-trigger"),
 	})
 }
 
 // apiVersion bumps when an existing route's request/response shape changes
 // incompatibly. Adding routes does NOT bump it — agents probe `actions`.
-const apiVersion = 1
+//
+// History: v2 unified the success envelopes — file-write/open-file/navigate
+// ({ok:true}) and unlock-repo ({status:"ok"}) now return the standard
+// MutationResult shape ({output:"", warnings?}).
+const apiVersion = 2
 
 type capabilitiesResponse struct {
 	APIVersion int      `json:"api_version"`
@@ -599,7 +613,9 @@ func (s *Server) handleNavigate(w http.ResponseWriter, r *http.Request) {
 	}
 	js, _ := json.Marshal(req)
 	s.Watcher.Navigate(js)
-	s.writeJSON(w, r, http.StatusOK, map[string]bool{"ok": true})
+	// Standard MutationResult envelope (empty output) — same success shape as
+	// every other POST so clients need exactly one response type.
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }
 
 // jjConfigBool reads a boolean jj config key. Returns false on any error
@@ -753,23 +769,23 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Write handlers ---
+//
+// Pure decode→validate→build mutations are (validate, build) method pairs on
+// their request structs, registered via mutation() in server.go routes().
 
 type newRequest struct {
 	Revisions []string `json:"revisions"`
 }
 
-func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
-	var req newRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q newRequest) validate() error {
+	if len(q.Revisions) == 0 {
+		return fmt.Errorf("revisions is required")
 	}
-	if len(req.Revisions) == 0 {
-		s.writeError(w, http.StatusBadRequest, "revisions is required")
-		return
-	}
-	revs := jj.FromIDs(req.Revisions)
-	s.runMutation(w, r, jj.New(revs))
+	return nil
+}
+
+func (q newRequest) build() (jj.CommandArgs, error) {
+	return jj.New(jj.FromIDs(q.Revisions)), nil
 }
 
 type editRequest struct {
@@ -777,17 +793,15 @@ type editRequest struct {
 	IgnoreImmutable bool   `json:"ignore_immutable"`
 }
 
-func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
-	var req editRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q editRequest) validate() error {
+	if q.Revision == "" {
+		return fmt.Errorf("revision is required")
 	}
-	if req.Revision == "" {
-		s.writeError(w, http.StatusBadRequest, "revision is required")
-		return
-	}
-	s.runMutation(w, r, jj.Edit(req.Revision, req.IgnoreImmutable))
+	return nil
+}
+
+func (q editRequest) build() (jj.CommandArgs, error) {
+	return jj.Edit(q.Revision, q.IgnoreImmutable), nil
 }
 
 type abandonRequest struct {
@@ -795,38 +809,33 @@ type abandonRequest struct {
 	IgnoreImmutable bool     `json:"ignore_immutable"`
 }
 
-func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
-	var req abandonRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q abandonRequest) validate() error {
+	if len(q.Revisions) == 0 {
+		return fmt.Errorf("revisions is required")
 	}
-	if len(req.Revisions) == 0 {
-		s.writeError(w, http.StatusBadRequest, "revisions is required")
-		return
-	}
-	revs := jj.FromIDs(req.Revisions)
-	s.runMutation(w, r, jj.Abandon(revs, req.IgnoreImmutable))
+	return nil
 }
 
+func (q abandonRequest) build() (jj.CommandArgs, error) {
+	return jj.Abandon(jj.FromIDs(q.Revisions), q.IgnoreImmutable), nil
+}
+
+// metaeditChangeIdRequest wraps `jj metaedit --update-change-id` — the "split
+// identity" divergence resolution. See docs/jj-divergence.md and the jj guide
+// (docs.jj-vcs.dev/latest/guides/divergence/ §Strategy 2).
 type metaeditChangeIdRequest struct {
 	Revision string `json:"revision"`
 }
 
-// handleMetaeditChangeId wraps `jj metaedit --update-change-id` — the "split
-// identity" divergence resolution. See docs/jj-divergence.md and the jj guide
-// (docs.jj-vcs.dev/latest/guides/divergence/ §Strategy 2).
-func (s *Server) handleMetaeditChangeId(w http.ResponseWriter, r *http.Request) {
-	var req metaeditChangeIdRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q metaeditChangeIdRequest) validate() error {
+	if q.Revision == "" {
+		return fmt.Errorf("revision is required")
 	}
-	if req.Revision == "" {
-		s.writeError(w, http.StatusBadRequest, "revision is required")
-		return
-	}
-	s.runMutation(w, r, jj.MetaeditUpdateChangeId(req.Revision))
+	return nil
+}
+
+func (q metaeditChangeIdRequest) build() (jj.CommandArgs, error) {
+	return jj.MetaeditUpdateChangeId(q.Revision), nil
 }
 
 type restoreRequest struct {
@@ -834,25 +843,22 @@ type restoreRequest struct {
 	Files    []string `json:"files"`
 }
 
-func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
-	var req restoreRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Revision == "" {
-		s.writeError(w, http.StatusBadRequest, "revision is required")
-		return
+func (q restoreRequest) validate() error {
+	if q.Revision == "" {
+		return fmt.Errorf("revision is required")
 	}
 	// `jj restore -c X` with no files empties the whole revision. That's
 	// abandon's job — enforce at least one non-empty file so a frontend bug
 	// can't silently nuke a commit's content. [""] is rejected too:
 	// `root-file:""` is a fileset expression, not "no file".
-	if len(req.Files) == 0 || slices.Contains(req.Files, "") {
-		s.writeError(w, http.StatusBadRequest, "files is required")
-		return
+	if len(q.Files) == 0 || slices.Contains(q.Files, "") {
+		return fmt.Errorf("files is required")
 	}
-	s.runMutation(w, r, jj.Restore(req.Revision, req.Files))
+	return nil
+}
+
+func (q restoreRequest) build() (jj.CommandArgs, error) {
+	return jj.Restore(q.Revision, q.Files), nil
 }
 
 type describeRequest struct {
@@ -860,6 +866,8 @@ type describeRequest struct {
 	Description string `json:"description"`
 }
 
+// handleDescribe stays hand-rolled: the description goes via stdin
+// (runMutationWithInput), which the mutation() factory doesn't model.
 func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 	var req describeRequest
 	if err := decodeBody(w, r, &req); err != nil {
@@ -899,36 +907,30 @@ func defaultAndValidate(val, defaultVal string, allowed map[string]bool) (string
 	return val, nil
 }
 
-func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
-	var req rebaseRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q rebaseRequest) validate() error {
+	if len(q.Revisions) == 0 {
+		return fmt.Errorf("revisions is required")
 	}
-	if len(req.Revisions) == 0 {
-		s.writeError(w, http.StatusBadRequest, "revisions is required")
-		return
+	if q.Destination == "" {
+		return fmt.Errorf("destination is required")
 	}
-	if req.Destination == "" {
-		s.writeError(w, http.StatusBadRequest, "destination is required")
-		return
-	}
-	sourceMode, err := defaultAndValidate(req.SourceMode, "-r", validSourceModes)
+	return nil
+}
+
+func (q rebaseRequest) build() (jj.CommandArgs, error) {
+	sourceMode, err := defaultAndValidate(q.SourceMode, "-r", validSourceModes)
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid source_mode")
-		return
+		return nil, fmt.Errorf("invalid source_mode")
 	}
-	targetMode, err := defaultAndValidate(req.TargetMode, "-d", validTargetModes)
+	targetMode, err := defaultAndValidate(q.TargetMode, "-d", validTargetModes)
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid target_mode")
-		return
+		return nil, fmt.Errorf("invalid target_mode")
 	}
-	revs := jj.FromIDs(req.Revisions)
-	s.runMutation(w, r, jj.Rebase(revs, req.Destination, sourceMode, targetMode, jj.RebaseOptions{
-		SkipEmptied:     req.SkipEmptied,
-		IgnoreImmutable: req.IgnoreImmutable,
-		SimplifyParents: req.SimplifyParents,
-	}))
+	return jj.Rebase(jj.FromIDs(q.Revisions), q.Destination, sourceMode, targetMode, jj.RebaseOptions{
+		SkipEmptied:     q.SkipEmptied,
+		IgnoreImmutable: q.IgnoreImmutable,
+		SimplifyParents: q.SimplifyParents,
+	}), nil
 }
 
 type squashRequest struct {
@@ -939,103 +941,121 @@ type squashRequest struct {
 	IgnoreImmutable bool     `json:"ignore_immutable"`
 }
 
-func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
-	var req squashRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q squashRequest) validate() error {
+	if len(q.Revisions) == 0 {
+		return fmt.Errorf("revisions is required")
 	}
-	if len(req.Revisions) == 0 {
-		s.writeError(w, http.StatusBadRequest, "revisions is required")
-		return
+	if q.Destination == "" {
+		return fmt.Errorf("destination is required")
 	}
-	if req.Destination == "" {
-		s.writeError(w, http.StatusBadRequest, "destination is required")
-		return
-	}
-	revs := jj.FromIDs(req.Revisions)
-	s.runMutation(w, r, jj.Squash(revs, req.Destination, req.Files, req.KeepEmptied, req.IgnoreImmutable))
+	return nil
 }
 
-func (s *Server) handleUndo(w http.ResponseWriter, r *http.Request) {
-	if err := decodeBody(w, r, &struct{}{}); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.runMutation(w, r, jj.Undo())
+func (q squashRequest) build() (jj.CommandArgs, error) {
+	return jj.Squash(jj.FromIDs(q.Revisions), q.Destination, q.Files, q.KeepEmptied, q.IgnoreImmutable), nil
+}
+
+// undoRequest has no fields — POST /api/undo takes an empty JSON body. The
+// struct exists so mutation() still enforces a valid JSON body + Content-Type.
+type undoRequest struct{}
+
+func (undoRequest) build() (jj.CommandArgs, error) {
+	return jj.Undo(), nil
 }
 
 // opIdRe validates op-ids: hex, at least 12 chars (jj's short form).
 // Embedded in a jj arg, so charset restriction blocks flag injection.
 var opIdRe = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
-// opMutation returns a handler that decodes {id}, validates via opIdRe,
-// and runs the given command builder. Shared by /api/op/undo + /api/op/restore.
-// bookmarkMutation/bookmarkRevMutation/bookmarkRemoteMutation are the bookmark
-// analogues of opMutation: decode → validate-non-empty → runMutation. Three
-// factories (not one) because the three request shapes have distinct JSON
-// field names — a generic version would need reflection and break the typed
-// request-struct marshaling in handlers_test.go.
-func (s *Server) bookmarkMutation(build func(name string) jj.CommandArgs) http.HandlerFunc {
+// mutation is the generic decode→validate→build→runMutation handler factory.
+// Every handler whose body is exactly that pipeline registers as a route line
+// in server.go routes(): reg(pattern, mutation(s, req.validate, req.build)).
+//
+// Req stays a NAMED request struct (newRequest, rebaseRequest, …) so tests
+// keep marshaling typed values; validate/build are usually method expressions
+// on that struct (xRequest.validate has type func(xRequest) error). nil
+// validate = no validation. A build error is also a 400 (e.g. rebase mode
+// validation). It's a free function, not a Server method — Go methods can't
+// have type parameters.
+//
+// Handlers with EXTRA behavior stay hand-rolled: stdin (describe), streaming
+// (git push/fetch, alias, index-paths), runner-backed validation (alias),
+// non-400 guard statuses (workspace forget's 409), server-state-dependent
+// builds (workspace add), or post-mutation side effects (snapshot,
+// update-stale, file-write).
+func mutation[Req any](s *Server, validate func(Req) error, build func(Req) (jj.CommandArgs, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req bookmarkNameRequest
+		var req Req
 		if err := decodeBody(w, r, &req); err != nil {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if req.Name == "" {
-			s.writeError(w, http.StatusBadRequest, "name is required")
+		if validate != nil {
+			if err := validate(req); err != nil {
+				s.writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		args, err := build(req)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		s.runMutation(w, r, build(req.Name))
+		s.runMutation(w, r, args)
 	}
 }
 
-func (s *Server) bookmarkRevMutation(build func(revision, name string) jj.CommandArgs) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req bookmarkRevisionRequest
-		if err := decodeBody(w, r, &req); err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if req.Revision == "" || req.Name == "" {
-			s.writeError(w, http.StatusBadRequest, "revision and name are required")
-			return
-		}
-		s.runMutation(w, r, build(req.Revision, req.Name))
-	}
-}
+// The factories below are thin adapters over mutation() for families of
+// routes that share one request shape but differ only in the command builder
+// (op undo/restore, the bookmark operations). They keep route lines compact:
+// reg("POST /api/op/undo", s.opMutation(jj.OpUndo)).
 
-func (s *Server) bookmarkRemoteMutation(build func(name, remote string) jj.CommandArgs) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req bookmarkRemoteRequest
-		if err := decodeBody(w, r, &req); err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if req.Name == "" || req.Remote == "" {
-			s.writeError(w, http.StatusBadRequest, "name and remote are required")
-			return
-		}
-		s.runMutation(w, r, build(req.Name, req.Remote))
-	}
+type opIdRequest struct {
+	ID string `json:"id"`
 }
 
 func (s *Server) opMutation(build func(id string) jj.CommandArgs) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID string `json:"id"`
-		}
-		if err := decodeBody(w, r, &req); err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if !opIdRe.MatchString(req.ID) {
-			s.writeError(w, http.StatusBadRequest, "invalid op id")
-			return
-		}
-		s.runMutation(w, r, build(req.ID))
-	}
+	return mutation(s,
+		func(req opIdRequest) error {
+			if !opIdRe.MatchString(req.ID) {
+				return fmt.Errorf("invalid op id")
+			}
+			return nil
+		},
+		func(req opIdRequest) (jj.CommandArgs, error) { return build(req.ID), nil })
+}
+
+func (s *Server) bookmarkMutation(build func(name string) jj.CommandArgs) http.HandlerFunc {
+	return mutation(s,
+		func(req bookmarkNameRequest) error {
+			if req.Name == "" {
+				return fmt.Errorf("name is required")
+			}
+			return nil
+		},
+		func(req bookmarkNameRequest) (jj.CommandArgs, error) { return build(req.Name), nil })
+}
+
+func (s *Server) bookmarkRevMutation(build func(revision, name string) jj.CommandArgs) http.HandlerFunc {
+	return mutation(s,
+		func(req bookmarkRevisionRequest) error {
+			if req.Revision == "" || req.Name == "" {
+				return fmt.Errorf("revision and name are required")
+			}
+			return nil
+		},
+		func(req bookmarkRevisionRequest) (jj.CommandArgs, error) { return build(req.Revision, req.Name), nil })
+}
+
+func (s *Server) bookmarkRemoteMutation(build func(name, remote string) jj.CommandArgs) http.HandlerFunc {
+	return mutation(s,
+		func(req bookmarkRemoteRequest) error {
+			if req.Name == "" || req.Remote == "" {
+				return fmt.Errorf("name and remote are required")
+			}
+			return nil
+		},
+		func(req bookmarkRemoteRequest) (jj.CommandArgs, error) { return build(req.Name, req.Remote), nil })
 }
 
 type restoreFromRequest struct {
@@ -1043,17 +1063,15 @@ type restoreFromRequest struct {
 	To   string `json:"to"`
 }
 
-func (s *Server) handleRestoreFrom(w http.ResponseWriter, r *http.Request) {
-	var req restoreFromRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q restoreFromRequest) validate() error {
+	if q.From == "" || q.To == "" {
+		return fmt.Errorf("from and to are required")
 	}
-	if req.From == "" || req.To == "" {
-		s.writeError(w, http.StatusBadRequest, "from and to are required")
-		return
-	}
-	s.runMutation(w, r, jj.RestoreFromTo(req.From, req.To))
+	return nil
+}
+
+func (q restoreFromRequest) build() (jj.CommandArgs, error) {
+	return jj.RestoreFromTo(q.From, q.To), nil
 }
 
 // handleSnapshot asks jj to observe the working copy on demand. Called by the
@@ -1280,18 +1298,17 @@ func (s *Server) handleUnlockRepo(w http.ResponseWriter, r *http.Request) {
 	if s.Watcher != nil {
 		s.Watcher.setPollFail("")
 	}
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
+	// Standard MutationResult envelope (empty output) — see handleNavigate.
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }
 
-func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Message string `json:"message"`
-	}
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.runMutation(w, r, jj.CommitWorkingCopy(req.Message))
+type commitRequest struct {
+	Message string `json:"message"`
+}
+
+func (q commitRequest) build() (jj.CommandArgs, error) {
+	// No validation — an empty message is valid for `jj commit`.
+	return jj.CommitWorkingCopy(q.Message), nil
 }
 
 func (s *Server) handleOpLog(w http.ResponseWriter, r *http.Request) {
@@ -1399,21 +1416,18 @@ type splitRequest struct {
 	Parallel bool     `json:"parallel"`
 }
 
-func (s *Server) handleSplit(w http.ResponseWriter, r *http.Request) {
-	var req splitRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q splitRequest) validate() error {
+	if q.Revision == "" {
+		return fmt.Errorf("revision is required")
 	}
-	if req.Revision == "" {
-		s.writeError(w, http.StatusBadRequest, "revision is required")
-		return
+	if len(q.Files) == 0 {
+		return fmt.Errorf("files is required")
 	}
-	if len(req.Files) == 0 {
-		s.writeError(w, http.StatusBadRequest, "files is required")
-		return
-	}
-	s.runMutation(w, r, jj.Split(req.Revision, req.Files, req.Parallel))
+	return nil
+}
+
+func (q splitRequest) build() (jj.CommandArgs, error) {
+	return jj.Split(q.Revision, q.Files, q.Parallel), nil
 }
 
 // hunkSpecRequest mirrors frontend's HunkSpec. The handler treats Spec as an
@@ -1525,21 +1539,18 @@ type resolveRequest struct {
 	Tool     string `json:"tool"` // ":ours" or ":theirs"
 }
 
-func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
-	var req resolveRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (q resolveRequest) validate() error {
+	if q.Revision == "" || q.File == "" || q.Tool == "" {
+		return fmt.Errorf("revision, file, and tool are required")
 	}
-	if req.Revision == "" || req.File == "" || req.Tool == "" {
-		s.writeError(w, http.StatusBadRequest, "revision, file, and tool are required")
-		return
+	if !allowedResolveTools[q.Tool] {
+		return fmt.Errorf("tool must be :ours or :theirs")
 	}
-	if !allowedResolveTools[req.Tool] {
-		s.writeError(w, http.StatusBadRequest, "tool must be :ours or :theirs")
-		return
-	}
-	s.runMutation(w, r, jj.Resolve(req.Revision, req.File, req.Tool))
+	return nil
+}
+
+func (q resolveRequest) build() (jj.CommandArgs, error) {
+	return jj.Resolve(q.Revision, q.File, q.Tool), nil
 }
 
 type mergeResolveRequest struct {
@@ -1854,5 +1865,6 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 	// is the primary contract; a failed snapshot just means the UI lags.
 	_, _ = s.trySnapshot(r.Context())
 	s.refreshOpId()
-	s.writeJSON(w, r, http.StatusOK, map[string]bool{"ok": true})
+	// Standard MutationResult envelope (empty output) — see handleNavigate.
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }

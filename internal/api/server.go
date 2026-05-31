@@ -166,31 +166,34 @@ func (s *Server) routes() {
 	reg("GET /api/info", s.handleInfo)
 	reg("GET /api/workspaces", s.handleWorkspaces)
 
-	reg("POST /api/new", s.handleNew)
-	reg("POST /api/edit", s.handleEdit)
-	reg("POST /api/abandon", s.handleAbandon)
-	reg("POST /api/metaedit-change-id", s.handleMetaeditChangeId)
-	reg("POST /api/restore", s.handleRestore)
-	reg("POST /api/describe", s.handleDescribe)
-	reg("POST /api/rebase", s.handleRebase)
-	reg("POST /api/squash", s.handleSquash)
-	reg("POST /api/split", s.handleSplit)
-	reg("POST /api/split-hunks", s.handleSplitHunks)
-	reg("POST /api/resolve", s.handleResolve)
-	reg("POST /api/merge-resolve", s.handleMergeResolve)
-	reg("POST /api/undo", s.handleUndo)
+	// Pure decode→validate→build mutations register through the generic
+	// mutation() factory — the route line IS the handler; (validate, build)
+	// are method pairs on the request structs in handlers.go.
+	reg("POST /api/new", mutation(s, newRequest.validate, newRequest.build))
+	reg("POST /api/edit", mutation(s, editRequest.validate, editRequest.build))
+	reg("POST /api/abandon", mutation(s, abandonRequest.validate, abandonRequest.build))
+	reg("POST /api/metaedit-change-id", mutation(s, metaeditChangeIdRequest.validate, metaeditChangeIdRequest.build))
+	reg("POST /api/restore", mutation(s, restoreRequest.validate, restoreRequest.build))
+	reg("POST /api/describe", s.handleDescribe) // stdin → runMutationWithInput
+	reg("POST /api/rebase", mutation(s, rebaseRequest.validate, rebaseRequest.build))
+	reg("POST /api/squash", mutation(s, squashRequest.validate, squashRequest.build))
+	reg("POST /api/split", mutation(s, splitRequest.validate, splitRequest.build))
+	reg("POST /api/split-hunks", s.handleSplitHunks) // tempfile setup, local-only
+	reg("POST /api/resolve", mutation(s, resolveRequest.validate, resolveRequest.build))
+	reg("POST /api/merge-resolve", s.handleMergeResolve) // tempfile setup, local-only
+	reg("POST /api/undo", mutation(s, nil, undoRequest.build))
 	reg("POST /api/op/undo", s.opMutation(jj.OpUndo))
 	reg("POST /api/op/restore", s.opMutation(jj.OpRestore))
-	reg("POST /api/restore-from", s.handleRestoreFrom)
-	reg("POST /api/snapshot", s.handleSnapshot)
-	reg("POST /api/workspace/add", s.handleWorkspaceAdd)
+	reg("POST /api/restore-from", mutation(s, restoreFromRequest.validate, restoreFromRequest.build))
+	reg("POST /api/snapshot", s.handleSnapshot)          // snapshot-pause check + clearStale
+	reg("POST /api/workspace/add", s.handleWorkspaceAdd) // build needs Server state (repoStorePath)
 	// forget carries the cross-tab guard (409 when the workspace is open as a
 	// tab); rename has no guard — it acts on the current workspace only.
 	reg("POST /api/workspace/forget", s.workspaceNameMutation(jj.WorkspaceForget, s.forgetOpenTabGuard))
 	reg("POST /api/workspace/rename", s.workspaceNameMutation(jj.WorkspaceRename, nil))
-	reg("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale)
-	reg("POST /api/unlock-repo", s.handleUnlockRepo)
-	reg("POST /api/commit", s.handleCommit)
+	reg("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale) // clearStale side effect
+	reg("POST /api/unlock-repo", s.handleUnlockRepo)                      // RunRaw, not a jj mutation
+	reg("POST /api/commit", mutation(s, nil, commitRequest.build))
 	reg("POST /api/open-file", s.handleOpenFile)
 
 	reg("POST /api/bookmark/set", s.bookmarkRevMutation(jj.BookmarkSet))

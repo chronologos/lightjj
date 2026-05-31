@@ -1,46 +1,58 @@
-import { parseJJVersion } from './api'
+import { parseJJVersion, resolvedInfo } from './api'
 
-/** Per-feature jj version gates. Each entry is the FIRST jj release that
- *  supports the capability + a short label for the startup warning.
- *  Backend has a parallel table (internal/jj/version.go) for gates that
- *  pick between command-builder codepaths — the two tables don't share
- *  entries (frontend gates UI affordances, backend gates jj args). */
-export const JJ_FEATURES = {
-  indexChangedPaths: { min: [0, 30], label: 'file-history index' },
-  // workspaceRootTmpl is backend-only (template selection); listed here so
-  // the startup warning mentions it — users on 0.39 see fewer workspace
-  // paths in the dropdown (additive-only protobuf store gap).
-  workspaceRootTmpl: { min: [0, 40], label: 'complete workspace paths' },
-} as const satisfies Record<string, { min: readonly [number, number]; label: string }>
+/** Frontend jj feature gates — names + display labels ONLY.
+ *
+ *  The supported/unsupported booleans come from the backend: `GET /api/info`
+ *  ships a `features` map resolved through internal/jj/version.go's
+ *  FeatureGates (the single authority on minimum versions, pessimistic on
+ *  unknown). This file holds no version numbers and does no version
+ *  comparison — it only labels the backend's booleans for the startup
+ *  warning and exposes the reactive jjSupports() read.
+ *
+ *  Keys are a wire contract with the backend's FeatureGates map. */
+export const JJ_FEATURE_LABELS = {
+  indexChangedPaths: 'file-history index',
+  workspaceRootTmpl: 'complete workspace paths',
+} as const satisfies Record<string, string>
 
-export type JJFeature = keyof typeof JJ_FEATURES
+export type JJFeature = keyof typeof JJ_FEATURE_LABELS
 
+/** Backend-resolved feature booleans. null = the info response hasn't been
+ *  loaded yet (or the backend predates the features map) → optimistic. */
+let features = $state<Record<string, boolean> | null>(null)
 let detected = $state<readonly [number, number] | null>(null)
 
-/** Set by App.svelte from api.info().jj_version once at startup. */
-export function setDetectedJJVersion(raw: string): void {
+/** Set by App.svelte from api.info().jj_version once at startup. Pulls the
+ *  feature map from the same (already-resolved, promise-memoized) info
+ *  response via resolvedInfo(); the optional second arg lets tests inject a
+ *  map directly. The parsed version is display-only (detectedJJVersion()) —
+ *  it no longer gates anything. */
+export function setDetectedJJVersion(raw: string, featureMap?: Record<string, boolean>): void {
   const v = parseJJVersion(raw)
   detected = v ? [v[0], v[1]] : null
+  features = featureMap ?? resolvedInfo()?.features ?? null
 }
 
-/** Whether the detected jj supports `feature`. Reactive (reads $state).
- *  Unknown version (parse failure / not yet loaded) → TRUE: optimistic so
- *  dev builds and the ~50ms pre-loadInfo window don't hide UI. A wrong
- *  guess surfaces as jj's own error toast — recoverable. (Contrast backend
- *  jjSupports: pessimistic, since a wrong guess there is a 500.) */
+/** Whether the running jj supports `feature`, per the BACKEND's resolution.
+ *  Reactive (reads $state). While the feature map hasn't loaded — dev builds,
+ *  the pre-loadInfo window, component tests, backends predating the map —
+ *  returns TRUE: optimistic so UI affordances aren't hidden by a loading
+ *  race. A wrong guess surfaces as jj's own error toast — recoverable.
+ *  (The backend's own gates stay pessimistic; see Server.jjSupports.) */
 export function jjSupports(feature: JJFeature): boolean {
-  if (!detected) return true
-  const [maj, min] = JJ_FEATURES[feature].min
-  return detected[0] > maj || (detected[0] === maj && detected[1] >= min)
+  const f = features
+  if (!f) return true
+  return f[feature] ?? true // gate name unknown to this backend → optimistic
 }
 
-/** Labels of features the detected jj is missing — drives the startup
- *  warning. Empty until setDetectedJJVersion runs (optimistic). */
+/** Labels of features the running jj is missing — drives the startup warning.
+ *  Empty until the backend feature map is loaded (optimistic). */
 export function missingJJFeatures(): string[] {
-  if (!detected) return []
-  return (Object.keys(JJ_FEATURES) as JJFeature[])
-    .filter(f => !jjSupports(f))
-    .map(f => `${JJ_FEATURES[f].label} (≥${JJ_FEATURES[f].min.join('.')})`)
+  const f = features
+  if (!f) return []
+  return (Object.keys(JJ_FEATURE_LABELS) as JJFeature[])
+    .filter(k => f[k] === false)
+    .map(k => JJ_FEATURE_LABELS[k])
 }
 
 export function detectedJJVersion(): readonly [number, number] | null {

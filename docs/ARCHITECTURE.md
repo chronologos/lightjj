@@ -54,7 +54,7 @@ flowchart TD
 
 **API endpoints:**
 
-*Generated from `internal/api/server.go` routes() — update when adding a route (see CLAUDE.md "Adding a new operation").*
+*Drift-checked by `TestArchitectureEndpointTableInSync` (internal/api/architecture_doc_test.go): every route registered in `routes()` must appear here and every `/api` row here must be a registered route. Update both together (see CLAUDE.md "Adding a new operation").*
 
 **Log & revision data**
 
@@ -186,7 +186,7 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/info` | Hostname, repo path, mode, default remote, jj version |
+| GET | `/api/info` | Hostname, repo path, mode, default remote, jj version, feature booleans (`features` map — backend-resolved jj gates) |
 | GET | `/api/aliases` | User-configured jj aliases |
 | POST | `/api/alias` | Run a configured alias (validated against config; streamed output) |
 | GET | `/api/pull-requests` | Open PR info per bookmark via `gh` |
@@ -252,6 +252,10 @@ Two implementations:
 ### API Layer (`internal/api/`)
 
 Thin HTTP handlers. Each handler: parses request → calls command builder → executes via runner → returns JSON. No business logic — just plumbing.
+
+**Generic mutation factory.** Handlers whose body is exactly decode→validate→build→`runMutation` don't exist as named functions: the route line in `routes()` is the handler, via `mutation[Req](s, validate, build)` (handlers.go). Each request struct carries `validate()`/`build()` methods; the route line passes them as method expressions (`mutation(s, rebaseRequest.validate, rebaseRequest.build)`). Families that share one request shape (op undo/restore, the bookmark operations) keep thin adapter factories (`opMutation`, `bookmarkMutation`, …) that delegate to `mutation()`. Handlers with extra behavior — stdin (describe), streaming (git push/fetch, alias), runner-backed validation (alias), non-400 guard statuses (workspace forget), server-state-dependent builds (workspace add), post-mutation side effects (snapshot, file-write) — stay hand-rolled.
+
+**One success envelope.** Every mutation POST returns the `MutationResult` shape `{output, warnings?}`; non-jj actions (navigate, file-write, open-file, unlock-repo) return it with an empty `output`. Errors are `{error}` with a 4xx/5xx status. `/api/capabilities`'s `api_version` bumps when an existing shape changes incompatibly.
 
 **Multi-tab routing.** `TabManager` (`tabs.go`) owns the top-level mux; each tab is a complete `Server` mounted at `/tab/{id}/` via a pre-built `http.StripPrefix` handler. `Server` stays tab-agnostic except for one injected closure: `Server.OpenTabRoots` (set by `addLocked` on every mounted Server, startup tab included) reports all open tab roots so the workspace-forget handler can return 409 instead of orphaning a tab that's viewing the workspace being forgotten. Tab construction is mode-agnostic via two injected closures: `TabResolve` (user path → canonical workspace root; `jj workspace root` locally or over SSH — the local resolver also probes that `@` resolves, rejecting forgotten-workspace dirs that would otherwise mount as permanently broken tabs and be re-restored broken on every launch) and `TabFactory` (canonical root → `Server`; `LocalRunner`+fsnotify or `SSHRunner`+op-id polling). The factory runs **outside** the write lock; double-check dedup under lock, shut down the orphan if a concurrent create won. Workspaces are just repo paths — the workspace dropdown opens a tab via `POST /tabs` with `ws.path`. Host-scoped routes — `/tabs`, `/api/config`, static files — live on `TabManager.Mux` directly. The `/api/` URL prefix is the frontend's per-tab discriminant: `tabScoped()` in `api.ts` prefixes `/api/*` with `/tab/{id}` and leaves `/tabs` unchanged. One constraint this imposes: **all `Server.routes()` paths must start with `/api/`** — anything else 404s in production (tests hit `srv.Mux` directly and won't catch it).
 

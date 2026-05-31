@@ -200,6 +200,27 @@ the entire array before writing any (all-or-nothing):
 `400` with `comments[N].anchor.selection required` if any entry is invalid; in
 that case nothing is written.
 
+## Wire format conventions
+
+Two field-naming styles coexist **by design** — they signal which domain an
+endpoint belongs to:
+
+- **jj-domain endpoints** (log, diff, mutations, `navigate`, `focus`) use
+  **snake_case** fields: `change_id`, `file_path`, `source_mode`.
+- **review-domain endpoints** (`doc-comments`, `annotations`) use
+  **camelCase** fields: `filePath`, `changeId`, `lineNum`. They predate the
+  snake_case convention, and renaming them would break stored review data.
+
+Don't normalize one style to the other when constructing requests; check the
+per-endpoint examples in this document.
+
+Success responses share one envelope: every mutation POST returns
+`{"output": "...", "warnings": "..."}` — `warnings` only when jj warned,
+`output` empty for non-jj actions (`navigate`, `file-write`, `open-file`,
+`unlock-repo`). Errors are `{"error": "..."}` with a 4xx/5xx status.
+`GET <base>/api/capabilities` reports `api_version`, which bumps when an
+existing shape changes incompatibly.
+
 ## Diff annotations
 
 Doc-comments anchor on rendered prose; **annotations** anchor on a diff line.

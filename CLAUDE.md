@@ -40,15 +40,15 @@ internal/
     file_change.go         — FileChange model, FilesTemplate, ParseFilesTemplate
     divergence.go          — DivergenceEntry, Divergence() template builder, ParseDivergence
     selected_revisions.go  — Multi-revision selection helper
-    version.go             — Semver type + named jj feature gates
+    version.go             — Semver type + named jj feature gates + FeatureGates wire registry (→ /api/info features)
     workspace_store.go     — Protobuf parser for .jj/repo/workspace_store/index (<0.40 fallback)
   runner/                  — CommandRunner interface + implementations
     runner.go              — Interface (Run, RunWithInput, RunForMutation, StreamCombined, RunRaw, WriteFile)
     local.go               — LocalRunner: exec("jj", args); WriteFile symlink-escape hardening; resolve rejects forgotten workspaces
     ssh.go                 — SSHRunner: wraps jj args in an ssh command
   api/                     — HTTP handlers
-    server.go              — Route registration, runMutation, op-id caching, helpers
-    handlers.go            — All endpoint implementations, flag validation
+    server.go              — Route registration (route lines ARE the pure-mutation handlers), runMutation, op-id caching, helpers
+    handlers.go            — Endpoint implementations, generic mutation[Req] factory, flag validation
     watcher.go             — Op-id watcher: fsnotify + SSE push (local), sshPollLoop (SSH), stale-WC detection
     tabs.go                — TabManager: per-tab Server + Watcher mounted at /tab/{id}/
     config.go              — Server-side JSONC config (hujson); mergeAndWriteConfig single write path
@@ -119,7 +119,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     bookmark-sync.ts       — classifyBookmark() → 8 sync states + sort/format helpers
     remote-visibility.ts   — buildVisibilityRevset(): per-remote visibility → revset string
     themes.ts              — 7 builtin themes + lazy Ghostty palettes + deriveTheme()
-    jj-features.svelte.ts  — Frontend jj version gates (optimistic on unknown)
+    jj-features.svelte.ts  — jj feature labels; booleans come from /api/info features (optimistic until loaded)
     confirm-gate.svelte.ts — createConfirmGate() double-press confirm factory
     BookmarkInput.svelte   — Bookmark name input with autocomplete
     DestinationInput.svelte — Destination picker (/) for inline rebase/squash (bookmark or raw revset)
@@ -200,7 +200,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
 - **Intersect expensive revset predicates with `mutable()` for large repo speed.** `conflicts()` and `files(path)` are O(commits×tree-check) with no index — 20+ seconds on large repos. `mutable() & <predicate>` lets jj evaluate the cheap set-membership check first, then run the expensive predicate only on those commits. Both `ConflictList` and `FileLog` learned this (20s→0.3s). Trade-off: scopes results to the user's own mutable work; callers wanting full scope should opt-in explicitly.
 - **Never use `separate()` for positional field output.** jj's `separate(sep, a, b, c)` SKIPS empty arguments — an empty `author.email()` on root commits shifts every following field one position left. Use explicit `++ sep ++` concatenation. Both `LogGraph` and `bookmarkListTemplate` learned this the hard way (see comments in `commands.go`).
 - **Parsers return empty slices, not nil.** This ensures JSON serialization produces `[]` not `null`.
-- **jj version gating** — backend: add a named `jj.Semver` constant in `internal/jj/version.go`, branch on `s.jjSupports(ctx, jj.YourGate)` in the handler, keep the older codepath as the `else`. `jjSupports` auto-resolves `jj --version` once (mutex-cached) and is PESSIMISTIC on unknown — gated handlers fall back, never 500. Tests: `newTestServer` defaults to 0.39 via `Allow(jj.Version())`; use `withJJ(srv, jj.Semver{0,40})` to exercise the new path. Frontend: add to `JJ_FEATURES` in `jj-features.svelte.ts`, call `jjSupports('feature')` in `$derived`/templates — OPTIMISTIC on unknown so dev builds don't lose UI. The two tables don't share entries (backend gates command args, frontend gates UI affordances); a capability can appear in both if it affects both.
+- **jj version gating** — backend is the single authority: add a named `jj.Semver` constant in `internal/jj/version.go` AND an entry in `jj.FeatureGates` (the wire-name → minimum-version registry), branch on `s.jjSupports(ctx, jj.YourGate)` in the handler, keep the older codepath as the `else`. `jjSupports` auto-resolves `jj --version` once (mutex-cached) and is PESSIMISTIC on unknown — gated handlers fall back, never 500. Tests: `newTestServer` defaults to 0.39 via `Allow(jj.Version())`; use `withJJ(srv, jj.Semver{0,40})` to exercise the new path. Frontend: there is NO frontend version table — `GET /api/info` ships a `features` map (every `FeatureGates` entry resolved to a boolean) and `jj-features.svelte.ts` only labels those names (`JJ_FEATURE_LABELS`). UI gates call `jjSupports('feature')` in `$derived`/templates — OPTIMISTIC while the info response hasn't loaded (so dev builds don't lose UI), then authoritative (= the backend's pessimistic booleans). A frontend-only gate still goes through the backend: add the Semver constant + `FeatureGates` entry there, add only the label here.
 - **`NewServer(runner, repoDir)`** takes the resolved repo dir as second arg. Pass `""` for SSH mode or tests. **Use `s.hasLocalFS()` / `s.isSSHMode()` for mode checks, not `RepoDir == ""`.** They're distinct: tests have neither local fs NOR SSH (both false); prod has exactly one. `Server.DefaultRemote` defaults to `"origin"` in the constructor body; `main.go` overrides post-construction from the `--default-remote` flag (zero test churn across existing call sites).
 - **Read-modify-write handlers need a `sync.Mutex`.** `atomicWriteJSON`/`os.Rename` prevents torn writes but NOT lost updates — two concurrent POSTs both read `[a,b]`, one appends `c`, other appends `d`, last-rename wins. See `jsonCollection.mu` (jsonstore.go), `configMu` (config.go). Contention is rare so a global mutex is fine; don't reach for per-key locks. Flat-file stores should be built on `jsonCollection[T]` rather than hand-rolling the lock + merge + write cycle (the annotations/doc-comments duplication was a recurring bug source).
 - **`sync.Once` permanently caches errors.** If the `Do()` closure can fail transiently (SSH slow-start, network blip), use `sync.Mutex` + `bool` resolved flag set only on success. See `resolveGHRepo` — `sync.Once` would have disabled PR badges for the server lifetime on a single timeout.
@@ -270,9 +270,9 @@ func TestHandleAbandon(t *testing.T) {
 
 1. Add a command builder function in `internal/jj/commands.go`
 2. Add tests for it in `internal/jj/commands_test.go`
-3. Add a request struct + handler in `internal/api/handlers.go`
-4. Register the route in `internal/api/server.go` → `routes()`. **Path must start with `/api/`** — `tabScoped()` in api.ts uses that prefix to route per-tab; anything else 404s in production (tests hit `srv.Mux` directly and won't catch it). Also add the endpoint to the table in `docs/ARCHITECTURE.md`.
-5. Add handler tests in `internal/api/handlers_test.go`. **For decode→validate→runMutation handlers, use a factory** — `opMutation`/`bookmarkMutation`/`bookmarkRevMutation`/`bookmarkRemoteMutation` (handlers.go) take a `func(...) jj.CommandArgs` and return `http.HandlerFunc`; the route line in server.go IS the handler. Don't unify across request shapes (one factory per struct — generic would need reflection and break typed test marshaling).
+3. Add a request struct in `internal/api/handlers.go` with `validate() error` and `build() (jj.CommandArgs, error)` methods. **Factory-first is the default**: a pure decode→validate→build→runMutation operation needs NO named handler function — the generic `mutation[Req]` factory (handlers.go) is the handler. Hand-roll only for extra behavior: stdin (describe), streaming (git push/fetch, alias), runner-backed validation (alias), non-400 guard statuses (workspace forget), server-state-dependent builds (workspace add), or post-mutation side effects (snapshot, file-write).
+4. Register the route in `internal/api/server.go` → `routes()` — the route line IS the handler: `reg("POST /api/foo", mutation(s, fooRequest.validate, fooRequest.build))`. **Path must start with `/api/`** — `tabScoped()` in api.ts uses that prefix to route per-tab; anything else 404s in production (tests hit `srv.Mux` directly and won't catch it). Also add the endpoint to the table in `docs/ARCHITECTURE.md` — `TestArchitectureEndpointTableInSync` (architecture_doc_test.go) fails if the table and `routes()` drift.
+5. Add handler tests in `internal/api/handlers_test.go`. Route families sharing one request shape use the thin adapter factories over `mutation()` — `opMutation`/`bookmarkMutation`/`bookmarkRevMutation`/`bookmarkRemoteMutation` (handlers.go) take a `func(...) jj.CommandArgs` and return `http.HandlerFunc`.
 6. Add the API call to `frontend/src/lib/api.ts`
 7. Wire it into the Svelte UI
 
