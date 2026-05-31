@@ -251,7 +251,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   async function fetchFileForEdit(path: string, errorPrefix: string, moveWorkingCopy: boolean): Promise<string | undefined> {
     const target = deps.getDiffTarget()
     if (target?.kind !== 'single' || editBusy.has(path)) return undefined
-    const { changeId: revId, isWorkingCopy } = target
+    const { changeId: revId, commitId, isWorkingCopy } = target
     editBusy.add(path)
     editError = ''
     try {
@@ -266,7 +266,14 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       }
       // Post-await identity guard — j/k navigation is possible during await.
       if (!stillOn(revId)) return undefined
-      const resp = await api.fileShow(revId, path)
+      // Read by commit_id, NOT changeId/revId (issue #16). api.fileShow caches
+      // by the id it's given; change_id survives rewrites, so a save (fileWrite
+      // → snapshot → new commit_id, same change_id) would leave a change_id-keyed
+      // entry serving the PRE-save content to the next Edit click. commit_id is
+      // content-addressed — the cache stays provably valid, and the editor opens
+      // with exactly what the displayed diff (also commit_id-keyed) shows.
+      // Mutations (api.edit above) and identity guards keep change_id.
+      const resp = await api.fileShow(commitId, path)
       if (!stillOn(revId)) return undefined
       return resp.content
     } catch (e) {

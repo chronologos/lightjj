@@ -96,7 +96,7 @@ describe('startEdit — post-await identity guards', () => {
 
     const p = fa.startEdit('a.go')
     await flush() // edit resolved, suspended in fileShow
-    expect(mockApi.fileShow).toHaveBeenCalledWith('ch-A', 'a.go')
+    expect(mockApi.fileShow).toHaveBeenCalledWith('co-A', 'a.go')
 
     liveTarget = target('co-B', 'ch-B')
     d.resolve({ content: 'stale' })
@@ -546,6 +546,25 @@ describe('saveFile', () => {
     expect(fa.editingFiles.has('a.go')).toBe(false)
     expect(fa.editFileContents.has('a.go')).toBe(false)
     expect(mockApi.fileWrite).not.toHaveBeenCalled()
+  })
+
+  it('edit → save → edit again fetches at the NEW commit_id (issue #16)', async () => {
+    // Save snapshots @ → new commit_id, SAME change_id. The second Edit must
+    // read by the new commit_id: api.fileShow caches by the id it's given, so
+    // a change_id-keyed read would cache-hit the first edit's pre-save content.
+    liveTarget = target('co-A', 'ch-A', { isWorkingCopy: true })
+    // onFileSaved = App's logSync.refresh(): the log reload mints the new
+    // commit_id into the live diffTarget before saveFile returns.
+    onFileSaved = () => { liveTarget = target('co-A2', 'ch-A', { isWorkingCopy: true }) }
+    const fa = createFileActions(deps)
+
+    await fa.startEdit('a.go')
+    expect(mockApi.fileShow).toHaveBeenLastCalledWith('co-A', 'a.go')
+
+    await fa.saveFile('a.go', 'edited content')
+
+    await fa.startEdit('a.go')
+    expect(mockApi.fileShow).toHaveBeenLastCalledWith('co-A2', 'a.go')
   })
 })
 

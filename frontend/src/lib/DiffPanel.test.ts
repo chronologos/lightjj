@@ -140,7 +140,9 @@ describe('DiffPanel', () => {
       await fireEvent.click(editBtn(container)!)
       await settle() // api.edit resolves, fileShow fires, suspends
 
-      expect(mockFileShow).toHaveBeenCalledWith('ch-A', 'a.go')
+      // Read by commit_id (issue #16) — fileShow caches by the id it's given;
+      // change_id survives rewrites so it must never be a fileShow cache key.
+      expect(mockFileShow).toHaveBeenCalledWith('co-A', 'a.go')
 
       // Navigate away BEFORE fileShow resolves.
       await rerender(props({
