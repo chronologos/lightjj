@@ -41,11 +41,11 @@ export interface FileActionsDeps {
    *  app-wide). Undefined when the host has none (test mounts): jj calls run
    *  direct and an undefined resolve is NOT treated as "blocked". */
   getMutationLock: () => JJMutationLock | undefined
-  /** Live onfilesaved prop (App's loadLog) — the explicit refresh after every
-   *  WC-mutating op. Explicit for IMMEDIACY: App's derived-staleness effect
-   *  also sees the new op-id, but defers its refresh until the mutation gate
-   *  clears; this call refreshes inside the save flow, and App's attemptedOpId
-   *  dedup makes the deferred staleness pass a no-op afterwards. */
+  /** Live onfilesaved prop (App's logSync.refresh()) — the explicit refresh
+   *  after every WC-mutating op. Explicit for IMMEDIACY: the log's op-sync also
+   *  sees the new op-id, but its auto-refresh defers until the mutation gate
+   *  clears; this call refreshes inside the save flow, and the op-sync's
+   *  attempted-op-id dedup makes the deferred auto pass a no-op afterwards. */
   getOnFileSaved: () => (() => Promise<void> | void) | undefined
   /** DiffPanel's revealFile(): force-mount + session-expand a file so the
    *  editor/preview about to open has body DOM to land in. */
@@ -224,11 +224,11 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       // warning at App.svelte — don't duplicate it in editError.
       if (result === undefined && lock) return
       if (!stillOn(revId)) return
-      // Explicit refresh — onjjmutation is withMutation (lock only, no loadLog).
-      // App's derived-staleness effect also sees the header-driven op-id, but
-      // it defers its refresh until `mutating` clears; calling onfilesaved here
-      // refreshes immediately in the save flow, and App's attemptedOpId dedup
-      // keeps the deferred staleness pass from refreshing a second time.
+      // Explicit refresh — onjjmutation is withMutation (lock only, no log refresh).
+      // The log's op-sync also sees the header-driven op-id, but its auto-refresh
+      // defers until `mutating` clears; calling onfilesaved here refreshes
+      // immediately in the save flow, and the op-sync's attempted-op-id dedup
+      // keeps the deferred auto pass from refreshing a second time.
       await deps.getOnFileSaved()?.()
     } catch (e) {
       editError = `Discard failed: ${e instanceof Error ? e.message : String(e)}`

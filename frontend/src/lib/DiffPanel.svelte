@@ -70,10 +70,10 @@
      *  the surface for a mode where unified is arguably clearer anyway). */
     hunkReview?: import('./DiffFileView.svelte').HunkReviewState | null
     /** Called after any WC-mutating op (saveFile/saveMerge/discardFile).
-     *  Explicit refresh for immediacy — App's derived-staleness effect also
-     *  sees the op-id change but defers its refresh until the mutation gate
-     *  clears; this prop refreshes in the save flow itself (App's
-     *  attemptedOpId dedup prevents a second, deferred refresh). */
+     *  Explicit refresh for immediacy — the log's op-sync also sees the op-id
+     *  change but its auto-refresh defers until the mutation gate clears; this
+     *  prop refreshes in the save flow itself (the op-sync's attempted-op-id
+     *  dedup prevents a second, deferred refresh). */
     onfilesaved?: () => Promise<void> | void
     /** App's withMutation wrapper — serializes jj mutations across the app.
      *  Returns undefined if blocked (another mutation in flight). */

@@ -24,7 +24,7 @@
     // undefined on first paint (no App mounted yet) — that's the only skip.
     if (appRef) tabState.set(activeTabId, appRef.getState())
     // Order matters: basePath must be set BEFORE the {#key} remount fires
-    // App's top-level fetches (loadLog, loadWorkspaces, etc.).
+    // App's mount-time refreshes (logSync/workspacesSync/... .refresh()).
     setActiveTab(id)
     activeTabId = id
   }

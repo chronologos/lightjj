@@ -61,6 +61,7 @@
   import { routeKeydown, type ActiveView } from './lib/keyboard-gate'
   import { computeSlide, type SlideDir } from './lib/slide'
   import { createLoader } from './lib/loader.svelte'
+  import { createOpSync, type OpSyncOptions } from './lib/op-sync.svelte'
   import { createRevisionNavigator } from './lib/revision-navigator.svelte'
   import { createCommentVisibility } from './lib/comment-visibility.svelte'
   import { config, FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT } from './lib/config.svelte'
@@ -107,9 +108,12 @@
   // includes a "Delete git lockfile" action. Auto-clears on recovery.
   let pollFailError = $state<string | null>(null)
 
-  // Stale immutable detection — force-push leftovers. Set after git fetch/push,
-  // cleared after cleanup or if resolved externally.
-  let staleImmutableGroups = $state<StaleImmutableGroup[]>([])
+  // Stale immutable detection — force-push leftovers. Refreshed after git
+  // fetch/push (handleGitOp's after hook) and by staleImmSync's throttled
+  // op-id staleness; cleared optimistically after cleanup. keepValueOnError:
+  // detection is best-effort, a failed scan keeps the last known groups.
+  const staleImm = createLoader(() => api.staleImmutable(), [] as StaleImmutableGroup[], undefined, { keepValueOnError: true })
+  let staleImmutableGroups = $derived(staleImm.value)
 
   let updateInfo: UpdateInfo | null = $state(null)
   checkForUpdate().then(info => { updateInfo = info })
@@ -345,7 +349,7 @@
     onError: e => setMessage(errorMessage(e)),
     onWarning: text => setMessage({ kind: 'warning', text }),
     withMutation,
-    reload: loadLog,
+    reload: () => logSync.refresh(),
     getWorkingCopyChangeId: () => workingCopyEntry?.commit.change_id,
   })
 
@@ -428,7 +432,7 @@
       // Explicit reload (DiffPanel.onfilesaved precedent) — withMutation doesn't
       // call loadLog, and waiting for the SSE round-trip leaves the diff stale
       // for the moment the user Escapes back to log.
-      void loadLog()
+      void logSync.refresh()
     }
   }
 
@@ -437,7 +441,7 @@
     await withMutation(() => docSession!.overwrite())
     docStale = false
     setMessage({ kind: 'success', text: `Saved ${docFilePath} (overwrote external change)` })
-    void loadLog()
+    void logSync.refresh()
   }
 
   async function handleDocReload() {
@@ -474,10 +478,24 @@
     switchToLogView()
   }
 
-  let currentWorkspace: string = $state('')
-  let workspaceList: Workspace[] = $state([])
-  let aliases: Alias[] = $state([])
-  let pullRequests: PullRequest[] = $state([])
+  // Server-state mirrors, each a loader + (further down) an op-sync that owns its
+  // refresh policy. keepValueOnError everywhere: these are best-effort enrichments
+  // (SSH mode / missing gh / single workspace all fail their fetches routinely) and
+  // a transient failure must not blank what the user already sees.
+  const workspaces = createLoader(
+    () => api.workspaces(),
+    { current: '', workspaces: [] as Workspace[] },
+    undefined,
+    { keepValueOnError: true },
+  )
+  // Tri-state on current: '' means UNKNOWN (initial value until the first fetch
+  // resolves; stays there if it fails) — see openWorkspaceContextMenu.
+  let currentWorkspace = $derived(workspaces.value.current)
+  let workspaceList = $derived(workspaces.value.workspaces)
+  const aliasesLoader = createLoader(() => api.aliases(), [] as Alias[], undefined, { keepValueOnError: true })
+  let aliases = $derived(aliasesLoader.value)
+  const prs = createLoader(() => api.pullRequests(), [] as PullRequest[], undefined, { keepValueOnError: true })
+  let pullRequests = $derived(prs.value)
   let prByBookmark = $derived(new Map(pullRequests.map(pr => [pr.bookmark, pr])))
 
   let contextMenu: { items: ContextMenuItem[]; x: number; y: number } | null = $state(null)
@@ -509,7 +527,7 @@
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
   // Mutation lock — prevents queuing ops against stale/changing state.
-  // Covers the full span from mutation start through post-mutation loadLog().
+  // Covers the full span from mutation start through the post-mutation log refresh.
   // Over SSH each call is ~440ms, so without this a double-click on Abandon
   // could fire two abandon requests against the same (now-stale) revision.
   let mutating = $state(false)
@@ -937,10 +955,10 @@
   // User's revsets.log config — empty filter bar applies this. Shown in the
   // placeholder so "why is X missing" is visible without opening jj config.
   let configuredLogRevset: string = $state('')
-  // Full remote list — session-memoized. Used by BookmarksPanel/Modal for
-  // multi-remote track/untrack submenus.
-  let allRemotes: string[] = $state([])
-  api.remotes().then(r => { allRemotes = r }).catch(() => {})
+  // Full remote list — session-memoized in api.ts. Used by BookmarksPanel/Modal
+  // for multi-remote track/untrack submenus.
+  const remotes = createLoader(() => api.remotes(), [] as string[], undefined, { keepValueOnError: true })
+  let allRemotes = $derived(remotes.value)
 
   // Visually distinct, platform-stable glyphs. No flags/people/hands (vary
   // wildly across OS/font), no skin-tone modifiers. Contiguous string iterates
@@ -960,14 +978,6 @@
     return `${hostEmoji(host)} ${host.slice(0, 8)} ${folder}`
   }
 
-  async function loadWorkspaces() {
-    try {
-      const result = await api.workspaces()
-      currentWorkspace = result.current
-      workspaceList = result.workspaces
-    } catch { /* ignore — SSH mode or single workspace */ }
-  }
-
   // Cmd+K → "New workspace" and revision-menu → "Add workspace here…". Backend
   // creates a sibling dir <repo>-<name> and adds it via `jj workspace add`.
   // revision (optional) is the change_id of a revision the new workspace's @
@@ -983,7 +993,9 @@
     try {
       const res = await withMutation(() => api.workspaceAdd(name, revision))
       if (!res) return
-      await loadWorkspaces()
+      // refresh() resolves only after the new list is applied — openWorkspaceTab
+      // reads workspaceList right after this await.
+      await workspacesSync.refresh()
       openWorkspaceTab(name)
     } catch (e) {
       setMessage(errorMessage(e))
@@ -998,7 +1010,7 @@
     runMutation(
       () => api.workspaceForget(wsName),
       `Forgot workspace '${wsName}'`,
-      { after: () => { loadWorkspaces() } },
+      { after: () => { void workspacesSync.refresh() } },
     )
 
   // Right-click the CURRENT workspace badge → "Rename". jj renames whichever
@@ -1011,7 +1023,7 @@
     await runMutation(
       () => api.workspaceRename(name),
       `Renamed workspace to '${name}'`,
-      { after: () => { loadWorkspaces() } },
+      { after: () => { void workspacesSync.refresh() } },
     )
   }
 
@@ -1020,8 +1032,8 @@
   // the CURRENT workspace; forget takes a name so it works on others. Every
   // shown item works — no dead disabled entries.
   //
-  // Tri-state on currentWorkspace: '' means UNKNOWN (initial value until
-  // loadWorkspaces() resolves; stays there if that fetch fails), not "some
+  // Tri-state on currentWorkspace: '' means UNKNOWN (initial value until the
+  // workspaces fetch resolves; stays there if it fails), not "some
   // other workspace". While unknown, fail safe: offer only non-destructive
   // items. A plain equality check would route the user's OWN badge to the
   // other-workspace menu, whose headline item is the destructive Forget.
@@ -1071,43 +1083,6 @@
     }
   }
 
-  async function loadAliases() {
-    try { aliases = await api.aliases() }
-    catch { /* ignore — aliases are optional */ }
-  }
-
-  // PR list is a `gh` network call (slow, possibly rate-limited). lastPrFetch
-  // throttles staleness-driven refreshes (refreshSlowMirrors below); explicit
-  // callers (mount, handleGitOp's after-hook) always fetch and stamp it.
-  const PR_REFRESH_MS = 60_000
-  let lastPrFetch = 0
-  async function loadPullRequests() {
-    lastPrFetch = Date.now()
-    try { pullRequests = await api.pullRequests() }
-    catch { /* ignore — gh may not be available */ }
-  }
-
-  // Slow-changing server-state mirrors: PR badges, palette aliases, remote
-  // list, and the stale-immutable scan. External changes to these are rare,
-  // so staleness-driven refreshes are throttled to once per PR_REFRESH_MS.
-  // api.ts drops its aliases/remotes session memos on op-id change, so the
-  // loadAliases/remotes calls here hit the network only when an operation
-  // could actually have changed them and are memo-hits otherwise. TWO calls
-  // here are genuinely expensive and must never run unthrottled on the
-  // op-id-change path: the PR fetch (a `gh` network call) and
-  // checkStaleImmutable (a `divergent() & immutable()` revset — seconds of
-  // CPU on monorepo-scale repos; it cannot use the `mutable() &` index
-  // speedup because it targets immutable commits by definition). Both also
-  // keep their explicit post-git-op triggers (handleGitOp's after hook) for
-  // immediacy when WE caused the change.
-  function refreshSlowMirrors() {
-    if (Date.now() - lastPrFetch < PR_REFRESH_MS) return
-    void loadPullRequests()
-    void loadAliases()
-    api.remotes().then(r => { allRemotes = r }).catch(() => {})
-    checkStaleImmutable()
-  }
-
   function handleRunAlias(name: string) {
     // Streamed like handleGitOp: aliases can wrap slow network ops. Progress
     // lines feed mutationProgress; .finally() clears it on resolve and reject.
@@ -1122,40 +1097,77 @@
   }
 
 
-  // ── Staleness bookkeeping (see the staleness $effect further down) ────────
-  // currentOpId  — latest op-id the backend reported (SSE push or response
-  //                header), written by the onStale subscription. Reactive.
-  // renderedOpId — op-id the rendered log reflects (a lower bound: set to the
-  //                value of currentOpId captured when the applying loadLog
-  //                STARTED — the response is at least that fresh since op-ids
-  //                only advance). Reactive.
-  // attemptedOpId — op-id of the last STARTED loadLog (set synchronously at
-  //                entry, success or not). Non-reactive on purpose: it (a)
-  //                stops the staleness effect from retry-looping a
-  //                persistently failing load (each new op-id gets exactly one
-  //                effect-driven attempt), and (b) lets the effect's deferred
-  //                re-check see that an explicit post-mutation loadLog already
-  //                started and skip the duplicate fetch.
+  // ── Op-synced server state ─────────────────────────────────────────────────
+  // "Is this data stale?" is DERIVED per resource: stale ⟺ the op-id the backend
+  // last reported (currentOpId) differs from the op-id that resource's value
+  // reflects. Each createOpSync owns that comparison plus the refresh policy for
+  // one loader: gate/enabled suppression (with re-fire when the suppressing
+  // condition clears — staleness can never be dropped), throttling, and
+  // explicit-vs-auto dedup. See lib/op-sync.svelte.ts and docs/CACHING.md.
+  //
+  // currentOpId is written ONLY by the onStale subscription (further down); it
+  // stays null until the first op-id CHANGE (api.ts treats the first observation
+  // as the baseline), which is why the mount-time explicit refresh()es below
+  // don't double-fetch when the first response's op-id header lands.
   let currentOpId = $state<string | null>(null)
-  let renderedOpId = $state<string | null>(null)
-  let attemptedOpId: string | null = null
 
-  async function loadLog(resetSelection = false) {
-    const opIdAtLoad = currentOpId
-    attemptedOpId = opIdAtLoad
+  // Today's suppression gate. Each sync reads it only while its resource is
+  // stale (dependency hygiene: when fresh, the only effect deps are op-ids).
+  const opSyncGate = () => loading || mutating || anyModalOpen || !!inlineMode
+
+  const opSync = (opts: Omit<OpSyncOptions, 'opId' | 'gate'>) =>
+    createOpSync({ opId: () => currentOpId, gate: opSyncGate, ...opts })
+
+  // Deferred-intent flag: userRefresh(true)/handleRevsetSubmit set it, the next
+  // log run consumes it. Same pattern as pendingSelectCommitId — refresh() takes
+  // no arguments, so explicit intent travels via App state.
+  let pendingResetSelection = false
+
+  const logSync = opSync({ run: () => loadLog() })
+  const workspacesSync = opSync({ run: () => workspaces.load() })
+  const oplogSync = opSync({ run: () => oplog.load(), enabled: () => oplogOpen })
+  const bookmarksSync = opSync({
+    run: () => bookmarksPanel.load(),
+    enabled: () => activeView === 'branches',
+  })
+  // Evolog has NO op-sync — it is selection-scoped per-revision data, the other
+  // identity granularity. Op-ids don't change when the cursor moves, and every
+  // op-id change refreshes the log, whose loadLog chains the evolog AFTER cursor
+  // reconciliation (so it always follows the post-refresh selection — an op-sync
+  // run thunk would read the PRE-reconciliation selection and stamp the wrong
+  // load as fresh). Its three explicit load sites: toggleEvolog (open),
+  // selectRevision's 50ms debounce (cursor follow), loadLog's chain (log refresh).
+  // Slow mirrors — throttled. TWO of these are genuinely expensive and must
+  // never run unthrottled on the op-id-change path: the PR fetch (a `gh`
+  // network call, possibly rate-limited) and the stale-immutable check (a
+  // `divergent() & immutable()` revset scan — seconds of CPU on monorepo-scale
+  // repos; it can't use the `mutable() &` index speedup because it targets
+  // immutable commits by definition). aliases/remotes ride the same throttle:
+  // api.ts drops their session memos on op-id change, so refreshes here hit
+  // the network only when an operation could actually have changed them.
+  // Both expensive ones keep explicit post-git-op refreshes (handleGitOp's
+  // after hook) for immediacy when WE caused the change.
+  const SLOW_MIRROR_MS = 60_000
+  const prsSync = opSync({ run: () => prs.load(), throttleMs: SLOW_MIRROR_MS })
+  const aliasesSync = opSync({ run: () => aliasesLoader.load(), throttleMs: SLOW_MIRROR_MS })
+  const remotesSync = opSync({ run: () => remotes.load(), throttleMs: SLOW_MIRROR_MS })
+  // startFresh: the scan never runs at mount or tab-switch — only in reaction
+  // to operations that happen while the app is open.
+  const staleImmSync = opSync({ run: () => staleImm.load(), throttleMs: SLOW_MIRROR_MS, startFresh: true })
+
+  async function loadLog(): Promise<boolean> {
+    const resetRequested = pendingResetSelection
+    pendingResetSelection = false
 
     const revset = revsetFilter || undefined
     const ok = await log.load(revset)
     blurActiveInput()
-    if (!ok) return // superseded or errored — don't post-process stale state
-
-    // The applied log reflects (at least) the op state we knew at load start.
-    // If a newer op-id arrived mid-fetch, renderedOpId stays behind currentOpId
-    // and the staleness effect fires one more refresh — conservative, never lossy.
-    renderedOpId = opIdAtLoad
+    if (!ok) return false // superseded or errored — don't post-process stale state
+    let resetSelection = resetRequested
 
     // pendingSelectCommitId: jumpToBookmark's deferred selection. Consume
-    // here; on hit suppress resetSelection (which handleRevsetSubmit passes).
+    // here; on hit suppress resetSelection (which handleRevsetSubmit requests
+    // via pendingResetSelection).
     let pending = pendingSelectCommitId
     pendingSelectCommitId = null
     if (pending) {
@@ -1186,18 +1198,20 @@
       const sel = revisions[selectedIndex]
       nav.loadDiffAndFiles(sel.commit, hasChecked)
     }
-    // Refresh open panels — oplog always reflects new operations,
-    // evolog may change if the selected revision was modified
-    if (oplogOpen) oplog.load()
-    if (activeView === 'branches') bookmarksPanel.load()
+    // Oplog/bookmarks panels are NOT chained here — their op-syncs notice the
+    // same op-id change that triggered this load and refresh themselves (and
+    // panel-open / userRefresh call their refresh() explicitly). The EVOLOG is
+    // chained, after reconciliation: it follows the selection, which the lines
+    // above may have just moved — an op-sync can't know that.
     if (evologOpen && selectedIndex >= 0 && revisions[selectedIndex]) {
-      evolog.load(effectiveId(revisions[selectedIndex].commit))
+      void evolog.load(effectiveId(revisions[selectedIndex].commit))
     }
 
     // Pre-load file lists for a window of ~10 revisions around the selection.
     // One jj subprocess for N revs; seeds files:X cache so the file sidebar
     // shows instantly during j/k. Fire-and-forget; main diff load isn't gated.
     prefetchFilesWindow()
+    return true
   }
 
   const FILES_PRELOAD_RADIUS = 5 // revisions on each side of selectedIndex
@@ -1208,10 +1222,6 @@
     const ids = revisions.slice(start, end).map(r => r.commit.commit_id)
     prefetchFilesBatch(ids)
   }
-
-  // Thin aliases — preserve existing call-site names across the component.
-  const loadOplog = oplog.load
-  const loadEvolog = evolog.load
 
   // Move cursor without loading diff/files — used in squash mode where
   // the diff is intentionally frozen on the source revision
@@ -1261,8 +1271,9 @@
     if (evologOpen) {
       clearTimeout(evologDebounceTimer)
       evologDebounceTimer = setTimeout(() => {
+        // Re-read at fire time so rapid j/k coalesces to wherever the cursor ends up.
         const current = revisions[selectedIndex]
-        if (current) loadEvolog(effectiveId(current.commit))
+        if (current) void evolog.load(effectiveId(current.commit))
       }, 50)
     }
 
@@ -1464,7 +1475,7 @@
         const result = await fn()
         setMessage(mutationMessage(successMsg, result))
         opts?.after?.()
-        await loadLog()
+        await logSync.refresh()
       } catch (e) { showError(e) }
     })
   }
@@ -1610,12 +1621,12 @@
         setMessage(mutationMessage(`Updated description for ${eid.slice(0, 8)}`, result))
         // Only poke the loader if selection unchanged — otherwise we'd write
         // the old revision's draft into the new selection's description loader.
-        // Mutation already succeeded; loadLog() will refresh either way.
+        // Mutation already succeeded; the log refresh below reloads either way.
         if (selectedRevision?.commit.commit_id === cid) {
           description.set(descriptionDraft)
           descriptionEditing = false
         }
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         showError(e)
       }
@@ -1664,7 +1675,7 @@
         descriptionEditing = false
         commitMode = false
         description.reset()
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         showError(e)
       }
@@ -1684,20 +1695,9 @@
               return (type === 'push' ? api.gitPush : api.gitFetch)(flags, onLine)
               .finally(() => { mutationProgress = '' }) },
       `Git ${type} complete`,
-      { after: () => { loadPullRequests(); checkStaleImmutable() } },
+      // We caused the change — refresh both immediately, bypassing the throttle.
+      { after: () => { void prsSync.refresh(); void staleImmSync.refresh() } },
     )
-  }
-
-  function checkStaleImmutable() {
-    api.staleImmutable().then(groups => {
-      // Guard: skip [] → [] to avoid no-op reactivity on every fetch/push.
-      if (groups.length > 0 || staleImmutableGroups.length > 0) {
-        staleImmutableGroups = groups
-      }
-    }).catch(() => {
-      // Silent — detection is best-effort. Don't block the user with
-      // an error about a background check.
-    })
   }
 
   function handleCleanupStaleImmutable() {
@@ -1705,7 +1705,10 @@
     runMutation(
       () => api.abandon(staleIds, true),
       `Cleaned up ${staleIds.length} stale immutable commit${staleIds.length !== 1 ? 's' : ''}`,
-      { after: () => { staleImmutableGroups = [] } },
+      // Optimistic clear + markFresh: the abandon made the groups empty; without
+      // the stamp, the mutation's own op-id advance would re-run the expensive
+      // scan just to learn that.
+      { after: () => { staleImm.set([]); staleImmSync.markFresh() } },
     )
   }
 
@@ -1761,11 +1764,11 @@
         const warnings = results.map(r => r.warnings).filter(Boolean).join('\n')
         const outputs = results.map(r => r.output).filter(Boolean).join('\n')
         setMessage(mutationMessage(text, { output: outputs, warnings: warnings || undefined }))
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         // Don't close panel on error — let user see state and retry
         showError(e)
-        await loadLog()
+        await logSync.refresh()
       }
     })
   }
@@ -1805,6 +1808,10 @@
   // revision the cursor landed on.
   function switchToBranchesView() {
     descriptionEditing = false
+    // Explicit refresh on entry (not re-entry): bypasses the op-sync gate so the
+    // panel never shows a false "No bookmarks" while the log/a mutation is in
+    // flight. The sync still owns op-id staleness while the view stays open.
+    if (activeView !== 'branches') void bookmarksSync.refresh()
     activeView = 'branches'
   }
 
@@ -1854,7 +1861,7 @@
           : `Rebased ${sources[0].slice(0, 8)} ${modeLabel} ${destination.slice(0, 8)}`
         setMessage(mutationMessage(msg, result))
         clearChecks()
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         showError(e)
       }
@@ -1873,7 +1880,7 @@
       try {
         const r = await api.rebase([changeId], s.dest, '-r', s.targetMode)
         setMessage(mutationMessage(`Slid ${changeId.slice(0, 8)} ${dir}`, r))
-        await loadLog()
+        await logSync.refresh()
         selectByChangeId(changeId)
       } catch (e) {
         showError(e)
@@ -1933,7 +1940,7 @@
           : `Squashed ${sources[0].slice(0, 8)} into ${destination.slice(0, 8)}`
         setMessage(mutationMessage(msg, result))
         clearChecks()
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         // W1: keep squash mode active so user can retry or Escape
         showError(e)
@@ -2054,7 +2061,7 @@
         cancelInlineModes()
         setMessage(mutationMessage(`Split ${revision.slice(0, 8)} (${files.length} files stay)`, result))
         clearChecks()
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         showError(e)
       }
@@ -2097,7 +2104,7 @@
           cancelInlineModes()
           setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${accepted}/${total} hunks)`, result))
           clearChecks()
-          await loadLog()
+          await logSync.refresh()
         } catch (e) { showError(e) }
       })
     }
@@ -2141,7 +2148,7 @@
         cancelInlineModes()
         setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${accepted}/${total} hunks)`, result))
         clearChecks()
-        await loadLog()
+        await logSync.refresh()
       } catch (e) {
         // 501 in SSH lands here with a clear backend message. User can
         // a/n to whole-file granularity and Enter again.
@@ -2219,16 +2226,18 @@
     openModal('bookmark')
   }
 
-  async function toggleOplog() {
+  function toggleOplog() {
     oplogOpen = !oplogOpen
-    if (oplogOpen) await oplog.load()
+    // Explicit refresh on open: bypasses the op-sync gate so the panel never
+    // shows a false "No operations" while the log/a mutation is in flight.
+    // The sync's enabled-flip alone would defer the fetch until the gate clears.
+    if (oplogOpen) void oplogSync.refresh()
   }
 
   async function toggleEvolog() {
     evologOpen = !evologOpen
-    if (evologOpen && selectedRevision) {
-      await evolog.load(effectiveId(selectedRevision.commit))
-    }
+    // Always load on open: the selection may have moved while the panel was closed.
+    if (evologOpen && selectedRevision) await evolog.load(effectiveId(selectedRevision.commit))
   }
 
   async function startDescriptionEdit() {
@@ -2242,11 +2251,18 @@
   }
 
   // User-intent refresh — dismisses any stale error/warning. Background
-  // refreshes (runMutation's post-mutation loadLog, the staleness effect)
-  // call loadLog() directly and preserve the message they just set.
+  // refreshes (runMutation's post-mutation logSync.refresh(), the op-syncs)
+  // preserve the message they just set.
   function userRefresh(resetSelection = false) {
     setMessage(null)
-    return loadLog(resetSelection)
+    if (resetSelection) pendingResetSelection = true
+    // Escape hatch ('r' = "I think the watcher missed something"): refresh open
+    // panels explicitly too. Their op-syncs can't help here — the premise is
+    // that the op-id signal itself was missed or never fired. (The evolog is
+    // covered by loadLog's post-reconciliation chain.)
+    if (oplogOpen) void oplogSync.refresh()
+    if (activeView === 'branches') void bookmarksSync.refresh()
+    return logSync.refresh()
   }
 
   function handleRevsetSubmit() {
@@ -2566,52 +2582,13 @@
   }
 
   // ── Staleness model ────────────────────────────────────────────────────────
-  // "Is the graph stale?" is DERIVED state, not an event: stale ⟺ the op-id
-  // the backend last reported (currentOpId) differs from the op-id the
-  // rendered log reflects (renderedOpId). The effect below re-evaluates
-  // whenever ANY input changes, so a refresh suppressed by loading/mutating/
-  // modal/inline-mode fires as soon as the suppressing condition clears — the
-  // staleness fact can never be dropped. (The previous model fired loadLog
-  // from inside the onStale callback and dropped the event when gated; an
-  // op-id arriving mid-loadLog left the graph stale until the NEXT operation.)
-  //
-  // The subscription only records the op-id; all policy lives in the effect.
+  // The subscription only records the op-id. ALL refresh policy — the per-
+  // resource stale comparison, gate/enabled suppression with re-fire, throttling,
+  // explicit-vs-auto dedup — lives in the op-syncs declared above (see the
+  // "Op-synced server state" block and lib/op-sync.svelte.ts). currentOpId stays
+  // null until the first op-id CHANGE: api.ts treats the first observed op-id as
+  // the baseline, so a fresh mount never refreshes what it just loaded.
   $effect(() => onStale((opId) => { currentOpId = opId }))
-
-  $effect(() => {
-    // Dependency note: when not stale, only currentOpId/renderedOpId are read
-    // → the effect is inert until an op-id moves. The gates below become deps
-    // only while stale, which is exactly when their flips should re-evaluate.
-    if (currentOpId === null || currentOpId === renderedOpId) return
-    if (loading || mutating || anyModalOpen || inlineMode) return
-    // Defer one macrotask + re-check before refreshing: post-mutation flows
-    // (runMutation, DiffPanel's onfilesaved) call loadLog explicitly right
-    // after `mutating` clears. The deferral lets that call start first — it
-    // stamps attemptedOpId synchronously at entry — so this effect doesn't
-    // fire a duplicate /api/log fetch. attemptedOpId also stops a persistently
-    // failing load from retry-looping (one effect-driven attempt per op-id).
-    const t = setTimeout(() => {
-      if (currentOpId === null || currentOpId === renderedOpId) return
-      if (currentOpId === attemptedOpId) return
-      if (loading || mutating || anyModalOpen || inlineMode) return
-      loadLog()
-      // Server-state mirrors that external operations can change. loadLog
-      // covers the graph + (in branches view) the bookmarks panel.
-      // loadWorkspaces is O(workspaces) — cheap and load-bearing for the
-      // workspace context-menu gating, so it runs every time. The expensive
-      // mirrors (PR badges, aliases/remotes, the stale-immutable revset
-      // scan) live behind refreshSlowMirrors' 60s throttle — see that
-      // function for the cost analysis.
-      void loadWorkspaces()
-      refreshSlowMirrors()
-    }, 0)
-    return () => clearTimeout(t)
-  })
-  // Load on view entry. Covers key '2' + toolbar click + any future path.
-  // loadLog also refreshes if branches view is open (mutations via this tab).
-  $effect(() => {
-    if (activeView === 'branches') bookmarksPanel.load()
-  })
   // Auto-refresh sources: SSE push (fsnotify/inotifywait) + tab-focus snapshot.
   // Both route through notifyOpId → onStale → currentOpId, so the staleness
   // effect's gates apply. The body reads no reactive state → runs once on
@@ -2748,11 +2725,20 @@
     nav.cancel()
   })
 
-  loadLog()
+  // Initial loads — explicit refresh() calls. A never-fetched sync IS stale by
+  // definition (op-sync's !hasApplied rule), so the eager syncs below would
+  // auto-fetch one effect flush + one macrotask later anyway; calling refresh()
+  // here starts the fetches synchronously (startup latency) and pre-empts that
+  // deferred auto pass (the attempted/inFlight stamps make its re-check a no-op).
+  // staleImmSync is deliberately absent (startFresh: created already-applied, so
+  // the expensive scan never runs at mount); loadInfo is not op-id state at all
+  // (repo identity can't change for a running server).
+  void logSync.refresh()
   loadInfo()
-  loadWorkspaces()
-  loadAliases()
-  loadPullRequests()
+  void workspacesSync.refresh()
+  void aliasesSync.refresh()
+  void prsSync.refresh()
+  void remotesSync.refresh()
 
   // --- Tab-switch state preservation ---
   // AppShell calls getState() before the {#key} remount destroys this instance.
@@ -3094,7 +3080,7 @@
             graphCommitId={selectedRevision?.commit.commit_id}
             onjump={jumpToBookmark}
             onexecute={handleBookmarkOp}
-            onrefresh={() => bookmarksPanel.load()}
+            onrefresh={() => bookmarksSync.refresh()}
             onclose={switchToLogView}
             onvisibilitychange={async (vis) => {
               // loadInfo() may have failed at mount (SSH slow-start); retry once
@@ -3289,7 +3275,7 @@
             {hunkReview}
             selectedFiles={fileSel.set}
             ontogglefile={fileSel.toggle}
-            onfilesaved={loadLog}
+            onfilesaved={() => logSync.refresh()}
             onjjmutation={withMutation}
             oncontextmenu={showContextMenu}
             onopenfile={editorConfigured ? handleOpenFile : undefined}
@@ -3341,7 +3327,7 @@
             loading={evologLoading}
             {selectedRevision}
             height={config.evologPanelHeight}
-            onrefresh={() => { if (selectedRevision) loadEvolog(effectiveId(selectedRevision.commit)) }}
+            onrefresh={() => { if (selectedRevision) void evolog.load(effectiveId(selectedRevision.commit)) }}
             onclose={() => { evologOpen = false }}
             onrestoreversion={handleRestoreVersion}
             oncontextmenu={showContextMenu}
@@ -3354,7 +3340,7 @@
           entries={oplogEntries}
           loading={oplogLoading}
           error={oplog.error}
-          onrefresh={loadOplog}
+          onrefresh={() => oplogSync.refresh()}
           onclose={() => { oplogOpen = false }}
           onopundo={handleOpUndo}
           onoprestore={handleOpRestore}

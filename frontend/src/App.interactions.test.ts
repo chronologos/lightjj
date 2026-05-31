@@ -120,6 +120,9 @@ describe('App.svelte interactions', () => {
     expect(qs('.bp-list')).toBeNull()
     await press('2')
     await waitFor(() => qs('.bp-list') !== null)
+    // '2' → switchToBranchesView → explicit bookmarksSync.refresh(): the fetch
+    // starts synchronously (bypasses the op-sync gate), so it has been recorded
+    // by the time the view renders.
     expect(calls.some(c => c.method === 'bookmarks')).toBe(true)
     await press('1')
     await waitFor(() => qs('.bp-list') === null)
@@ -174,12 +177,13 @@ describe('App.svelte interactions', () => {
 })
 
 // ── Staleness model + identity-keyed cursor ─────────────────────────────────
-// Locks the App-side behavior of the derived staleness design: staleness is
-// `currentOpId !== renderedOpId` evaluated by an $effect, so a refresh
-// suppressed by an inline mode/modal/mutation fires when the gate clears
-// instead of being dropped. And the cursor is identity-keyed (selectedId →
-// derived selectedIndex), so a refresh that shifts row positions cannot
-// silently re-bind the cursor (and the diff panel) to a different revision.
+// Locks the App-side behavior of the derived staleness design: each server
+// resource's op-sync compares the op-id its value reflects against the latest
+// reported op-id (lib/op-sync.svelte.ts), so a refresh suppressed by an inline
+// mode/modal/mutation fires when the gate clears instead of being dropped. And
+// the cursor is identity-keyed (selectedId → derived selectedIndex), so a
+// refresh that shifts row positions cannot silently re-bind the cursor (and the
+// diff panel) to a different revision.
 describe('staleness + identity cursor', () => {
   const logCalls = () => calls.filter(c => c.method === 'log').length
 
