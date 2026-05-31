@@ -47,7 +47,7 @@
      *  `diffTarget` during a fetch. Equality with activeRevisionId is the
      *  "content matches target" invariant. Covers snapshot-refresh (isRefresh
      *  path) where diffPending stays false but commit_id still churns. */
-    diffContentKey?: string
+    diffContentKey: string
     splitView: boolean
     vis: CommentVisibility
     /** Revision metadata header (change_id, description, bookmarks, describe
@@ -102,15 +102,8 @@
   // Has the diff content caught up to the current target? False during the
   // navigate→fetch-resolve gap. Gates the highlight/word-diff derivation
   // effect — running with stale parsedDiff under new cacheKey writes a
-  // poisoned memo that the next fire would then short-circuit on. When
-  // diffContentKey is undefined (pre-fix App, tests that don't pass it),
-  // fall back to `!diffPending` — still catches the common non-refresh
-  // path, matching the minimal-fix behavior.
-  let contentMatchesTarget = $derived(
-    diffContentKey !== undefined
-      ? diffContentKey === activeRevisionId
-      : !diffPending
-  )
+  // poisoned memo that the next fire would then short-circuit on.
+  let contentMatchesTarget = $derived(diffContentKey === activeRevisionId)
 
   // --- Local state ---
   let panelContentEl: HTMLElement | undefined = $state(undefined)

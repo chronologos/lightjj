@@ -24,7 +24,7 @@ vi.mock('./api', async (importOriginal) => {
 })
 
 import DiffPanel from './DiffPanel.svelte'
-import { api, type DiffTarget, type FileChange } from './api'
+import { api, diffTargetKey, type DiffTarget, type FileChange } from './api'
 import { clearDiffCaches, derivedCache } from './diff-cache'
 import { createCommentVisibility } from './comment-visibility.svelte'
 
@@ -49,10 +49,18 @@ const tinyDiff = (path: string) =>
   `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1 @@\n+x\n`
 
 function props(overrides: Record<string, unknown> = {}) {
+  // diffContentKey is a required prop. Default it to match diffTarget
+  // ("content has caught up") so fixtures that don't exercise the
+  // content/target mismatch keep working; tests that do exercise it pass
+  // diffContentKey explicitly and the override below wins.
+  const diffTarget = ('diffTarget' in overrides
+    ? overrides.diffTarget
+    : target('co-A', 'ch-A')) as DiffTarget | undefined
   return {
     diffContent: tinyDiff('a.go'),
     changedFiles: [mkFile('a.go')],
-    diffTarget: target('co-A', 'ch-A'),
+    diffTarget,
+    diffContentKey: diffTarget ? diffTargetKey(diffTarget) : '',
     diffLoading: false,
     splitView: false,
     vis: createCommentVisibility(),

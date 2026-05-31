@@ -782,6 +782,10 @@
 
     // Workspaces
     { label: 'New workspace…', category: 'Workspace', action: handleWorkspaceAdd, when: () => !inlineMode && sshMode === false },
+    // Rename is otherwise only reachable by right-clicking the current-workspace
+    // badge, which doesn't render in single-workspace repos. currentWorkspace
+    // !== '' = workspace info loaded (tri-state: '' means unknown).
+    { label: 'Rename workspace…', category: 'Workspace', action: renameWorkspace, when: () => !inlineMode && currentWorkspace !== '' },
 
     // View (non-dynamic)
     { label: 'Edit config (JSON)…', category: 'View', hint: 'theme, fonts, editorArgs', action: () => { closeAllModals(); configModalOpen = true } },
@@ -976,20 +980,35 @@
   // jj's command shapes decide what's offered: rename/update-stale act only on
   // the CURRENT workspace; forget takes a name so it works on others. Every
   // shown item works — no dead disabled entries.
+  //
+  // Tri-state on currentWorkspace: '' means UNKNOWN (initial value until
+  // loadWorkspaces() resolves; stays there if that fetch fails), not "some
+  // other workspace". While unknown, fail safe: offer only non-destructive
+  // items. A plain equality check would route the user's OWN badge to the
+  // other-workspace menu, whose headline item is the destructive Forget.
   function openWorkspaceContextMenu(wsName: string, x: number, y: number) {
     const items: ContextMenuItem[] = []
-    if (wsName === currentWorkspace) {
+    const wsKnown = currentWorkspace !== ''
+    if (wsKnown && wsName === currentWorkspace) {
       items.push(
         { label: 'Rename…', disabled: inlineMode, action: () => renameWorkspace() },
         { label: 'Update if stale', disabled: inlineMode, action: () => handleUpdateStale() },
       )
     } else {
       const ws = workspaceList.find(w => w.name === wsName)
+      // inlineMode gate: opening a tab remounts App ({#key} in AppShell), which
+      // drops a half-configured rebase/squash/split by design.
       items.push(
-        { label: 'Open in new tab', shortcut: '↗', disabled: !ws?.path, action: () => openWorkspaceTab(wsName) },
-        { separator: true },
-        { label: 'Forget', danger: true, disabled: inlineMode, action: () => forgetWorkspace(wsName) },
+        { label: 'Open in new tab', shortcut: '↗', disabled: inlineMode || !ws?.path, action: () => openWorkspaceTab(wsName) },
       )
+      // Forget only when we KNOW this isn't the current workspace — forgetting
+      // the workspace being viewed orphans the tab.
+      if (wsKnown) {
+        items.push(
+          { separator: true },
+          { label: 'Forget', danger: true, disabled: inlineMode, action: () => forgetWorkspace(wsName) },
+        )
+      }
     }
     contextMenu = { items, x, y }
   }
@@ -2431,8 +2450,13 @@
   let staleWhileSuppressed = false
   $effect(() => {
     return onStale(() => {
-      if (!loading && !mutating && !anyModalOpen && !inlineMode) loadLog()
-      else if (inlineMode || anyModalOpen) staleWhileSuppressed = true
+      if (!loading && !mutating && !anyModalOpen && !inlineMode) {
+        loadLog()
+        // Workspaces can change outside the UI too (CLI add/rename/forget,
+        // another tab, an agent). Fire-and-forget — one cheap jj call,
+        // error-swallowing, must not delay loadLog.
+        void loadWorkspaces()
+      } else if (inlineMode || anyModalOpen) staleWhileSuppressed = true
       // loadLog at :721 already calls bookmarksPanel.load() when branches is
       // active. Only fire here when loadLog was gated (loading/mutating true).
       else if (activeView === 'branches') bookmarksPanel.load()
@@ -2581,6 +2605,9 @@
     if (!inlineMode && !anyModalOpen && staleWhileSuppressed) {
       staleWhileSuppressed = false
       loadLog()
+      // Mirror the direct onStale path — the suppressed staleness may have
+      // included workspace changes.
+      void loadWorkspaces()
     }
   })
 

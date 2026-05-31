@@ -435,17 +435,19 @@
               {#each entry.commit.working_copies ?? [] as ws}
                 {#if ws === currentWorkspace}
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <!-- Same gate as the row-level oncontextmenu above: badge menus
+                       must not open during inline modes or graph refreshes. -->
                   <span
                     class="workspace-badge ws-current"
                     title="Current workspace — right-click to rename or recover"
-                    oncontextmenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onworkspacecontextmenu(ws, e.clientX, e.clientY) }}
+                    oncontextmenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); if (anyModeActive || isRefreshing) return; onworkspacecontextmenu(ws, e.clientX, e.clientY) }}
                   >◇ {ws}@</span>
                 {:else}
                   <button
                     class="workspace-badge ws-other"
                     title="Open workspace '{ws}' in a new tab — right-click for more"
                     onclick={(e: MouseEvent) => { e.stopPropagation(); onworkspaceclick(ws) }}
-                    oncontextmenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onworkspacecontextmenu(ws, e.clientX, e.clientY) }}
+                    oncontextmenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); if (anyModeActive || isRefreshing) return; onworkspacecontextmenu(ws, e.clientX, e.clientY) }}
                   >◇ {ws}@</button>
                 {/if}
               {/each}

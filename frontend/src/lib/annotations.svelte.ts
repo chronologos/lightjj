@@ -27,12 +27,6 @@ export const isReviewedMarker = (a: Annotation) =>
 const FUZZY_WINDOW = 5 // ±lines to search for content match
 const NO_ANN: readonly PlacedReview[] = [] // shared empty result for forLine misses
 
-// changeIds known to have zero annotations — skip the GET on settled j/k.
-// add() is the only path that makes a changeId non-empty, so invalidation is
-// trivial. Cross-tab edge (tab B adds, tab A stale) is rare × rare; a page
-// refresh or adding any annotation in tab A clears the local miss.
-const knownEmpty = new Set<string>()
-
 // Hunk header format: @@ -oldStart,oldCount +newStart,newCount @@
 // For a hunk entirely ABOVE an annotation's line, the net effect on that
 // line's number is (newCount - oldCount). Using the diff-parser's DiffHunk
@@ -271,19 +265,17 @@ export function createAnnotationStore(): AnnotationStore {
   // backend but invisible in UI until next nav.
   let loadGen = 0
   const bumpGen = () => ++loadGen
+  // No negative caching of empty changeIds: agents POST annotations out-of-band
+  // (other tabs, the agent CLI), so a "known empty" memo would make those
+  // comments permanently invisible here. One cheap GET per revisit of an
+  // annotation-free revision is the price of correctness.
   async function load(changeId: string, commitId: string) {
     const gen = bumpGen()
-    if (knownEmpty.has(changeId)) {
-      list = []
-      loadedChangeId = changeId
-      return
-    }
     return withBusy(async () => {
       const raw = await api.annotations(changeId)
       if (gen !== loadGen) return
       loadedChangeId = changeId
       if (raw.length === 0) {
-        knownEmpty.add(changeId)
         list = []
         return
       }
@@ -346,7 +338,6 @@ export function createAnnotationStore(): AnnotationStore {
   }
 
   async function add(opts: Parameters<AnnotationStore['add']>[0]) {
-    knownEmpty.delete(opts.changeId)
     const ann: Annotation = {
       id: crypto.randomUUID(),
       ...opts,
@@ -410,7 +401,6 @@ export function createAnnotationStore(): AnnotationStore {
           lineNum: FILE_LEVEL, lineContent: '', comment: '', severity: 'reviewed',
           createdAt: Date.now(), status: 'open',
         }
-        knownEmpty.delete(ctx.changeId)
         list = [...list, ann]
         try { await api.saveAnnotation(ann) }
         catch (e) { list = list.filter(a => a.id !== ann.id); throw e }
