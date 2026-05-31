@@ -425,7 +425,7 @@ func TestHandleSnapshot(t *testing.T) {
 
 func TestHandleWorkspaceAdd(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceAdd("/tmp/myrepo-feature", "feature")).
+	runner.Expect(jj.WorkspaceAdd("/tmp/myrepo-feature", "feature", "")).
 		SetOutput([]byte("Created workspace in \"/tmp/myrepo-feature\""))
 	defer runner.Verify()
 
@@ -455,7 +455,7 @@ func TestHandleWorkspaceAddFromSecondaryWorkspace(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	// dest resolves to a sibling of the PRIMARY (parent/repo-withcodex), not
 	// parent/repo-withclaude-withcodex.
-	runner.Expect(jj.WorkspaceAdd(filepath.Join(parent, "repo-withcodex"), "withcodex")).
+	runner.Expect(jj.WorkspaceAdd(filepath.Join(parent, "repo-withcodex"), "withcodex", "")).
 		SetOutput([]byte("Created workspace"))
 	defer runner.Verify()
 
@@ -484,6 +484,57 @@ func TestHandleWorkspaceAddValidation(t *testing.T) {
 			srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/add", []byte(tc.body)))
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 		})
+	}
+}
+
+func TestHandleWorkspaceAddWithRevision(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceAdd("/tmp/myrepo-feature", "feature", "xyz")).
+		SetOutput([]byte("Created workspace"))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	srv.RepoDir = "/tmp/myrepo"
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/add", []byte(`{"name":"feature","revision":"xyz"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceForget(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceForget("feature")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	// Forget works in SSH mode too (no RepoDir needed) — pure jj mutation.
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/forget", []byte(`{"name":"feature"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceRename(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceRename("renamed")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/rename", []byte(`{"name":"renamed"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceForgetRenameValidation(t *testing.T) {
+	for _, path := range []string{"/api/workspace/forget", "/api/workspace/rename"} {
+		for _, body := range []string{`{"name":""}`, `{"name":"a/b"}`, `{"name":".."}`} {
+			t.Run(path+" "+body, func(t *testing.T) {
+				runner := testutil.NewMockRunner(t)
+				defer runner.Verify()
+				srv := newTestServer(runner)
+				w := httptest.NewRecorder()
+				srv.Mux.ServeHTTP(w, jsonPost(path, []byte(body)))
+				assert.Equal(t, http.StatusBadRequest, w.Code)
+			})
+		}
 	}
 }
 

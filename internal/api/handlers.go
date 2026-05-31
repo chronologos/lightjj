@@ -1070,6 +1070,9 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 
 type workspaceAddRequest struct {
 	Name string `json:"name"`
+	// Revision (optional) becomes the new workspace's working-copy parent.
+	// Empty = jj default (share current @ parents). Set by "Add workspace here".
+	Revision string `json:"revision,omitempty"`
 }
 
 var workspaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -1106,7 +1109,47 @@ func (s *Server) handleWorkspaceAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	baseRoot := filepath.Dir(filepath.Dir(s.repoStorePath())) // <defaultRoot>/.jj/repo → <defaultRoot>
 	dest := filepath.Join(filepath.Dir(baseRoot), filepath.Base(baseRoot)+"-"+req.Name)
-	s.runMutation(w, r, jj.WorkspaceAdd(dest, req.Name))
+	s.runMutation(w, r, jj.WorkspaceAdd(dest, req.Name, req.Revision))
+}
+
+type workspaceNameRequest struct {
+	Name string `json:"name"`
+}
+
+// handleWorkspaceForget stops tracking the named workspace. Works on any
+// workspace (forget takes a name) and in SSH mode (pure jj mutation, no local
+// fs needed). The on-disk directory is left intact. The frontend gates this to
+// non-current workspaces — forgetting the workspace you're viewing orphans the
+// tab — but the backend doesn't enforce that (jj allows it; the name is the
+// only contract). After the op the frontend reloads /api/workspaces so the
+// dropdown + badges drop the forgotten entry.
+func (s *Server) handleWorkspaceForget(w http.ResponseWriter, r *http.Request) {
+	var req workspaceNameRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !workspaceNameRe.MatchString(req.Name) {
+		s.writeError(w, http.StatusBadRequest, "workspace name must match [A-Za-z0-9_-]+")
+		return
+	}
+	s.runMutation(w, r, jj.WorkspaceForget(req.Name))
+}
+
+// handleWorkspaceRename renames the CURRENT workspace (the one `-R` points at).
+// jj has no argument to pick which workspace, so the frontend only offers
+// rename on the current-workspace badge. Pure jj mutation — works in SSH mode.
+func (s *Server) handleWorkspaceRename(w http.ResponseWriter, r *http.Request) {
+	var req workspaceNameRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !workspaceNameRe.MatchString(req.Name) {
+		s.writeError(w, http.StatusBadRequest, "workspace name must match [A-Za-z0-9_-]+")
+		return
+	}
+	s.runMutation(w, r, jj.WorkspaceRename(req.Name))
 }
 
 // handleWorkspaceUpdateStale recovers a stale working copy. The watcher's

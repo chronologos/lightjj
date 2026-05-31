@@ -80,6 +80,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     onclearchecks: vi.fn(),
     onbookmarkclick: vi.fn(),
     onworkspaceclick: vi.fn(),
+    onworkspacecontextmenu: vi.fn(),
     currentWorkspace: 'default',
     remoteVisibility: {},
     rebase: createRebaseMode(),

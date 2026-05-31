@@ -33,6 +33,7 @@
     onclearchecks: () => void
     onbookmarkclick: (name: string) => void
     onworkspaceclick: (wsName: string) => void
+    onworkspacecontextmenu: (wsName: string, x: number, y: number) => void
     /** Current workspace name — its badge renders dimmed/non-interactive (clicking would dup the active tab). */
     currentWorkspace: string
     rebase: RebaseMode
@@ -50,7 +51,7 @@
     revisions, selectedIndex, checkedRevisions, loading, mutating, viewLabel, lastCheckedIndex,
     onselect, ontogglecheck, onrangecheck, oncontextmenu, onresolvedivergence,
     onnewfromchecked, onabandonchecked, onclearchecks,
-    onbookmarkclick, onworkspaceclick, currentWorkspace,
+    onbookmarkclick, onworkspaceclick, onworkspacecontextmenu, currentWorkspace,
     rebase, squash, split,
     theme, themeEpoch = 0, prByBookmark, impliedCommitIds, remoteVisibility,
   }: Props = $props()
@@ -433,12 +434,18 @@
             <span class="bookmark-line-content">
               {#each entry.commit.working_copies ?? [] as ws}
                 {#if ws === currentWorkspace}
-                  <span class="workspace-badge ws-current">◇ {ws}@</span>
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <span
+                    class="workspace-badge ws-current"
+                    title="Current workspace — right-click to rename or recover"
+                    oncontextmenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onworkspacecontextmenu(ws, e.clientX, e.clientY) }}
+                  >◇ {ws}@</span>
                 {:else}
                   <button
                     class="workspace-badge ws-other"
-                    title="Open workspace '{ws}' in a new tab"
+                    title="Open workspace '{ws}' in a new tab — right-click for more"
                     onclick={(e: MouseEvent) => { e.stopPropagation(); onworkspaceclick(ws) }}
+                    oncontextmenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onworkspacecontextmenu(ws, e.clientX, e.clientY) }}
                   >◇ {ws}@</button>
                 {/if}
               {/each}

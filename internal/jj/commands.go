@@ -323,10 +323,12 @@ func DiffRange(from, to string, files []string) CommandArgs {
 // Explicit concatenation, NOT separate() — separate() skips empty arguments,
 // so if(conflict, "", ...) would shift field positions. Empirically verified.
 // Guards: if(normal_target, ...) because normal_target is absent for BOTH
-//         conflicted AND deleted-local refs (conflict=false in the latter,
-//         so if(conflict, ...) alone leaks "<Error: No Commit available>").
-//         if(tracked, ...) because self.tracking_*_count() errors on
-//         non-tracked refs. self. prefix is required on tracking_* methods.
+//
+//	conflicted AND deleted-local refs (conflict=false in the latter,
+//	so if(conflict, ...) alone leaks "<Error: No Commit available>").
+//	if(tracked, ...) because self.tracking_*_count() errors on
+//	non-tracked refs. self. prefix is required on tracking_* methods.
+//
 // .short() (no arg) matches the log template so commit_id strings compare
 // equal across endpoints (jumpToBookmark findIndex depends on this).
 const bookmarkListTemplate = `name ++ "\x1F" ++ if(remote, remote, ".") ++ "\x1F" ++ stringify(tracked) ++ "\x1F" ++ stringify(conflict) ++ "\x1F" ++ if(normal_target, normal_target.commit_id().short(), "") ++ "\x1F" ++ added_targets.map(|c| c.commit_id().short()).join(",") ++ "\x1F" ++ if(tracked, stringify(self.tracking_ahead_count().lower()), "0") ++ "\x1F" ++ if(tracked, stringify(self.tracking_behind_count().lower()), "0") ++ "\x1F" ++ stringify(synced) ++ "\x1F" ++ if(normal_target, normal_target.description().first_line(), "") ++ "\x1F" ++ if(normal_target, normal_target.committer().timestamp().ago(), "") ++ "\n"`
@@ -636,7 +638,6 @@ func FileLog(path string, limit int, full bool) CommandArgs {
 // automatically — ~70× speedup on merge-heavy repos per jj#4674. The index is
 // segment-based and persists; re-running appends new commits only. Under
 // `debug` because jj hasn't promoted it to stable yet (jj#7250).
-//
 func IndexChangedPaths() CommandArgs {
 	return []string{"debug", "index-changed-paths"}
 }
@@ -715,16 +716,41 @@ func ParseConflictList(output string) []*ConflictEntry {
 	return entries
 }
 
-// WorkspaceAdd returns args for `jj workspace add <dest> --name <name>`.
+// WorkspaceAdd returns args for `jj workspace add <dest> --name <name> [-r <revision>]`.
 // Destination is an absolute path; jj refuses if it already exists with content.
 // Name is optional (jj defaults to basename(dest)) but always passed here so
 // callers see the same name in working_copies output as they typed.
-func WorkspaceAdd(dest, name string) CommandArgs {
+//
+// revision (optional) becomes the PARENT of the new workspace's working-copy
+// commit — `jj new <revision>` semantics, not a checkout. Empty means jj's
+// default (share the current workspace's @ parents). Used by "Add workspace
+// here" on a revision context menu so the new workspace starts atop that rev.
+func WorkspaceAdd(dest, name, revision string) CommandArgs {
 	args := []string{"workspace", "add", dest}
 	if name != "" {
 		args = append(args, "--name", name)
 	}
+	if revision != "" {
+		args = append(args, "-r", revision)
+	}
 	return args
+}
+
+// WorkspaceForget returns args for `jj workspace forget <name>`.
+// Stops tracking the named workspace's working-copy commit. The on-disk
+// directory is NOT touched (jj leaves it for the user to delete). Takes a name
+// so any workspace can be forgotten from the shared repo store — unlike rename/
+// update-stale which only act on the current workspace.
+func WorkspaceForget(name string) CommandArgs {
+	return []string{"workspace", "forget", name}
+}
+
+// WorkspaceRename returns args for `jj workspace rename <newName>`.
+// jj renames the CURRENT workspace (the one `-R` points at) — there is no
+// argument to select which workspace, so callers must already be operating in
+// the workspace they want to rename.
+func WorkspaceRename(newName string) CommandArgs {
+	return []string{"workspace", "rename", newName}
 }
 
 // WorkspaceUpdateStale returns args for `jj workspace update-stale`.

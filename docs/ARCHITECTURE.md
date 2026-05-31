@@ -159,7 +159,9 @@ flowchart TD
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/workspaces` | Current workspace + list with paths |
-| POST | `/api/workspace/add` | Create sibling-directory workspace (local-only) |
+| POST | `/api/workspace/add` | Create sibling-directory workspace (local-only); optional `revision` parent |
+| POST | `/api/workspace/forget` | Stop tracking a workspace by name (dir left on disk) |
+| POST | `/api/workspace/rename` | Rename the current workspace |
 | POST | `/api/workspace/update-stale` | Recover a stale working copy |
 
 Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `routes()`):

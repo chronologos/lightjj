@@ -925,22 +925,73 @@
     } catch { /* ignore — SSH mode or single workspace */ }
   }
 
-  // Cmd+K → "New workspace". Backend creates a sibling dir <repo>-<name> and
-  // adds it via `jj workspace add`. After success, reload the workspace list
-  // (which picks up the new path from the workspace_store index) and open it
-  // as a tab.
-  async function handleWorkspaceAdd() {
+  // Cmd+K → "New workspace" and revision-menu → "Add workspace here…". Backend
+  // creates a sibling dir <repo>-<name> and adds it via `jj workspace add`.
+  // revision (optional) is the change_id of a revision the new workspace's @
+  // should sit atop (`-r` → `jj new` parent semantics). After success, reload
+  // the workspace list (picks up the new path from the workspace_store index)
+  // and open it as a tab.
+  async function handleWorkspaceAdd(revision?: string) {
+    const base = 'New workspace name (creates sibling directory <repo>-<name>)'
+    const promptMsg = revision ? `${base}, based on ${revision.slice(0, 8)}:` : `${base}:`
     // eslint-disable-next-line no-alert
-    const name = prompt('New workspace name (creates sibling directory <repo>-<name>):')?.trim()
+    const name = prompt(promptMsg)?.trim()
     if (!name) return
     try {
-      const res = await withMutation(() => api.workspaceAdd(name))
+      const res = await withMutation(() => api.workspaceAdd(name, revision))
       if (!res) return
       await loadWorkspaces()
       openWorkspaceTab(name)
     } catch (e) {
       setMessage(errorMessage(e))
     }
+  }
+
+  // Right-click workspace badge → "Forget". jj stops tracking the workspace but
+  // leaves its directory on disk. Gated to NON-current workspaces in the menu
+  // (forgetting the one you're viewing orphans the tab). Reload the list after
+  // so the dropdown + badges drop the entry.
+  const forgetWorkspace = (wsName: string) =>
+    runMutation(
+      () => api.workspaceForget(wsName),
+      `Forgot workspace '${wsName}'`,
+      { after: () => { loadWorkspaces() } },
+    )
+
+  // Right-click the CURRENT workspace badge → "Rename". jj renames whichever
+  // workspace `-R` points at (no name arg), so this only targets the current
+  // one — the menu hides it on other badges.
+  async function renameWorkspace() {
+    // eslint-disable-next-line no-alert
+    const name = prompt(`Rename current workspace '${currentWorkspace}' to:`, currentWorkspace)?.trim()
+    if (!name || name === currentWorkspace) return
+    await runMutation(
+      () => api.workspaceRename(name),
+      `Renamed workspace to '${name}'`,
+      { after: () => { loadWorkspaces() } },
+    )
+  }
+
+  // Shared by the toolbar dropdown options and RevisionGraph workspace badges.
+  // jj's command shapes decide what's offered: rename/update-stale act only on
+  // the CURRENT workspace; forget takes a name so it works on others. Every
+  // shown item works — no dead disabled entries.
+  function openWorkspaceContextMenu(wsName: string, x: number, y: number) {
+    const items: ContextMenuItem[] = []
+    if (wsName === currentWorkspace) {
+      items.push(
+        { label: 'Rename…', disabled: inlineMode, action: () => renameWorkspace() },
+        { label: 'Update if stale', disabled: inlineMode, action: () => handleUpdateStale() },
+      )
+    } else {
+      const ws = workspaceList.find(w => w.name === wsName)
+      items.push(
+        { label: 'Open in new tab', shortcut: '↗', disabled: !ws?.path, action: () => openWorkspaceTab(wsName) },
+        { separator: true },
+        { label: 'Forget', danger: true, disabled: inlineMode, action: () => forgetWorkspace(wsName) },
+      )
+    }
+    contextMenu = { items, x, y }
   }
 
   // Shared by toolbar dropdown + RevisionGraph workspace badges. Distinguish
@@ -1218,6 +1269,11 @@
       { label: 'Slide down', shortcut: '⇧J', disabled: inlineMode || !slideDown.ok, action: () => { selectByChangeId(changeId); handleSlide('down') } },
       { separator: true },
       { label: 'Set bookmark...', shortcut: 'B', disabled: inlineMode, action: () => { selectByChangeId(changeId); openModal('bookmarkInput') } },
+      { separator: true },
+      // Add-here passes the change_id as the new workspace's parent revision
+      // (`-r` → `jj new` semantics). Local-fs only (handleWorkspaceAdd derives a
+      // sibling dir on disk); disabled in SSH mode, same as the palette command.
+      { label: 'Add workspace here…', disabled: inlineMode || sshMode !== false, action: () => handleWorkspaceAdd(changeId) },
     ]
     if (entry?.commit.divergent) {
       items.push(
@@ -2642,7 +2698,12 @@
               <div class="toolbar-ws-dropdown">
                 {#each workspaceList as ws (ws.name)}
                   {#if ws.name === currentWorkspace}
-                    <div class="toolbar-ws-option toolbar-ws-active">
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="toolbar-ws-option toolbar-ws-active"
+                      title="Current workspace — right-click to rename or recover"
+                      oncontextmenu={(e: MouseEvent) => { e.preventDefault(); wsDropdownOpen = false; openWorkspaceContextMenu(ws.name, e.clientX, e.clientY) }}
+                    >
                       <span class="toolbar-ws-glyph">◇</span>
                       <span>{ws.name}</span>
                     </div>
@@ -2650,11 +2711,13 @@
                     <!-- Workspaces are just repo paths — open as a tab. Path absent
                          when the workspace predates jj's workspace_store index
                          (additive-only; no backfill). Click-to-warn instead of
-                         disabled+title — title is keyboard-inaccessible. -->
+                         disabled+title — title is keyboard-inaccessible.
+                         Right-click → forget. -->
                     <button
                       class="toolbar-ws-option"
                       class:toolbar-ws-unavailable={!ws.path}
                       onclick={() => { wsDropdownOpen = false; openWorkspaceTab(ws.name) }}
+                      oncontextmenu={(e: MouseEvent) => { e.preventDefault(); wsDropdownOpen = false; openWorkspaceContextMenu(ws.name, e.clientX, e.clientY) }}
                     >
                       <span class="toolbar-ws-glyph">◇</span>
                       <span>{ws.name}</span>
@@ -2832,6 +2895,7 @@
             onclearchecks={clearChecksAndReload}
             onbookmarkclick={openBookmarkModal}
             onworkspaceclick={openWorkspaceTab}
+            onworkspacecontextmenu={openWorkspaceContextMenu}
             {currentWorkspace}
             {rebase}
             {squash}

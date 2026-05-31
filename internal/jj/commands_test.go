@@ -307,10 +307,21 @@ func TestDebugSnapshot(t *testing.T) {
 func TestWorkspaceAdd(t *testing.T) {
 	assert.Equal(t,
 		CommandArgs{"workspace", "add", "/tmp/r-feat", "--name", "feat"},
-		WorkspaceAdd("/tmp/r-feat", "feat"))
+		WorkspaceAdd("/tmp/r-feat", "feat", ""))
 	assert.Equal(t,
 		CommandArgs{"workspace", "add", "/tmp/r-feat"},
-		WorkspaceAdd("/tmp/r-feat", ""))
+		WorkspaceAdd("/tmp/r-feat", "", ""))
+	assert.Equal(t,
+		CommandArgs{"workspace", "add", "/tmp/r-feat", "--name", "feat", "-r", "xyz"},
+		WorkspaceAdd("/tmp/r-feat", "feat", "xyz"))
+}
+
+func TestWorkspaceForget(t *testing.T) {
+	assert.Equal(t, CommandArgs{"workspace", "forget", "feat"}, WorkspaceForget("feat"))
+}
+
+func TestWorkspaceRename(t *testing.T) {
+	assert.Equal(t, CommandArgs{"workspace", "rename", "feat"}, WorkspaceRename("feat"))
 }
 
 func TestWorkspaceUpdateStale(t *testing.T) {
@@ -780,4 +791,3 @@ func TestParseConflictList_EmptyAndMalformed(t *testing.T) {
 	assert.Len(t, got, 1)
 	assert.Equal(t, []*ConflictFile{}, got[0].Files)
 }
-

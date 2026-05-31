@@ -1146,7 +1146,16 @@ export const api = {
 
   snapshot: () => post<MutationResult>('/api/snapshot', {}),
 
-  workspaceAdd: (name: string) => post<MutationResult>('/api/workspace/add', { name }),
+  // revision (optional) becomes the new workspace's working-copy parent —
+  // `jj new <revision>` semantics. Omitted = jj default (current @ parents).
+  workspaceAdd: (name: string, revision?: string) =>
+    post<MutationResult>('/api/workspace/add', revision ? { name, revision } : { name }),
+
+  // Forget takes a name → works on any workspace. Rename has no name arg in jj
+  // (renames the CURRENT workspace), so the UI only offers it on the current one.
+  workspaceForget: (name: string) => post<MutationResult>('/api/workspace/forget', { name }),
+
+  workspaceRename: (name: string) => post<MutationResult>('/api/workspace/rename', { name }),
 
   workspaceUpdateStale: () => post<MutationResult>('/api/workspace/update-stale', {}),
 

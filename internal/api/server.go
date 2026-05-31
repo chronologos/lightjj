@@ -178,6 +178,8 @@ func (s *Server) routes() {
 	reg("POST /api/restore-from", s.handleRestoreFrom)
 	reg("POST /api/snapshot", s.handleSnapshot)
 	reg("POST /api/workspace/add", s.handleWorkspaceAdd)
+	reg("POST /api/workspace/forget", s.handleWorkspaceForget)
+	reg("POST /api/workspace/rename", s.handleWorkspaceRename)
 	reg("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale)
 	reg("POST /api/unlock-repo", s.handleUnlockRepo)
 	reg("POST /api/commit", s.handleCommit)
