@@ -226,50 +226,95 @@ data is valid regardless of which tab fetched it.
 
 ## Staleness model
 
-How the frontend decides "the rendered graph no longer reflects the repo."
-Not a cache (nothing is stored) but the coherence mechanism that drives every
-non-explicit `loadLog()`.
+How the frontend decides "this rendered server data no longer reflects the
+repo." Not a cache (nothing is stored) but the coherence mechanism that drives
+every non-explicit refresh.
 
-**Staleness is derived state, never an event.** Three pieces, all in
-App.svelte:
+**Staleness is derived state, never an event — and it is owned per resource by
+`createOpSync` (lib/op-sync.svelte.ts).** Every repo-scoped server resource is a
+`createLoader` (owns value/loading/error + generation supersede) paired with an
+op-sync (owns refresh policy). App.svelte holds exactly one piece of shared
+state: `currentOpId`, written by the `onStale` subscription (record-only — all
+policy lives in the syncs).
 
-| Variable | Reactivity | Meaning |
+| Sync | Loader | Policy |
 |---|---|---|
-| `currentOpId` | `$state` | latest op-id the backend reported. Written by the `onStale` subscription (api.ts callbacks pass the op-id; SSE pushes and response headers both feed it) |
-| `renderedOpId` | `$state` | op-id the rendered log reflects — a *lower bound*: set on successful `loadLog` to the `currentOpId` captured at load **start** (the response is at least that fresh, since op-ids only advance) |
-| `attemptedOpId` | plain `let` | op-id of the last *started* `loadLog`, stamped synchronously at entry, success or not |
+| `logSync` | `log` | eager; `run` = `loadLog()` (fetch + cursor reconciliation + diff chase + evolog chain + prefetch) |
+| `workspacesSync` | `workspaces` | eager |
+| `oplogSync` / `bookmarksSync` | panel loaders | eager, `enabled:` panel-open predicates (op-id staleness while open); panel-open itself calls `refresh()` explicitly so the gate can't defer the first paint |
+| `prsSync` / `aliasesSync` / `remotesSync` | mirror loaders | throttled 60s (per-resource timestamps) |
+| `staleImmSync` | `staleImm` | throttled 60s + `startFresh` (the scan never runs at mount) |
 
-One `$effect` evaluates `currentOpId !== renderedOpId` behind the gates
-(`loading || mutating || anyModalOpen || inlineMode`). Because effects re-run
-when **any** dependency changes, a refresh suppressed by a gate fires as soon
-as the gate clears — the staleness fact cannot be dropped. (The previous
-design refreshed inside the `onStale` callback and returned early when gated;
-api.ts had already advanced `lastOpId`, so the dropped event never re-fired
-and the graph stayed stale until the *next* operation.)
+**The evolog has NO op-sync** — it is *selection-scoped* per-revision data (the
+other identity granularity). Every op-id change refreshes the log, and `loadLog`
+chains the evolog **after** cursor reconciliation so it always follows the
+post-refresh selection; an op-sync run thunk would read the pre-reconciliation
+selection and stamp the wrong load as fresh. Its loads are all explicit:
+toggle-open, the 50ms selection-follow debounce, and the loadLog chain.
 
-Supporting details:
+Per sync, the staleness comparison is
+`!hasApplied || (currentOpId !== null && currentOpId !== reflectsOpId)`:
 
-- **Capture-at-start renderedOpId.** An op-id arriving mid-`loadLog` leaves
-  `renderedOpId < currentOpId` → exactly one more refresh. Conservative,
-  never lossy; converges in one extra round.
-- **`attemptedOpId` (non-reactive on purpose).** (a) A persistently failing
-  `loadLog` doesn't retry-loop — each new op-id gets one effect-driven
-  attempt. (b) The effect defers its refresh by one macrotask and re-checks:
-  post-mutation flows (`runMutation`, DiffPanel `onfilesaved`) call `loadLog`
-  explicitly right after `mutating` clears, and the stamp lets the effect skip
-  the duplicate fetch.
-- **Dependency hygiene.** When not stale, the effect reads only the two
-  op-ids → inert until one moves. The gates become deps only while stale.
-- **What rides along.** A staleness-driven refresh also refreshes the other
-  server-state mirrors: workspaces + stale-immutable groups every time;
-  PR badges / aliases / remotes throttled to once per minute
-  (`refreshSlowMirrors`, stamped by `lastPrFetch`).
+- **`reflectsOpId`** — op-id captured at the **start** of the last applied run
+  (a lower bound: the response is at least that fresh, since op-ids only
+  advance). An op-id arriving mid-fetch leaves the sync stale → exactly one
+  more refresh. Conservative, never lossy.
+- **`hasApplied`** — a never-loaded resource is stale by definition. This is
+  what makes a panel's first open fetch even though `currentOpId` is still
+  null (api.ts treats the first observed op-id as the baseline and only fires
+  `onStale` on *changes*).
+- **`attempted`** (non-reactive on purpose) — one auto attempt per op-id, so a
+  persistently failing fetch doesn't retry-loop, and the macrotask-deferred
+  re-check can skip the duplicate when a post-mutation flow already called
+  `refresh()` explicitly.
 
-The cursor survives these refreshes because selection is identity-keyed:
+The auto-refresh `$effect` is suppressed by the gate
+(`loading || mutating || anyModalOpen || inlineMode`) and the `enabled`
+predicate — but suppression retains staleness: the gates are dependencies only
+while stale, so the effect re-fires the moment one clears. **Explicit
+`refresh()` bypasses gate/enabled/throttle** (post-mutation refreshes run while
+`mutating` is still true) and resolves only after the value is applied, so
+callers can read the mirror right after the await.
+
+**Critical implementation rule: the effect reads its staleness inputs RAW**
+(`opId()`, `reflectsOpId`, the completion `epoch`) — never through a memoized
+boolean `$derived`. A derived that recomputes true→true does not advance its
+write version, so dependent effects do not re-run; folding staleness into a
+boolean would silently drop every op-id that arrives while already stale.
+Tested: `op-sync.svelte.test.ts` `describe('the three review races')`.
+
+The cursor survives log refreshes because selection is identity-keyed:
 `selectedId` (effectiveId) is the `$state`, `selectedIndex` is derived from it
 against the current `revisions` list, and `loadLog`'s reconciliation falls
 back to the working-copy row only when the selected revision disappeared.
 Tested: `App.interactions.test.ts` `describe('staleness + identity cursor')`.
+
+---
+
+## Rejected designs
+
+Documented so they don't get re-proposed. Both were assessed against svelte
+5.55 reactivity source during the op-sync design review.
+
+**Reactive content-keyed read-model for the revision navigator** ("replace
+`revGen`/`diffContentKey` with a `SvelteMap` keyed by commit_id; displayed diff
+= `$derived(map.get(key))`"). The map mechanics are fine — SvelteMap tracks
+per-key for present keys and wakes missing-key readers on insertion, and
+propagation is synchronous. What kills it: presence-in-map is a **two-state**
+signal, but DiffPanel's stale-while-revalidate behavior (snapshot refresh:
+show old content, no spinner, scroll preserved — the `isRefresh` path) needs
+the **three-state** distinction that `diffContentKey`/`diffPending` encode.
+Rebuilding that on top of a keyed map reinvents `diffContentKey` as an "SWR
+fallback marker" and deletes nothing. Also: optimistic writes
+(`description.set(draft)`) would poison a content-addressed store — `jj undo`
+resurrects the old commit_id and the map would serve a never-committed draft.
+
+**Making the api.ts response cache itself reactive** (C16 unification). The
+LRU bumps recency on read via delete+reinsert; under SvelteMap that is 2
+structural changes × 3 keys = 6 whole-map invalidations per `getCached` hit —
+on the cache-hit j/k path whose flagship invariant is **zero** reactive
+updates. Eviction would also become user-visible (evicting the displayed key
+blanks the screen). The plain-Map cache + loader value slots stay.
 
 ---
 
