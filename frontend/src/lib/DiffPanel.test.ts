@@ -205,9 +205,10 @@ describe('DiffPanel', () => {
     })
 
     // Regression: onjjmutation=withMutation holds mutating=true through
-    // res.json(), so the header-driven notifyOpId microtask hits App's
-    // !mutating guard and the later SSE push dedups. Explicit onfilesaved
-    // is the only refresh path. Same mechanism saveFile/saveMerge use.
+    // res.json(), so App's derived-staleness effect defers its refresh until
+    // the gate clears. Explicit onfilesaved is the IMMEDIATE refresh path
+    // (App's attemptedOpId dedups the deferred pass). Same mechanism
+    // saveFile/saveMerge use.
     it('successful discard → onfilesaved called (explicit refresh)', async () => {
       const mockRestore = api.restore as Mock
       mockRestore.mockResolvedValue({ warnings: '' })

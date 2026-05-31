@@ -143,10 +143,14 @@ async function loadRemote(): Promise<LoadResult> {
 // Takes a PARTIAL config — only the keys dirtied locally since the last
 // flush. The backend merges per-key (mergeAndWriteConfig), so a partial POST
 // is safe and is what prevents the cross-instance lost update (see dirtyKeys).
+// Returns true only when the server accepted the write. Callers use the
+// false/indeterminate result to keep the affected keys dirty for retry —
+// otherwise a transient failure would silently drop those values from the
+// server config until the user changes them again.
 async function saveRemote(
   c: Partial<Config>,
   onError: (msg: string | null) => void,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const res = await fetch('/api/config', {
       method: 'POST',
@@ -155,12 +159,15 @@ async function saveRemote(
     })
     if (res.status === 422) {
       onError(await readError(res))
+      return false
     } else if (res.ok) {
       onError(null)
+      return true
     }
     // Other non-ok statuses: don't clobber lastError. A 500 (disk full) isn't
     // actionable in the UI the same way a syntax error is.
-  } catch { /* backend down — localStorage already has it */ }
+    return false
+  } catch { /* backend down — localStorage already has it */ return false }
 }
 
 function createConfig() {
@@ -247,6 +254,7 @@ function createConfig() {
     for (const k of dirtyKeys) {
       (partial as Record<string, unknown>)[k] = pendingSnap[k]
     }
+    const flushedKeys = [...dirtyKeys]
     dirtyKeys.clear()
     pendingSnap = undefined
     // Nothing locally changed (hydration / applyPartial / storage-sync write)
@@ -256,7 +264,14 @@ function createConfig() {
     // would let a stale 422 stomp a fresh ok's null-clear, leaving the warning
     // up after the user fixed their file.
     const gen = ++saveGen
-    saveRemote(partial, msg => { if (gen === saveGen) lastError = msg })
+    void saveRemote(partial, msg => { if (gen === saveGen) lastError = msg })
+      .then(accepted => {
+        // A failed/indeterminate write keeps its keys dirty so the NEXT flush
+        // (next config change or unload) retries them. Without this, clearing
+        // dirtyKeys above would make a transient network failure silently drop
+        // these values from the server config forever.
+        if (!accepted) for (const k of flushedKeys) dirtyKeys.add(k)
+      })
   }
   // Flush on unload so a mid-drag close doesn't lose the last 500ms of writes.
   // saveLocal (sync localStorage) is the one that matters here — saveRemote
