@@ -1,8 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import type { Bookmark, PullRequest, RemoteVisibility, RemoteVisibilityEntry } from './api'
-  import { classifyBookmark, syncPriority, syncLabel, syncLabelAction, trackOptions, type SyncState, type TrackOption } from './bookmark-sync'
+  import { classifyBookmark, syncLabel, syncLabelAction, trackOptions, compareBookmarks, bookmarkSortTs, matchBookmark, type SyncState, type SortMode, type SortEntry, type TrackOption } from './bookmark-sync'
   import { fuzzyMatch } from './fuzzy'
+  import { relativeTime } from './time-format'
   import { createConfirmGate } from './confirm-gate.svelte'
   import { createListCursor } from './list-cursor.svelte'
   import type { BookmarkOp } from './BookmarkModal.svelte'
@@ -76,6 +77,26 @@
   let inputEl: HTMLInputElement | undefined = $state(undefined)
   let listEl: HTMLDivElement | undefined = $state(undefined)
   let inputFocused: boolean = $state(false)
+
+  // Sort mode persists across the per-view remount (panel mounts via {#if
+  // activeView === 'branches'}, so component-local state resets each visit)
+  // and across reloads. localStorage is the right tier — a client-only UI
+  // preference, not server config.
+  const SORT_KEY = 'lightjj.bookmarkSort'
+  const SORT_MODES: { id: SortMode; label: string }[] = [
+    { id: 'priority', label: 'Priority' },
+    { id: 'recent', label: 'Recent' },
+    { id: 'name', label: 'Name' },
+  ]
+  function loadSortMode(): SortMode {
+    const v = (typeof localStorage !== 'undefined' && localStorage.getItem(SORT_KEY)) || ''
+    return SORT_MODES.some(m => m.id === v) ? (v as SortMode) : 'priority'
+  }
+  let sortMode: SortMode = $state(loadSortMode())
+  function setSortMode(m: SortMode) {
+    sortMode = m
+    try { localStorage.setItem(SORT_KEY, m) } catch { /* private mode / quota — preference is best-effort */ }
+  }
 
   const confirm = createConfirmGate<'d' | 'f' | 't'>()
 
@@ -170,24 +191,27 @@
     if (changed) expandedGroups = next
   })
 
+  // Classify + sort a group's bookmarks in one place. `remote` undefined =
+  // LOCAL group (unscoped); a remote name scopes the sync state AND the
+  // recency key to that remote's ref so display, sort, and jumpTarget agree.
+  function sortedEntries(bms: Bookmark[], remote?: string): SortEntry[] {
+    const entries = bms.map(bm => ({ bm, sync: classifyBookmark(bm, remote), ts: bookmarkSortTs(bm, remote) }))
+    return entries.sort((a, b) => compareBookmarks(sortMode, a, b))
+  }
+
   let panelRows = $derived.by((): PanelRow[] => {
     const result: PanelRow[] = []
 
     // 1. Local group
     const localBms = bookmarks.filter(bm => bm.local)
-    const filteredLocal = query ? localBms.filter(b => fuzzyMatch(query, b.name)) : localBms
+    const filteredLocal = query ? localBms.filter(b => matchBookmark(query, b, fuzzyMatch)) : localBms
     result.push({
       kind: 'group', remote: '.', label: 'LOCAL',
       count: filteredLocal.length, expanded: expandedGroups.has('.'),
       visibility: null,
     })
     if (expandedGroups.has('.')) {
-      for (const entry of filteredLocal
-        .map(bm => ({ bm, sync: classifyBookmark(bm) }))
-        .sort((a, b) => {
-          const p = syncPriority(a.sync) - syncPriority(b.sync)
-          return p !== 0 ? p : a.bm.name.localeCompare(b.bm.name)
-        })) {
+      for (const entry of sortedEntries(filteredLocal)) {
         // Conflicted bookmarks have no commit_id (the ref points at multiple
         // commits). Jump to added_targets[0] — for 1-side conflicts (delete
         // in one op, move in concurrent op) this is THE target; for multi-
@@ -203,22 +227,21 @@
     for (const remote of allRemotes) {
       const visEntry = remoteVisibility[remote]
       const remoteBms = bookmarks.filter(bm => bm.remotes?.some(r => r.remote === remote))
-      const filtered = query ? remoteBms.filter(b => fuzzyMatch(query, b.name)) : remoteBms
+      const filtered = query ? remoteBms.filter(b => matchBookmark(query, b, fuzzyMatch)) : remoteBms
       result.push({
         kind: 'group', remote, label: remote.toUpperCase(),
         count: filtered.length, expanded: expandedGroups.has(remote),
         visibility: visEntry ?? { visible: false },
       })
       if (expandedGroups.has(remote)) {
-        for (const bm of filtered.sort((a, b) => a.name.localeCompare(b.name))) {
+        for (const entry of sortedEntries(filtered, remote)) {
+          const bm = entry.bm
           const hidden = visEntry?.hidden?.includes(bm.name) ?? false
-          // classifyBookmark(bm, remote) — scoped so the sync dot/label
-          // describe THIS remote's state, not the first-tracked-remote's.
-          // jumpTarget is the scoped remote's commit_id for the same reason:
-          // display and click must agree on which commit they mean.
+          // jumpTarget is the scoped remote's commit_id: display and click
+          // must agree on which commit they mean.
           const scoped = bm.remotes?.find(r => r.remote === remote)
           result.push({
-            kind: 'bookmark', bm, sync: classifyBookmark(bm, remote), remote,
+            kind: 'bookmark', bm, sync: entry.sync, remote,
             visibleInLog: (visEntry?.visible ?? false) && !hidden,
             jumpTarget: scoped?.commit_id ?? bm.commit_id,
           })
@@ -430,7 +453,8 @@
   <div class="bp-commit-line" class:bp-commit-remote={isRemote}>
     <span class="bp-cid">{ref.commit_id.slice(0, 8)}</span>
     <span class="bp-desc" class:placeholder-text={!ref.description}>{ref.description || '(no description)'}</span>
-    {#if ref.ago}<span class="bp-ago">{ref.ago}</span>{/if}
+    {#if ref.author_name && !ref.mine}<span class="bp-author" title="authored by {ref.author_email}">{ref.author_name}</span>{/if}
+    {#if ref.commit_ts}<span class="bp-ago" title="committed {new Date(ref.commit_ts * 1000).toLocaleString()}">{relativeTime(ref.commit_ts * 1000)}</span>{/if}
     {#if isRemote}<span class="bp-remote-tag">@{ref.remote}</span>{/if}
   </div>
 {/snippet}
@@ -457,11 +481,23 @@
       bind:value={query}
       class="bp-filter"
       type="text"
-      placeholder="Filter bookmarks... (press / to focus)"
+      placeholder="Filter… name, or author:bob (/ to focus)"
       oninput={() => { cursor.index = 0 }}
       onfocus={() => { inputFocused = true }}
       onblur={() => { inputFocused = false }}
     />
+    <div class="seg bp-sort" role="radiogroup" aria-label="Sort bookmarks">
+      {#each SORT_MODES as m}
+        <button
+          class="seg-btn"
+          class:active={sortMode === m.id}
+          role="radio"
+          aria-checked={sortMode === m.id}
+          title="Sort by {m.label.toLowerCase()}"
+          onclick={() => setSortMode(m.id)}
+        >{m.label}</button>
+      {/each}
+    </div>
     <span class="bp-count">{panelRows.filter(r => r.kind === 'bookmark').length}</span>
   </div>
 
@@ -687,7 +723,8 @@
   }
 
   .bp-filter {
-    width: 340px;
+    flex: 0 1 340px;
+    min-width: 0;
     background: var(--base);
     color: var(--text);
     border: 1px solid var(--surface0);
@@ -707,6 +744,15 @@
     padding: 2px 8px;
     background: var(--surface0);
     border-radius: 10px;
+    flex-shrink: 0;
+  }
+
+  /* Sort segmented control — sizing/spacing only; .seg/.seg-btn/.active chrome
+     comes from theme.css. */
+  .bp-sort {
+    flex-shrink: 0;
+    margin-left: auto;
+    font-size: var(--fs-sm);
   }
 
   .bp-list {
@@ -888,6 +934,22 @@
 
   .bp-commit-remote .bp-cid { color: var(--blue); }
   .bp-commit-remote .bp-desc { color: var(--overlay1); }
+
+  /* Tip-commit author (issue #19). Faint + truncated so it reads as metadata,
+     not content; doubles as the target of the author filter. Shown only for
+     OTHERS' commits (ref.mine suppresses it). flex-shrink:1 + min-width:0 so
+     it yields to the description under width pressure — the description is the
+     content, the author is metadata and must give way first. */
+  .bp-author {
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .bp-ago {
     font-size: var(--fs-xs);

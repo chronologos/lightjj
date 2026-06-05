@@ -120,8 +120,9 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     MessageBar.svelte      — Single user-facing message surface (error/warning/success)
     TabBar.svelte          — Tab strip (click to switch, ✕ close, + open)
     BookmarkModal.svelte   — Bookmark modal (move/advance/delete/forget/track)
-    BookmarksPanel.svelte  — Branches view: trouble-first bookmark list
+    BookmarksPanel.svelte  — Branches view: bookmark list (sortable Priority/Recent/Name, author shown + filterable)
     bookmark-sync.ts       — classifyBookmark() → 8 sync states + sort/format helpers
+    workspace-recovery.ts  — PURE — planRecoverAll()/recoverAllMessage() for "Update all (recover stale)"
     remote-visibility.ts   — buildVisibilityRevset(): per-remote visibility → revset string
     themes.ts              — 7 builtin themes + lazy Ghostty palettes + deriveTheme()
     jj-features.svelte.ts  — jj feature labels; booleans come from /api/info features (optimistic until loaded)

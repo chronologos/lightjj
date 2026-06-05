@@ -51,11 +51,17 @@ export interface RebaseMode extends ModeBase {
   enter(revisions: string[]): void
 }
 
+/** Which description the squashed commit keeps (issue #22). 'destination' is
+ *  the default (jj's --use-destination-message). 'source' / 'combine' send a
+ *  description_mode the backend composes into -m. */
+export type SquashDescMode = 'destination' | 'source' | 'combine'
+
 export interface SquashMode extends ModeBase {
   readonly kind: 'squash'
   readonly sources: string[]
   readonly keepEmptied: boolean
   readonly ignoreImmutable: boolean
+  readonly descMode: SquashDescMode
   enter(revisions: string[]): void
 }
 
@@ -129,6 +135,14 @@ export function createSquashMode(): SquashMode {
   let sources: string[] = $state([])
   let keepEmptied = $state(false)
   let ignoreImmutable = $state(false)
+  let descMode: SquashDescMode = $state('destination')
+
+  // m cycles destination → source → combine → destination.
+  const NEXT_DESC: Record<SquashDescMode, SquashDescMode> = {
+    destination: 'source',
+    source: 'combine',
+    combine: 'destination',
+  }
 
   return {
     kind: 'squash' as const,
@@ -138,11 +152,13 @@ export function createSquashMode(): SquashMode {
     get sources() { return sources },
     get keepEmptied() { return keepEmptied },
     get ignoreImmutable() { return ignoreImmutable },
+    get descMode() { return descMode },
 
     enter(revisions: string[]) {
       sources = revisions
       keepEmptied = false
       ignoreImmutable = false
+      descMode = 'destination'
       active = true
     },
 
@@ -155,6 +171,7 @@ export function createSquashMode(): SquashMode {
       switch (key) {
         case 'e': keepEmptied = !keepEmptied; return true
         case 'x': ignoreImmutable = !ignoreImmutable; return true
+        case 'm': descMode = NEXT_DESC[descMode]; return true
         default: return false
       }
     },

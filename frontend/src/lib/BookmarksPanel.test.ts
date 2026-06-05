@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import BookmarksPanel from './BookmarksPanel.svelte'
 import type { Bookmark, BookmarkRemote, PullRequest, RemoteVisibility } from './api'
 
 const mkRemote = (over: Partial<BookmarkRemote> = {}): BookmarkRemote => ({
-  remote: 'origin', commit_id: 'abc', description: 'test commit', ago: '2 days ago', tracked: true, ahead: 0, behind: 0, ...over,
+  remote: 'origin', commit_id: 'abc', description: 'test commit', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0, ...over,
 })
 const mkLocal = (): BookmarkRemote => mkRemote({ remote: '.', tracked: false })
 
@@ -44,6 +44,18 @@ function activeName(): string {
 function footer(): string {
   return document.querySelector('.key-footer')?.textContent ?? ''
 }
+/** Bookmark-row names in DOM order. */
+function rowNames(): string[] {
+  return Array.from(document.querySelectorAll('.bp-row .bp-name')).map(n => n.textContent?.trim() ?? '')
+}
+/** The sort segmented-control button with the given label. */
+function sortBtn(label: string): HTMLElement {
+  return Array.from(document.querySelectorAll('.bp-sort .seg-btn')).find(b => b.textContent?.trim() === label) as HTMLElement
+}
+
+// Sort preference persists to localStorage — isolate every test so one test's
+// chosen mode can't leak into another's default-'priority' assumption.
+beforeEach(() => localStorage.clear())
 
 describe('BookmarksPanel — sort', () => {
   it('trouble-first: conflict → diverged → ahead → behind → local → remote → synced; alpha within tier', () => {
@@ -341,6 +353,93 @@ describe('BookmarksPanel — filter', () => {
     await fireEvent.input(input, { target: { value: 'ftx' } }) // fuzzy match feature-x
     expect(rows().length).toBe(1)
     expect(activeName()).toBe('') // index reset to 0 = group header
+  })
+
+  it('plain query matches name OR author (issue #19)', async () => {
+    const bms = [
+      mkBm({ name: 'aaa', local: mkRemote({ remote: '.', tracked: false, author_name: 'Ada' }) }),
+      mkBm({ name: 'bbb', local: mkRemote({ remote: '.', tracked: false, author_name: 'Grace' }) }),
+    ]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    const input = document.querySelector('.bp-filter') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'grace' } }) // author of bbb
+    expect(rowNames()).toEqual(['bbb'])
+  })
+
+  it('author: prefix restricts to author, ignoring name (issue #19)', async () => {
+    const bms = [
+      mkBm({ name: 'grace-branch', local: mkRemote({ remote: '.', tracked: false, author_name: 'Ada' }) }),
+      mkBm({ name: 'other', local: mkRemote({ remote: '.', tracked: false, author_name: 'Grace' }) }),
+    ]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    const input = document.querySelector('.bp-filter') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'author:grace' } })
+    // matches by AUTHOR (other), not by NAME (grace-branch)
+    expect(rowNames()).toEqual(['other'])
+  })
+})
+
+describe('BookmarksPanel — sort modes (issue #19)', () => {
+  const local = (ts: number, author = '') => mkRemote({ remote: '.', tracked: false, commit_ts: ts, author_name: author })
+
+  it('Recent reorders by commit_ts (newest first); default is alphabetical for all-synced', async () => {
+    const bms = [
+      mkBm({ name: 'old', local: local(100), synced: true }),
+      mkBm({ name: 'new', local: local(300), synced: true }),
+      mkBm({ name: 'mid', local: local(200), synced: true }),
+    ]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    // priority default: all synced → name tiebreak → alphabetical
+    expect(rowNames()).toEqual(['mid', 'new', 'old'])
+    await fireEvent.click(sortBtn('Recent'))
+    expect(rowNames()).toEqual(['new', 'mid', 'old'])
+  })
+
+  it('Name sorts alphabetically regardless of timestamp', async () => {
+    const bms = [
+      mkBm({ name: 'charlie', local: local(999), synced: true }),
+      mkBm({ name: 'alpha', local: local(1), synced: true }),
+    ]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    await fireEvent.click(sortBtn('Name'))
+    expect(rowNames()).toEqual(['alpha', 'charlie'])
+  })
+
+  it('persists the chosen mode across remount via localStorage', async () => {
+    const bms = [mkBm({ name: 'feat', local: local(100), synced: true })]
+    const { unmount } = render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    await fireEvent.click(sortBtn('Recent'))
+    expect(localStorage.getItem('lightjj.bookmarkSort')).toBe('recent')
+    unmount()
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    expect(sortBtn('Recent').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('renders the tip-commit author in the row (someone else\'s commit)', () => {
+    const bms = [mkBm({ name: 'feat', local: local(100, 'Ada Lovelace') })]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    expect(document.querySelector('.bp-author')?.textContent).toBe('Ada Lovelace')
+  })
+
+  it('suppresses the author label on your own commits (mine)', () => {
+    const bms = [mkBm({ name: 'feat', local: mkRemote({ remote: '.', tracked: false, commit_ts: 100, author_name: 'Me', mine: true }) })]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: [] }) })
+    expect(document.querySelector('.bp-author')).toBeNull()
+  })
+
+  it('Recent sorts within an expanded REMOTE group by that remote\'s commit_ts', async () => {
+    // Closes the coverage hole: all other sort tests use allRemotes:[] (LOCAL
+    // group only); this exercises the scoped remote-group path.
+    const r = (ts: number) => mkRemote({ remote: 'origin', tracked: false, commit_ts: ts })
+    const bms = [
+      mkBm({ name: 'r-old', remotes: [r(100)] }),
+      mkBm({ name: 'r-new', remotes: [r(300)] }),
+      mkBm({ name: 'r-mid', remotes: [r(200)] }),
+    ]
+    render(BookmarksPanel, { props: props({ bookmarks: bms, allRemotes: ['origin'], remoteVisibility: { origin: { visible: true } } }) })
+    expect(rowNames()).toEqual(['r-mid', 'r-new', 'r-old']) // priority default → alphabetical
+    await fireEvent.click(sortBtn('Recent'))
+    expect(rowNames()).toEqual(['r-new', 'r-mid', 'r-old'])
   })
 })
 

@@ -8,20 +8,37 @@ import (
 // Alias represents a user-defined jj alias from the [aliases] config section.
 type Alias struct {
 	Name    string   `json:"name"`
-	Command []string `json:"command"` // e.g. ["git", "fetch", "-b", "glob:alice/*"]
+	Command []string `json:"command"`       // e.g. ["git", "fetch", "-b", "glob:alice/*"]
+	Doc     string   `json:"doc,omitempty"` // optional description from table-form aliases
 }
 
 // ParseAliases parses the output of `jj config list aliases` into a slice of Alias.
-// Each entry starts with "aliases.<name> = " followed by a TOML-style array value
-// that may span multiple lines.
+//
+// jj renders two alias shapes. The simple form is a TOML array that may span
+// multiple lines:
+//
+//	aliases.l = ["log", "-r", "@"]
+//
+// The table form — `{ definition = [...], doc = "..." }`, which jj ≥ 0.42
+// documents as the way to attach a description (surfaced in shell completions
+// via the .doc field) — flattens to one key per sub-field:
+//
+//	aliases.s.definition = ["show"]
+//	aliases.s.doc        = "show a revision"
+//
+// Both shapes coalesce into a single Alias per name; the doc is optional. An
+// entry that never yields a runnable command is dropped (the palette needs
+// something to run), so a stray .doc without a definition is ignored.
 func ParseAliases(output string) []Alias {
 	if strings.TrimSpace(output) == "" {
 		return []Alias{}
 	}
 
 	lines := strings.Split(output, "\n")
-	aliases := []Alias{}
-	var currentName string
+	order := []string{} // names in first-seen order
+	byName := map[string]*Alias{}
+
+	var currentName, currentKind string
 	var currentValue strings.Builder
 
 	flush := func() {
@@ -29,23 +46,32 @@ func ParseAliases(output string) []Alias {
 			return
 		}
 		raw := currentValue.String()
-		cmd := parseAliasValue(raw)
-		if len(cmd) > 0 {
-			aliases = append(aliases, Alias{Name: currentName, Command: cmd})
+		a := byName[currentName]
+		if a == nil {
+			a = &Alias{Name: currentName}
+			byName[currentName] = a
+			order = append(order, currentName)
 		}
-		currentName = ""
+		if currentKind == "doc" {
+			a.Doc = parseAliasDoc(raw)
+		} else {
+			a.Command = parseAliasValue(raw)
+		}
+		currentName, currentKind = "", ""
 		currentValue.Reset()
 	}
 
 	for _, line := range lines {
 		if strings.HasPrefix(line, "aliases.") {
 			flush()
-			// Split on first " = " to separate name from value
+			// Split on first " = " to separate the key from its value. A doc
+			// value can itself contain " = " (e.g. doc = "a = b"); Cut splits
+			// on the first occurrence, so the key is always intact.
 			before, after, ok := strings.Cut(line, " = ")
 			if !ok {
 				continue
 			}
-			currentName = strings.TrimPrefix(before, "aliases.")
+			currentName, currentKind = splitAliasKey(strings.TrimPrefix(before, "aliases."))
 			currentValue.WriteString(after)
 		} else if currentName != "" {
 			// Continuation line for multi-line array or triple-quoted string.
@@ -56,7 +82,67 @@ func ParseAliases(output string) []Alias {
 	}
 	flush()
 
+	aliases := make([]Alias, 0, len(order))
+	for _, name := range order {
+		if a := byName[name]; len(a.Command) > 0 {
+			aliases = append(aliases, *a)
+		}
+	}
 	return aliases
+}
+
+// splitAliasKey separates an alias config key (already stripped of the
+// "aliases." prefix) into the alias name and which sub-field it carries. A
+// trailing ".definition"/".doc" is a table-form sub-key; anything else is a
+// simple-form alias whose whole key is the name and whose value is the command
+// ("definition" kind). An alias literally named "doc" stays a definition —
+// only a *dotted* ".doc" suffix selects the doc kind.
+func splitAliasKey(key string) (name, kind string) {
+	if n, ok := strings.CutSuffix(key, ".definition"); ok {
+		return n, "definition"
+	}
+	if n, ok := strings.CutSuffix(key, ".doc"); ok {
+		return n, "doc"
+	}
+	return key, "definition"
+}
+
+// parseAliasDoc decodes the single TOML string value of a table-form alias's
+// .doc field into a plain Go string for display. Handles basic ("…"), literal
+// ('…'), and triple-quoted ("""…""" / '''…''') forms; returns "" on anything
+// it can't parse.
+func parseAliasDoc(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 2 {
+		return ""
+	}
+	// Triple-quoted (checked before the single-char forms, since `'''` starts
+	// with `'`). jj usually emits single-line basic strings here, but a
+	// multi-line doc round-trips through the array parser's continuation path.
+	if len(raw) >= 6 {
+		if delim := raw[:3]; delim == `"""` || delim == "'''" {
+			end := strings.Index(raw[3:], delim)
+			if end < 0 {
+				return ""
+			}
+			// TOML strips the first newline after the opening delimiter.
+			return strings.TrimPrefix(raw[3:3+end], "\n")
+		}
+	}
+	switch raw[0] {
+	case '"':
+		// Basic string — valid JSON, so Unmarshal handles \n, \", \\, etc.
+		var s string
+		if json.Unmarshal([]byte(raw), &s) == nil {
+			return s
+		}
+	case '\'':
+		// Literal string — no escapes; content sits between the quotes.
+		if end := strings.LastIndexByte(raw[1:], '\''); end >= 0 {
+			return raw[1 : 1+end]
+		}
+	}
+	return ""
 }
 
 // parseAliasValue converts a TOML-style array string like ['git', 'fetch']

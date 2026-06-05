@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { classifyBookmark, syncPriority, fmtCount, syncLabel, syncLabelAction, trackOptions } from './bookmark-sync'
+import { classifyBookmark, syncPriority, fmtCount, syncLabel, syncLabelAction, trackOptions, compareBookmarks, bookmarkSortTs, authorMatch, matchBookmark, type SortEntry } from './bookmark-sync'
 import type { Bookmark, BookmarkRemote } from './api'
 
 const mkRemote = (over: Partial<BookmarkRemote> = {}): BookmarkRemote => ({
-  remote: 'origin', commit_id: 'abc', description: '', ago: '', tracked: true, ahead: 0, behind: 0, ...over,
+  remote: 'origin', commit_id: 'abc', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0, ...over,
 })
 
 const mkBm = (over: Partial<Bookmark> = {}): Bookmark => ({
@@ -375,5 +375,106 @@ describe('syncLabelAction', () => {
     expect(syncLabelAction({ kind: 'conflict', sides: 2 }, 'origin')).toBeNull()
     expect(syncLabelAction({ kind: 'local-only' }, 'origin')).toBeNull()
     expect(syncLabelAction({ kind: 'remote-only', tracked: true }, 'origin')).toBeNull()
+  })
+})
+
+// --- Sorting (issue #19) ---
+describe('compareBookmarks', () => {
+  // Build a SortEntry; sync is only consulted in 'priority' mode.
+  const e = (name: string, ts: number, conflict = false, sync: SortEntry['sync'] = { kind: 'synced' }): SortEntry =>
+    ({ bm: mkBm({ name, conflict }), sync, ts })
+
+  it('recent: newest commit_ts first, name tiebreak', () => {
+    const entries = [e('old', 100), e('new', 300), e('mid', 200)]
+    entries.sort((a, b) => compareBookmarks('recent', a, b))
+    expect(entries.map(x => x.bm.name)).toEqual(['new', 'mid', 'old'])
+  })
+
+  it('recent: equal ts falls back to alphabetical name', () => {
+    const entries = [e('zeta', 100), e('alpha', 100)]
+    entries.sort((a, b) => compareBookmarks('recent', a, b))
+    expect(entries.map(x => x.bm.name)).toEqual(['alpha', 'zeta'])
+  })
+
+  it('name: pure alphabetical, ignores ts and sync', () => {
+    const entries = [e('charlie', 999), e('alpha', 1), e('bravo', 500)]
+    entries.sort((a, b) => compareBookmarks('name', a, b))
+    expect(entries.map(x => x.bm.name)).toEqual(['alpha', 'bravo', 'charlie'])
+  })
+
+  it('priority: sync severity first, then name', () => {
+    const entries = [
+      e('z-synced', 100, false, { kind: 'synced' }),
+      e('a-ahead', 100, false, { kind: 'ahead', by: 1 }),
+      e('b-diverged', 100, false, { kind: 'diverged', ahead: 1, behind: 1 }),
+    ]
+    entries.sort((a, b) => compareBookmarks('priority', a, b))
+    expect(entries.map(x => x.bm.name)).toEqual(['b-diverged', 'a-ahead', 'z-synced'])
+  })
+
+  it('conflicts pin to the top in EVERY mode', () => {
+    for (const mode of ['recent', 'name', 'priority'] as const) {
+      const entries = [
+        e('zzz-newest', 999, false),
+        e('conflict', 0, true, { kind: 'conflict', sides: 2 }),
+        e('aaa', 500, false),
+      ]
+      entries.sort((a, b) => compareBookmarks(mode, a, b))
+      expect(entries[0].bm.name, mode).toBe('conflict')
+    }
+  })
+})
+
+describe('bookmarkSortTs', () => {
+  it('unscoped: prefers local ref ts', () => {
+    const bm = mkBm({ local: mkRemote({ remote: '.', commit_ts: 42 }), remotes: [mkRemote({ commit_ts: 99 })] })
+    expect(bookmarkSortTs(bm)).toBe(42)
+  })
+  it('scoped: keys on the named remote ts', () => {
+    const bm = mkBm({ remotes: [mkRemote({ remote: 'origin', commit_ts: 7 }), mkRemote({ remote: 'upstream', commit_ts: 88 })] })
+    expect(bookmarkSortTs(bm, 'upstream')).toBe(88)
+  })
+  it('returns 0 when no ref has a timestamp', () => {
+    expect(bookmarkSortTs(mkBm({ conflict: true }))).toBe(0)
+  })
+})
+
+// --- Filtering by author (issue #19) ---
+describe('authorMatch', () => {
+  const bm = mkBm({
+    local: mkRemote({ remote: '.', author_name: 'Ada Lovelace', author_email: 'ada@example.com' }),
+    remotes: [mkRemote({ author_name: 'Grace Hopper', author_email: 'grace@navy.mil' })],
+  })
+  it('matches author name substring, case-insensitive', () => {
+    expect(authorMatch(bm, 'ada')).toBe(true)
+    expect(authorMatch(bm, 'LOVELACE')).toBe(true)
+  })
+  it('matches author email substring', () => {
+    expect(authorMatch(bm, 'navy.mil')).toBe(true)
+  })
+  it('matches any ref (local OR remote)', () => {
+    expect(authorMatch(bm, 'grace')).toBe(true)
+  })
+  it('no match returns false', () => {
+    expect(authorMatch(bm, 'turing')).toBe(false)
+  })
+})
+
+describe('matchBookmark', () => {
+  const fuzzy = (q: string, s: string) => s.toLowerCase().includes(q.toLowerCase())
+  const bm = mkBm({ name: 'feature-x', local: mkRemote({ remote: '.', author_name: 'Ada', author_email: 'ada@x.com' }) })
+
+  it('empty query matches everything', () => {
+    expect(matchBookmark('', bm, fuzzy)).toBe(true)
+    expect(matchBookmark('   ', bm, fuzzy)).toBe(true)
+  })
+  it('plain query matches name OR author', () => {
+    expect(matchBookmark('feature', bm, fuzzy)).toBe(true) // name
+    expect(matchBookmark('ada', bm, fuzzy)).toBe(true)     // author
+    expect(matchBookmark('nope', bm, fuzzy)).toBe(false)
+  })
+  it('author: prefix restricts to author, ignores name', () => {
+    expect(matchBookmark('author:ada', bm, fuzzy)).toBe(true)
+    expect(matchBookmark('author:feature', bm, fuzzy)).toBe(false) // name no longer matches
   })
 })

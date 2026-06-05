@@ -94,7 +94,7 @@ describe('BookmarkModal', () => {
 
     it('tracked remote bookmark shows tracked badge', async () => {
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', remotes: [{ remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: true, ahead: 0, behind: 0 }] }),
+        makeBookmark({ name: 'feat', remotes: [{ remote: 'origin', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0 }] }),
       ])
       await renderSettled(defaultProps())
       expect(screen.getByText('⊙ origin')).toBeInTheDocument()
@@ -108,7 +108,7 @@ describe('BookmarkModal', () => {
 
     it('footer shows which remote t operates on', async () => {
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', remotes: [{ remote: 'upstream', commit_id: 'x', description: '', ago: '', tracked: true, ahead: 0, behind: 0 }] }),
+        makeBookmark({ name: 'feat', remotes: [{ remote: 'upstream', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0 }] }),
       ])
       await renderSettled(defaultProps())
       expect(footer()).toContain('untrack')
@@ -194,7 +194,7 @@ describe('BookmarkModal', () => {
     it('first d arms, second d fires delete', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
       ])
       await renderSettled(defaultProps({ onexecute }))
 
@@ -223,7 +223,7 @@ describe('BookmarkModal', () => {
     it('untrack requires confirmation', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', remotes: [{ remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: true, ahead: 0, behind: 0 }] }),
+        makeBookmark({ name: 'feat', remotes: [{ remote: 'origin', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0 }] }),
       ])
       await renderSettled(defaultProps({ onexecute }))
 
@@ -239,7 +239,7 @@ describe('BookmarkModal', () => {
     it('track does NOT require confirmation (non-destructive)', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', remotes: [{ remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 }] }),
+        makeBookmark({ name: 'feat', remotes: [{ remote: 'origin', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 }] }),
       ])
       await renderSettled(defaultProps({ onexecute }))
 
@@ -250,8 +250,8 @@ describe('BookmarkModal', () => {
     it('j/k disarms', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'alpha', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
-        makeBookmark({ name: 'beta', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'alpha', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'beta', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
       ])
       await renderSettled(defaultProps({ onexecute }))
 
@@ -264,7 +264,7 @@ describe('BookmarkModal', () => {
 
     it('Escape disarms without closing', async () => {
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
       ])
       await renderSettled(defaultProps())
 
@@ -279,7 +279,7 @@ describe('BookmarkModal', () => {
     it('pressing a different action key disarms and re-arms', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
       ])
       await renderSettled(defaultProps({ onexecute }))
 
@@ -294,7 +294,7 @@ describe('BookmarkModal', () => {
     it('mousemove to a different row disarms', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'alpha', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'alpha', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
         makeBookmark({ name: 'beta' }),
       ])
       await renderSettled(defaultProps({ onexecute }))
@@ -324,7 +324,7 @@ describe('BookmarkModal', () => {
 
     it('a disarms a pending destructive confirmation', async () => {
       const onexecute = vi.fn()
-      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 }, commit_id: 'aaa' })])
+      mockBookmarks.mockResolvedValue([makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 }, commit_id: 'aaa' })])
       await renderSettled(defaultProps({ currentCommitId: 'bbb', onexecute }))
 
       await fireEvent.keyDown(modal(), { key: 'd' }) // arm delete
@@ -372,7 +372,7 @@ describe('BookmarkModal', () => {
       // lying menu entry — jj would warn "No matching remotes" and no-op.
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } }),
+        makeBookmark({ name: 'feat', local: { remote: '.', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } }),
       ])
       await renderSettled(defaultProps({ onexecute }))
 
@@ -386,8 +386,8 @@ describe('BookmarkModal', () => {
       const ontrackmenu = vi.fn()
       mockBookmarks.mockResolvedValue([
         makeBookmark({ name: 'main', remotes: [
-          { remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: true, ahead: 0, behind: 0 },
-          { remote: 'upstream', commit_id: 'y', description: '', ago: '', tracked: false, ahead: 0, behind: 0 },
+          { remote: 'origin', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0 },
+          { remote: 'upstream', commit_id: 'y', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 },
         ] }),
       ])
       await renderSettled(defaultProps({ onexecute, ontrackmenu }))
@@ -562,8 +562,8 @@ describe('BookmarkModal', () => {
   describe('footer hints react to selection', () => {
     it('track hint label flips between track/untrack per selected bookmark', async () => {
       mockBookmarks.mockResolvedValue([
-        makeBookmark({ name: 'alpha', remotes: [{ remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: true, ahead: 0, behind: 0 }] }),
-        makeBookmark({ name: 'beta', remotes: [{ remote: 'origin', commit_id: 'x', description: '', ago: '', tracked: false, ahead: 0, behind: 0 }] }),
+        makeBookmark({ name: 'alpha', remotes: [{ remote: 'origin', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0 }] }),
+        makeBookmark({ name: 'beta', remotes: [{ remote: 'origin', commit_id: 'x', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 }] }),
       ])
       await renderSettled(defaultProps())
 

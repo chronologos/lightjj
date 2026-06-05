@@ -58,6 +58,7 @@
   import DivergencePanel from './lib/DivergencePanel.svelte'
   import { executeKeepPlan, splitIdentity, squashDivergent, abandonMutable, type DivergenceActionResult } from './lib/divergence-actions'
   import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, createFileSelection, targetModeLabel, type ModeKind } from './lib/modes.svelte'
+  import { planRecoverAll, recoverAllMessage } from './lib/workspace-recovery'
   import { routeKeydown, type ActiveView } from './lib/keyboard-gate'
   import { computeSlide, type SlideDir } from './lib/slide'
   import { createLoader } from './lib/loader.svelte'
@@ -830,6 +831,9 @@
     // badge, which doesn't render in single-workspace repos. currentWorkspace
     // !== '' = workspace info loaded (tri-state: '' means unknown).
     { label: 'Rename workspace…', category: 'Workspace', action: renameWorkspace, when: () => currentWorkspace !== '' },
+    // Recover every workspace's working copy after a rebase across branches
+    // (issue #21). Only meaningful with multiple workspaces.
+    { label: 'Update all workspaces (recover stale)', category: 'Workspace', action: updateAllStaleWorkspaces, when: () => workspaceList.length > 1 },
 
     // View (non-dynamic)
     { label: 'Edit config (JSON)…', category: 'View', hint: 'theme, fonts, editorArgs', action: () => { closeAllModals(); configModalOpen = true } },
@@ -897,7 +901,9 @@
       .filter(a => !isBuiltinAlias(a))
       .map(a => ({
         label: a.name,
-        hint: a.command.join(' '),
+        // Prefer the author's description (table-form `doc`) over the raw
+        // command body when present; fall back to the command otherwise.
+        hint: a.doc || a.command.join(' '),
         category: 'Aliases',
         action: () => handleRunAlias(a.name),
       })),
@@ -1051,6 +1057,10 @@
       // drops a half-configured rebase/squash/split by design.
       items.push(
         { label: 'Open in new tab', shortcut: '↗', disabled: inlineMode || !ws?.path, action: () => openWorkspaceTab(wsName) },
+        // Recover this sibling's working copy without switching to it (issue
+        // #21). Same path gate as Open-in-new-tab (no resolvable root → can't
+        // target it). Safe even if it isn't actually stale.
+        { label: 'Update if stale', disabled: inlineMode || !ws?.path, action: () => recoverWorkspace(wsName) },
       )
       // Forget only when we KNOW this isn't the current workspace — forgetting
       // the workspace being viewed orphans the tab.
@@ -1503,6 +1513,41 @@
       { after: () => { workspaceStale = false } },
     )
 
+  // Recover a stale working copy of ANOTHER workspace by name (issue #21).
+  // update-stale is a safe no-op when the workspace is already fresh, so we
+  // run it unconditionally — no detection needed.
+  const recoverWorkspace = (name: string) =>
+    runMutation(
+      () => api.updateStaleWorkspace(name),
+      // Neutral wording: update-stale is a no-op when the workspace is already
+      // fresh (jj exits 0 either way), so we must NOT claim it "updated" it.
+      `Ran update-stale on '${name}'`,
+    )
+
+  // "Update all workspaces" (issue #21: "after a rebase across branches, update
+  // my stale workspaces"). Runs update-stale across every workspace with a
+  // known path; the current one goes through its own endpoint (clears the
+  // watcher). withMutation gates against concurrent ops; the summary IS the
+  // signal (no passive staleness detection). Workspaces predating jj's
+  // workspace_store index (no path) are skipped and named.
+  function updateAllStaleWorkspaces() {
+    const { targets, skipped } = planRecoverAll(workspaceList, currentWorkspace)
+    if (targets.length === 0) return
+    return withMutation(async () => {
+      let ran = 0
+      const failed: string[] = []
+      for (const ws of targets) {
+        try {
+          await (ws.name === currentWorkspace ? api.workspaceUpdateStale() : api.updateStaleWorkspace(ws.name))
+          ran++
+        } catch { failed.push(ws.name) }
+      }
+      workspaceStale = false
+      await logSync.refresh()
+      setMessage(recoverAllMessage(ran, failed, skipped))
+    })
+  }
+
   // Stale warning is lower-priority than a mutation error the user just
   // triggered, so `message` wins. Non-dismissable (the problem persists until
   // fixed); the ✕ only dismisses real messages.
@@ -1927,11 +1972,19 @@
         const files = fileSel.set.size < fileSel.total
           ? [...fileSel.set]
           : undefined
-        const { sources, keepEmptied, ignoreImmutable } = squash
-        const result = await api.squash(sources, destination, {
+        const { sources, keepEmptied, ignoreImmutable, descMode } = squash
+        // Order sources by graph position so multi-source "combine" composes a
+        // DETERMINISTIC description — `sources` arrives in checkbox-click order,
+        // which would otherwise make the combined message depend on click order.
+        const orderedSources = [...sources].sort((a, b) =>
+          revisions.findIndex(r => effectiveId(r.commit) === a) - revisions.findIndex(r => effectiveId(r.commit) === b))
+        const result = await api.squash(orderedSources, destination, {
           files,
           keepEmptied: keepEmptied || undefined,
           ignoreImmutable: ignoreImmutable || undefined,
+          // Default 'destination' = jj's --use-destination-message; omit it so
+          // the wire stays minimal and the backend default path is unchanged.
+          descriptionMode: descMode !== 'destination' ? descMode : undefined,
         })
         // W1: only exit mode after successful API call
         cancelInlineModes()
@@ -2848,6 +2901,18 @@
             </button>
             {#if wsDropdownOpen && workspaceList.length > 1}
               <div class="toolbar-ws-dropdown">
+                <!-- Recover every workspace at once (issue #21) — the bulk
+                     answer to "after a rebase, update my stale workspaces". -->
+                <button
+                  class="toolbar-ws-option toolbar-ws-action"
+                  disabled={inlineMode}
+                  title="Run update-stale across all workspaces"
+                  onclick={() => { wsDropdownOpen = false; updateAllStaleWorkspaces() }}
+                >
+                  <span class="toolbar-ws-glyph">⟳</span>
+                  <span>Update all workspaces (recover stale)</span>
+                </button>
+                <div class="toolbar-ws-sep"></div>
                 {#each workspaceList as ws (ws.name)}
                   {#if ws.name === currentWorkspace}
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -3807,6 +3872,21 @@
 
   .toolbar-ws-unavailable {
     opacity: 0.5;
+  }
+
+  /* "Update all" header action — same row chrome as an option, dimmed glyph,
+     disabled while an inline mode is active. */
+  .toolbar-ws-action {
+    color: var(--text-faint);
+  }
+  .toolbar-ws-action:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .toolbar-ws-sep {
+    height: 1px;
+    margin: 3px 4px;
+    background: var(--surface1);
   }
 
   .toolbar-theme {

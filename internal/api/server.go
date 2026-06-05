@@ -176,7 +176,7 @@ func (s *Server) routes() {
 	reg("POST /api/restore", mutation(s, restoreRequest.validate, restoreRequest.build))
 	reg("POST /api/describe", s.handleDescribe) // stdin → runMutationWithInput
 	reg("POST /api/rebase", mutation(s, rebaseRequest.validate, rebaseRequest.build))
-	reg("POST /api/squash", mutation(s, squashRequest.validate, squashRequest.build))
+	reg("POST /api/squash", s.handleSquash) // hand-rolled: source/combine description modes read descriptions first (issue #22)
 	reg("POST /api/split", mutation(s, splitRequest.validate, splitRequest.build))
 	reg("POST /api/split-hunks", s.handleSplitHunks) // tempfile setup, local-only
 	reg("POST /api/resolve", mutation(s, resolveRequest.validate, resolveRequest.build))
@@ -191,7 +191,8 @@ func (s *Server) routes() {
 	// tab); rename has no guard — it acts on the current workspace only.
 	reg("POST /api/workspace/forget", s.workspaceNameMutation(jj.WorkspaceForget, s.forgetOpenTabGuard))
 	reg("POST /api/workspace/rename", s.workspaceNameMutation(jj.WorkspaceRename, nil))
-	reg("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale) // clearStale side effect
+	reg("POST /api/workspace/update-stale", s.handleWorkspaceUpdateStale)             // clearStale side effect (current workspace)
+	reg("POST /api/workspace/update-stale-other", s.handleWorkspaceUpdateStaleOther) // recover a sibling workspace by name (RunRaw -R path)
 	reg("POST /api/unlock-repo", s.handleUnlockRepo)                      // RunRaw, not a jj mutation
 	reg("POST /api/commit", mutation(s, nil, commitRequest.build))
 	reg("POST /api/open-file", s.handleOpenFile)

@@ -11,7 +11,7 @@ function activeRebase(sourceKey?: string, targetKey?: string) {
   return m
 }
 
-function activeSquash(toggle?: 'e' | 'd') {
+function activeSquash(toggle?: 'e' | 'x' | 'm') {
   const m = createSquashMode()
   m.enter(['x'])
   if (toggle) m.handleKey(toggle)
@@ -131,6 +131,25 @@ describe('StatusBar', () => {
       const { container } = render(StatusBar, { props: defaultProps({ squash: activeSquash() }) })
       const footer = container.querySelector('footer')
       expect(footer?.classList.contains('squash-active')).toBe(true)
+    })
+
+    it('shows the description-mode hint, defaulting to destination (not highlighted)', () => {
+      const { container } = render(StatusBar, { props: defaultProps({ squash: activeSquash() }) })
+      const labels = Array.from(container.querySelectorAll('.key-label')).map(l => l.textContent)
+      expect(labels).toContain('desc: destination')
+      // m key not highlighted on the default
+      const keys = container.querySelectorAll('.key:not(.action-key)')
+      const mKey = Array.from(keys).find(k => k.textContent === 'm')
+      expect(mKey?.classList.contains('key-active')).toBe(false)
+    })
+
+    it('m cycles the description mode and highlights it when non-default', () => {
+      const { container } = render(StatusBar, { props: defaultProps({ squash: activeSquash('m') }) })
+      const labels = Array.from(container.querySelectorAll('.key-label')).map(l => l.textContent)
+      expect(labels).toContain('desc: source')
+      const keys = container.querySelectorAll('.key:not(.action-key)')
+      const mKey = Array.from(keys).find(k => k.textContent === 'm')
+      expect(mKey?.classList.contains('key-active')).toBe(true)
     })
   })
 

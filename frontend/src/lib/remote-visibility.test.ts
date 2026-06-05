@@ -26,7 +26,7 @@ describe('revsetQuote', () => {
 })
 
 const mkRemote = (over: Partial<BookmarkRemote> = {}): BookmarkRemote => ({
-  remote: 'origin', commit_id: 'abc', description: '', ago: '', tracked: true, ahead: 0, behind: 0, ...over,
+  remote: 'origin', commit_id: 'abc', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: true, ahead: 0, behind: 0, ...over,
 })
 const mkBm = (name: string, remotes: string[]): Bookmark => ({
   name, conflict: false, synced: true, commit_id: 'abc',

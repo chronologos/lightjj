@@ -487,6 +487,7 @@ describe('squash request body', () => {
     await api.squash(['src1', 'src2'], 'dest1', {
       files: ['a.go', 'b.go'],
       keepEmptied: true,
+      descriptionMode: 'combine',
     })
 
     expect(mockFetch).toHaveBeenCalledTimes(1)
@@ -496,6 +497,7 @@ describe('squash request body', () => {
     expect(body.destination).toBe('dest1')
     expect(body.files).toEqual(['a.go', 'b.go'])
     expect(body.keep_emptied).toBe(true)
+    expect(body.description_mode).toBe('combine')
   })
 
   it('omits undefined fields from request body', async () => {
@@ -511,6 +513,21 @@ describe('squash request body', () => {
     expect(body.destination).toBe('dest1')
     expect(body.files).toBeUndefined()
     expect(body.keep_emptied).toBeUndefined()
+    expect(body.description_mode).toBeUndefined()
+  })
+})
+
+describe('updateStaleWorkspace request body', () => {
+  it('POSTs the workspace name to /api/workspace/update-stale-other', async () => {
+    _testInternals.lastOpId = 'op1'
+    mockFetch.mockResolvedValueOnce(mockResponse({ output: '' }, 'op1'))
+
+    await api.updateStaleWorkspace('feat')
+
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(String(url)).toContain('/api/workspace/update-stale-other')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body).name).toBe('feat')
   })
 })
 

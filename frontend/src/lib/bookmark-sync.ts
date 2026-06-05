@@ -105,6 +105,79 @@ export function syncPriority(s: SyncState): number {
   return PRIORITY[s.kind]
 }
 
+// --- Sorting (issue #19) ---------------------------------------------------
+
+/** Bookmark-panel sort modes, surfaced as a segmented control.
+ *  - priority: trouble-first (sync severity), then name. The original default.
+ *  - recent: most-recently-updated first (committer timestamp, desc).
+ *  - name: pure alphabetical.
+ *  Conflicts have no tip commit (no ts/author) and stay pinned to the top in
+ *  EVERY mode — they're the broken state you most need to see, and have no
+ *  meaningful age to order by. */
+export type SortMode = 'priority' | 'recent' | 'name'
+
+/** The committer timestamp (epoch seconds) that orders this bookmark within
+ *  its group. LOCAL group keys on the local ref; a remote group keys on that
+ *  remote's ref (scopeRemote). 0 when absent (conflict / no tip). */
+export function bookmarkSortTs(bm: Bookmark, scopeRemote?: string): number {
+  const ref = scopeRemote
+    ? bm.remotes?.find(r => r.remote === scopeRemote)
+    : bm.local ?? bm.remotes?.find(r => r.tracked) ?? bm.remotes?.[0]
+  return ref?.commit_ts ?? 0
+}
+
+/** Comparator over already-classified entries. `sync` is only consulted for
+ *  'priority' mode; pass the scoped classification so a remote group orders by
+ *  that remote's state. `ts` is the group-scoped sort timestamp. */
+export interface SortEntry {
+  bm: Bookmark
+  sync: SyncState
+  ts: number
+}
+
+export function compareBookmarks(mode: SortMode, a: SortEntry, b: SortEntry): number {
+  // Conflicts float above everything, in every mode.
+  const ca = a.bm.conflict ? 0 : 1
+  const cb = b.bm.conflict ? 0 : 1
+  if (ca !== cb) return ca - cb
+  switch (mode) {
+    case 'priority': {
+      const p = syncPriority(a.sync) - syncPriority(b.sync)
+      return p !== 0 ? p : a.bm.name.localeCompare(b.bm.name)
+    }
+    case 'recent': {
+      const t = b.ts - a.ts // newest first
+      return t !== 0 ? t : a.bm.name.localeCompare(b.bm.name)
+    }
+    case 'name':
+      return a.bm.name.localeCompare(b.bm.name)
+  }
+}
+
+// --- Filtering (issue #19) -------------------------------------------------
+
+/** Does any ref (local or remote) of this bookmark have an author whose name
+ *  or email contains `q` (case-insensitive substring)? */
+export function authorMatch(bm: Bookmark, q: string): boolean {
+  const ql = q.trim().toLowerCase()
+  if (!ql) return true
+  const refs = [bm.local, ...(bm.remotes ?? [])]
+  return refs.some(r =>
+    !!r && (r.author_name.toLowerCase().includes(ql) || r.author_email.toLowerCase().includes(ql)),
+  )
+}
+
+/** Filter predicate for the bookmark panel's single filter box.
+ *  - `author:<text>` restricts to author name/email (precise).
+ *  - otherwise matches bookmark name (fuzzy) OR author (substring).
+ *  Empty query matches everything. */
+export function matchBookmark(query: string, bm: Bookmark, fuzzy: (q: string, s: string) => boolean): boolean {
+  const q = query.trim()
+  if (!q) return true
+  if (q.toLowerCase().startsWith('author:')) return authorMatch(bm, q.slice('author:'.length))
+  return fuzzy(q, bm.name) || authorMatch(bm, q)
+}
+
 /** Compact count: 7392 → 7.4k, 130774 → 131k. Large-repo behind-counts are noise past ~1k. */
 export function fmtCount(n: number): string {
   if (n < 1000) return String(n)

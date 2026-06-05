@@ -934,11 +934,16 @@ func (q rebaseRequest) build() (jj.CommandArgs, error) {
 }
 
 type squashRequest struct {
-	Revisions       []string `json:"revisions"`
-	Destination     string   `json:"destination"`
+	Revisions   []string `json:"revisions"`
+	Destination string   `json:"destination"`
 	Files           []string `json:"files"`
 	KeepEmptied     bool     `json:"keep_emptied"`
 	IgnoreImmutable bool     `json:"ignore_immutable"`
+	// DescriptionMode (issue #22) decides the squashed commit's description:
+	// "" / "destination" → keep the destination's (default, --use-destination-message);
+	// "source" → the source revision(s)' description(s);
+	// "combine" → destination first, then sources, blank-line separated.
+	DescriptionMode string `json:"description_mode"`
 }
 
 func (q squashRequest) validate() error {
@@ -948,11 +953,67 @@ func (q squashRequest) validate() error {
 	if q.Destination == "" {
 		return fmt.Errorf("destination is required")
 	}
+	switch q.DescriptionMode {
+	case "", "destination", "source", "combine":
+	default:
+		return fmt.Errorf("invalid description_mode: %q", q.DescriptionMode)
+	}
 	return nil
 }
 
-func (q squashRequest) build() (jj.CommandArgs, error) {
-	return jj.Squash(jj.FromIDs(q.Revisions), q.Destination, q.Files, q.KeepEmptied, q.IgnoreImmutable), nil
+// handleSquash is hand-rolled (not the generic mutation factory) because the
+// "source"/"combine" description modes must READ commit descriptions before
+// building the args — a server-state-dependent build (issue #22). The default
+// "destination" mode needs no read and composes message="".
+func (s *Server) handleSquash(w http.ResponseWriter, r *http.Request) {
+	var req squashRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := req.validate(); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	message := ""
+	if req.DescriptionMode == "source" || req.DescriptionMode == "combine" {
+		msg, err := s.composeSquashMessage(r.Context(), req.DescriptionMode, req.Destination, req.Revisions)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		message = msg
+	}
+	s.runMutation(w, r, jj.Squash(jj.FromIDs(req.Revisions), req.Destination, req.Files, req.KeepEmptied, req.IgnoreImmutable, message))
+}
+
+// composeSquashMessage reads the descriptions a squash will combine and joins
+// them for -m (issue #22). "source" = the source revision(s) only; "combine" =
+// destination first, then sources. Empty descriptions are skipped so the
+// result never has blank-line padding; if nothing non-empty remains it returns
+// "", and Squash falls back to --use-destination-message (keeping the
+// destination's — the best available when the chosen side is empty).
+func (s *Server) composeSquashMessage(ctx context.Context, mode, destination string, sources []string) (string, error) {
+	// "combine" = destination's description first, then the sources'; "source"
+	// = sources only. One read loop over the ordered rev list; empty
+	// descriptions are skipped so the join never pads with blank lines. (Source
+	// order is the caller's responsibility — the frontend sends them in graph
+	// order so multi-source combine is deterministic, not checkbox-click order.)
+	revs := sources
+	if mode == "combine" {
+		revs = append([]string{destination}, sources...)
+	}
+	var parts []string
+	for _, rev := range revs {
+		out, err := s.Runner.Run(ctx, jj.GetDescription(rev))
+		if err != nil {
+			return "", err
+		}
+		if d := strings.TrimRight(string(out), "\n"); d != "" {
+			parts = append(parts, d)
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // undoRequest has no fields — POST /api/undo takes an empty JSON body. The
@@ -1261,6 +1322,52 @@ func (s *Server) handleWorkspaceUpdateStale(w http.ResponseWriter, r *http.Reque
 	// propagate that to us. Self-heals — if update-stale FAILED, the next
 	// snapshot re-detects within 5s. Brief false-clear, bounded by one tick.
 	s.clearStale()
+}
+
+// handleWorkspaceUpdateStaleOther recovers a stale working copy of a workspace
+// OTHER than the one this tab points at (issue #21). The current workspace has
+// its own watcher-driven flow (handleWorkspaceUpdateStale + clearStale); this
+// targets a sibling by name, resolving its absolute root server-side via
+// workspacePathMap so the -R path is jj's OWN output, never request-injected.
+//
+// RunRaw (not runMutation) is deliberate: targeting a sibling needs an explicit
+// -R that conflicts with the runner's injected -R RepoDir (see
+// WorkspaceUpdateStaleAt). Works in both modes — local: -R overrides cwd; SSH:
+// RunRaw's `cd RepoPath && <argv>` adds no -R of its own.
+func (s *Server) handleWorkspaceUpdateStaleOther(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decodeBody(w, r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	_, pathMap, err := s.workspacePathMap(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	path := pathMap[req.Name]
+	if path == "" {
+		// Same gate as "Open in new tab": a workspace predating jj's
+		// workspace_store index has no resolvable path (additive-only, no
+		// backfill). Not a 400 — the request is well-formed; we just can't act.
+		s.writeError(w, http.StatusUnprocessableEntity, "workspace path unknown (predates jj's workspace_store index)")
+		return
+	}
+	if _, err := s.Runner.RunRaw(r.Context(), append([]string{"jj"}, jj.WorkspaceUpdateStaleAt(path)...)); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// The sibling's working-copy moved → the repo op-id advanced. Refresh so
+	// the current tab's log reflects the other workspace's @ move promptly
+	// (RunRaw bypasses runMutation's built-in refreshOpId).
+	s.refreshOpId()
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }
 
 // clearStale is the handler-side stale reset. setStale serializes the

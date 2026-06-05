@@ -38,7 +38,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
 }
 
 function localBm(name: string): Bookmark {
-  return makeBookmark({ name, local: { remote: '.', commit_id: 'aaa', description: '', ago: '', tracked: false, ahead: 0, behind: 0 } })
+  return makeBookmark({ name, local: { remote: '.', commit_id: 'aaa', description: '', author_name: '', author_email: '', commit_ts: 0, mine: false, tracked: false, ahead: 0, behind: 0 } })
 }
 
 // Waits for git command elements to render, then returns their text content.

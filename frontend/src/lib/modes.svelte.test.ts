@@ -178,6 +178,24 @@ describe('createSquashMode', () => {
       expect(mode.ignoreImmutable).toBe(false)
     })
 
+    it('cycles descMode with m: destination → source → combine → destination', () => {
+      const mode = createSquashMode()
+      expect(mode.descMode).toBe('destination')
+      expect(mode.handleKey('m')).toBe(true)
+      expect(mode.descMode).toBe('source')
+      expect(mode.handleKey('m')).toBe(true)
+      expect(mode.descMode).toBe('combine')
+      expect(mode.handleKey('m')).toBe(true)
+      expect(mode.descMode).toBe('destination')
+    })
+
+    it('enter resets descMode to destination', () => {
+      const mode = createSquashMode()
+      mode.handleKey('m') // → source
+      mode.enter(['abc'])
+      expect(mode.descMode).toBe('destination')
+    })
+
     it('returns false for unrecognized keys', () => {
       const mode = createSquashMode()
       expect(mode.handleKey('z')).toBe(false)

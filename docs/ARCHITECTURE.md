@@ -94,7 +94,7 @@ flowchart TD
 | POST | `/api/restore` | Reset listed files to parent content |
 | POST | `/api/restore-from` | Restore content from one revision into another |
 | POST | `/api/rebase` | Rebase (`-r`/`-s`/`-b` × `-d`/`--insert-after`/`--insert-before`) |
-| POST | `/api/squash` | Squash selected files into a target revision |
+| POST | `/api/squash` | Squash selected files into a target revision; `description_mode` (destination/source/combine) picks which description survives |
 | POST | `/api/split` | Split revision by file selection |
 | POST | `/api/split-hunks` | Hunk-level split via `jj split --tool` re-entry (local-only) |
 | POST | `/api/undo` | Undo the last operation |
@@ -162,7 +162,8 @@ flowchart TD
 | POST | `/api/workspace/add` | Create sibling-directory workspace (local-only); optional `revision` parent |
 | POST | `/api/workspace/forget` | Stop tracking a workspace by name (dir left on disk); 409 if the workspace is open as another tab |
 | POST | `/api/workspace/rename` | Rename the current workspace |
-| POST | `/api/workspace/update-stale` | Recover a stale working copy |
+| POST | `/api/workspace/update-stale` | Recover a stale working copy (current workspace) |
+| POST | `/api/workspace/update-stale-other` | Recover a stale working copy of a sibling workspace by `name` (RunRaw `-R path`) |
 
 Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `routes()`):
 

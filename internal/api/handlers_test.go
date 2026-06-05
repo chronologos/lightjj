@@ -126,7 +126,7 @@ func TestHandleLog_Empty(t *testing.T) {
 
 func TestHandleBookmarks(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1fabc\x1fabc\x1f0\x1f0\x1ftrue\x1fdesc\x1f2 days ago"))
+	runner.Expect(jj.BookmarkListAll()).SetOutput([]byte("main\x1f.\x1ffalse\x1ffalse\x1fabc\x1fabc\x1f0\x1f0\x1ftrue\x1fdesc\x1fAda Lovelace\x1fada@example.com\x1f1780000000\x1ftrue"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -139,6 +139,10 @@ func TestHandleBookmarks(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &bookmarks))
 	assert.Len(t, bookmarks, 1)
 	assert.Equal(t, "main", bookmarks[0].Name)
+	require.NotNil(t, bookmarks[0].Local)
+	assert.Equal(t, "Ada Lovelace", bookmarks[0].Local.AuthorName)
+	assert.Equal(t, "ada@example.com", bookmarks[0].Local.AuthorEmail)
+	assert.Equal(t, int64(1780000000), bookmarks[0].Local.CommitTs)
 }
 
 func TestHandleDiff(t *testing.T) {
@@ -385,7 +389,7 @@ func TestHandleRebase(t *testing.T) {
 func TestHandleSquash(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", nil, false, false)).SetOutput([]byte(""))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false, "")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -395,6 +399,83 @@ func TestHandleSquash(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSquash_CombineDescriptions(t *testing.T) {
+	// combine: read destination THEN sources, join destination-first with a
+	// blank line, pass via -m (issue #22).
+	runner := testutil.NewMockRunner(t)
+	revs := jj.FromIDs([]string{"abc"})
+	runner.Expect(jj.GetDescription("def")).SetOutput([]byte("dest desc\n"))
+	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("source desc\n"))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false, "dest desc\n\nsource desc")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(squashRequest{Revisions: []string{"abc"}, Destination: "def", DescriptionMode: "combine"})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/squash", body))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSquash_CombineMultiSource(t *testing.T) {
+	// Multi-source combine: destination first, then sources IN THE ORDER SENT
+	// (the frontend orders them by graph position); an empty source is skipped
+	// without leaving blank-line padding.
+	runner := testutil.NewMockRunner(t)
+	revs := jj.FromIDs([]string{"abc", "xyz"})
+	runner.Expect(jj.GetDescription("def")).SetOutput([]byte("dest\n"))
+	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("first\n"))
+	runner.Expect(jj.GetDescription("xyz")).SetOutput([]byte("\n")) // empty → skipped
+	runner.Expect(jj.Squash(revs, "def", nil, false, false, "dest\n\nfirst")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(squashRequest{Revisions: []string{"abc", "xyz"}, Destination: "def", DescriptionMode: "combine"})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/squash", body))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSquash_SourceDescription(t *testing.T) {
+	// source: read only the source(s); destination is NOT read.
+	runner := testutil.NewMockRunner(t)
+	revs := jj.FromIDs([]string{"abc"})
+	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("source desc\n"))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false, "source desc")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(squashRequest{Revisions: []string{"abc"}, Destination: "def", DescriptionMode: "source"})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/squash", body))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSquash_EmptyChosenDescriptionFallsBack(t *testing.T) {
+	// source mode where the source has no description → composed message is
+	// empty → Squash falls back to --use-destination-message (message="").
+	runner := testutil.NewMockRunner(t)
+	revs := jj.FromIDs([]string{"abc"})
+	runner.Expect(jj.GetDescription("abc")).SetOutput([]byte("\n"))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false, "")).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(squashRequest{Revisions: []string{"abc"}, Destination: "def", DescriptionMode: "source"})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/squash", body))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleSquash_InvalidDescriptionMode(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify() // no jj runs — 400 at validation
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(squashRequest{Revisions: []string{"abc"}, Destination: "def", DescriptionMode: "bogus"})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/squash", body))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestHandleUndo(t *testing.T) {
@@ -585,6 +666,45 @@ func TestHandleWorkspaceForget_OpenTabConflict(t *testing.T) {
 	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/forget", []byte(`{"name":"feat"}`)))
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Contains(t, w.Body.String(), "close the tab")
+}
+
+func TestHandleWorkspaceUpdateStaleOther(t *testing.T) {
+	// Resolves the named sibling's path from the workspace list, then runs
+	// update-stale scoped to it via RunRaw (jj -R <path>).
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F/home/u/repo-feat\n" +
+			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
+	runner.Expect(append([]string{"jj"}, jj.WorkspaceUpdateStaleAt("/home/u/repo-feat")...)).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/update-stale-other", []byte(`{"name":"feat"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleWorkspaceUpdateStaleOther_MissingName(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify() // no jj runs — 400 before any command
+	srv := newTestServer(runner)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/update-stale-other", []byte(`{"name":""}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleWorkspaceUpdateStaleOther_UnknownPath(t *testing.T) {
+	// Workspace exists in the list but has no resolvable path (predates jj's
+	// workspace_store index) → 422, update-stale never runs.
+	runner := testutil.NewMockRunner(t)
+	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F\n" + // empty path field
+			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
+	defer runner.Verify() // no WorkspaceUpdateStaleAt
+	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/update-stale-other", []byte(`{"name":"feat"}`)))
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
 func TestHandleWorkspaceForget_NonTabWorkspace(t *testing.T) {
@@ -2780,7 +2900,7 @@ func TestHandleEdit_IgnoreImmutable(t *testing.T) {
 func TestHandleSquash_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", nil, false, false)).SetError(errors.New("squash failed"))
+	runner.Expect(jj.Squash(revs, "def", nil, false, false, "")).SetError(errors.New("squash failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2798,7 +2918,7 @@ func TestHandleSquash_RunnerError(t *testing.T) {
 func TestHandleSquash_WithFiles(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", []string{"a.go", "b.go"}, false, false)).SetOutput([]byte(""))
+	runner.Expect(jj.Squash(revs, "def", []string{"a.go", "b.go"}, false, false, "")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2813,7 +2933,7 @@ func TestHandleSquash_WithFiles(t *testing.T) {
 func TestHandleSquash_Flags(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Squash(revs, "def", nil, true, true)).SetOutput([]byte(""))
+	runner.Expect(jj.Squash(revs, "def", nil, true, true, "")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -3695,7 +3815,7 @@ func TestWireTypes(t *testing.T) {
 			name:   "squash: files + keep_emptied + ignore_immutable",
 			route:  "/api/squash",
 			body:   `{"revisions":["abc"],"destination":"def","files":["x.go"],"keep_emptied":true,"ignore_immutable":true}`,
-			expect: jj.Squash(abc, "def", []string{"x.go"}, true, true),
+			expect: jj.Squash(abc, "def", []string{"x.go"}, true, true, ""),
 		},
 		{
 			name:   "edit: ignore_immutable",

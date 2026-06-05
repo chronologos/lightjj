@@ -8,8 +8,11 @@ import (
 type BookmarkRemote struct {
 	Remote      string `json:"remote"`
 	CommitId    string `json:"commit_id"`
-	Description string `json:"description"` // first line
-	Ago         string `json:"ago"`         // committer timestamp, relative ("3 days ago")
+	Description string `json:"description"`  // first line
+	AuthorName  string `json:"author_name"`  // tip commit author (whose work this is)
+	AuthorEmail string `json:"author_email"` // tip commit author email (filter target)
+	CommitTs    int64  `json:"commit_ts"`    // committer timestamp, epoch seconds (sort key; frontend derives relative age)
+	Mine        bool   `json:"mine"`         // author email == my email → UI suppresses the author label
 	Tracked     bool   `json:"tracked"`
 	// Ahead = commits on remote not in local (pull needed).
 	// Behind = commits in local not on remote (push needed).
@@ -41,7 +44,7 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 
 	for _, b := range lines {
 		parts := strings.Split(b, "\x1f")
-		if len(parts) < 11 {
+		if len(parts) < 14 {
 			continue
 		}
 
@@ -55,7 +58,10 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 		behind, _ := strconv.Atoi(parts[7])
 		synced := parts[8] == "true"
 		description := parts[9]
-		ago := parts[10]
+		authorName := parts[10]
+		authorEmail := parts[11]
+		commitTs, _ := strconv.ParseInt(parts[12], 10, 64) // "" → 0 (conflict/no target)
+		mine := parts[13] == "true"
 
 		if remoteName == "git" {
 			continue
@@ -84,7 +90,10 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 				Remote:      ".",
 				CommitId:    commitId,
 				Description: description,
-				Ago:         ago,
+				AuthorName:  authorName,
+				AuthorEmail: authorEmail,
+				CommitTs:    commitTs,
+				Mine:        mine,
 				Tracked:     tracked,
 			}
 			bookmark.CommitId = commitId
@@ -97,7 +106,10 @@ func ParseBookmarkListOutput(output string, defaultRemote string) []Bookmark {
 				Tracked:     tracked,
 				CommitId:    commitId,
 				Description: description,
-				Ago:         ago,
+				AuthorName:  authorName,
+				AuthorEmail: authorEmail,
+				CommitTs:    commitTs,
+				Mine:        mine,
 				Ahead:       ahead,
 				Behind:      behind,
 			}

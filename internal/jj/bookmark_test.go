@@ -6,19 +6,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Template fields (11): name, remote, tracked, conflict, commitId,
-// addedTargets, ahead, behind, synced, description, ago
+// Template fields (14): name, remote, tracked, conflict, commitId,
+// addedTargets, ahead, behind, synced, description, authorName, authorEmail,
+// committerTs (epoch seconds), mine.
 //
-// bml pads 9-field legacy-test lines with empty desc+ago so tests don't
-// need updating every time a display-only field is added.
+// bml pads short legacy-test lines (which stop at `synced` = 8 separators)
+// up to the full 14-field row with empty trailing fields, so display-only
+// additions don't churn every test row.
 func bml(lines ...string) string {
+	const seps = 13 // 14 fields → 13 separators
 	for i, l := range lines {
-		if n := strings.Count(l, "\x1f"); n == 8 {
-			lines[i] = l + "\x1f\x1f" // +desc +ago
-		} else if n == 9 {
-			lines[i] = l + "\x1f" // +ago
+		if n := strings.Count(l, "\x1f"); n < seps {
+			lines[i] = l + strings.Repeat("\x1f", seps-n)
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -140,6 +142,37 @@ func TestParseBookmarkListOutput_AheadBehind(t *testing.T) {
 	assert.Equal(t, 3, r.Ahead)
 	assert.Equal(t, 1, r.Behind)
 	assert.False(t, bms[0].Synced)
+}
+
+func TestParseBookmarkListOutput_AuthorAndTimestamp(t *testing.T) {
+	// Full 14-field rows: author name/email + epoch-seconds committer ts + mine
+	// flow onto both the local ref and each remote ref. The local tip is mine
+	// (true), the remote tip is someone else's (false).
+	input := "feat\x1f.\x1ffalse\x1ffalse\x1fabc\x1fabc\x1f0\x1f0\x1ffalse\x1fAdd feature\x1fAda Lovelace\x1fada@example.com\x1f1780326757\x1ftrue\n" +
+		"feat\x1forigin\x1ftrue\x1ffalse\x1fdef\x1fdef\x1f0\x1f1\x1ffalse\x1fAdd feature\x1fGrace Hopper\x1fgrace@example.com\x1f1780000000\x1ffalse"
+	bms := ParseBookmarkListOutput(input, "origin")
+	assert.Len(t, bms, 1)
+
+	require.NotNil(t, bms[0].Local)
+	assert.Equal(t, "Ada Lovelace", bms[0].Local.AuthorName)
+	assert.Equal(t, "ada@example.com", bms[0].Local.AuthorEmail)
+	assert.Equal(t, int64(1780326757), bms[0].Local.CommitTs)
+	assert.True(t, bms[0].Local.Mine)
+
+	require.Len(t, bms[0].Remotes, 1)
+	assert.Equal(t, "Grace Hopper", bms[0].Remotes[0].AuthorName)
+	assert.Equal(t, int64(1780000000), bms[0].Remotes[0].CommitTs)
+	assert.False(t, bms[0].Remotes[0].Mine)
+}
+
+func TestParseBookmarkListOutput_EmptyTimestampIsZero(t *testing.T) {
+	// bml pads trailing fields empty (no author, no ts) — ParseInt("") → 0,
+	// not a parse error that drops the row.
+	bms := ParseBookmarkListOutput(bml("solo\x1f.\x1ffalse\x1ffalse\x1fabc\x1fabc\x1f0\x1f0\x1ftrue"), "origin")
+	assert.Len(t, bms, 1)
+	require.NotNil(t, bms[0].Local)
+	assert.Equal(t, int64(0), bms[0].Local.CommitTs)
+	assert.Empty(t, bms[0].Local.AuthorName)
 }
 
 func TestParseBookmarkListOutput_RemoteOnly(t *testing.T) {

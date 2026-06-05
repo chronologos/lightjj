@@ -132,17 +132,24 @@ func TestDiff_WithFile(t *testing.T) {
 
 func TestSquash(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Squash(from, "def", nil, false, false)
+	got := Squash(from, "def", nil, false, false, "")
 	assert.Equal(t, []string{"squash", "--from", "abc", "--into", "def", "--use-destination-message"}, got)
 }
 
 func TestSquash_AllFlags(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Squash(from, "def", []string{"file.go"}, true, true)
+	got := Squash(from, "def", []string{"file.go"}, true, true, "")
 	assert.Contains(t, got, "--keep-emptied")
 	assert.Contains(t, got, "--use-destination-message")
 	assert.Contains(t, got, "--ignore-immutable")
 	assert.Contains(t, got, `root-file:"file.go"`)
+}
+
+func TestSquash_Message(t *testing.T) {
+	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
+	got := Squash(from, "def", nil, false, false, "combined desc")
+	assert.Equal(t, []string{"squash", "--from", "abc", "--into", "def", "-m", "combined desc"}, got)
+	assert.NotContains(t, got, "--use-destination-message")
 }
 
 func TestBookmarkSet(t *testing.T) {
@@ -331,6 +338,11 @@ func TestWorkspaceRename(t *testing.T) {
 func TestWorkspaceUpdateStale(t *testing.T) {
 	got := WorkspaceUpdateStale()
 	assert.Equal(t, CommandArgs{"workspace", "update-stale"}, got)
+}
+
+func TestWorkspaceUpdateStaleAt(t *testing.T) {
+	got := WorkspaceUpdateStaleAt("/home/u/repo-feat")
+	assert.Equal(t, CommandArgs{"-R", "/home/u/repo-feat", "workspace", "update-stale"}, got)
 }
 
 func TestFilesBatch(t *testing.T) {

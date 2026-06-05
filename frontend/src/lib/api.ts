@@ -130,8 +130,11 @@ export interface ConflictEntry {
 export interface BookmarkRemote {
   remote: string
   commit_id: string
-  description: string  // first line
-  ago: string          // committer timestamp relative ("3 days ago")
+  description: string   // first line
+  author_name: string   // tip commit author (whose work this branch is)
+  author_email: string  // tip commit author email (filter target)
+  commit_ts: number     // committer timestamp, epoch SECONDS (sort key; relative age derived via relativeTime)
+  mine: boolean         // author is me → row suppresses the author label (it's just noise on your own branches)
   tracked: boolean
   // ahead = commits on remote not in local (pull needed)
   // behind = commits in local not on remote (push needed)
@@ -862,6 +865,7 @@ export interface WorkspacesResponse {
 export interface Alias {
   name: string
   command: string[]
+  doc?: string // optional description from a table-form `{ definition, doc }` alias
 }
 
 export interface PullRequest {
@@ -1195,12 +1199,14 @@ export const api = {
     post<MutationResult>('/api/split-hunks', { revision, spec, description }),
 
   squash: (revisions: string[], destination: string, opts?: {
-    files?: string[], keepEmptied?: boolean, ignoreImmutable?: boolean
+    files?: string[], keepEmptied?: boolean, ignoreImmutable?: boolean,
+    descriptionMode?: 'source' | 'combine'
   }) =>
     post<MutationResult>('/api/squash', {
       revisions, destination,
       files: opts?.files, keep_emptied: opts?.keepEmptied,
       ignore_immutable: opts?.ignoreImmutable,
+      description_mode: opts?.descriptionMode,
     }),
 
   undo: () => post<MutationResult>('/api/undo', {}),
@@ -1232,6 +1238,9 @@ export const api = {
   workspaceRename: (name: string) => post<MutationResult>('/api/workspace/rename', { name }),
 
   workspaceUpdateStale: () => post<MutationResult>('/api/workspace/update-stale', {}),
+  // Recover a stale working copy of ANOTHER workspace by name (issue #21).
+  // Safe/idempotent — a no-op on a fresh workspace.
+  updateStaleWorkspace: (name: string) => post<MutationResult>('/api/workspace/update-stale-other', { name }),
 
   unlockRepo: () => post<MutationResult>('/api/unlock-repo', {}),
 

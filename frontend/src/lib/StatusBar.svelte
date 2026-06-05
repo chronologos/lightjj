@@ -45,10 +45,15 @@
           { keys: ['p'], label: 'simplify-parents', active: rebase.simplifyParents },
         ],
       ]
-      case 'squash': return [[
-        { keys: ['e'], label: 'keep-emptied', active: squash.keepEmptied },
-        { keys: ['x'], label: 'ignore-immutable', active: squash.ignoreImmutable },
-      ]]
+      case 'squash': return [
+        [
+          { keys: ['e'], label: 'keep-emptied', active: squash.keepEmptied },
+          { keys: ['x'], label: 'ignore-immutable', active: squash.ignoreImmutable },
+        ],
+        // Which description the squashed commit keeps (issue #22). Showing the
+        // active choice here is also the answer to "I'm not sure which prevails".
+        [{ keys: ['m'], label: `desc: ${squash.descMode}`, active: squash.descMode !== 'destination' }],
+      ]
       case 'split': return [
         split.review
           ? [{ keys: ['j', 'k'], label: 'hunk' }, { keys: ['Space'], label: 'toggle' }, { keys: ['a', 'n'], label: 'file' }]

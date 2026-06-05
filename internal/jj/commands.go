@@ -290,19 +290,25 @@ func BookmarkUntrack(name string, remote string) CommandArgs {
 	return args
 }
 
-func Squash(from SelectedRevisions, destination string, files []string, keepEmptied bool, ignoreImmutable bool) CommandArgs {
+func Squash(from SelectedRevisions, destination string, files []string, keepEmptied bool, ignoreImmutable bool, message string) CommandArgs {
 	args := []string{"squash"}
 	args = append(args, from.AsPrefixedArgs("--from")...)
 	args = append(args, "--into", destination)
 	if keepEmptied {
 		args = append(args, "--keep-emptied")
 	}
-	// --use-destination-message is unconditional: jj would otherwise open an
-	// editor when both source and destination have descriptions, and the web UI
-	// has no way to compose a combined one. StatusBar used to surface this as a
-	// toggle — it was a placebo (the condition here was `X || !interactive`
-	// with interactive hardcoded false).
-	args = append(args, "--use-destination-message")
+	// Description handling (issue #22). jj would otherwise open an editor when
+	// both source and destination have descriptions, and the web UI has no way
+	// to compose one interactively. A non-empty message is the combined text
+	// the caller already composed (source / destination+source) — pass it via
+	// -m, the non-interactive equivalent of the combine-editor. Empty message =
+	// the "Destination" mode (and the empty-result fallback): keep the
+	// destination's description, discard the source's.
+	if message != "" {
+		args = append(args, "-m", message)
+	} else {
+		args = append(args, "--use-destination-message")
+	}
 	if ignoreImmutable {
 		args = append(args, "--ignore-immutable")
 	}
@@ -332,7 +338,23 @@ func DiffRange(from, to string, files []string) CommandArgs {
 //
 // .short() (no arg) matches the log template so commit_id strings compare
 // equal across endpoints (jumpToBookmark findIndex depends on this).
-const bookmarkListTemplate = `name ++ "\x1F" ++ if(remote, remote, ".") ++ "\x1F" ++ stringify(tracked) ++ "\x1F" ++ stringify(conflict) ++ "\x1F" ++ if(normal_target, normal_target.commit_id().short(), "") ++ "\x1F" ++ added_targets.map(|c| c.commit_id().short()).join(",") ++ "\x1F" ++ if(tracked, stringify(self.tracking_ahead_count().lower()), "0") ++ "\x1F" ++ if(tracked, stringify(self.tracking_behind_count().lower()), "0") ++ "\x1F" ++ stringify(synced) ++ "\x1F" ++ if(normal_target, normal_target.description().first_line(), "") ++ "\x1F" ++ if(normal_target, normal_target.committer().timestamp().ago(), "") ++ "\n"`
+// Fields (14, \x1F-delimited): name, remote, tracked, conflict, commitId,
+// addedTargets, ahead, behind, synced, description, authorName, authorEmail,
+// committerTs, mine. committerTs is epoch SECONDS (format("%s")) — a sortable
+// key for the "Recent" sort mode; the frontend derives the relative age from
+// it via relativeTime(), so no localized ago() string crosses the wire. Per
+// issue #19 we show the AUTHOR (whose work the branch is, stable across
+// rebases) and key recency on the committer timestamp (when the tip was last
+// touched). `mine` (author email == my email) lets the UI suppress the author
+// label on your own branches, where it's just noise.
+//
+// Delimiter safety: name/email and the integer ts can't contain ASCII control
+// chars; description is first_line()-guarded. authorName is the one free-form
+// field — git's commit-object format is line-based so a `\n` is impossible,
+// and a `\x1F` in a name is pathological (assumed absent, same assumption the
+// LogGraph template already makes for author.email()). If that ever bites,
+// the fix is the json() template rule (see CLAUDE.md), not a runtime guard.
+const bookmarkListTemplate = `name ++ "\x1F" ++ if(remote, remote, ".") ++ "\x1F" ++ stringify(tracked) ++ "\x1F" ++ stringify(conflict) ++ "\x1F" ++ if(normal_target, normal_target.commit_id().short(), "") ++ "\x1F" ++ added_targets.map(|c| c.commit_id().short()).join(",") ++ "\x1F" ++ if(tracked, stringify(self.tracking_ahead_count().lower()), "0") ++ "\x1F" ++ if(tracked, stringify(self.tracking_behind_count().lower()), "0") ++ "\x1F" ++ stringify(synced) ++ "\x1F" ++ if(normal_target, normal_target.description().first_line(), "") ++ "\x1F" ++ if(normal_target, normal_target.author().name(), "") ++ "\x1F" ++ if(normal_target, normal_target.author().email(), "") ++ "\x1F" ++ if(normal_target, normal_target.committer().timestamp().format("%s"), "") ++ "\x1F" ++ if(normal_target, stringify(normal_target.mine()), "") ++ "\n"`
 
 func BookmarkList(revset string) CommandArgs {
 	return []string{"bookmark", "list", "-a", "-r", revset, "--template", bookmarkListTemplate, "--color", "never", "--ignore-working-copy"}
@@ -834,6 +856,19 @@ func WorkspaceRename(newName string) CommandArgs {
 // checks out the current view's @ — no data loss, but files change on disk.
 func WorkspaceUpdateStale() CommandArgs {
 	return []string{"workspace", "update-stale"}
+}
+
+// WorkspaceUpdateStaleAt returns `jj workspace update-stale` args scoped to
+// ANOTHER workspace via -R <path> (issue #21: recover a sibling workspace
+// without switching tabs). The caller MUST run this through RunRaw, prepending
+// "jj" — NOT Run/RunForMutation. Those inject the tab's own -R RepoDir
+// (SSHRunner.wrapArgs), and jj rejects two --repository flags as a hard error;
+// RunRaw passes argv verbatim (local: cwd=RepoDir, the explicit -R overrides;
+// SSH: `cd RepoPath && <argv>`, the explicit -R targets the sibling).
+// Idempotent: a fresh workspace prints "Attempted recovery, but the working
+// copy is not stale" and exits 0, so it is safe to run unconditionally.
+func WorkspaceUpdateStaleAt(path string) CommandArgs {
+	return []string{"-R", path, "workspace", "update-stale"}
 }
 
 // WorkspaceList returns args for `jj workspace list` with a template.
