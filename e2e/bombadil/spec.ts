@@ -113,7 +113,11 @@ const focusInInput = extract((s) => {
 //
 // revisionCount>0 proves both Svelte-mount AND API round-trip; a bare
 // `.panel` check would miss the server-side-broken case. 5s is generous
-// for a 12-commit localhost fixture.
+// for a 12-commit localhost fixture — provided the binary actually serves
+// the SPA. The May–June 2026 "appMounts timed out" runs were NOT this
+// property being too tight: e2e.yml built the stub binary (missing
+// `-tags embed`), so the page was a static help stub with zero rows. The
+// fix is in the workflow, not this deadline.
 export const appMounts = eventually(() =>
   revisionCount.current > 0
 ).within(5, "seconds");

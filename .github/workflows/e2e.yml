@@ -52,9 +52,14 @@ jobs:
           bombadil --version
 
       - name: Build lightjj
+        # -tags embed is REQUIRED: without it `go build` produces the stub
+        # binary (frontend_stub.go, //go:build !embed) that serves a static
+        # "frontend not bundled" help page instead of the SPA — bombadil then
+        # fuzzes an empty page and appMounts fails forever. The build-tag split
+        # landed in v1.24.1; release.yml got the tag, this workflow didn't.
         run: |
           (cd frontend && pnpm install --frozen-lockfile && pnpm run build)
-          go build ./cmd/lightjj
+          go build -tags embed ./cmd/lightjj
 
       - name: Typecheck spec
         working-directory: e2e/bombadil

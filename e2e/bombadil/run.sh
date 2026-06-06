@@ -53,6 +53,21 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
+# Defensive: pre-warm the API before fuzzing. Polling `/` above only confirms
+# the HTTP server has bound — it doesn't run the first (cold) `jj log`
+# subprocess. bombadil's time-windowed liveness properties (e.g. appMounts'
+# `eventually(...).within(5,"seconds")`) advance on a per-captured-state clock,
+# so warming the cold path here keeps a slow first `jj log` (+ op-id seed) from
+# eating into that budget on a contended runner. The API is tab-scoped — the
+# `-R` repo mounts as tab "0", so /tab/0/api/log is the real log route
+# (bare /api/log 404s; only /api/config + /api/state live at the root). Not
+# load-bearing for the stub-binary bug this directory's history documents
+# (missing `-tags embed` in e2e.yml) — just removes a cold-start flake class.
+for _ in $(seq 50); do
+  curl -sf "http://localhost:$PORT/tab/0/api/log" >/dev/null && break
+  sleep 0.1
+done
+
 # --- bombadil ------------------------------------------------------------
 rm -rf "$OUT"
 HEADLESS_FLAG="--headless"
