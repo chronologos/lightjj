@@ -109,7 +109,12 @@ type StaleImmutableEntry struct {
 	CommitId        string   `json:"commit_id"`
 	LocalBookmarks  []string `json:"local_bookmarks"`
 	RemoteBookmarks []string `json:"remote_bookmarks"`
-	Description     string   `json:"description"`
+	// IsHead = no visible children. The cleanup action runs `jj abandon
+	// --ignore-immutable`, which rebases all descendants onto the abandoned
+	// commit's parent — catastrophic when the stale copy is an ancestor of
+	// real history (issue #21). Only leaf abandons are safe.
+	IsHead      bool   `json:"is_head"`
+	Description string `json:"description"`
 }
 
 // Full commit_id (not .short()) — these IDs flow into jj abandon -r via the
@@ -121,6 +126,7 @@ const staleImmutableTemplate = `change_id.short() ++ "\x1F" ++ ` +
 	`commit_id ++ "\x1F" ++ ` +
 	`local_bookmarks.map(|b| b.name()).join("\x1E") ++ "\x1F" ++ ` +
 	`remote_bookmarks.map(|b| b.name() ++ "@" ++ b.remote()).join("\x1E") ++ "\x1F" ++ ` +
+	`if(self.contained_in("visible_heads()"), "1", "") ++ "\x1F" ++ ` +
 	`description.first_line() ++ "\n"`
 
 // StaleImmutable returns args for the stale-immutable detection log call.
@@ -144,7 +150,7 @@ func ParseStaleImmutable(output string) []StaleImmutableEntry {
 			continue
 		}
 		f := strings.Split(line, "\x1F")
-		if len(f) != 5 {
+		if len(f) != 6 {
 			continue
 		}
 		entries = append(entries, StaleImmutableEntry{
@@ -152,7 +158,8 @@ func ParseStaleImmutable(output string) []StaleImmutableEntry {
 			CommitId:        f[1],
 			LocalBookmarks:  splitNonEmpty(f[2], "\x1E"),
 			RemoteBookmarks: splitNonEmpty(f[3], "\x1E"),
-			Description:     f[4],
+			IsHead:          f[4] == "1",
+			Description:     f[5],
 		})
 	}
 	return entries
@@ -164,6 +171,12 @@ type StaleImmutableGroup struct {
 	ChangeId string              `json:"change_id"`
 	Stale    StaleImmutableEntry `json:"stale"`
 	Keeper   StaleImmutableEntry `json:"keeper"`
+	// Safe = Stale.IsHead. `jj abandon` rebases descendants onto the abandoned
+	// commit's PARENT — wrong destination if the stale copy carries work (it
+	// should go onto Keeper instead). Only a leaf stale is safe to abandon
+	// outright; the frontend's Clean up action filters on this and tells the
+	// user to rebase the rest manually.
+	Safe bool `json:"safe"`
 }
 
 // GroupStaleImmutable groups entries by change_id and identifies actionable
@@ -190,11 +203,13 @@ func GroupStaleImmutable(entries []StaleImmutableEntry) []StaleImmutableGroup {
 		if (bm0 == 0) == (bm1 == 0) {
 			continue
 		}
-		if bm0 > 0 {
-			groups = append(groups, StaleImmutableGroup{ChangeId: cid, Keeper: copies[0], Stale: copies[1]})
-		} else {
-			groups = append(groups, StaleImmutableGroup{ChangeId: cid, Keeper: copies[1], Stale: copies[0]})
+		keeper, stale := copies[0], copies[1]
+		if bm0 == 0 {
+			keeper, stale = copies[1], copies[0]
 		}
+		groups = append(groups, StaleImmutableGroup{
+			ChangeId: cid, Keeper: keeper, Stale: stale, Safe: stale.IsHead,
+		})
 	}
 	return groups
 }

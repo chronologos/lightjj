@@ -73,6 +73,26 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
   // Each op bumping it invalidates the others' post-await writes. Two
   // isolated createLoader instances can't express this (bug_048 would regress).
   let gen = 0
+  // queueLoading has its OWN counter: `gen` is bumped by selectFile (which
+  // never touches queueLoading), so gating the finally-clear on `g === gen`
+  // would strand the flag when a nav lands during save()'s post-resolve
+  // refetch. queueGen is bumped only by refreshQueue itself — only a
+  // competing queue fetch suppresses the clear (the bug_009 invariant).
+  let queueGen = 0
+
+  // Shared queue fetch for enter() and save()'s post-resolve refresh. Caller
+  // owns the gen bump; this only writes `queue` when its caller's gen is live.
+  async function refreshQueue(g: number): Promise<void> {
+    const qg = ++queueGen
+    queueLoading = true
+    try {
+      const q = await api.conflicts()
+      if (g !== gen) return
+      queue = q
+    } finally {
+      if (qg === queueGen) queueLoading = false
+    }
+  }
 
   async function enter(): Promise<boolean> {
     // bug_039: reset stale panel state; keep resolved (resume behavior).
@@ -82,18 +102,13 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
     sides = null
     busy = false
     const g = ++gen
-    queueLoading = true
     try {
-      const q = await api.conflicts()
-      if (g !== gen) return true  // superseded — not an error
-      queue = q
+      await refreshQueue(g)
       return true
     } catch (e) {
-      if (g !== gen) return true
+      if (g !== gen) return true  // superseded — not an error
       deps.onError(e)
       return false
-    } finally {
-      if (g === gen) queueLoading = false
     }
   }
 
@@ -160,10 +175,20 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
           return false  // 'stale' is silent: gen check above already covers it
         }
         resolved = new Set([...resolved, `${cur.commitId}:${cur.path}`])
+        // issue #24: the resolve REWROTE cur's commit (and possibly auto-
+        // resolved descendants). The queue still holds pre-rewrite commit_ids;
+        // a second save in the same commit would `jj resolve -r <stale id>` →
+        // divergence. Refetch so the next selectFile gets the rewritten id.
+        // `current` is NOT remapped — it keeps the pre-rewrite id so the
+        // {#key} block (and the user's just-saved result panel) stay put;
+        // remapping would re-key against `sides` still loaded from C0.
+        // Clicking the next queue item runs a fresh selectFile.
+        await refreshQueue(g)
         await deps.reload()
         return true
       } catch (e) {
-        // reload() failure (resolveConflictFile itself never throws).
+        // refreshQueue/reload failure (resolveConflictFile itself never throws).
+        // Resolution already landed; surfacing the error nudges a re-enter.
         if (g === gen) deps.onError(e)
         return false
       } finally {

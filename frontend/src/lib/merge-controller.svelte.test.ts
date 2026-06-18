@@ -286,6 +286,58 @@ describe('save()', () => {
     expect(reload).toHaveBeenCalledOnce()
   })
 
+  it('issue #24: save refetches queue so next file targets the rewritten commit_id', async () => {
+    // Non-@ commit with two conflicted files. First save rewrites C0 → C1.
+    // Without the post-save refresh, queue still holds C0; the second
+    // selectFile+save would `jj resolve -r C0` → divergent rewrite.
+    const mc = createMergeController(deps)
+    mockApi.conflicts.mockResolvedValueOnce([
+      { commit_id: 'C0', change_id: 'aaa', description: 'feat', files: [
+        { path: 'a.go', sides: 2 }, { path: 'b.go', sides: 2 },
+      ] },
+    ])
+    await mc.enter()
+    expect(mc.queue[0].commit_id).toBe('C0')
+
+    mc.selectFile({ commitId: 'C0', changeId: 'aaa', path: 'a.go', sides: 2 })
+    await flush()
+    // Post-save refetch: a.go resolved → gone; commit rewritten C0→C1.
+    mockApi.conflicts.mockResolvedValueOnce([
+      { commit_id: 'C1', change_id: 'aaa', description: 'feat', files: [
+        { path: 'b.go', sides: 2 },
+      ] },
+    ])
+    expect(await mc.save('fixed-a')).toBe(true)
+    expect(mockApi.mergeResolve).toHaveBeenCalledWith('C0', 'a.go', 'fixed-a')
+    // Queue refreshed → b.go now carries C1. ConflictQueue derives flat from
+    // this; the next click hands selectFile a C1 item, not stale C0.
+    expect(mc.queue).toHaveLength(1)
+    expect(mc.queue[0].commit_id).toBe('C1')
+    expect(mc.queue[0].files).toEqual([{ path: 'b.go', sides: 2 }])
+    // current is NOT remapped — panel keeps showing the just-saved result;
+    // remapping would re-key MergePanel against sides still loaded from C0.
+    expect(mc.current?.commitId).toBe('C0')
+  })
+
+  it('issue #24: nav during post-save queue refresh → stale queue write bounces, queueLoading clears', async () => {
+    const mc = createMergeController(deps)
+    mc.selectFile({ commitId: 'C0', changeId: 'aaa', path: 'a.go', sides: 2 })
+    await flush()
+    const dQ = deferred<typeof mc.queue>()
+    mockApi.conflicts.mockImplementationOnce(() => dQ.p)
+    const savePromise = mc.save('fixed')
+    await flush()  // mergeResolve resolved; refreshQueue pending
+    expect(mc.queueLoading).toBe(true)
+    mc.selectFile({ commitId: 'C0', changeId: 'aaa', path: 'b.go', sides: 2 })  // bumps gen, NOT queueGen
+    await flush()
+    dQ.resolve([{ commit_id: 'C1', change_id: 'aaa', description: '', files: [{ path: 'a.go', sides: 2 }] }])
+    expect(await savePromise).toBe(true)   // resolution itself succeeded
+    expect(mc.queue).toEqual([])           // gen-guarded queue write bounced
+    expect(mc.current?.path).toBe('b.go')
+    // queueLoading uses its OWN counter — selectFile's gen bump must not strand it.
+    expect(mc.queueLoading).toBe(false)
+  })
+
   it('save() returns false when withMutation is blocked', async () => {
     const mc = createMergeController({ ...deps, withMutation: async () => undefined })
     mc.selectFile(item('a.go'))

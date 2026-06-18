@@ -116,6 +116,10 @@ export interface StaleImmutableGroup {
   change_id: string
   stale: { commit_id: string; description: string; local_bookmarks: string[]; remote_bookmarks: string[] }
   keeper: { commit_id: string; description: string; local_bookmarks: string[]; remote_bookmarks: string[] }
+  /** stale is a leaf (no visible children). Clean up only abandons safe groups
+   *  — abandoning a non-leaf rebases its descendants onto stale's PARENT, not
+   *  keeper, which is the wrong destination (issue #21). */
+  safe: boolean
 }
 
 // Mirrors internal/jj/commands.go ConflictEntry. One conflicted commit in the

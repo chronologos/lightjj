@@ -84,6 +84,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     file-actions.svelte.ts — createFileActions(): per-file edit/preview/merge/quick-resolve state + actions (DiffPanel's mutation cluster)
     diff-cache.ts          — App-lifetime caches: derived highlights, parsed diffs, collapse state
     SearchResults.svelte   — Diff search match jump-list dropdown (capped render, snippet windowing)
+    ReviewJumpList.svelte  — Annotation jump-list dropdown over navAnnotations (SearchResults sibling, parent-owned cursor)
     FileSelectionPanel.svelte — Squash/split/review file checkbox panel
     hunk-apply.ts          — PURE — hunk selection model + forward-apply accepted hunks (spec for apply_hunks.go)
     RevisionHeader.svelte  — Header slot: change_id, description, badges, Describe/Divergence buttons
@@ -157,6 +158,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     MarkdownPreview.svelte — .md preview toggle with annotation gutter
     fuzzy.ts               — Fuzzy string matching
     group-by.ts            — groupByWithIndex utility
+    paths.ts               — basename()/dirname() display helpers (jump-list dropdowns)
     time-format.ts         — relativeTime() compact ages + firstLine()
     scroll-into-view.ts    — scrollIdxIntoView() data-idx row scroll helper
     loader.svelte.ts       — createLoader() async factory with generation counter

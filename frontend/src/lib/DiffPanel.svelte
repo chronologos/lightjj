@@ -19,6 +19,7 @@
   import { createFileActions } from './file-actions.svelte'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
   import SearchResults from './SearchResults.svelte'
+  import ReviewJumpList from './ReviewJumpList.svelte'
   import FileComparePicker from './FileComparePicker.svelte'
   import FileSelectionPanel from './FileSelectionPanel.svelte'
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
@@ -536,8 +537,8 @@
   }
 
   function jumpToFirstOfSeverity(sev: Severity) {
-    const r = navAnnotations.find(x => x.severity === sev)
-    if (r) scrollToReview(r)
+    const i = navAnnotations.findIndex(x => x.severity === sev)
+    if (i >= 0) jumpToAnnotation(i)
   }
 
   // Export helpers for command palette (bound via bind:this in App)
@@ -579,6 +580,15 @@
   // `let`, not $state: it's never read from a template/$derived (only written
   // and read inside stepAnnotation between presses).
   let annNavId: string | null = null
+  // issue #25: jump-list dropdown over navAnnotations (SearchResults pattern).
+  let annListOpen = $state(false)
+
+  function jumpToAnnotation(idx: number) {
+    if (idx < 0 || idx >= navAnnotations.length) return
+    annNavIdx = idx
+    annNavId = navAnnotations[idx].id
+    scrollToReview(navAnnotations[idx])
+  }
 
   /** Returns false when there's nothing to step to — caller (App) shows the
    *  "No annotations" hint. Expands the target (overrides) before scroll so
@@ -1178,6 +1188,7 @@
     hunkNavIdx = -1
     annNavIdx = -1
     annNavId = null
+    annListOpen = false
     annBubble = { open: false, x: 0, y: 0, editing: null, lineContext: null }
     symbolHover.clear()
     if (searchOpen) { searchQuery = ''; currentMatchIdx = 0 }
@@ -1738,6 +1749,20 @@
   {#if diffTarget?.kind === 'single' && (severityCounts.size > 0 || orphanedReviews.length > 0 || reviewedCount > 0 || vis.hiddenAuthors.size > 0)}
     <div class="annotations-bar">
       {#if reviewedCount > 0}<span class="reviewed-progress" title="{reviewedCount} of {parsedDiff.length} files reviewed">✓ {reviewedCount}/{parsedDiff.length}</span>{/if}
+      {#if navAnnotations.length > 0}
+        <!-- issue #25: discoverable surface for the existing `{`/`}` step nav.
+             Counter toggles the ReviewJumpList dropdown (SearchResults sibling). -->
+        <div class="ann-nav">
+          <button class="ann-nav-btn" onclick={() => stepAnnotation(-1)} title="Previous comment ({'{'})" aria-label="Previous comment">◀</button>
+          <button class="ann-nav-count" class:active={annListOpen}
+            data-ann-list-toggle
+            onclick={() => annListOpen = !annListOpen}
+            title="Comment {annNavIdx + 1 || '–'} of {navAnnotations.length} — click for list"
+            aria-expanded={annListOpen}
+          >{annNavIdx >= 0 ? annNavIdx + 1 : '–'}/{navAnnotations.length}</button>
+          <button class="ann-nav-btn" onclick={() => stepAnnotation(1)} title="Next comment ({'}'})" aria-label="Next comment">▶</button>
+        </div>
+      {/if}
       <div class="sev-strip">
         {#each (['must-fix', 'suggestion', 'question', 'nitpick'] as const) as sev}
           {@const n = severityCounts.get(sev) ?? 0}
@@ -1763,6 +1788,14 @@
         onclick={() => confirm(`Clear all ${annotations.list.length} annotations on this change?`) && annotations.clear()}
         title="Delete all review comments on this revision"
       >Clear</button>
+      {#if annListOpen && navAnnotations.length > 0}
+        <ReviewJumpList
+          reviews={navAnnotations}
+          currentIdx={annNavIdx}
+          onjump={(i) => { jumpToAnnotation(i); annListOpen = false }}
+          onclose={() => annListOpen = false}
+        />
+      {/if}
     </div>
   {/if}
   {#if parsedDiff.length > 0}
@@ -2233,7 +2266,18 @@
     border-bottom: 1px solid var(--surface0);
     font-size: var(--fs-sm);
     flex-shrink: 0;
+    position: relative;  /* anchor for ReviewJumpList dropdown */
   }
+  .ann-nav { display: flex; align-items: center; }
+  .ann-nav-btn, .ann-nav-count {
+    background: none; border: 1px solid var(--surface2); color: var(--subtext0);
+    padding: 1px 5px; cursor: pointer; font: inherit; line-height: 1.4;
+  }
+  .ann-nav-btn:first-child { border-radius: 3px 0 0 3px; border-right: none; }
+  .ann-nav-btn:last-child { border-radius: 0 3px 3px 0; border-left: none; }
+  .ann-nav-count { font-family: var(--font-mono); font-size: var(--fs-xs); min-width: 3.5em; text-align: center; }
+  .ann-nav-btn:hover, .ann-nav-count:hover { background: var(--surface0); color: var(--text); }
+  .ann-nav-count.active { background: var(--surface0); color: var(--text); }
   .reviewed-progress { color: var(--green); font-weight: 600; font-size: var(--fs-sm); }
   .sev-strip { display: flex; gap: 8px; flex: 1; align-items: center; }
   .sev-dot {

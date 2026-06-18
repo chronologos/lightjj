@@ -106,17 +106,19 @@ func TestParseDivergence_MalformedLine(t *testing.T) {
 }
 
 func TestParseStaleImmutable(t *testing.T) {
-	output := "spzmpxnu\x1Fa4eecdf2f0dccfcec69fb4ec1e71fda4b0da6a36\x1F\x1F\x1Fv0.8.0: tab persistence\n" +
-		"spzmpxnu\x1F9d3d2a067c6c5e9cc72c3c422ee5416d0c89f765\x1Fv0.8.0\x1Fv0.8.0@origin\x1Fv0.8.0: tab persistence\n"
+	output := "spzmpxnu\x1Fa4eecdf2f0dccfcec69fb4ec1e71fda4b0da6a36\x1F\x1F\x1F1\x1Fv0.8.0: tab persistence\n" +
+		"spzmpxnu\x1F9d3d2a067c6c5e9cc72c3c422ee5416d0c89f765\x1Fv0.8.0\x1Fv0.8.0@origin\x1F\x1Fv0.8.0: tab persistence\n"
 	got := ParseStaleImmutable(output)
 	assert.Equal(t, 2, len(got))
 	assert.Equal(t, "spzmpxnu", got[0].ChangeId)
 	assert.Equal(t, "a4eecdf2f0dccfcec69fb4ec1e71fda4b0da6a36", got[0].CommitId)
 	assert.Equal(t, []string{}, got[0].LocalBookmarks)
 	assert.Equal(t, []string{}, got[0].RemoteBookmarks)
+	assert.True(t, got[0].IsHead)
 	assert.Equal(t, "v0.8.0: tab persistence", got[0].Description)
 	assert.Equal(t, []string{"v0.8.0"}, got[1].LocalBookmarks)
 	assert.Equal(t, []string{"v0.8.0@origin"}, got[1].RemoteBookmarks)
+	assert.False(t, got[1].IsHead)
 }
 
 func TestParseStaleImmutable_Empty(t *testing.T) {
@@ -126,7 +128,7 @@ func TestParseStaleImmutable_Empty(t *testing.T) {
 
 func TestParseStaleImmutable_CommaInBookmarkName(t *testing.T) {
 	// Commas are valid in git refs. \x1E delimiter keeps `fix,bug` intact.
-	output := "spzmpxnu\x1Fabc\x1Ffix,bug\x1Emain\x1F\x1Fdesc\n"
+	output := "spzmpxnu\x1Fabc\x1Ffix,bug\x1Emain\x1F\x1F\x1Fdesc\n"
 	got := ParseStaleImmutable(output)
 	assert.Equal(t, []string{"fix,bug", "main"}, got[0].LocalBookmarks)
 }
@@ -138,7 +140,7 @@ func TestParseStaleImmutable_MalformedLine(t *testing.T) {
 
 func TestGroupStaleImmutable_ActionablePair(t *testing.T) {
 	entries := []StaleImmutableEntry{
-		{ChangeId: "abc", CommitId: "111", LocalBookmarks: []string{}, RemoteBookmarks: []string{}, Description: "v1"},
+		{ChangeId: "abc", CommitId: "111", LocalBookmarks: []string{}, RemoteBookmarks: []string{}, IsHead: true, Description: "v1"},
 		{ChangeId: "abc", CommitId: "222", LocalBookmarks: []string{"main"}, RemoteBookmarks: []string{"main@origin"}, Description: "v1"},
 	}
 	groups := GroupStaleImmutable(entries)
@@ -146,6 +148,22 @@ func TestGroupStaleImmutable_ActionablePair(t *testing.T) {
 	assert.Equal(t, "abc", groups[0].ChangeId)
 	assert.Equal(t, "111", groups[0].Stale.CommitId)
 	assert.Equal(t, "222", groups[0].Keeper.CommitId)
+	assert.True(t, groups[0].Safe)
+}
+
+func TestGroupStaleImmutable_StaleHasChildren_Unsafe(t *testing.T) {
+	// issue #21: stale copy with descendants — `jj abandon --ignore-immutable`
+	// would rebase those onto stale's parent (wrong destination; the user's
+	// work should go onto Keeper). Group is still emitted (so the bar warns)
+	// but Safe=false so the frontend's Clean up skips it.
+	entries := []StaleImmutableEntry{
+		{ChangeId: "abc", CommitId: "111", IsHead: false, Description: "v1"},
+		{ChangeId: "abc", CommitId: "222", LocalBookmarks: []string{"main"}, Description: "v1"},
+	}
+	groups := GroupStaleImmutable(entries)
+	assert.Equal(t, 1, len(groups))
+	assert.Equal(t, "111", groups[0].Stale.CommitId)
+	assert.False(t, groups[0].Safe)
 }
 
 func TestGroupStaleImmutable_SymmetricBookmarks_NotActionable(t *testing.T) {

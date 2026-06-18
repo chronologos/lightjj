@@ -1562,13 +1562,25 @@
     details: 'Set jj config `snapshot.auto-update-stale = true` (default) to recover automatically.',
     action: { label: 'Update stale', onClick: handleUpdateStale },
   }
+  // issue #21: Clean up runs `jj abandon --ignore-immutable`, which rebases
+  // descendants onto the abandoned commit's PARENT. Only safe when stale is a
+  // leaf — otherwise the user's work (or worse, immutable trunk) lands on the
+  // wrong base. Partition once; both the bar and the action read from this.
+  let staleImmSafe = $derived(staleImmutableGroups.filter(g => g.safe))
+  let staleImmUnsafe = $derived(staleImmutableGroups.filter(g => !g.safe))
   const staleImmutableMessage: Message | null = $derived(staleImmutableGroups.length > 0 ? {
     kind: 'warning' as const,
-    text: `${staleImmutableGroups.length} stale immutable commit${staleImmutableGroups.length !== 1 ? 's' : ''} (likely force-pushed remotely)`,
+    text: `${staleImmutableGroups.length} stale immutable commit${staleImmutableGroups.length !== 1 ? 's' : ''} (likely force-pushed remotely)`
+      + (staleImmUnsafe.length > 0 ? ` — ${staleImmUnsafe.length} carrying descendants, rebase those onto the keeper first` : ''),
     details: staleImmutableGroups.map(g =>
-      `${g.stale.commit_id.slice(0, 8)} "${g.stale.description}" — keeper: ${g.keeper.commit_id.slice(0, 8)} (${g.keeper.local_bookmarks.concat(g.keeper.remote_bookmarks).join(', ')})`
+      `${g.safe ? '' : '⚠ has descendants — NOT auto-cleaned: '}${g.stale.commit_id.slice(0, 8)} "${g.stale.description}" — keeper: ${g.keeper.commit_id.slice(0, 8)} (${g.keeper.local_bookmarks.concat(g.keeper.remote_bookmarks).join(', ')})`
     ).join('\n'),
-    action: { label: 'Clean up', onClick: handleCleanupStaleImmutable },
+    // No action when nothing is safe to abandon — MessageBar renders the ✕
+    // dismiss instead (which is a no-op for ambient messages, but at least
+    // there's no destructive button to misclick).
+    action: staleImmSafe.length > 0
+      ? { label: `Clean up ${staleImmSafe.length}`, onClick: handleCleanupStaleImmutable }
+      : undefined,
   } : null)
 
   // Config file has a JSONC syntax error (backend returned 422). Non-dismissable
@@ -1746,14 +1758,20 @@
   }
 
   function handleCleanupStaleImmutable() {
-    const staleIds = staleImmutableGroups.map(g => g.stale.commit_id)
+    // issue #21: only abandon leaf stale copies. The button is hidden when
+    // staleImmSafe is empty, but guard anyway — the derived can shift between
+    // render and click if a background refresh lands.
+    const staleIds = staleImmSafe.map(g => g.stale.commit_id)
+    if (staleIds.length === 0) return
+    const remaining = staleImmUnsafe
     runMutation(
       () => api.abandon(staleIds, true),
-      `Cleaned up ${staleIds.length} stale immutable commit${staleIds.length !== 1 ? 's' : ''}`,
-      // Optimistic clear + markFresh: the abandon made the groups empty; without
+      `Cleaned up ${staleIds.length} stale immutable commit${staleIds.length !== 1 ? 's' : ''}`
+        + (remaining.length > 0 ? ` (${remaining.length} skipped — has descendants)` : ''),
+      // Optimistic set + markFresh: the abandon removed the safe groups; without
       // the stamp, the mutation's own op-id advance would re-run the expensive
-      // scan just to learn that.
-      { after: () => { staleImm.set([]); staleImmSync.markFresh() } },
+      // scan just to learn that. Unsafe groups remain so the bar stays up.
+      { after: () => { staleImm.set(remaining); staleImmSync.markFresh() } },
     )
   }
 

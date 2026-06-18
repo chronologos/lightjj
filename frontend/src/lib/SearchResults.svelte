@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SearchMatch } from './DiffPanel.svelte'
   import { scrollIdxIntoView } from './scroll-into-view'
+  import { basename, dirname } from './paths'
 
   interface Props {
     matches: SearchMatch[]
@@ -28,15 +29,6 @@
     if (i >= RENDER_CAP) return
     scrollIdxIntoView(listEl, i)
   })
-
-  function basename(p: string) {
-    const i = p.lastIndexOf('/')
-    return i === -1 ? p : p.slice(i + 1)
-  }
-  function dirname(p: string) {
-    const i = p.lastIndexOf('/')
-    return i === -1 ? '' : p.slice(0, i + 1)
-  }
 
   // Window the snippet around the match so long lines don't blow out the row.
   // Returns [pre, match, post, leadEllipsis, trailEllipsis].
