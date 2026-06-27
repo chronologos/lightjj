@@ -3883,6 +3883,32 @@ func TestHandleNavigate(t *testing.T) {
 	defer unsub()
 
 	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"change_id":"abc","file_path":"src/a.go","line":42}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	select {
+	case msg := <-ch:
+		require.Equal(t, evNameNav, msg.name)
+		var p navigateRequest
+		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		assert.Equal(t, "abc", p.ChangeID)
+		assert.Equal(t, "src/a.go", p.FilePath)
+		assert.Equal(t, 42, p.Line)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("navigate not broadcast")
+	}
+}
+
+func TestHandleNavigateWithRevsetAndChange(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+
+	ch, unsub := srv.Watcher.subscribe()
+	defer unsub()
+
+	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"change_id":"abc","file_path":"src/a.go","line":42,"revset":"trunk()..@"}`)))
 	require.Equal(t, http.StatusOK, w.Code)
 
