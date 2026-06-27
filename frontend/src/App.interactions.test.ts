@@ -26,6 +26,7 @@ vi.mock('./lib/api', async (orig) => {
 vi.stubGlobal('fetch', async () => new Response(null, { status: 204 }))
 
 import App from './App.svelte'
+import { recentActionsStore } from './lib/recent-actions.svelte'
 import {
   resetMockApi, calls, triggerNavigate, triggerStale,
   setFixtures, defaultFixtures, mkRevision,
@@ -51,6 +52,7 @@ async function mountApp() {
 
 beforeEach(() => {
   resetMockApi()
+  recentActionsStore.all = {}
   cleanup()
 })
 
@@ -173,6 +175,74 @@ describe('App.svelte interactions', () => {
     triggerNavigate({ change_id: 'cnonexistent' })
     await waitFor(() => qs('.message-text')?.textContent?.includes('not in current revset') === true)
     expect(selectedEntry()).toBe('0')
+  })
+
+  it('agent navigate can apply a revset before selecting a change', async () => {
+    await mountApp()
+
+    triggerNavigate({ revset: 'trunk()..@', change_id: 'cmid' })
+
+    await waitFor(() => selectedEntry() === '1')
+    expect(calls.some(c => c.method === 'log' && c.args[0] === 'trunk()..@')).toBe(true)
+    expect((qs('.revset-input') as HTMLInputElement | null)?.value).toBe('trunk()..@')
+  })
+
+  it('loads a revset selected from history', async () => {
+    recentActionsStore.all = {
+      'revset-filter': {
+        'trunk() | (main@origin..qsrtlvlv) | heads(::qsrtlvlv & ::main@origin)': 2,
+      },
+    }
+
+    await mountApp()
+    const input = qs('.revset-input') as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    await fireEvent.focus(input)
+    await waitFor(() => qs('.revset-history-item') !== null)
+    const item = qs('.revset-history-item') as HTMLButtonElement
+    expect(item?.textContent).toContain('main@origin..qsrtlvlv')
+
+    await fireEvent.click(item!)
+    await waitFor(() =>
+      calls.some(c =>
+        c.method === 'log' &&
+        c.args[0] === 'trunk() | (main@origin..qsrtlvlv) | heads(::qsrtlvlv & ::main@origin)'
+      )
+    )
+    expect(input.value).toContain('main@origin..qsrtlvlv')
+  })
+
+  it('inserts a revset operator from the operator picker', async () => {
+    await mountApp()
+    const input = qs('.revset-input') as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    await fireEvent.input(input, { target: { value: 'trunk()@' } })
+    input.setSelectionRange(7, 7)
+    await fireEvent.click(qs('.revset-operators')!)
+
+    const union = [...document.querySelectorAll('.revset-operator-item')]
+      .find(button => button.querySelector('.operator-token')?.textContent === 'x | y') as HTMLButtonElement | undefined
+    expect(union).not.toBeUndefined()
+
+    await fireEvent.click(union!)
+    await waitFor(() => input.value === 'trunk() | @')
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('loads a LazyJJ alias expression from a preset chip', async () => {
+    await mountApp()
+    const stackChip = [...document.querySelectorAll('.preset-chip')]
+      .find(button => button.textContent === 'stack') as HTMLButtonElement | undefined
+    expect(stackChip).not.toBeUndefined()
+    expect(stackChip?.title).toContain('LazyJJ stack: all commits in your current stack')
+    expect(stackChip?.title).toContain('roots(fork_point(trunk() | @)+::@)::')
+
+    await fireEvent.click(stackChip!)
+    const expected = 'roots(fork_point(trunk() | @)+::@)::'
+    await waitFor(() => calls.some(c => c.method === 'log' && c.args[0] === expected))
+    expect((qs('.revset-input') as HTMLInputElement).value).toBe(expected)
   })
 })
 

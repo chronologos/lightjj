@@ -72,6 +72,14 @@
   import WelcomeModal from './lib/WelcomeModal.svelte'
   import ConfigModal from './lib/ConfigModal.svelte'
   import { buildVisibilityRevset, revsetQuote, syncVisibility } from './lib/remote-visibility'
+  import { recentActions } from './lib/recent-actions.svelte'
+  import {
+    REVSET_OPERATORS,
+    insertRevsetOperator,
+    moveHistoryIndex,
+    normalizeRevset,
+    revsetHistoryItems,
+  } from './lib/revset-history'
   import ConflictQueue from './lib/ConflictQueue.svelte'
   import FileHistoryPanel from './lib/FileHistoryPanel.svelte'
   import { createMergeController } from './lib/merge-controller.svelte'
@@ -213,6 +221,20 @@
       desc: 'Mutable commits with unresolved merge conflicts' },
     { key: 'divergent', label: 'Divergent', revset: '(divergent() & mutable())::',
       desc: 'Divergent changes (same change_id, different commit_ids) and their descendants' },
+    { key: 'alias-trunk', label: 'trunk', revset: 'trunk()',
+      desc: 'LazyJJ trunk: the main integration branch' },
+    { key: 'alias-branch-off', label: 'branch off', revset: 'fork_point(trunk() | @)',
+      desc: 'LazyJJ branch_off: where your current work diverged from trunk' },
+    { key: 'alias-stack-base', label: 'stack base', revset: 'roots(fork_point(trunk() | @)+::@)',
+      desc: 'LazyJJ stack_base: the first commit(s) after branch_off in your current path' },
+    { key: 'alias-stack', label: 'stack', revset: 'roots(fork_point(trunk() | @)+::@)::',
+      desc: 'LazyJJ stack: all commits in your current stack' },
+    { key: 'alias-stacks', label: 'stacks', revset: 'mine() & mutable()',
+      desc: 'LazyJJ stacks: all mutable commits authored by you across the entire repo' },
+    { key: 'alias-no-description', label: 'no desc', revset: "description(exact:'') ~ root() ~ empty()",
+      desc: 'LazyJJ no_description: non-empty commits missing descriptions, excluding root' },
+    { key: 'alias-ghbranch', label: 'ghbranch', revset: 'heads(::@ & bookmarks())',
+      desc: 'LazyJJ ghbranch: the most recent bookmark in the ancestry of the current position' },
   ] as const
 
   // The only dynamic preset. Empty list → '' (chip hidden by {#if}, never
@@ -226,6 +248,12 @@
       ? ''
       : `ancestors(${pullRequests.map(p => `present(${revsetQuote(p.bookmark)})`).join(' | ')}, 3) | @`
   )
+
+  const revsetHistory = recentActions('revset-filter')
+  let revsetHistoryOpen: boolean = $state(false)
+  let revsetHistoryIndex: number = $state(-1)
+  let revsetOperatorsOpen: boolean = $state(false)
+  let revsetHistoryOptions = $derived(revsetHistoryItems(revsetHistory.snapshot(), revsetFilter))
 
   // Label for RevisionGraph's header badge. null = default log (no badge).
   // Pure string-match on revsetFilter — a preset's identity IS its revset
@@ -630,6 +658,7 @@
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
   let bookmarksPanelRef: ReturnType<typeof BookmarksPanel> | undefined = $state(undefined)
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
+  let revsetFilterBarEl: HTMLElement | undefined = $state(undefined)
   let wsDropdownOpen: boolean = $state(false)
   let wsSelectorEl: HTMLElement | undefined = $state(undefined)
 
@@ -1562,25 +1591,13 @@
     details: 'Set jj config `snapshot.auto-update-stale = true` (default) to recover automatically.',
     action: { label: 'Update stale', onClick: handleUpdateStale },
   }
-  // issue #21: Clean up runs `jj abandon --ignore-immutable`, which rebases
-  // descendants onto the abandoned commit's PARENT. Only safe when stale is a
-  // leaf — otherwise the user's work (or worse, immutable trunk) lands on the
-  // wrong base. Partition once; both the bar and the action read from this.
-  let staleImmSafe = $derived(staleImmutableGroups.filter(g => g.safe))
-  let staleImmUnsafe = $derived(staleImmutableGroups.filter(g => !g.safe))
   const staleImmutableMessage: Message | null = $derived(staleImmutableGroups.length > 0 ? {
     kind: 'warning' as const,
-    text: `${staleImmutableGroups.length} stale immutable commit${staleImmutableGroups.length !== 1 ? 's' : ''} (likely force-pushed remotely)`
-      + (staleImmUnsafe.length > 0 ? ` — ${staleImmUnsafe.length} carrying descendants, rebase those onto the keeper first` : ''),
+    text: `${staleImmutableGroups.length} stale immutable commit${staleImmutableGroups.length !== 1 ? 's' : ''} (likely force-pushed remotely)`,
     details: staleImmutableGroups.map(g =>
-      `${g.safe ? '' : '⚠ has descendants — NOT auto-cleaned: '}${g.stale.commit_id.slice(0, 8)} "${g.stale.description}" — keeper: ${g.keeper.commit_id.slice(0, 8)} (${g.keeper.local_bookmarks.concat(g.keeper.remote_bookmarks).join(', ')})`
+      `${g.stale.commit_id.slice(0, 8)} "${g.stale.description}" — keeper: ${g.keeper.commit_id.slice(0, 8)} (${g.keeper.local_bookmarks.concat(g.keeper.remote_bookmarks).join(', ')})`
     ).join('\n'),
-    // No action when nothing is safe to abandon — MessageBar renders the ✕
-    // dismiss instead (which is a no-op for ambient messages, but at least
-    // there's no destructive button to misclick).
-    action: staleImmSafe.length > 0
-      ? { label: `Clean up ${staleImmSafe.length}`, onClick: handleCleanupStaleImmutable }
-      : undefined,
+    action: { label: 'Clean up', onClick: handleCleanupStaleImmutable },
   } : null)
 
   // Config file has a JSONC syntax error (backend returned 422). Non-dismissable
@@ -1758,20 +1775,14 @@
   }
 
   function handleCleanupStaleImmutable() {
-    // issue #21: only abandon leaf stale copies. The button is hidden when
-    // staleImmSafe is empty, but guard anyway — the derived can shift between
-    // render and click if a background refresh lands.
-    const staleIds = staleImmSafe.map(g => g.stale.commit_id)
-    if (staleIds.length === 0) return
-    const remaining = staleImmUnsafe
+    const staleIds = staleImmutableGroups.map(g => g.stale.commit_id)
     runMutation(
       () => api.abandon(staleIds, true),
-      `Cleaned up ${staleIds.length} stale immutable commit${staleIds.length !== 1 ? 's' : ''}`
-        + (remaining.length > 0 ? ` (${remaining.length} skipped — has descendants)` : ''),
-      // Optimistic set + markFresh: the abandon removed the safe groups; without
+      `Cleaned up ${staleIds.length} stale immutable commit${staleIds.length !== 1 ? 's' : ''}`,
+      // Optimistic clear + markFresh: the abandon made the groups empty; without
       // the stamp, the mutation's own op-id advance would re-run the expensive
-      // scan just to learn that. Unsafe groups remain so the bar stays up.
-      { after: () => { staleImm.set(remaining); staleImmSync.markFresh() } },
+      // scan just to learn that.
+      { after: () => { staleImm.set([]); staleImmSync.markFresh() } },
     )
   }
 
@@ -2344,8 +2355,74 @@
     userRefresh(true)
   }
 
+  function closeRevsetHistory() {
+    revsetHistoryOpen = false
+    revsetHistoryIndex = -1
+  }
+
+  function closeRevsetPickers() {
+    closeRevsetHistory()
+    revsetOperatorsOpen = false
+  }
+
+  function openRevsetHistory() {
+    if (revsetHistoryOptions.length === 0) return
+    revsetHelpOpen = false
+    revsetOperatorsOpen = false
+    revsetHistoryOpen = true
+    if (revsetHistoryIndex >= revsetHistoryOptions.length) revsetHistoryIndex = revsetHistoryOptions.length - 1
+  }
+
+  function rememberRevsetFilter() {
+    const normalized = normalizeRevset(revsetFilter)
+    if (!normalized) return
+    revsetFilter = normalized
+    revsetHistory.record(normalized)
+  }
+
+  function submitRevsetFromUser() {
+    rememberRevsetFilter()
+    closeRevsetHistory()
+    handleRevsetSubmit()
+  }
+
+  function applyRevsetHistory(revset: string) {
+    revsetFilter = revset
+    submitRevsetFromUser()
+    revsetInputEl?.blur()
+  }
+
+  async function insertRevsetOperatorFromMenu(token: string) {
+    const edit = insertRevsetOperator(
+      revsetFilter,
+      token,
+      revsetInputEl?.selectionStart,
+      revsetInputEl?.selectionEnd,
+    )
+    revsetFilter = edit.value
+    closeRevsetPickers()
+    revsetHelpOpen = false
+    await tick()
+    revsetInputEl?.focus()
+    revsetInputEl?.setSelectionRange(edit.selectionStart, edit.selectionEnd)
+  }
+
+  async function moveRevsetHistory(delta: -1 | 1) {
+    if (revsetHistoryOptions.length === 0) return
+    revsetHelpOpen = false
+    revsetOperatorsOpen = false
+    revsetHistoryOpen = true
+    const next = moveHistoryIndex(revsetHistoryIndex, delta, revsetHistoryOptions.length)
+    revsetHistoryIndex = next
+    revsetFilter = revsetHistoryOptions[next]
+    await tick()
+    revsetInputEl?.focus()
+    revsetInputEl?.setSelectionRange(revsetFilter.length, revsetFilter.length)
+  }
+
   function clearRevsetFilter() {
     revsetFilter = ''
+    closeRevsetPickers()
     handleRevsetSubmit()
   }
 
@@ -2355,8 +2432,9 @@
 
   function applyRevsetExample(revset: string) {
     revsetHelpOpen = false
+    closeRevsetPickers()
     revsetFilter = revset
-    handleRevsetSubmit()
+    submitRevsetFromUser()
   }
 
   // Click-outside + Escape close for the help popover.
@@ -2366,6 +2444,33 @@
       if (e instanceof KeyboardEvent && e.key !== 'Escape') return
       if (e instanceof MouseEvent && revsetHelpPopoverEl?.contains(e.target as Node)) return
       revsetHelpOpen = false
+    }
+    const id = setTimeout(() => {
+      document.addEventListener('click', close)
+      document.addEventListener('keydown', close)
+    }, 0)
+    return () => {
+      clearTimeout(id)
+      document.removeEventListener('click', close)
+      document.removeEventListener('keydown', close)
+    }
+  })
+
+  $effect(() => {
+    const count = revsetHistoryOptions.length
+    if (count === 0) {
+      closeRevsetHistory()
+    } else if (revsetHistoryIndex >= count) {
+      revsetHistoryIndex = count - 1
+    }
+  })
+
+  $effect(() => {
+    if (!revsetHistoryOpen && !revsetOperatorsOpen) return
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== 'Escape') return
+      if (e instanceof MouseEvent && revsetFilterBarEl?.contains(e.target as Node)) return
+      closeRevsetPickers()
     }
     const id = setTimeout(() => {
       document.addEventListener('click', close)
@@ -2676,6 +2781,14 @@
     if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') {
       setMessage({ kind: 'warning', text: 'Agent navigate ignored — finish or Esc current mode' })
       return
+    }
+    if (p.revset !== undefined) {
+      pendingNavScroll = null
+      switchToLogView()
+      revsetFilter = p.revset
+      const ok = await userRefresh(true)
+      if (!ok) return
+      if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') return
     }
     // comment_id → position resolution. Agents reference comments by id (the
     // only stable handle they have). Two stores, distinguished by the OTHER
@@ -3043,31 +3156,93 @@
                (bookmark click, visibility toggle, smart views) are direct assignments.
                Previously lived inside RevisionGraph with 4 callback props threading
                control back up; extracted to eliminate the ownership inversion. -->
-          <div class="revset-filter-bar">
+          <div class="revset-filter-bar" bind:this={revsetFilterBarEl}>
             <span class="revset-icon">$</span>
             <input
               bind:this={revsetInputEl}
               value={revsetFilter}
-              oninput={(e: Event) => { revsetFilter = (e.target as HTMLInputElement).value }}
+              oninput={(e: Event) => {
+                revsetFilter = (e.target as HTMLInputElement).value
+                revsetHistoryIndex = -1
+                if (revsetHistoryOptions.length > 0) revsetHistoryOpen = true
+              }}
+              onfocus={openRevsetHistory}
               class="revset-input"
               type="text"
               placeholder={configuredLogRevset || "revset filter (press / to focus)"}
               onkeydown={(e: KeyboardEvent) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  handleRevsetSubmit()
+                  submitRevsetFromUser()
                   revsetInputEl?.blur()
                 } else if (e.key === 'Escape') {
                   e.preventDefault()
+                  if (revsetHistoryOpen) {
+                    closeRevsetHistory()
+                    return
+                  }
                   clearRevsetFilter()
                   revsetInputEl?.blur()
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  void moveRevsetHistory(1)
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  void moveRevsetHistory(-1)
                 }
               }}
             />
+            <button
+              class="revset-history"
+              class:active={revsetHistoryOpen}
+              disabled={revsetHistoryOptions.length === 0}
+              onclick={() => revsetHistoryOpen ? closeRevsetHistory() : openRevsetHistory()}
+              title="Revset history"
+            >⌄</button>
+            <button
+              class="revset-operators"
+              class:active={revsetOperatorsOpen}
+              onclick={() => {
+                revsetHelpOpen = false
+                closeRevsetHistory()
+                revsetOperatorsOpen = !revsetOperatorsOpen
+              }}
+              title="Revset operators"
+            >&amp;</button>
             {#if revsetFilter}
               <button class="revset-clear" onclick={clearRevsetFilter} title="Clear filter (Escape)">x</button>
             {/if}
-            <button class="revset-help" onclick={() => revsetHelpOpen = !revsetHelpOpen} title="Revset help">?</button>
+            <button class="revset-help" onclick={() => { closeRevsetPickers(); revsetHelpOpen = !revsetHelpOpen }} title="Revset help">?</button>
+            {#if revsetHistoryOpen && revsetHistoryOptions.length > 0}
+              <div class="revset-history-menu" role="listbox" aria-label="Revset history">
+                {#each revsetHistoryOptions as item, i (item)}
+                  <button
+                    class="revset-history-item"
+                    class:active={i === revsetHistoryIndex}
+                    role="option"
+                    aria-selected={i === revsetHistoryIndex}
+                    title={item}
+                    onmousedown={(e: MouseEvent) => e.preventDefault()}
+                    onclick={() => applyRevsetHistory(item)}
+                  >{item}</button>
+                {/each}
+              </div>
+            {/if}
+            {#if revsetOperatorsOpen}
+              <div class="revset-operator-menu" role="menu" aria-label="Revset operators">
+                {#each REVSET_OPERATORS as op (op.label)}
+                  <button
+                    class="revset-operator-item"
+                    title={op.description}
+                    onmousedown={(e: MouseEvent) => e.preventDefault()}
+                    onclick={() => void insertRevsetOperatorFromMenu(op.token)}
+                  >
+                    <span class="operator-token">{op.label}</span>
+                    <span class="operator-desc">{op.description}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
             {#if revsetHelpOpen}
               <div class="revset-help-popover" bind:this={revsetHelpPopoverEl}>
                 {#snippet ex(revset: string)}
@@ -3078,6 +3253,18 @@
                 <p><b>See everything</b>: {@render ex('all()')} or {@render ex('::')} (capped at 500)</p>
                 <p class="help-examples">
                   Common: {@render ex('mine()')} · {@render ex('trunk()..@')} · {@render ex('ancestors(@, 20)')}
+                </p>
+                <p class="help-operators">
+                  <b>Operators</b>:
+                  {#each REVSET_OPERATORS as op (op.label)}
+                    <button
+                      class="help-ex help-operator"
+                      title={op.description}
+                      aria-label={op.description}
+                      onmousedown={(e: MouseEvent) => e.preventDefault()}
+                      onclick={() => void insertRevsetOperatorFromMenu(op.token)}
+                    >{op.label}</button>
+                  {/each}
                 </p>
               </div>
             {/if}
@@ -3624,6 +3811,124 @@
     color: var(--red);
   }
 
+  .revset-history,
+  .revset-operators {
+    background: transparent;
+    border: 1px solid var(--surface1);
+    border-radius: 3px;
+    color: var(--overlay0);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: var(--fs-sm);
+    height: 20px;
+    line-height: 16px;
+    padding: 0 5px;
+    flex-shrink: 0;
+  }
+  .revset-history:hover:not(:disabled),
+  .revset-history.active,
+  .revset-operators:hover,
+  .revset-operators.active {
+    color: var(--amber);
+    border-color: var(--amber);
+    background: var(--surface0);
+  }
+  .revset-history:disabled {
+    cursor: default;
+    opacity: 0.35;
+  }
+
+  .revset-history-menu {
+    position: absolute;
+    top: calc(100% - 2px);
+    left: 26px;
+    right: 30px;
+    margin-top: 4px;
+    padding: 4px;
+    background: var(--mantle);
+    border: 1px solid var(--surface1);
+    border-radius: 5px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    z-index: 11;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .revset-history-item {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    background: transparent;
+    color: var(--subtext0);
+    border: 0;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.35;
+    padding: 4px 6px;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .revset-history-item:hover,
+  .revset-history-item.active {
+    background: var(--bg-selected);
+    color: var(--text);
+  }
+
+  .revset-operator-menu {
+    position: absolute;
+    top: calc(100% - 2px);
+    right: 4px;
+    margin-top: 4px;
+    width: min(420px, calc(100vw - 24px));
+    max-height: min(520px, calc(100vh - 110px));
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--mantle);
+    border: 1px solid var(--surface1);
+    border-radius: 5px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    z-index: 11;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .revset-operator-item {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    background: transparent;
+    color: var(--subtext0);
+    border: 0;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: var(--fs-sm);
+    line-height: 1.35;
+    padding: 4px 6px;
+    text-align: left;
+  }
+  .revset-operator-item:hover {
+    background: var(--bg-selected);
+    color: var(--text);
+  }
+  .operator-token {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+  .operator-desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .revset-help {
     background: transparent;
     border: 1px solid var(--surface1);
@@ -3685,7 +3990,21 @@
     border: 1px solid var(--surface1);
     padding: 0 3px;
   }
-  .help-examples { color: var(--subtext0); font-size: var(--fs-sm); }
+  .help-examples,
+  .help-operators {
+    color: var(--subtext0);
+    font-size: var(--fs-sm);
+  }
+  .help-operators {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .help-operator {
+    min-width: 26px;
+    text-align: center;
+  }
 
   .panel-divider {
     width: 4px;
