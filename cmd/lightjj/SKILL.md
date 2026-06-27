@@ -72,6 +72,12 @@ lightjj api POST /tab/0/api/doc-comments @comment.json
 lightjj api POST /tab/0/api/navigate '{"file_path":"src/main.go","line":42}'
 lightjj api POST /tab/0/api/navigate '{"change_id":"xyzabc","comment_id":"a1b2c3"}'
 
+# Set the visible revset filter. A revset-only payload changes the graph
+# without selecting a revision; combine revset + change_id when the target
+# may not be visible under the user's current filter.
+lightjj api POST /tab/0/api/navigate '{"revset":"trunk()..@"}'
+lightjj api POST /tab/0/api/navigate '{"revset":"mutable()","change_id":"xyzabc"}'
+
 # Read inline review comments (annotations) on a change. Note: camelCase param.
 lightjj api GET '/tab/0/api/annotations?changeId=xyzabc'
 
@@ -81,6 +87,41 @@ lightjj api POST /tab/0/api/annotations '{"id":"a1","changeId":"xyzabc",
   "filePath":"src/main.go","lineNum":42,"lineContent":"func main() {",
   "comment":"missing error check","severity":"suggestion","author":"agent-name"}'
 ```
+
+## Driving the revset view
+
+Use `/api/navigate` when the user asks you to change what LightJJ is showing.
+Do not run `jj` just to answer "can you set the revset?" — steer the running
+viewer through the API so the browser and agent stay in sync.
+
+```bash
+# Show the current working stack relative to trunk
+lightjj api POST /tab/0/api/navigate '{"revset":"trunk()..@"}'
+
+# Show all mutable work, including alternate heads
+lightjj api POST /tab/0/api/navigate '{"revset":"mutable()"}'
+
+# Show the default jj-ish context used by the UI preset
+lightjj api POST /tab/0/api/navigate '{"revset":"present(@) | ancestors(immutable_heads().., 2) | present(trunk())"}'
+
+# If selecting a commit that may be outside the current view, set revset and
+# change_id together. The frontend applies the revset first, then selects.
+lightjj api POST /tab/0/api/navigate '{"revset":"all() ~ root()","change_id":"xyzabc"}'
+```
+
+After steering, verify what the browser accepted:
+
+```bash
+lightjj api GET /tab/0/api/focus
+lightjj api GET '/tab/0/api/log?revset=trunk()..@'
+```
+
+Prefer narrow revsets for user-facing cleanup work:
+
+- `trunk()..@` — current working-copy stack relative to trunk.
+- `mutable()` — local mutable heads and workspace work.
+- `all() ~ root()` — archaeology only; it will surface remote branches and
+  stale artifacts that are not part of the current working view.
 
 ## Review loop
 
