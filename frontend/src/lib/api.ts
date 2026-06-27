@@ -184,10 +184,11 @@ function notifyStaleWC(stale: boolean) {
 }
 
 // Agent-driven navigate subscribers. POST /api/navigate → SSE `nav` event with
-// {change_id?, file_path?, line?, comment_id?}. App scrolls the human's view
-// there. comment_id resolves to a {file_path, line} client-side via the
-// annotation/doc-comment stores when present (the agent only knows the id).
-export interface NavigatePayload { change_id?: string; file_path?: string; line?: number; comment_id?: string }
+// {revset?, change_id?, file_path?, line?, comment_id?}. App can replace the
+// graph filter before selecting the change. comment_id resolves to a
+// {file_path, line} client-side via the annotation/doc-comment stores when
+// present (the agent only knows the id).
+export interface NavigatePayload { change_id?: string; file_path?: string; line?: number; comment_id?: string; revset?: string }
 const navigateCallbacks = new Set<(p: NavigatePayload) => void>()
 function notifyNavigate(p: NavigatePayload) {
   for (const cb of navigateCallbacks) cb(p)

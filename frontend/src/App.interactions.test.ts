@@ -351,6 +351,16 @@ describe('App.svelte interactions', () => {
     expect(badge.getAttribute('href')).toBe('https://github.com/o/r/pull/2')
     expect(badge.title).toContain('PR #2 by bob')
   })
+
+  it('agent navigate can apply a revset before selecting a change', async () => {
+    await mountApp()
+
+    triggerNavigate({ revset: 'trunk()..@', change_id: 'cmid' })
+
+    await waitFor(() => selectedEntry() === '1')
+    expect(calls.some(c => c.method === 'log' && c.args[0] === 'trunk()..@')).toBe(true)
+    expect((qs('.revset-input') as HTMLInputElement | null)?.value).toBe('trunk()..@')
+  })
 })
 
 // ── Staleness model + identity-keyed cursor ─────────────────────────────────
