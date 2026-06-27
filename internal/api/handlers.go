@@ -579,6 +579,9 @@ type navigateRequest struct {
 	ChangeID string `json:"change_id,omitempty"`
 	FilePath string `json:"file_path,omitempty"`
 	Line     int    `json:"line,omitempty"`
+	// Revset, when present, asks the frontend to replace the graph filter
+	// before selecting ChangeID. An empty string intentionally clears the filter.
+	Revset *string `json:"revset,omitempty"`
 	// CommentID is passed through to the frontend untouched — the server has
 	// no view of the comment store's positions; the frontend resolves the id
 	// to a scroll target against its loaded annotation/doc-comment stores.
@@ -600,14 +603,19 @@ func (s *Server) handleNavigate(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.ChangeID == "" && req.FilePath == "" && req.CommentID == "" {
-		s.writeError(w, http.StatusBadRequest, "change_id, file_path, or comment_id required")
+	if req.ChangeID == "" && req.FilePath == "" && req.CommentID == "" && req.Revset == nil {
+		s.writeError(w, http.StatusBadRequest, "change_id, file_path, comment_id, or revset required")
 		return
 	}
 	// Cap before broadcast — payload is copied into every subscriber's chan
 	// buffer; an oversized field is a cheap amplification vector. 4k is far
-	// beyond any real change_id (~12 chars) or repo-relative path.
-	if len(req.ChangeID) > 256 || len(req.FilePath) > 4096 || len(req.CommentID) > 256 {
+	// beyond any real change_id (~12 chars), repo-relative path, or practical
+	// revset filter.
+	revsetLen := 0
+	if req.Revset != nil {
+		revsetLen = len(*req.Revset)
+	}
+	if len(req.ChangeID) > 256 || len(req.FilePath) > 4096 || len(req.CommentID) > 256 || revsetLen > 4096 {
 		s.writeError(w, http.StatusBadRequest, "field too long")
 		return
 	}
@@ -934,8 +942,8 @@ func (q rebaseRequest) build() (jj.CommandArgs, error) {
 }
 
 type squashRequest struct {
-	Revisions   []string `json:"revisions"`
-	Destination string   `json:"destination"`
+	Revisions       []string `json:"revisions"`
+	Destination     string   `json:"destination"`
 	Files           []string `json:"files"`
 	KeepEmptied     bool     `json:"keep_emptied"`
 	IgnoreImmutable bool     `json:"ignore_immutable"`

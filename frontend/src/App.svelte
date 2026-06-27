@@ -2677,6 +2677,14 @@
       setMessage({ kind: 'warning', text: 'Agent navigate ignored — finish or Esc current mode' })
       return
     }
+    if (p.revset !== undefined) {
+      pendingNavScroll = null
+      switchToLogView()
+      revsetFilter = p.revset
+      const ok = await userRefresh(true)
+      if (!ok) return
+      if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') return
+    }
     // comment_id → position resolution. Agents reference comments by id (the
     // only stable handle they have). Two stores, distinguished by the OTHER
     // field the agent supplies:
