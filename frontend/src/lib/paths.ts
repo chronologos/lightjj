@@ -3,11 +3,12 @@
 // import surface stays obvious.
 
 export function basename(p: string): string {
-  const i = p.lastIndexOf('/')
+  // Separator-agnostic: repoRoot from a Windows backend arrives with '\'.
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
   return i === -1 ? p : p.slice(i + 1)
 }
 
 export function dirname(p: string): string {
-  const i = p.lastIndexOf('/')
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
   return i === -1 ? '' : p.slice(0, i + 1)
 }

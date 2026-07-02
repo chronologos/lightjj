@@ -53,6 +53,13 @@ type Server struct {
 	ghRepoResolved bool
 	ghRepoMu       sync.Mutex
 
+	// wsName is this Server's own jj workspace name ("default", "feature-x").
+	// Resolved asynchronously (resolveWsNameAsync) so GET /tabs stays in-memory
+	// — a hung/slow tab runner must not block the whole tab list. First GET may
+	// see ""; subsequent fetches carry the resolved name.
+	wsName   string
+	wsNameMu sync.Mutex
+
 	// Watcher provides SSE auto-refresh. Nil only on --no-watch or constructor
 	// failure. Set by main.go after NewServer; routes() tolerates nil.
 	Watcher *Watcher
@@ -114,6 +121,67 @@ func (s *Server) repoStorePath() string {
 		s.repoStore = filepath.Clean(p)
 	})
 	return s.repoStore
+}
+
+// repoRoot returns the primary workspace's root — the tab-grouping key. Two
+// tabs belong to the same repo iff their repoRoot values match. Derived from
+// repoStorePath() (Dir(Dir("<primary>/.jj/repo")) == "<primary>") so primary
+// and secondary workspaces of the same repo produce identical values. Empty
+// when there's no local filesystem (SSH, tests) — those tabs render ungrouped.
+func (s *Server) repoRoot() string {
+	if !s.hasLocalFS() {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(s.repoStorePath()))
+}
+
+// wsNameCached returns whatever workspace name has been resolved so far
+// (empty until resolveWsNameAsync completes). Never blocks on a subprocess.
+func (s *Server) wsNameCached() string {
+	s.wsNameMu.Lock()
+	defer s.wsNameMu.Unlock()
+	return s.wsName
+}
+
+// resolveWsNameAsync kicks off workspace-name resolution in the background.
+// GET /tabs must stay in-memory (a hung/slow tab runner blocking the whole
+// list is a regression from the previously-instant handleList), so the
+// subprocess runs off the request path with its own timeout. Idempotent:
+// re-resolving overwrites with the same value; a tie-break failure ("")
+// leaves the field alone so a later attempt (jj upgraded, pathMap complete)
+// can still land.
+func (s *Server) resolveWsNameAsync() {
+	// pickCurrentWorkspace needs ourRoot to tie-break; without it the resolver
+	// is a wasted subprocess. (Also skips test tabs, whose MockRunners don't
+	// expect the goroutine's calls.)
+	if s.Runner == nil || (s.RepoDir == "" && s.RepoPath == "") {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		workspaces, pathMap, err := s.workspacePathMap(ctx)
+		if err != nil {
+			return
+		}
+		var candidates []string
+		for _, ws := range workspaces {
+			if ws.Current {
+				candidates = append(candidates, ws.Name)
+			}
+		}
+		ourRoot := s.RepoDir
+		if ourRoot == "" {
+			ourRoot = s.RepoPath
+		}
+		name := pickCurrentWorkspace(candidates, pathMap, ourRoot)
+		if name == "" {
+			return
+		}
+		s.wsNameMu.Lock()
+		s.wsName = name
+		s.wsNameMu.Unlock()
+	}()
 }
 
 func NewServer(r runner.CommandRunner, repoDir string) *Server {

@@ -6,6 +6,7 @@ export interface TutorialFeature {
 }
 
 export const FEATURES: TutorialFeature[] = [
+  { version: '1.34.0', shortcut: null, title: 'Tabs group by repo', description: 'Tabs that are workspaces of the same repo now cluster behind a repo chip with a colored notch. A solo tab looks the same as before; open a second workspace and both slot together as ◇ tabs. Per-tab amber dots mark stale working copies. The ◇ workspace toolbar dropdown no longer flickers on tab switch.' },
   { version: '1.33.0', shortcut: '{ / }', title: 'Step and list review comments', description: 'The annotations bar now has ◀ N/M ▶ buttons that step through review comments (same as the {/} keys, now discoverable). Click the N/M counter for a jump-list of every comment with severity, location, and first line — same shape as the diff-search dropdown.' },
   { version: '1.33.0', shortcut: '3', title: 'Merge view no longer creates divergent commits', description: 'Saving a resolved file in the merge view now refreshes the conflict queue, so the next file you resolve targets the rewritten commit instead of the pre-save one. Previously, resolving two files in the same non-@ commit produced two divergent rewrites.' },
   { version: '1.33.0', shortcut: null, title: '"Clean up" stale immutable commits is now safe', description: 'The stale-immutable warning bar\'s Clean up button only abandons copies that have no descendants — abandoning a non-leaf rebases its descendants onto the wrong base. Non-leaf entries are listed in the bar\'s details with a note to rebase them onto the keeper first.' },

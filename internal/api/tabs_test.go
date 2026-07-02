@@ -18,12 +18,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// allowTabEnrichment permits the lazy per-tab lookups handleList triggers
+// (jj version gate + workspace list). Output resolves wsName to "default".
+func allowTabEnrichment(r *testutil.MockRunner) {
+	r.Allow(jj.Version()).SetOutput([]byte("jj 0.39.0"))
+	r.Allow(jj.WorkspaceList(false)).SetOutput([]byte("default\x1Fabc\x1Fdef\x1Ftrue\n"))
+}
+
 // newTestTab returns a TabManager with one tab mounting a mock-backed Server.
 // Factory is nil → handleCreate returns 501 (like SSH mode), so tests that
 // cover create use a custom factory inline.
 func newTestTab(t *testing.T) (*TabManager, *testutil.MockRunner) {
 	runner := testutil.NewMockRunner(t)
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
+	allowTabEnrichment(runner)
 	srv := NewServer(runner, "")
 	tm := NewTabManager(nil, nil)
 	tm.AddTab(srv, "/test/repo")
@@ -72,6 +80,7 @@ func TestTabList_StableOrder(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		runner := testutil.NewMockRunner(t)
 		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		allowTabEnrichment(runner)
 		tm.AddTab(NewServer(runner, ""), "/r")
 	}
 	w := httptest.NewRecorder()
@@ -82,6 +91,66 @@ func TestTabList_StableOrder(t *testing.T) {
 	assert.Equal(t, "0", tabs[0].ID)
 	assert.Equal(t, "1", tabs[1].ID)
 	assert.Equal(t, "2", tabs[2].ID)
+}
+
+// TestTabList_Enrichment covers the grouping-key derivation: two tabs — one
+// primary workspace, one secondary (pointer file) — must produce identical
+// RepoRoot values so the frontend groups them. Regression guard for the v1
+// spec's mismatch (primary = Path, secondary = pointer content) that would
+// have made grouping never happen.
+func TestTabList_Enrichment(t *testing.T) {
+	tmp := t.TempDir()
+	primary := filepath.Join(tmp, "proj")
+	secondary := filepath.Join(tmp, "proj-ws")
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, ".jj", "repo"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(secondary, ".jj"), 0o755))
+	// Secondary's .jj/repo is a pointer FILE relative to its .jj/ dir.
+	require.NoError(t, os.WriteFile(filepath.Join(secondary, ".jj", "repo"),
+		[]byte("../../proj/.jj/repo\n"), 0o644))
+
+	tm := NewTabManager(nil, nil)
+	mk := func(dir string, stale bool) *Server {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		allowTabEnrichment(r)
+		s := NewServer(r, dir)
+		s.Watcher = newWatcher(s)
+		s.Watcher.stale.Store(stale)
+		return s
+	}
+	sPri := mk(primary, false)
+	sSec := mk(secondary, true)
+	tm.AddTab(sPri, primary)
+	tm.AddTab(sSec, secondary)
+	// wsName resolves off-path (resolveWsNameAsync); MockRunner is synchronous
+	// so the goroutine completes fast, but we still need to wait for it.
+	require.Eventually(t, func() bool {
+		return sPri.wsNameCached() != "" && sSec.wsNameCached() != ""
+	}, time.Second, time.Millisecond)
+
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/tabs", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var tabs []Tab
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tabs))
+	require.Len(t, tabs, 2)
+	assert.Equal(t, primary, tabs[0].RepoRoot, "primary repoRoot = own path")
+	assert.Equal(t, primary, tabs[1].RepoRoot, "secondary repoRoot = primary's path (grouping key)")
+	assert.Equal(t, "default", tabs[0].WsName)
+	assert.False(t, tabs[0].Stale)
+	assert.True(t, tabs[1].Stale)
+}
+
+func TestTabList_Enrichment_NoLocalFS(t *testing.T) {
+	// SSH/test mode: RepoDir="" → RepoRoot="" (renders solo, ungrouped).
+	tm, _ := newTestTab(t)
+	w := httptest.NewRecorder()
+	tm.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/tabs", nil))
+	var tabs []Tab
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tabs))
+	require.Len(t, tabs, 1)
+	assert.Empty(t, tabs[0].RepoRoot)
 }
 
 func TestTabCreate_NoFactory(t *testing.T) {

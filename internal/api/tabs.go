@@ -25,6 +25,17 @@ type Tab struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"` // tab label (repo dir basename)
 	Path string `json:"path"` // display/tooltip; canonical workspace root for repos
+	// RepoRoot is the tab-grouping key: primary and secondary workspaces of the
+	// same repo share it (see Server.repoRoot). Set once in addLocked; empty
+	// when unresolvable (SSH mode, tests) → tab renders solo. Stable for the
+	// tab's lifetime.
+	RepoRoot string `json:"repoRoot,omitempty"`
+	// WsName and Stale are enriched at list time (handleList) from in-memory
+	// Server state — WsName via wsNameCached (resolved off-path by
+	// resolveWsNameAsync at addLocked), Stale via Watcher.Stale(). omitempty
+	// keeps the wire compact for solo/fresh tabs.
+	WsName string `json:"wsName,omitempty"`
+	Stale  bool   `json:"stale,omitempty"`
 
 	srv     *Server
 	handler http.Handler
@@ -117,14 +128,18 @@ func (m *TabManager) addLocked(srv *Server, path string) *Tab {
 	id := strconv.Itoa(m.next)
 	m.next++
 	t := &Tab{
-		ID:      id,
-		Kind:    "repo",
-		Name:    filepath.Base(path),
-		Path:    path,
-		srv:     srv,
-		handler: http.StripPrefix("/tab/"+id, srv.Mux),
+		ID:       id,
+		Kind:     "repo",
+		Name:     filepath.Base(path),
+		Path:     path,
+		RepoRoot: srv.repoRoot(),
+		srv:      srv,
+		handler:  http.StripPrefix("/tab/"+id, srv.Mux),
 	}
 	m.tabs[id] = t
+	// Kick off workspace-name resolution in the background so handleList stays
+	// in-memory (a hung tab runner would otherwise wedge the whole list).
+	srv.resolveWsNameAsync()
 	// Every mounted Server can see all open tab roots — feeds the workspace-
 	// forget cross-tab guard. Assignment only (no call) under m.mu; the
 	// method takes RLock at request time.
@@ -229,8 +244,27 @@ func (m *TabManager) sortedTabs() []*Tab {
 
 func (m *TabManager) handleList(w http.ResponseWriter, r *http.Request) {
 	m.mu.RLock()
-	out := m.sortedTabs()
+	src := m.sortedTabs()
 	m.mu.RUnlock()
+	// Enrichment is in-memory: wsName was resolved off-path (resolveWsNameAsync
+	// in addLocked) and Stale is an atomic read — no subprocess on the request
+	// path, so a hung/slow tab runner can't block the list. Encode value copies
+	// so concurrent handleList calls don't race writing t.Stale on the shared
+	// *Tab.
+	out := make([]Tab, len(src))
+	for i, t := range src {
+		v := Tab{
+			ID: t.ID, Kind: t.Kind, Name: t.Name, Path: t.Path,
+			RepoRoot: t.RepoRoot,
+		}
+		if t.srv != nil {
+			v.WsName = t.srv.wsNameCached()
+			if t.srv.Watcher != nil {
+				v.Stale = t.srv.Watcher.Stale()
+			}
+		}
+		out[i] = v
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }

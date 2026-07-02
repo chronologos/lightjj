@@ -299,6 +299,11 @@ func (w *Watcher) setStale(v bool) {
 	}
 }
 
+// Stale is the lock-free read of the last-observed working-copy staleness.
+// TabManager.handleList surfaces it on every tab so background-tab stale dots
+// reflect that tab's snapshotLoop state without a per-tab SSE subscription.
+func (w *Watcher) Stale() bool { return w.stale.Load() }
+
 // setPollFail records persistent poll failure / recovery. Same edge-triggered
 // broadcast discipline as setStale. err == "" means "healthy"; non-empty means
 // "failing, here's the last error text for the UI". Updates pollErr on every

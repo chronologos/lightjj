@@ -336,6 +336,13 @@ export interface TabInfo {
   kind: string
   name: string
   path: string
+  /** Primary-workspace root — the tab-grouping key. Empty when unresolvable
+   *  (SSH mode, tests) → tab renders solo. See Server.repoRoot(). */
+  repoRoot?: string
+  /** jj workspace name ("default", "feature-x"). Empty when unresolved. */
+  wsName?: string
+  /** Live working-copy staleness from this tab's Watcher.snapshotLoop. */
+  stale?: boolean
 }
 
 export function setActiveTab(id: string): void {

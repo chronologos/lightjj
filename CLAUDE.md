@@ -119,7 +119,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     ContextMenu.svelte     — Reusable right-click context menu
     StatusBar.svelte       — Bottom status bar with mode indicators and shortcuts
     MessageBar.svelte      — Single user-facing message surface (error/warning/success)
-    TabBar.svelte          — Tab strip (click to switch, ✕ close, + open)
+    TabBar.svelte          — Tab strip: repoRoot-grouped (chip + --graph-N notch), stale dots, ✕ close, + open
     BookmarkModal.svelte   — Bookmark modal (move/advance/delete/forget/track)
     BookmarksPanel.svelte  — Branches view: bookmark list (sortable Priority/Recent/Name, author shown + filterable)
     bookmark-sync.ts       — classifyBookmark() → 8 sync states + sort/format helpers

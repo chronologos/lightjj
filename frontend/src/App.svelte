@@ -25,10 +25,14 @@
   import { untrack, onDestroy, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 
-  let { tabBar, onOpenTab, initialState }: {
+  let { tabBar, onOpenTab, initialState, initialWsName }: {
     tabBar?: Snippet
     onOpenTab?: (path: string) => void
     initialState?: TabState
+    /** The active tab's wsName from GET /tabs — seeds currentWorkspace so the
+     *  ◇ toolbar button doesn't flicker away during the {#key} remount while
+     *  api.workspaces() is in flight. */
+    initialWsName?: string
   } = $props()
 
   // initialState is passed inside {#key activeTabId} — it never changes
@@ -491,7 +495,9 @@
   )
   // Tri-state on current: '' means UNKNOWN (initial value until the first fetch
   // resolves; stays there if it fails) — see openWorkspaceContextMenu.
-  let currentWorkspace = $derived(workspaces.value.current)
+  // initialWsName (from GET /tabs enrichment) bridges the {#key}-remount gap so
+  // the ◇ button doesn't flicker; api.workspaces() takes over once it resolves.
+  let currentWorkspace = $derived(workspaces.value.current || initialWsName || '')
   let workspaceList = $derived(workspaces.value.workspaces)
   const aliasesLoader = createLoader(() => api.aliases(), [] as Alias[], undefined, { keepValueOnError: true })
   let aliases = $derived(aliasesLoader.value)
