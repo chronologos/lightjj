@@ -1,0 +1,31 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#25252f"/><stop offset="1" stop-color="#121218"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="34" y1="6" x2="46" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffa726"/><stop offset="1" stop-color="#ef5350"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="256" cy="235" r="210" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffa726" stop-opacity="0.25"/><stop offset="1" stop-color="#ffa726" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Big-Sur-style squircle tile -->
+  <rect x="46" y="46" width="420" height="420" rx="94" fill="url(#bg)"/>
+  <rect x="46" y="46" width="420" height="420" rx="94" fill="url(#glow)"/>
+  <rect x="46.5" y="46.5" width="419" height="419" rx="93.5" fill="none"
+        stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+
+  <!-- brand mark (from lightjj-svg-pack, 80-unit space) scaled onto the tile -->
+  <g transform="translate(11, 79) scale(5.5)">
+    <path d="M46,8 L30,34 L46,36 L32,56" stroke="url(#bolt)" stroke-width="4.5"
+          stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M46,36 L58,58" stroke="url(#bolt)" stroke-width="3.5"
+          stroke-linecap="round" opacity="0.65" fill="none"/>
+    <circle cx="46" cy="8" r="5" fill="#ffa726"/>
+    <circle cx="38" cy="35" r="3" fill="#ff8a50"/>
+    <circle cx="32" cy="56" r="4.5" fill="#ef5350"/>
+    <circle cx="58" cy="58" r="3.5" fill="#ff7043" opacity="0.65"/>
+  </g>
+</svg>
