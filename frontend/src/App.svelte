@@ -2341,7 +2341,7 @@
     diff.reset()
     files.reset()
     clearChecks()
-    userRefresh(true)
+    return userRefresh(true)
   }
 
   function clearRevsetFilter() {
@@ -2681,7 +2681,7 @@
       pendingNavScroll = null
       switchToLogView()
       revsetFilter = p.revset
-      const ok = await userRefresh(true)
+      const ok = await handleRevsetSubmit()
       if (!ok) return
       if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') return
     }

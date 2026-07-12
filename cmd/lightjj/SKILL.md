@@ -106,22 +106,23 @@ lightjj api POST /tab/0/api/navigate '{"revset":"present(@) | ancestors(immutabl
 
 # If selecting a commit that may be outside the current view, set revset and
 # change_id together. The frontend applies the revset first, then selects.
-lightjj api POST /tab/0/api/navigate '{"revset":"all() ~ root()","change_id":"xyzabc"}'
+lightjj api POST /tab/0/api/navigate '{"revset":"xyzabc | present(@) | trunk()","change_id":"xyzabc"}'
 ```
 
-After steering, verify what the browser accepted:
+After steering, verify the graph with the same revset. For combined navigation,
+use focus only to confirm the selected change; focus does not report the revset:
 
 ```bash
-lightjj api GET /tab/0/api/focus
 lightjj api GET '/tab/0/api/log?revset=trunk()..@'
+lightjj api GET /tab/0/api/focus
 ```
 
 Prefer narrow revsets for user-facing cleanup work:
 
 - `trunk()..@` — current working-copy stack relative to trunk.
 - `mutable()` — local mutable heads and workspace work.
-- `all() ~ root()` — archaeology only; it will surface remote branches and
-  stale artifacts that are not part of the current working view.
+- `<change_id> | present(@) | trunk()` — a target change with enough working
+  context for focused review.
 
 ## Review loop
 
