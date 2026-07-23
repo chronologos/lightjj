@@ -3370,6 +3370,38 @@ func TestHandlePullRequests_RemoteListFails(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandleGitHubRepo(t *testing.T) {
+	t.Run("GitHub remote → owner/repo", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		defer runner.Verify()
+		srv := prTestServer(t, runner, "git@github.com:org/repo.git")
+
+		req := httptest.NewRequest("GET", "/api/github-repo", nil)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]string
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+		assert.Equal(t, "org/repo", resp["repo"])
+	})
+
+	t.Run("non-GitHub remote → empty repo, no error", func(t *testing.T) {
+		runner := testutil.NewMockRunner(t)
+		defer runner.Verify()
+		srv := prTestServer(t, runner, "git@gitlab.com:org/repo.git")
+
+		req := httptest.NewRequest("GET", "/api/github-repo", nil)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]string
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+		assert.Equal(t, "", resp["repo"])
+	})
+}
+
 // --- Runner error tests for read handlers ---
 
 // runnerErrorTest is a helper that creates a server, expects a command to fail,

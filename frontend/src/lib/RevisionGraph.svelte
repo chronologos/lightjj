@@ -28,6 +28,10 @@
     onabandonchecked: () => void
     onclearchecks: () => void
     onbookmarkclick: (name: string) => void
+    /** Right-click on a bookmark badge — App builds the menu (Create PR…, etc.)
+     *  per the "component emits the domain object" convention. Optional: absent
+     *  in tests / harnesses that don't wire a menu. */
+    onbookmarkcontextmenu?: (name: string, x: number, y: number) => void
     onworkspaceclick: (wsName: string) => void
     onworkspacecontextmenu: (wsName: string, x: number, y: number) => void
     /** Current workspace name — its badge renders dimmed/non-interactive (clicking would dup the active tab). */
@@ -48,7 +52,7 @@
     revisions, selectedIndex, checkedRevisions, loading, mutating, viewLabel, lastCheckedIndex,
     onselect, ontogglecheck, onrangecheck, oncontextmenu, onresolvedivergence,
     onnewfromchecked, onabandonchecked, onclearchecks,
-    onbookmarkclick, onworkspaceclick, onworkspacecontextmenu, currentWorkspace,
+    onbookmarkclick, onbookmarkcontextmenu, onworkspaceclick, onworkspacecontextmenu, currentWorkspace,
     rebase, squash, split, megamerge,
     theme, themeEpoch = 0, prByBookmark, impliedCommitIds, remoteVisibility,
   }: Props = $props()
@@ -489,6 +493,7 @@
                 {:else}
                   <button class="bookmark-badge" class:conflicted={bm.conflict}
                      onclick={(e: MouseEvent) => { e.stopPropagation(); onbookmarkclick(bm.name) }}
+                     oncontextmenu={(e: MouseEvent) => { if (!onbookmarkcontextmenu) return; e.preventDefault(); e.stopPropagation(); if (anyModeActive || isRefreshing) return; onbookmarkcontextmenu(bm.name, e.clientX, e.clientY) }}
                      style={tinted ? `--lane-color: ${laneColorVar}` : ''} class:lane-tinted={tinted}
                      title={bm.conflict ? 'Conflicted — this bookmark points at multiple commits'
                           : bm.unsynced ? 'Out of sync with tracked remote' : undefined}

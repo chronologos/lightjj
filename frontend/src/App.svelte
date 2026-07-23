@@ -42,6 +42,7 @@
 
   import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload } from './lib/api'
   import { setDetectedJJVersion, missingJJFeatures } from './lib/jj-features.svelte'
+  import { canCreatePR, bookmarkCreatePREligibility, prCompareUrl } from './lib/bookmark-sync'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
@@ -917,6 +918,33 @@
       })),
   )
 
+  // Local bookmarks (visible in the current log) eligible for "Create PR":
+  // pushed to a remote, no open PR (issue #32). Empty when no GitHub remote
+  // resolved. Eligibility comes from each commit's own local/remote refs —
+  // always fresh with the log, no dependency on the branches-view-gated
+  // bookmarksPanel loader. Single source of truth for the Cmd+K entries and the
+  // revision-badge context menu.
+  let createPRBookmarks = $derived.by<Set<string>>(() => {
+    const out = new Set<string>()
+    if (!githubRepo) return out
+    for (const entry of revisions) {
+      const onRemote = new Set((entry.remote_bookmarks ?? []).map(r => r.name))
+      for (const b of entry.bookmarks ?? []) {
+        if (canCreatePR({ hasLocalRef: true, onRemote: onRemote.has(b.name), hasOpenPR: prByBookmark.has(b.name) }))
+          out.add(b.name)
+      }
+    }
+    return out
+  })
+
+  let createPRCommands = $derived<PaletteCommand[]>(
+    [...createPRBookmarks].map(name => ({
+      label: `Create PR for ${name}…`,
+      category: 'Bookmarks',
+      action: () => createPR(name),
+    })),
+  )
+
   // Category-level inline-mode gate. Every command in these categories mutates
   // the repo, enters a mode, or opens a modal — none are valid while a
   // rebase/squash/split is in progress. The gate is injected HERE (not spelled
@@ -928,7 +956,7 @@
   // Category grouping in the palette's cheatsheet view is handled by Map.groupBy
   // (CommandPalette.svelte), so spread order here doesn't affect visual grouping.
   let commands = $derived<PaletteCommand[]>(
-    [...staticCommands, ...dynamicCommands, ...aliasCommands].map(c =>
+    [...staticCommands, ...dynamicCommands, ...aliasCommands, ...createPRCommands].map(c =>
       INLINE_GATED_CATEGORIES.has(c.category ?? '')
         ? { ...c, when: () => !inlineMode && (c.when?.() ?? true) }
         : c,
@@ -973,6 +1001,25 @@
   // for multi-remote track/untrack submenus.
   const remotes = createLoader(() => api.remotes(), [] as string[], undefined, { keepValueOnError: true })
   let allRemotes = $derived(remotes.value)
+
+  // Resolved "owner/repo" for the current GitHub remote ('' when the repo has
+  // no recognizable GitHub remote). Empty value hides every "Create PR"
+  // affordance. Session-stable but derived server-side from the remote list, so
+  // it rides the same slow-mirror op-sync as remotes() (api.ts drops its memo on
+  // op-id change — a `git remote add` followed by any op re-resolves it).
+  const githubRepoLoader = createLoader(() => api.githubRepo(), '', undefined, { keepValueOnError: true })
+  let githubRepo = $derived(githubRepoLoader.value)
+
+  // Open the GitHub compare page for a pushed bookmark in a new tab. Client-side
+  // window.open (NOT a `gh`/xdg-open shell-out) so it opens on the user's
+  // machine, not the SSH remote where jj runs (cf. open.go editor spawning).
+  function createPR(bookmark: string) {
+    if (!githubRepo) {
+      setMessage({ kind: 'warning', text: 'No GitHub remote configured' })
+      return
+    }
+    window.open(prCompareUrl(githubRepo, bookmark), '_blank', 'noopener')
+  }
 
   // Visually distinct, platform-stable glyphs. No flags/people/hands (vary
   // wildly across OS/font), no skin-tone modifiers. Contiguous string iterates
@@ -1169,6 +1216,7 @@
   const prsSync = opSync({ run: () => prs.load(), throttleMs: SLOW_MIRROR_MS })
   const aliasesSync = opSync({ run: () => aliasesLoader.load(), throttleMs: SLOW_MIRROR_MS })
   const remotesSync = opSync({ run: () => remotes.load(), throttleMs: SLOW_MIRROR_MS })
+  const githubRepoSync = opSync({ run: () => githubRepoLoader.load(), throttleMs: SLOW_MIRROR_MS })
   // startFresh: the scan never runs at mount or tab-switch — only in reaction
   // to operations that happen while the app is open.
   const staleImmSync = opSync({ run: () => staleImm.load(), throttleMs: SLOW_MIRROR_MS, startFresh: true })
@@ -1322,6 +1370,19 @@
   // write so the effect-triggered loadLog sees it.
   let pendingSelectCommitId: string | null = null
 
+  // Right-click on a RevisionGraph bookmark badge. The component emits only the
+  // bookmark name (domain object); App builds the items (CLAUDE.md "Adding a
+  // context-menu surface"). Create PR… appears only for eligible (pushed,
+  // PR-less, GitHub) bookmarks — createPRBookmarks already encodes that.
+  function openRevisionBookmarkContextMenu(name: string, x: number, y: number) {
+    const items: ContextMenuItem[] = []
+    if (createPRBookmarks.has(name)) {
+      items.push({ label: 'Create PR…', action: () => createPR(name) })
+    }
+    items.push({ label: `Copy name (${name})`, action: () => navigator.clipboard.writeText(name) })
+    contextMenu = { items, x, y }
+  }
+
   function showBookmarkContextMenu(bm: Bookmark, actions: BookmarkRowActions, x: number, y: number, jumpTarget?: string) {
     const pd = actions.pushDelete
     const delOp: BookmarkOp = pd[0]
@@ -1334,11 +1395,24 @@
       { label: 'Jump to revision', shortcut: '⏎', disabled: !actions.jump,
         action: () => jumpToBookmark(bm, jumpTarget) },
       { separator: true },
+    ]
+    // "Create PR…" — only when a GitHub repo resolved AND the branch is pushed
+    // with no open PR. Hidden (not shown-disabled) otherwise: a local-only or
+    // already-PR'd branch has no sensible compare URL, and the menu already
+    // carries many items. Placed near the top — it's a common next-step after
+    // pushing a new branch.
+    if (githubRepo && canCreatePR(bookmarkCreatePREligibility(bm, prByBookmark))) {
+      items.push(
+        { label: 'Create PR…', action: () => createPR(bm.name) },
+        { separator: true },
+      )
+    }
+    items.push(
       { label: delLabel, shortcut: 'd', danger: true, disabled: !actions.del && !pd[0],
         action: () => handleBookmarkOp(delOp) },
       { label: 'Forget', shortcut: 'f', danger: true,
         action: () => handleBookmarkOp({ action: 'forget', bookmark: bm.name }) },
-    ]
+    )
     for (const t of actions.track) {
       items.push({
         label: t.action === 'track' ? `Track @${t.remote}` : `Untrack @${t.remote}`,
@@ -2946,6 +3020,7 @@
   void aliasesSync.refresh()
   void prsSync.refresh()
   void remotesSync.refresh()
+  void githubRepoSync.refresh()
 
   // --- Tab-switch state preservation ---
   // AppShell calls getState() before the {#key} remount destroys this instance.
@@ -3265,6 +3340,7 @@
             onabandonchecked={handleAbandonChecked}
             onclearchecks={clearChecksAndReload}
             onbookmarkclick={openBookmarkModal}
+            onbookmarkcontextmenu={openRevisionBookmarkContextMenu}
             onworkspaceclick={openWorkspaceTab}
             onworkspacecontextmenu={openWorkspaceContextMenu}
             {currentWorkspace}

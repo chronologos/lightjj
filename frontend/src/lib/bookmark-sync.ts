@@ -232,6 +232,49 @@ export function syncLabel(s: SyncState, remote: string): string {
   }
 }
 
+// --- Create PR (issue #32) -------------------------------------------------
+
+/** Inputs to the "Create PR" eligibility check, in primitive terms so every
+ *  surface can supply them from its own data model — a BookmarksPanel
+ *  `Bookmark` (via `bookmarkCreatePREligibility`) or a per-commit local/remote
+ *  ref pair from the revision log. */
+export interface CreatePREligibility {
+  /** A local branch exists — something to open a PR *from*. */
+  hasLocalRef: boolean
+  /** The branch has been pushed to a remote. Required: GitHub's
+   *  `/compare/<branch>` URL 404s for a branch that isn't on the remote. */
+  onRemote: boolean
+  /** An open PR already tracks this branch (from the `prByBookmark` map). */
+  hasOpenPR: boolean
+}
+
+/** Can we offer "Create PR" for this branch? Needs a local ref that has been
+ *  pushed and has no open PR yet. Callers must ALSO check that a GitHub repo
+ *  resolved (empty repo string from /api/github-repo hides the affordance). */
+export function canCreatePR(e: CreatePREligibility): boolean {
+  return e.hasLocalRef && e.onRemote && !e.hasOpenPR
+}
+
+/** Eligibility for a BookmarksPanel `Bookmark` (has full local/remote refs). */
+export function bookmarkCreatePREligibility(
+  bm: Bookmark,
+  prByBookmark: Map<string, unknown>,
+): CreatePREligibility {
+  return {
+    hasLocalRef: !!bm.local,
+    onRemote: (bm.remotes?.length ?? 0) > 0,
+    hasOpenPR: prByBookmark.has(bm.name),
+  }
+}
+
+/** GitHub PR-compare URL for a pushed bookmark. Per-segment encoding preserves
+ *  the `/` path separators in namespaced branch names (`alice/feature`) while
+ *  escaping any other URL-unsafe characters git allows in ref names. */
+export function prCompareUrl(repo: string, bookmark: string): string {
+  const branch = bookmark.split('/').map(encodeURIComponent).join('/')
+  return `https://github.com/${repo}/compare/${branch}?expand=1`
+}
+
 export interface TrackOption {
   action: 'track' | 'untrack'
   remote: string

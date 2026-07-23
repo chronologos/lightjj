@@ -200,6 +200,7 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 | GET | `/api/aliases` | User-configured jj aliases |
 | POST | `/api/alias` | Run a configured alias (validated against config; streamed output) |
 | GET | `/api/pull-requests` | Open PR info per bookmark via `gh` |
+| GET | `/api/github-repo` | Resolved `owner/repo` for building PR-compare URLs (empty if not GitHub) |
 | GET | `/api/symbol` | rg-backed symbol definition lookup |
 
 **Agent & automation**

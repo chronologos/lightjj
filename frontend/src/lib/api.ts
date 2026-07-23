@@ -299,6 +299,7 @@ export function onSSEState(callback: (connected: boolean) => void): () => void {
 function clearSessionMemos(): void {
   _remotes = undefined
   _aliases = undefined
+  _githubRepo = undefined
   _info = undefined
   _infoValue = undefined
 }
@@ -400,6 +401,7 @@ function notifyOpId(opId: string) {
   // feature gates that resolvedInfo() feeds synchronously.
   _remotes = undefined
   _aliases = undefined
+  _githubRepo = undefined
 
   if (staleCallbacks.size > 0 && !refreshQueued) {
     refreshQueued = true
@@ -795,6 +797,9 @@ export async function prefetchFilesBatch(commitIds: string[]): Promise<void> {
 // external operation may follow a config/remote edit — see notifyOpId).
 let _remotes: Promise<string[]> | undefined
 let _aliases: Promise<Alias[]> | undefined
+// Resolved "owner/repo" (empty string = no GitHub remote). Derived server-side
+// from the same remote list as _remotes, so it's dropped on the same triggers.
+let _githubRepo: Promise<string> | undefined
 let _info: Promise<InfoResponse> | undefined
 // Resolved value of _info for synchronous reads (jj-features reads the backend
 // feature map in the same tick App calls setDetectedJJVersion).
@@ -1298,6 +1303,14 @@ export const api = {
     streamPost('/api/git/fetch', { flags }, onLine),
 
   pullRequests: () => request<PullRequest[]>('/api/pull-requests'),
+
+  // Resolved "owner/repo" for building the GitHub PR-compare URL client-side.
+  // Empty string when the repo has no recognizable GitHub remote → callers
+  // hide the Create-PR affordances. Session-memoized like remotes() (it's
+  // derived from the same remote list); dropped on op-id change / tab switch.
+  githubRepo: () => _githubRepo ??= request<{ repo: string }>('/api/github-repo')
+    .then(r => r.repo)
+    .catch(e => { _githubRepo = undefined; throw e }),
 
   aliases: () => _aliases ??= request<Alias[]>('/api/aliases').catch(e => { _aliases = undefined; throw e }),
 

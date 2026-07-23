@@ -1926,6 +1926,15 @@ func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, prs)
 }
 
+// handleGitHubRepo returns the resolved "owner/repo" for the current remote,
+// used client-side to build the PR-compare URL for "Create PR". Reuses the
+// same resolveGHRepo() lazy cache as the PR-badge fetch. Non-GitHub repos
+// (or repos with no recognizable GitHub remote) get an empty repo string —
+// the frontend hides the Create-PR affordances rather than erroring.
+func (s *Server) handleGitHubRepo(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"repo": s.resolveGHRepo()})
+}
+
 // --- File write handler ---
 
 type fileWriteRequest struct {

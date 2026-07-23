@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyBookmark, syncPriority, fmtCount, syncLabel, syncLabelAction, trackOptions, compareBookmarks, bookmarkSortTs, authorMatch, matchBookmark, type SortEntry } from './bookmark-sync'
+import { classifyBookmark, syncPriority, fmtCount, syncLabel, syncLabelAction, trackOptions, compareBookmarks, bookmarkSortTs, authorMatch, matchBookmark, canCreatePR, bookmarkCreatePREligibility, prCompareUrl, type SortEntry } from './bookmark-sync'
 import type { Bookmark, BookmarkRemote } from './api'
 
 const mkRemote = (over: Partial<BookmarkRemote> = {}): BookmarkRemote => ({
@@ -476,5 +476,50 @@ describe('matchBookmark', () => {
   it('author: prefix restricts to author, ignores name', () => {
     expect(matchBookmark('author:ada', bm, fuzzy)).toBe(true)
     expect(matchBookmark('author:feature', bm, fuzzy)).toBe(false) // name no longer matches
+  })
+})
+
+describe('canCreatePR', () => {
+  it('eligible: local ref, on remote, no open PR', () => {
+    expect(canCreatePR({ hasLocalRef: true, onRemote: true, hasOpenPR: false })).toBe(true)
+  })
+  it('not eligible: never pushed (compare URL would 404)', () => {
+    expect(canCreatePR({ hasLocalRef: true, onRemote: false, hasOpenPR: false })).toBe(false)
+  })
+  it('not eligible: no local ref', () => {
+    expect(canCreatePR({ hasLocalRef: false, onRemote: true, hasOpenPR: false })).toBe(false)
+  })
+  it('not eligible: already has an open PR', () => {
+    expect(canCreatePR({ hasLocalRef: true, onRemote: true, hasOpenPR: true })).toBe(false)
+  })
+})
+
+describe('bookmarkCreatePREligibility', () => {
+  const prMap = new Map<string, unknown>([['has-pr', {}]])
+
+  it('pushed + PR-less bookmark is eligible', () => {
+    const bm = mkBm({ name: 'feat', local: mkRemote({ remote: '.' }), remotes: [mkRemote()] })
+    expect(canCreatePR(bookmarkCreatePREligibility(bm, prMap))).toBe(true)
+  })
+  it('local-only (never pushed) is not eligible', () => {
+    const bm = mkBm({ name: 'feat', local: mkRemote({ remote: '.' }), remotes: [] })
+    expect(canCreatePR(bookmarkCreatePREligibility(bm, prMap))).toBe(false)
+  })
+  it('bookmark with an existing PR is not eligible', () => {
+    const bm = mkBm({ name: 'has-pr', local: mkRemote({ remote: '.' }), remotes: [mkRemote()] })
+    expect(canCreatePR(bookmarkCreatePREligibility(bm, prMap))).toBe(false)
+  })
+  it('remote-only (no local ref) is not eligible', () => {
+    const bm = mkBm({ name: 'feat', local: undefined, remotes: [mkRemote()] })
+    expect(canCreatePR(bookmarkCreatePREligibility(bm, prMap))).toBe(false)
+  })
+})
+
+describe('prCompareUrl', () => {
+  it('builds the expand=1 compare URL', () => {
+    expect(prCompareUrl('owner/repo', 'feature')).toBe('https://github.com/owner/repo/compare/feature?expand=1')
+  })
+  it('preserves slashes in namespaced branch names, encodes each segment', () => {
+    expect(prCompareUrl('owner/repo', 'alice/feature x')).toBe('https://github.com/owner/repo/compare/alice/feature%20x?expand=1')
   })
 })

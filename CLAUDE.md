@@ -122,7 +122,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     TabBar.svelte          — Tab strip: repoRoot-grouped (chip + --graph-N notch), stale dots, ✕ close, + open
     BookmarkModal.svelte   — Bookmark modal (move/advance/delete/forget/track)
     BookmarksPanel.svelte  — Branches view: bookmark list (sortable Priority/Recent/Name, author shown + filterable)
-    bookmark-sync.ts       — classifyBookmark() → 8 sync states + sort/format helpers
+    bookmark-sync.ts       — classifyBookmark() → 8 sync states + sort/format helpers + canCreatePR/prCompareUrl (Create PR)
     workspace-recovery.ts  — PURE — planRecoverAll()/recoverAllMessage() for "Update all (recover stale)"
     remote-visibility.ts   — buildVisibilityRevset(): per-remote visibility → revset string
     themes.ts              — 7 builtin themes + lazy Ghostty palettes + deriveTheme()
