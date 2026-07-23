@@ -61,7 +61,7 @@
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import DivergencePanel from './lib/DivergencePanel.svelte'
   import { executeKeepPlan, splitIdentity, squashDivergent, abandonMutable, type DivergenceActionResult } from './lib/divergence-actions'
-  import { createRebaseMode, createSquashMode, createSplitMode, createDivergenceMode, createFileSelection, targetModeLabel, type ModeKind } from './lib/modes.svelte'
+  import { createRebaseMode, createSquashMode, createSplitMode, createMegamergeMode, createDivergenceMode, createFileSelection, targetModeLabel, type ModeKind } from './lib/modes.svelte'
   import { planRecoverAll, recoverAllMessage } from './lib/workspace-recovery'
   import { routeKeydown, type ActiveView } from './lib/keyboard-gate'
   import { computeSlide, type SlideDir } from './lib/slide'
@@ -329,6 +329,7 @@
   const rebase = createRebaseMode()
   const squash = createSquashMode()
   const split = createSplitMode()
+  const megamerge = createMegamergeMode()
   const divergence = createDivergenceMode()
   const fileSel = createFileSelection()
 
@@ -524,12 +525,12 @@
   )
 
   let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || configModalOpen || !!contextMenu || divergence.active || welcomeOpen || !!fileHistoryPath)
-  let inlineMode = $derived(rebase.active || squash.active || split.active)
+  let inlineMode = $derived(rebase.active || squash.active || split.active || megamerge.active)
   // Which mode (if any). `inlineMode` answers "is ANY mode active?" for
   // toolbar gates; `activeInlineMode.diffFollows` answers the per-mode
   // question — whether nav should reload the diff or freeze it. onselect
   // previously read `inlineMode` and conflated these.
-  let activeInlineMode = $derived(rebase.active ? rebase : squash.active ? squash : split.active ? split : null)
+  let activeInlineMode = $derived(rebase.active ? rebase : squash.active ? squash : split.active ? split : megamerge.active ? megamerge : null)
   let diffFrozen = $derived(activeInlineMode ? !activeInlineMode.diffFollows : false)
   let conflictCount = $derived(changedFiles.filter(f => f.conflict).length)
 
@@ -816,6 +817,7 @@
     { label: 'Abandon selected revision', category: 'Revisions', action: () => handleAbandon(effectiveId(selectedRevision!.commit)), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Rebase revision(s)', shortcut: 'R', category: 'Revisions', action: enterRebaseMode, when: () => !!selectedRevision || checkedRevisions.size > 0 },
     { label: 'Squash revision(s)', shortcut: 'S', category: 'Revisions', action: enterSquashMode, when: () => !!selectedRevision || checkedRevisions.size > 0 },
+    { label: 'Edit parents…', shortcut: 'M', category: 'Revisions', action: () => enterMegamergeMode(), when: () => !!selectedRevision && checkedRevisions.size === 0 && !selectedRevision.commit.immutable },
     { label: 'Split revision', shortcut: 's', category: 'Revisions', action: enterSplitMode, when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Slide revision down (swap with parent)', shortcut: '⇧J', category: 'Revisions', action: () => handleSlide('down'), when: () => !!selectedRevision && checkedRevisions.size === 0 },
     { label: 'Slide revision up (swap with child)', shortcut: '⇧K', category: 'Revisions', action: () => handleSlide('up'), when: () => !!selectedRevision && checkedRevisions.size === 0 },
@@ -1419,6 +1421,7 @@
       { label: 'Rebase...', shortcut: 'R', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterRebaseMode() } },
       { label: 'Squash...', shortcut: 'S', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSquashMode() } },
       { label: 'Split...', shortcut: 's', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSplitMode() } },
+      { label: 'Edit parents…', shortcut: 'M', disabled: inlineMode || !!entry?.commit.immutable, action: () => { selectByChangeId(changeId); enterMegamergeMode(changeId) } },
       { label: 'Slide up', shortcut: '⇧K', disabled: inlineMode || !slideUp.ok, action: () => { selectByChangeId(changeId); handleSlide('up') } },
       { label: 'Slide down', shortcut: '⇧J', disabled: inlineMode || !slideDown.ok, action: () => { selectByChangeId(changeId); handleSlide('down') } },
       { separator: true },
@@ -1429,6 +1432,29 @@
       // sibling dir on disk); disabled in SSH mode, same as the palette command.
       { label: 'Add workspace here…', disabled: inlineMode || sshMode !== false, action: () => handleWorkspaceAdd(changeId) },
     ]
+    // One-shot @-parent edits: only for a revision X that isn't @ itself, when
+    // @ exists in the log and is mutable. "Add" appears when X isn't already a
+    // parent of @; "Remove" when it is (disabled if it's @'s only parent —
+    // a commit must keep ≥1 parent). Both rebase @ onto the full new set.
+    const wc = workingCopyEntry
+    if (entry && !entry.commit.is_working_copy && wc && !wc.commit.immutable) {
+      const wcParents = wc.commit.parent_ids ?? []
+      const isParentOfWc = wcParents.includes(commitId)
+      items.push({ separator: true })
+      if (isParentOfWc) {
+        items.push({
+          label: 'Remove from parents of @',
+          disabled: inlineMode || wcParents.length <= 1,
+          action: () => editWorkingCopyParent(commitId, 'remove'),
+        })
+      } else {
+        items.push({
+          label: 'Add as parent of @',
+          disabled: inlineMode,
+          action: () => editWorkingCopyParent(commitId, 'add'),
+        })
+      }
+    }
     if (entry?.commit.divergent) {
       items.push(
         { separator: true },
@@ -1937,6 +1963,88 @@
     })
   }
 
+  // Megamerge (M): edit the target commit's parent set in place. Seeded with
+  // the target's current parents — parent_ids are short commit_ids, matched
+  // against rows' commit.commit_id (same short form; see LogGraph template).
+  // Immutable targets are rejected (jj can't rewrite them).
+  function enterMegamergeMode(changeId?: string) {
+    const target = changeId
+      ? revisions.find(r => effectiveId(r.commit) === changeId) ?? null
+      : selectedRevision
+    if (!target || checkedRevisions.size > 0) return
+    if (target.commit.immutable) {
+      setMessage({ kind: 'warning', text: 'Cannot edit parents of an immutable revision' })
+      return
+    }
+    cancelInlineModes()
+    if (!switchToLogView()) return
+    // Seed with the target's FULL current parent set. parent_ids are already
+    // commit_ids, so no lookup is needed. A parent outside the current revset
+    // has no visible row to badge or toggle, but we still keep its commit_id in
+    // the set so Enter reproduces it and doesn't silently drop it.
+    const parentIds = target.commit.parent_ids ?? []
+    megamerge.enter(effectiveId(target.commit), target.commit.commit_id, [...parentIds])
+  }
+
+  // Enter: run ONE `jj rebase -r <target> -d p1 -d p2 …`. Requires ≥1 parent;
+  // an unchanged parent set is a no-op that just exits. commit_ids are fine as
+  // rebase destinations.
+  async function executeMegamerge() {
+    const target = megamerge.target
+    if (!target) return
+    const parents = [...megamerge.parentIds]
+    if (parents.length === 0) {
+      setMessage({ kind: 'warning', text: 'A commit needs at least one parent' })
+      return
+    }
+    // No-op: parent set unchanged → exit without a mutation. Order-insensitive
+    // (a merge's parents are a set, and `jj rebase -d a -d b` == `-d b -d a`).
+    const initial = megamerge.initialParentIds
+    const unchanged = parents.length === initial.length
+      && new Set(parents).size === new Set([...parents, ...initial]).size
+    if (unchanged) { megamerge.cancel(); return }
+    megamerge.cancel()
+    return withMutation(async () => {
+      try {
+        const result = await api.rebase([target], parents, '-r', '-d')
+        const noun = parents.length === 1 ? 'parent' : 'parents'
+        setMessage(mutationMessage(`Set ${parents.length} ${noun} on ${target.slice(0, 8)}`, result))
+        clearChecks()
+        await logSync.refresh()
+      } catch (e) {
+        showError(e)
+      }
+    })
+  }
+
+  // One-shot parent edits from the context menu: add/remove revision X to/from
+  // @'s parent set, then rebase @ onto the resulting set. Shares the plural
+  // rebase API with megamerge mode. `op` picks the set transform.
+  async function editWorkingCopyParent(xCommitId: string, op: 'add' | 'remove') {
+    const wc = workingCopyEntry
+    if (!wc || wc.commit.immutable) return
+    const current = wc.commit.parent_ids ?? []
+    const next = op === 'add'
+      ? [...current, xCommitId]
+      : current.filter(p => p !== xCommitId)
+    if (op === 'add' && current.includes(xCommitId)) return  // already a parent
+    if (next.length === 0) {
+      setMessage({ kind: 'warning', text: 'A commit needs at least one parent' })
+      return
+    }
+    return withMutation(async () => {
+      try {
+        const result = await api.rebase([effectiveId(wc.commit)], next, '-r', '-d')
+        const verb = op === 'add' ? 'Added' : 'Removed'
+        setMessage(mutationMessage(`${verb} parent ${xCommitId.slice(0, 8)} ${op === 'add' ? 'to' : 'from'} @`, result))
+        clearChecks()
+        await logSync.refresh()
+      } catch (e) {
+        showError(e)
+      }
+    })
+  }
+
   // Shift+J/K: jj-arrange-style single-step swap with topological neighbor.
   // Gate logic lives in slide.ts (pure, tested). Cursor follows the moved
   // change_id post-reload — commit_id changes, so loadLog's index-preservation
@@ -2268,6 +2376,7 @@
     rebase.cancel()
     squash.cancel()
     split.cancel()
+    megamerge.cancel()
     divergence.cancel()
     fileSel.clear()
     selectedHunks.clear()
@@ -2499,6 +2608,9 @@
     rebase: executeRebase,
     squash: executeSquash,
     split: executeSplit,
+    // Megamerge ignores typedDest — the parent set is the destination, picked
+    // by Space-toggling rows, not typed into the `/` DestinationInput.
+    megamerge: executeMegamerge,
   }
 
   // Header verb for the `/` DestinationInput, per mode kind. Split never opens
@@ -2507,6 +2619,9 @@
     rebase: () => `Rebase ${targetModeLabel[rebase.targetMode]}`,
     squash: () => 'Squash into',
     split: () => '',
+    // Megamerge never opens the `/` DestinationInput (Space picks parents), so
+    // this string is unused — present only to satisfy the exhaustive Record.
+    megamerge: () => '',
   }
 
   // Inline mode Enter/Escape — must fire even when FileSelectionPanel holds
@@ -2542,14 +2657,22 @@
 
     const mode = activeInlineMode
     if (!mode) return  // unreachable: routeKeydown only calls this when inlineMode
+    // Megamerge: Space toggles the cursor row's commit_id in/out of the parent
+    // set. Handled here (not mode.handleKey) because the mode factory can't see
+    // the cursor row's commit_id. j/k still fall through to navKey below.
+    if (mode.kind === 'megamerge' && e.key === ' ') {
+      e.preventDefault()
+      const cur = revisions[selectedIndex]?.commit
+      if (cur) megamerge.toggle(cur.commit_id)
+      return
+    }
     const jk = !mode.hasDestination ? undefined
              : mode.diffFollows ? selectRevision
              : selectRevisionCursorOnly
     // `/` opens DestinationInput for off-revset targets — only modes with a
-    // destination get it. Handled HERE (not in mode.handleKey) because opening
-    // a modal is an App-level concern; the mode factory has no access to
-    // destInputOpen.
-    if (e.key === '/' && mode.hasDestination) {
+    // typed destination get it. Megamerge has a cursor (hasDestination) but no
+    // TYPED destination (parents are picked from the graph), so it's excluded.
+    if (e.key === '/' && mode.hasDestination && mode.kind !== 'megamerge') {
       e.preventDefault()
       destInputOpen = true
       return
@@ -2574,6 +2697,12 @@
   // checked revisions > message-expand > message > nothing.
   function handleEscapeStack(): void {
     if (descriptionEditing) { descriptionEditing = false; commitMode = false }
+    // Oplog/Evolog are bottom DRAWERS opened by 4/5 (or O/E). Their own panels
+    // close on Escape only while focused; opening via the shortcut leaves focus
+    // on the graph, so an App-level Escape fallback is needed — otherwise a
+    // keyboard-opened drawer can only be dismissed by re-pressing its toggle
+    // (a soft trap; caught by the e2e noModalTraps property).
+    else if (oplogOpen || evologOpen) { oplogOpen = false; evologOpen = false }
     else if (checkedRevisions.size > 0) clearChecksAndReload()
     else if (messageExpanded) messageExpanded = false
     else if (message) dismissMessage()
@@ -2653,6 +2782,7 @@
       case 'B': if (singleOnly) { e.preventDefault(); openModal('bookmarkInput') } break
       case 'R': if (oneOrMany) { e.preventDefault(); enterRebaseMode() } break
       case 'S': if (oneOrMany) { e.preventDefault(); enterSquashMode() } break
+      case 'M': if (singleOnly) { e.preventDefault(); enterMegamergeMode() } break
       case 'J': if (singleOnly) { e.preventDefault(); handleSlide('down') } break
       case 'K': if (singleOnly) { e.preventDefault(); handleSlide('up') } break
     }
@@ -3141,6 +3271,7 @@
             {rebase}
             {squash}
             {split}
+            {megamerge}
             theme={config.theme}
             themeEpoch={ghosttyThemes.length}
             {prByBookmark}
@@ -3395,6 +3526,7 @@
                 ondraftchange={(v) => { descriptionDraft = v }}
                 onbookmarkclick={openBookmarkModal}
                 onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
+                oneditparents={() => enterMegamergeMode()}
               />
               {/key}
               {/if}
@@ -3444,6 +3576,7 @@
       {squashFileCount}
       {split}
       {splitFileCount}
+      {megamerge}
       {activeView}
     />
   </div>

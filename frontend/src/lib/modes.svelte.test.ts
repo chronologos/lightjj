@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createRebaseMode, createSquashMode, createSplitMode, createFileSelection, targetModeLabel, type ModeBase } from './modes.svelte'
+import { createRebaseMode, createSquashMode, createSplitMode, createMegamergeMode, createFileSelection, targetModeLabel, type ModeBase } from './modes.svelte'
 
 describe('targetModeLabel', () => {
   it('maps all target modes to labels', () => {
@@ -17,9 +17,10 @@ describe('targetModeLabel', () => {
 // question is answered at definition time, not at each call site.
 describe('diffFollows — per-mode nav semantics', () => {
   it.each([
-    ['rebase', createRebaseMode, true,  'destination preview — diff shows what you land on'],
-    ['squash', createSquashMode, false, 'frozen on source — that is what you are squashing'],
-    ['split',  createSplitMode,  false, 'frozen on source — that is what you are splitting'],
+    ['rebase',    createRebaseMode,    true,  'destination preview — diff shows what you land on'],
+    ['squash',    createSquashMode,    false, 'frozen on source — that is what you are squashing'],
+    ['split',     createSplitMode,     false, 'frozen on source — that is what you are splitting'],
+    ['megamerge', createMegamergeMode, false, 'frozen on target — you are editing its parents'],
   ] as const)('%s → diffFollows=%s (%s)', (_name, create, expected, _why) => {
     const mode: ModeBase = create()
     expect(mode.diffFollows).toBe(expected)
@@ -31,9 +32,10 @@ describe('diffFollows — per-mode nav semantics', () => {
 // generic instead of branching per-mode. New modes MUST fill all three.
 describe('ModeBase — kind/sources/hasDestination', () => {
   it.each([
-    ['rebase', createRebaseMode, true],
-    ['squash', createSquashMode, true],
-    ['split',  createSplitMode,  false],
+    ['rebase',    createRebaseMode,    true],
+    ['squash',    createSquashMode,    true],
+    ['split',     createSplitMode,     false],
+    ['megamerge', createMegamergeMode, true],
   ] as const)('%s → kind=%s, hasDestination=%s', (kind, create, hasDestination) => {
     const mode: ModeBase = create()
     expect(mode.kind).toBe(kind)
@@ -342,5 +344,72 @@ describe('createFileSelection', () => {
     sel.init([])
     expect(sel.total).toBe(0)
     expect(sel.set.size).toBe(0)
+  })
+})
+
+describe('createMegamergeMode', () => {
+  it('starts inactive with empty state', () => {
+    const m = createMegamergeMode()
+    expect(m.active).toBe(false)
+    expect(m.kind).toBe('megamerge')
+    expect(m.sources).toEqual([])
+    expect(m.destinationIds).toEqual([])
+    expect(m.parentIds).toEqual([])
+  })
+
+  // ModeBase contract: frozen diff (you're editing the target's parents, not
+  // previewing a landing spot) but hasDestination=true so j/k moves the cursor.
+  it('has the multi-destination ModeBase shape', () => {
+    const m = createMegamergeMode()
+    expect(m.diffFollows).toBe(false)
+    expect(m.hasDestination).toBe(true)
+  })
+
+  it('enter seeds parent set from commit_ids and exposes target', () => {
+    const m = createMegamergeMode()
+    m.enter('ctarget', 'ktarget', ['kp1', 'kp2'])
+    expect(m.active).toBe(true)
+    expect(m.target).toBe('ctarget')
+    expect(m.targetCommitId).toBe('ktarget')
+    expect(m.sources).toEqual(['ctarget'])
+    expect(new Set(m.parentIds)).toEqual(new Set(['kp1', 'kp2']))
+    expect(new Set(m.destinationIds)).toEqual(new Set(['kp1', 'kp2']))
+    expect(new Set(m.initialParentIds)).toEqual(new Set(['kp1', 'kp2']))
+  })
+
+  it('toggle adds and removes a commit_id from the parent set', () => {
+    const m = createMegamergeMode()
+    m.enter('ctarget', 'ktarget', ['kp1'])
+    m.toggle('kp2')
+    expect(new Set(m.parentIds)).toEqual(new Set(['kp1', 'kp2']))
+    m.toggle('kp1')
+    expect(new Set(m.parentIds)).toEqual(new Set(['kp2']))
+  })
+
+  // A commit can never be its own parent — toggling the target is a no-op.
+  it('toggle ignores the target commit_id', () => {
+    const m = createMegamergeMode()
+    m.enter('ctarget', 'ktarget', ['kp1'])
+    m.toggle('ktarget')
+    expect(new Set(m.parentIds)).toEqual(new Set(['kp1']))
+  })
+
+  // initialParentIds is the no-op-exit baseline — it must NOT track live edits.
+  it('initialParentIds is frozen at enter, unaffected by toggles', () => {
+    const m = createMegamergeMode()
+    m.enter('ctarget', 'ktarget', ['kp1'])
+    m.toggle('kp2')
+    expect(new Set(m.initialParentIds)).toEqual(new Set(['kp1']))
+  })
+
+  it('cancel resets to empty inactive state', () => {
+    const m = createMegamergeMode()
+    m.enter('ctarget', 'ktarget', ['kp1'])
+    m.cancel()
+    expect(m.active).toBe(false)
+    expect(m.target).toBe('')
+    expect(m.targetCommitId).toBe('')
+    expect(m.parentIds).toEqual([])
+    expect(m.initialParentIds).toEqual([])
   })
 })

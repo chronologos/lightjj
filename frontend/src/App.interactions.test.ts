@@ -115,6 +115,100 @@ describe('App.svelte interactions', () => {
     await waitFor(() => qs('.bp-list') !== null)
   })
 
+  // Megamerge (M): edit the cursor revision's parent set in place. Seeded from
+  // parent_ids (commit_ids matched against rows' commit_id). Space toggles the
+  // cursor row's commit_id in/out; Enter runs ONE plural api.rebase; Escape
+  // cancels with no mutation.
+  const rebaseCalls = () => calls.filter(c => c.method === 'rebase')
+
+  it('M on the working copy enters megamerge seeded with its current parent', async () => {
+    await mountApp()
+    // @ (entry 0, cwc) has parent_ids [kmid]. Its parent row is entry 1 (cmid/kmid).
+    await press('M')
+    await waitFor(() => qs('.statusbar.megamerge-active') !== null)
+    expect(qs('.statusbar .mode-badge')?.textContent).toBe('megamerge')
+    // Seeded parent (kmid) renders exactly one parent badge.
+    await waitFor(() => document.querySelectorAll('.badge-target').length === 1)
+    expect(qs('.mm-parent-count')?.textContent).toContain('1 parent')
+  })
+
+  it('Space toggles a parent; Enter runs one plural rebase with the new set', async () => {
+    await mountApp()
+    await press('M')
+    await waitFor(() => qs('.statusbar.megamerge-active') !== null)
+    // Cursor is on @ (entry 0). Move to trunk (entry 2, ktrunk) and add it.
+    await press('j'); await press('j')
+    await waitFor(() => selectedEntry() === '2')
+    await press(' ')
+    // Now two parents: seeded kmid + newly-added ktrunk.
+    await waitFor(() => document.querySelectorAll('.badge-target').length === 2)
+
+    const before = rebaseCalls().length
+    await press('Enter')
+    await waitFor(() => rebaseCalls().length > before)
+    const call = rebaseCalls().at(-1)!
+    // api.rebase(revisions, destinations, '-r', '-d') — destinations is an array
+    // containing the full new parent set (kmid + ktrunk).
+    expect(call.args[0]).toEqual(['cwc'])
+    expect(new Set(call.args[1] as string[])).toEqual(new Set(['kmid', 'ktrunk']))
+    // Mode exits after execute.
+    await waitFor(() => qs('.statusbar.megamerge-active') === null)
+  })
+
+  it('Escape cancels megamerge without a mutation', async () => {
+    await mountApp()
+    const before = rebaseCalls().length
+    await press('M')
+    await waitFor(() => qs('.statusbar.megamerge-active') !== null)
+    await press('j'); await press('j'); await press(' ') // toggle a change
+    await press('Escape')
+    await waitFor(() => qs('.statusbar.megamerge-active') === null)
+    expect(rebaseCalls().length).toBe(before)
+  })
+
+  it('Enter with an unchanged parent set is a no-op exit (no rebase)', async () => {
+    await mountApp()
+    const before = rebaseCalls().length
+    await press('M')
+    await waitFor(() => qs('.statusbar.megamerge-active') !== null)
+    // Do not toggle anything — parent set equals the seed.
+    await press('Enter')
+    await waitFor(() => qs('.statusbar.megamerge-active') === null)
+    expect(rebaseCalls().length).toBe(before)
+  })
+
+  // The RevisionHeader "Edit parents" button — the mouse-discoverable entry
+  // point (and the one Bombadil's Click action can drive). Gated on mutability.
+  it('RevisionHeader "Edit parents" button enters megamerge (mutable @)', async () => {
+    await mountApp()
+    // @ (cwc) is mutable and the single-revision target → button shows.
+    await waitFor(() => qs('.edit-parents-btn') !== null)
+    await fireEvent.click(qs('.edit-parents-btn')!)
+    await waitFor(() => qs('.statusbar.megamerge-active') !== null)
+    expect(qs('.statusbar .mode-badge')?.textContent).toBe('megamerge')
+  })
+
+  it('"Edit parents" button is hidden for an immutable revision', async () => {
+    await mountApp()
+    await waitFor(() => qs('.edit-parents-btn') !== null)
+    // Navigate to the immutable trunk (entry 2, ctrunk).
+    await press('j'); await press('j')
+    await waitFor(() => qs('.detail-change-id')?.textContent === 'ctrunk')
+    expect(qs('.edit-parents-btn')).toBeNull()
+  })
+
+  // App-level Escape fallback closes the oplog/evolog drawers (they're opened
+  // via 4/5 without focus, so the panel's own Escape handler can't fire). Guards
+  // the soft-trap the e2e noModalTraps property caught.
+  it('Escape closes the oplog drawer opened via keyboard', async () => {
+    await mountApp()
+    expect(qs('.oplog-panel')).toBeNull()
+    await press('4')
+    await waitFor(() => qs('.oplog-panel') !== null)
+    await press('Escape')
+    await waitFor(() => qs('.oplog-panel') === null)
+  })
+
   it("'2' switches to branches view, '1' returns to log", async () => {
     await mountApp()
     expect(qs('.bp-list')).toBeNull()

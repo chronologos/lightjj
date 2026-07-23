@@ -883,8 +883,13 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 }
 
 type rebaseRequest struct {
-	Revisions       []string `json:"revisions"`
-	Destination     string   `json:"destination"`
+	Revisions   []string `json:"revisions"`
+	Destination string   `json:"destination"`
+	// Destinations rewrites the target's whole parent set in place (one repeated
+	// target flag per entry) — the megamerge edit-parents operation. Exactly one
+	// of Destination / Destinations must be provided; Destination stays for the
+	// single-destination callers (rebase/squash/slide).
+	Destinations    []string `json:"destinations"`
 	SourceMode      string   `json:"source_mode"`
 	TargetMode      string   `json:"target_mode"`
 	SkipEmptied     bool     `json:"skip_emptied"`
@@ -911,8 +916,18 @@ func (q rebaseRequest) validate() error {
 	if len(q.Revisions) == 0 {
 		return fmt.Errorf("revisions is required")
 	}
-	if q.Destination == "" {
-		return fmt.Errorf("destination is required")
+	// Exactly one of destination / destinations. Both empty = nothing to rebase
+	// onto; both set = ambiguous. An empty entry inside destinations is rejected
+	// too — it would emit a bare `-d` flag.
+	single := q.Destination != ""
+	multi := len(q.Destinations) > 0
+	if single == multi {
+		return fmt.Errorf("exactly one of destination or destinations is required")
+	}
+	for _, d := range q.Destinations {
+		if d == "" {
+			return fmt.Errorf("destinations entries must be non-empty")
+		}
 	}
 	return nil
 }
@@ -926,7 +941,11 @@ func (q rebaseRequest) build() (jj.CommandArgs, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid target_mode")
 	}
-	return jj.Rebase(jj.FromIDs(q.Revisions), q.Destination, sourceMode, targetMode, jj.RebaseOptions{
+	destinations := q.Destinations
+	if q.Destination != "" {
+		destinations = []string{q.Destination}
+	}
+	return jj.Rebase(jj.FromIDs(q.Revisions), destinations, sourceMode, targetMode, jj.RebaseOptions{
 		SkipEmptied:     q.SkipEmptied,
 		IgnoreImmutable: q.IgnoreImmutable,
 		SimplifyParents: q.SimplifyParents,

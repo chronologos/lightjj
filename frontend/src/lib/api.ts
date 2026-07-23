@@ -1189,11 +1189,17 @@ export const api = {
   describe: (revision: string, description: string) =>
     post<MutationResult>('/api/describe', { revision, description }),
 
-  rebase: (revisions: string[], destination: string, sourceMode?: string, targetMode?: string, opts?: {
+  // destination: a single revision (rebase/squash/slide) OR an array of
+  // revisions that becomes the target's whole parent set in place (megamerge
+  // edit-parents → one repeated -d per entry). The backend accepts exactly one
+  // of `destination` / `destinations`; we pick the wire field by array-ness.
+  rebase: (revisions: string[], destination: string | string[], sourceMode?: string, targetMode?: string, opts?: {
     skipEmptied?: boolean, ignoreImmutable?: boolean, simplifyParents?: boolean
   }) =>
     post<MutationResult>('/api/rebase', {
-      revisions, destination, source_mode: sourceMode, target_mode: targetMode,
+      revisions,
+      ...(Array.isArray(destination) ? { destinations: destination } : { destination }),
+      source_mode: sourceMode, target_mode: targetMode,
       skip_emptied: opts?.skipEmptied, ignore_immutable: opts?.ignoreImmutable,
       simplify_parents: opts?.simplifyParents,
     }),

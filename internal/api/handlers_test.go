@@ -251,7 +251,7 @@ func TestHandleMetaeditChangeId_EmptyRevision(t *testing.T) {
 func TestRunMutation_Warnings(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", jj.RebaseOptions{})).
+	runner.Expect(jj.Rebase(revs, []string{"def"}, "-r", "-d", jj.RebaseOptions{})).
 		SetOutput([]byte("Rebased 3 commits")).
 		SetStderr([]byte("Warning: conflict in src/foo.go\nWarning: conflict in src/bar.go"))
 	defer runner.Verify()
@@ -374,7 +374,7 @@ func TestHandleDescribe(t *testing.T) {
 func TestHandleRebase(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", jj.RebaseOptions{})).SetOutput([]byte(""))
+	runner.Expect(jj.Rebase(revs, []string{"def"}, "-r", "-d", jj.RebaseOptions{})).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -384,6 +384,46 @@ func TestHandleRebase(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// Megamerge edit-parents: `destinations` rewrites the target's whole parent set
+// in place, emitting one repeated `-d` flag per parent.
+func TestHandleRebase_Destinations(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
+	runner.Expect(jj.Rebase(revs, []string{"p1", "p2", "p3"}, "-r", "-d", jj.RebaseOptions{})).SetOutput([]byte(""))
+	defer runner.Verify()
+
+	srv := newTestServer(runner)
+	body, _ := json.Marshal(rebaseRequest{Revisions: []string{"abc"}, Destinations: []string{"p1", "p2", "p3"}})
+	req := jsonPost("/api/rebase", body)
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// Validation: exactly one of destination / destinations. Both empty, both set,
+// and an empty entry inside destinations are all 400s.
+func TestHandleRebase_DestinationValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"neither", `{"revisions":["abc"]}`},
+		{"both", `{"revisions":["abc"],"destination":"def","destinations":["p1"]}`},
+		{"empty destinations entry", `{"revisions":["abc"],"destinations":["p1",""]}`},
+		{"empty destinations array", `{"revisions":["abc"],"destinations":[]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(testutil.NewMockRunner(t))
+			req := jsonPost("/api/rebase", []byte(tc.body))
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
 }
 
 func TestHandleSquash(t *testing.T) {
@@ -1782,7 +1822,7 @@ func TestHandleRebase_Modes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := testutil.NewMockRunner(t)
 			revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-			runner.Expect(jj.Rebase(revs, "def", tt.wantSource, tt.wantTarget, jj.RebaseOptions{})).SetOutput([]byte(""))
+			runner.Expect(jj.Rebase(revs, []string{"def"}, tt.wantSource, tt.wantTarget, jj.RebaseOptions{})).SetOutput([]byte(""))
 			defer runner.Verify()
 
 			srv := newTestServer(runner)
@@ -1802,7 +1842,7 @@ func TestHandleRebase_Modes(t *testing.T) {
 func TestHandleRebase_Flags(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", jj.RebaseOptions{SkipEmptied: true, IgnoreImmutable: true, SimplifyParents: true})).SetOutput([]byte(""))
+	runner.Expect(jj.Rebase(revs, []string{"def"}, "-r", "-d", jj.RebaseOptions{SkipEmptied: true, IgnoreImmutable: true, SimplifyParents: true})).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -1974,7 +2014,7 @@ func TestHandleDescribe_RunnerError(t *testing.T) {
 func TestHandleRebase_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	revs := jj.NewSelectedRevisions(&jj.Commit{ChangeId: "abc"})
-	runner.Expect(jj.Rebase(revs, "def", "-r", "-d", jj.RebaseOptions{})).SetError(errors.New("rebase failed"))
+	runner.Expect(jj.Rebase(revs, []string{"def"}, "-r", "-d", jj.RebaseOptions{})).SetError(errors.New("rebase failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -3809,7 +3849,7 @@ func TestWireTypes(t *testing.T) {
 			body:  `{"revisions":["abc"],"destination":"def","source_mode":"-s","target_mode":"--insert-after","skip_emptied":true,"ignore_immutable":true}`,
 			// If any of these 4 field names mismatch: -s→-r, --insert-after→-d,
 			// true→false — MockRunner.Expect fails.
-			expect: jj.Rebase(abc, "def", "-s", "--insert-after", jj.RebaseOptions{SkipEmptied: true, IgnoreImmutable: true}),
+			expect: jj.Rebase(abc, []string{"def"}, "-s", "--insert-after", jj.RebaseOptions{SkipEmptied: true, IgnoreImmutable: true}),
 		},
 		{
 			name:   "squash: files + keep_emptied + ignore_immutable",

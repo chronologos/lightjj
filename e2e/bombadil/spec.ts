@@ -8,16 +8,17 @@
 // (selectedIndexValid). Bombadil finds these by random action sequences
 // the hand-written tests never tried.
 
-import {
-  extract, actions, weighted,
-  always, eventually, next, now,
-} from "@antithesishq/bombadil";
+// Bombadil 0.6.x module layout: the LTL operators live at the package root;
+// the browser-typed extract/actions/weighted (State/Action-aware) and the
+// default browser properties moved under `@antithesishq/bombadil/browser`.
+import { always, eventually, next, now } from "@antithesishq/bombadil";
+import { extract, actions, weighted } from "@antithesishq/bombadil/browser";
 
-// Default PROPERTIES only — noUncaughtExceptions, noUnhandledRejections,
-// no4xx5xx, error-log detection. NOT /defaults/actions: the default
-// reload/back/forward generators ate ~20% of action budget in the first
-// spike; our own generators below give better exploration density.
-export * from "@antithesishq/bombadil/defaults/properties";
+// Default PROPERTIES only — noHttpErrorCodes, noUncaughtExceptions,
+// noUnhandledPromiseRejections, noConsoleErrors. NOT /browser/defaults/actions:
+// the default reload/back/forward generators ate ~20% of action budget in the
+// first spike; our own generators below give better exploration density.
+export * from "@antithesishq/bombadil/browser/defaults/properties";
 
 // -------------------------------------------------------------------------
 // Extractors — DOM state snapshots. Each returns a Cell<T> that Bombadil
@@ -68,6 +69,42 @@ const rowHeights = extract((s) =>
 // use `.role-marker` (renamed v1.25.0 to kill the old name collision).
 const inlineModeActive = extract((s) =>
   s.document.querySelector(".mode-badge") !== null
+);
+
+// Megamerge (M): mode-badge text is 'megamerge' only while editing a commit's
+// parent set in place. A distinct extractor (not just inlineModeActive) lets
+// the megamerge-specific properties gate precisely on that mode.
+const megamergeActive = extract((s) =>
+  s.document.querySelector(".mode-badge")?.textContent?.trim() === "megamerge"
+);
+
+// Count of destination/parent badges rendered in the graph. In megamerge EVERY
+// row in the chosen parent set carries a `.role-marker.badge-target` (matched
+// by commit_id); rebase/squash render at most one. Virtualization can hide
+// off-screen in-set rows, so this is a LOWER bound on the true parent count —
+// properties may assert rendered <= claimed, never equality.
+const parentBadgeCount = extract((s) =>
+  s.document.querySelectorAll(".badge-target").length
+);
+
+// StatusBar's authoritative selected-parent count ("N parent(s)"). Same render
+// pass as the megamerge mode-badge (both under StatusBar's activeMode gate), so
+// it reads consistent with megamergeActive. Leading integer; -1 when absent.
+const mmParentCount = extract((s) => {
+  const t = s.document.querySelector(".mm-parent-count")?.textContent ?? "";
+  const n = parseInt(t, 10);
+  return Number.isNaN(n) ? -1 : n;
+});
+
+// Rows that are BOTH a source (the commit being edited) and a parent — must
+// always be zero: a commit can't be its own parent, and the source/target
+// roles are mutually exclusive per row in every mode. The megamerge multi-badge
+// model (parent set matched by commit_id against every row) is where a
+// matching-logic slip would first surface.
+const sourceTargetSameRow = extract((s) =>
+  Array.from(s.document.querySelectorAll(".graph-row"))
+    .filter((el) => el.querySelector(".badge-source") && el.querySelector(".badge-target"))
+    .length
 );
 
 // MessageBar presence. `eventually dismissable` is the guarantee — an
@@ -194,6 +231,26 @@ export const inlineModeEscapable = always(
   )
 );
 
+// Megamerge badge/count coherence. Every rendered parent badge corresponds to a
+// commit_id in the mode's parent set, so the count of `.badge-target` markers
+// can never EXCEED StatusBar's authoritative parent count. Targets the bug
+// class where the badge predicate matches the wrong identity (keying by
+// change_id instead of commit_id, or badging the target/non-parent rows) —
+// that over-renders badges → violation. `<=` not `===`: virtualization can hide
+// in-set rows that scrolled off-screen, so rendered is a lower bound.
+export const megamergeBadgeCoherent = always(() =>
+  !megamergeActive.current || parentBadgeCount.current <= mmParentCount.current
+);
+
+// No row is simultaneously source and parent-target — a commit is never its own
+// parent (the toggle guards the target's commit_id), and source/target roles
+// are per-row exclusive in every mode. Virtualization-safe (only inspects
+// rendered rows). Holds across rebase/squash too, but the megamerge multi-badge
+// path is where a matching slip would first break it.
+export const noSelfParentRow = always(() =>
+  sourceTargetSameRow.current === 0
+);
+
 // Diff/cursor coherence — the #1 historical bug class in this codebase.
 // revGen await-gap, post-await identity guards, navigateCached double-rAF
 // scheduling all exist to prevent "cursor is on C, diff shows A". When
@@ -263,11 +320,57 @@ export const escapeKeys = actions(() => [press(KEY.ESC)]);
 // accumulate across the run and eventually break the fixture structure.
 // If we want mutation coverage, that's a separate spec against a
 // `jj op restore`-on-loop fixture.
+//
+// IMPORTANT — these press LOWERCASE keys. Bombadil's PressKey carries only a
+// keyCode with no shift/modifier, and a letter keyCode emits the lowercase char
+// (verified: 0.6.1 logs "Pressing m (code: 77)"). So keyCode 82/83 dispatch
+// `r`/`s`, NOT `R`/`S`: `r` is REFRESH and `s` is SPLIT (an inline mode — this
+// is what actually exercises inlineModeEscapable), while lightjj's `R` (rebase)
+// and `S` (squash) are uppercase and CANNOT be driven by 0.6.1 — the same
+// hard limit that blocks megamerge's `M` (see megamergeKeys below). `b` opens
+// the bookmark modal (lowercase, reachable).
 export const modeKeys = actions(() => [
-  press(KEY.r),  // rebase mode
-  press(KEY.s),  // squash mode
-  press(KEY.b),  // bookmark modal
+  press(KEY.r),  // 'r' → refresh (NOT rebase; uppercase R is undriveable)
+  press(KEY.s),  // 's' → split mode (an inline mode — reachable)
+  press(KEY.b),  // 'b' → bookmark modal
 ]);
+
+// Megamerge entry. The mode is bound to uppercase `M` (matching jjui). PressKey
+// carries only a keyCode with no modifier state, and a letter keyCode emits the
+// LOWERCASE char (keyCode 77 → `m`, markdown preview) — so `TypeText` is the
+// only in-vocabulary action that could deliver an uppercase character to the
+// `<svelte:window onkeydown>` handler. Once in the mode, Space (navKeys) toggles
+// the cursor row in/out of the parent set, Enter (commitKeys) executes, Escape
+// cancels.
+//
+// KNOWN REACHABILITY GAP — confirmed by focused probe on BOTH Bombadil 0.4.2
+// AND 0.6.1: `TypeText("M")` does NOT enter megamerge (`megamergeActive` stayed
+// false across every captured state, 4 attempts total), while the control
+// `PressKey('s')` DID reach split — so the harness can drive lowercase-key
+// inline modes, just not uppercase. 0.6.0's keyboard rework (#199, "only emit
+// text for text-producing keys") did not change this: `TypeText` still injects
+// text without a window `keydown` for the shortcut, and `PressKey` has no shift
+// field (Action type is `{ code }` only). Megamerge's three real entry points
+// (uppercase `M`, right-click "Edit parents…", Cmd+K) each need input 0.6.1
+// cannot produce (Shift, contextmenu, meta). REACHABILITY IS NOW PROVIDED BY THE
+// `clickEditParents` GENERATOR (below): a real RevisionHeader "Edit parents"
+// button that Bombadil's Click action can drive. This keyboard generator is kept
+// as a forward-compatible best effort (a future Bombadil whose TypeText
+// dispatches real key events, or which grows modifier support, would drive the
+// `M` shortcut with no spec change) but is currently a no-op for mode entry.
+export const megamergeKeys = actions(() => [
+  { TypeText: { text: "M", delayMillis: 10 } } as const,
+]);
+
+// Enter — executes the active inline mode (megamerge → rebase the parent set;
+// split → split) or, in normal mode, (re)loads the diff (harmless). The base
+// spec excluded Enter to keep the fixture pristine; megamerge execute coverage
+// needs it. Kept low-weight, and the fixture is recreated fresh per run so
+// mutation drift is bounded to one session. Megamerge Enter with an unchanged
+// set is a no-op exit (no mutation); a toggled set rewrites parents, and any
+// illegal target (cycle/descendant/immutable) surfaces as a dismissable
+// MessageBar — messageBarDismissable already guards that path.
+export const commitKeys = actions(() => [press(KEY.ENTER)]);
 
 // Selector → array of center points for visible (width>0) elements.
 // Capped at 20 — virtualized lists can be arbitrarily long and we only
@@ -311,6 +414,18 @@ export const clickDismiss = clicks("dismiss", dismissCenters);
 const triggerCenters = centers(".alert-badge-click");
 export const clickTriggers = clicks("trigger", triggerCenters);
 
+// "Edit parents" button (RevisionHeader) — the mouse-driven megamerge entry.
+// This is what makes megamerge REACHABLE by Bombadil: the mode's `M` shortcut
+// is uppercase and undriveable (see megamergeKeys), but a left-Click is in the
+// action vocabulary. The button renders only on a mutable single-revision
+// target, so the generator returns [] when it's absent. Clicking it enters the
+// mode; Space (navKeys) toggles a parent, Enter (commitKeys) executes, Escape
+// (escapeKeys) cancels — exercising megamergeBadgeCoherent / inlineModeEscapable
+// non-vacuously. Weighted a bit higher than clickTriggers so the mode is reached
+// with reasonable density.
+const editParentsCenters = centers(".edit-parents-btn");
+export const clickEditParents = clicks("editparents", editParentsCenters);
+
 // Not yet in the action pool: doc-mode entry (the "Doc" button in
 // DiffFileView's header has no stable test selector — just `.btn.btn-sm`)
 // and symbol-peek (⌘+hover an identifier — Bombadil's `PressKey: {code}`
@@ -336,8 +451,11 @@ export const lightjjActions = weighted([
   [30, escapeKeys],
   [25, navKeys],
   [15, clickRows],
+  [12, clickEditParents], // reach megamerge via the RevisionHeader button (Click)
   [10, clickTriggers],
   [8,  clickDismiss],
+  [6,  megamergeKeys],  // reach megamerge (TypeText 'M') — see generator note; undriveable on 0.6.1
   [5,  modeKeys],
   [4,  clickInputs],
+  [3,  commitKeys],     // Enter — execute inline modes (megamerge/split)
 ]);

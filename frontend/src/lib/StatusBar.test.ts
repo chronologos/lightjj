@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/svelte'
 import StatusBar from './StatusBar.svelte'
-import { createRebaseMode, createSquashMode, createSplitMode } from './modes.svelte'
+import { createRebaseMode, createSquashMode, createSplitMode, createMegamergeMode } from './modes.svelte'
+
+function activeMegamerge(parentCommitIds: string[] = ['kp1']) {
+  const m = createMegamergeMode()
+  m.enter('ctarget', 'ktarget', parentCommitIds)
+  return m
+}
 
 function activeRebase(sourceKey?: string, targetKey?: string) {
   const m = createRebaseMode()
@@ -33,6 +39,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     squashFileCount: null,
     split: createSplitMode(),
     splitFileCount: null,
+    megamerge: createMegamergeMode(),
     activeView: 'log' as const,
     ...overrides,
   }

@@ -2,9 +2,10 @@
 # Creates a small deterministic jj repo for Bombadil UI fuzzing.
 #
 # Shape:
-#   - ~12 commits, one branch point
+#   - ~15 commits, one branch point
 #   - 1 divergent change (DivergencePanel reachability)
 #   - 1 conflicted merge (ConflictQueue / MergePanel reachability)
+#   - 1 clean mutable 2-parent merge (megamerge edit-parents target)
 #   - README.md with a mermaid block (markdown preview toggle)
 #   - multi-file commits (file stepping [ / ])
 #   - 2 bookmarks (BookmarksPanel / BookmarkModal)
@@ -134,6 +135,21 @@ jj describe -m "diverge: version A (amended)"
 # command reconciles the two heads and surfaces the divergence. `-r @`
 # is valid inside --at-op because @ resolves against that op's view.
 jj --at-op "$OP_BEFORE" describe -r @ -m "diverge: version B"
+
+# --- clean 2-parent merge: a mutable megamerge target --------------------
+# Two independent commits off trunk touching DIFFERENT files (no overlap →
+# clean auto-merge, unlike the side+feature conflict above). The resulting
+# merge is mutable and sits near the top of the graph — an ideal target for
+# megamerge mode (M): its parent set can be meaningfully edited (add/remove a
+# parent) without first resolving a conflict. Bookmarks mm-a/mm-b give the
+# merge stable parents (and snapshot each working copy before we branch away).
+jj new trunk -m "mm-a: add one.txt"
+write one.txt 'one'
+jj bookmark create mm-a -r @
+jj new trunk -m "mm-b: add two.txt"
+write two.txt 'two'
+jj bookmark create mm-b -r @
+jj new mm-a mm-b -m "megamerge target: clean 2-parent merge"
 
 # --- park @ on an empty commit off trunk ---------------------------------
 # Leaves the merge + divergence intact while giving j/k somewhere harmless

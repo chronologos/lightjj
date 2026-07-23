@@ -15,12 +15,13 @@
     ondraftchange: (value: string) => void
     onbookmarkclick: (name: string) => void
     onresolveDivergence: () => void
+    oneditparents: () => void
   }
 
   let {
     revision, fullDescription, descriptionEditing, descriptionDraft,
     commitMode, prByBookmark, onstartdescribe, ondescribe, oncanceldescribe,
-    ondraftchange, onbookmarkclick, onresolveDivergence,
+    ondraftchange, onbookmarkclick, onresolveDivergence, oneditparents,
   }: Props = $props()
 
   // descExpanded resets on navigation via {#key} in App.svelte (component
@@ -49,6 +50,11 @@
       <button class="btn" onclick={onstartdescribe} title="Edit description (e)">
         Describe
       </button>
+      {#if !revision.commit.immutable}
+        <button class="btn edit-parents-btn" onclick={oneditparents} title="Edit parents — add/remove this commit's parents (M)">
+          Edit parents
+        </button>
+      {/if}
       {#if revision.commit.divergent}
         <button class="btn btn-danger" onclick={onresolveDivergence} title="Resolve divergent commit">
           Divergence

@@ -583,6 +583,45 @@ func TestIntegrationRebase(t *testing.T) {
 	assert.NotEmpty(t, a.Commit.ChangeId)
 }
 
+// Megamerge edit-parents: `destinations` rewrites a commit's parent set in
+// place. Build two siblings A and B off root (bookmarked for stable reference),
+// a leaf C on A, then rebase C onto {A, B} — C becomes a 2-parent merge.
+func TestIntegrationRebaseDestinations(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	// root → A (a.txt), bookmarked ba
+	writeFile(t, r.RepoDir, "a.txt", "a")
+	jjExec("describe", "-m", "commit A")
+	jjExec("bookmark", "create", "ba", "-r", "@")
+	// root → B (b.txt) — sibling of A, bookmarked bb
+	jjExec("new", "root()")
+	writeFile(t, r.RepoDir, "b.txt", "b")
+	jjExec("describe", "-m", "commit B")
+	jjExec("bookmark", "create", "bb", "-r", "@")
+	// A → C (c.txt), the commit whose parents we'll edit
+	jjExec("new", "ba")
+	writeFile(t, r.RepoDir, "c.txt", "c")
+	jjExec("describe", "-m", "commit C")
+
+	srv := NewServer(r, "")
+	rows := getLogRows(t, srv, "revset=all()")
+	commitA := findRow(t, rows, "commit A")
+	commitB := findRow(t, rows, "commit B")
+	commitC := findRow(t, rows, "commit C")
+
+	w := apiPost(t, srv, "/api/rebase", map[string]any{
+		"revisions":    []string{commitC.Commit.ChangeId},
+		"destinations": []string{commitA.Commit.ChangeId, commitB.Commit.ChangeId},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// C is now a merge of A and B — both parents present.
+	rows = getLogRows(t, srv, "revset=all()")
+	c := findRow(t, rows, "commit C")
+	assert.Len(t, c.Commit.ParentIds, 2, "C should have two parents after megamerge")
+}
+
 func TestIntegrationSquash(t *testing.T) {
 	r, jjExec := jjTestRepo(t)
 	t.Parallel()

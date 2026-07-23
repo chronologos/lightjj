@@ -11,10 +11,12 @@
 #   jq -r 'select(.violations != []) | .violations[]' out/trace.jsonl
 #
 # Prereqs:
-#   - bombadil binary >= 0.4.0 on PATH (https://github.com/antithesishq/bombadil/releases)
-#     v0.3.x cannot instrument <script type="module"> — blank page (fixed in #75).
-#   - lightjj built at repo root (go build ./cmd/lightjj)
-#   - pnpm install in this dir (for @antithesishq/bombadil types)
+#   - bombadil binary >= 0.6.0 on PATH (https://github.com/antithesishq/bombadil/releases)
+#     0.6.x moved the CLI to `bombadil browser test` and the spec modules under
+#     `@antithesishq/bombadil/browser` — this harness requires it. (0.5.0 also
+#     replaced fixed timeouts with quiescence timers and auto-accepts dialogs.)
+#   - lightjj built at repo root (go build -tags embed ./cmd/lightjj)
+#   - pnpm install in this dir (for @antithesishq/bombadil@0.6.x types)
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -22,7 +24,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 
 BV=$(bombadil --version 2>/dev/null | awk '{print $2}')
 case "$BV" in
-  0.[0-3].*|"") echo "bombadil >= 0.4.0 required (found '${BV:-none}'); see prereqs above" >&2; exit 1 ;;
+  0.[0-5].*|"") echo "bombadil >= 0.6.0 required (found '${BV:-none}'); the CLI/module layout changed in 0.6 — see prereqs above" >&2; exit 1 ;;
 esac
 
 FIXTURE="${FIXTURE:-/tmp/lightjj-bombadil-fixture}"
@@ -73,26 +75,27 @@ rm -rf "$OUT"
 HEADLESS_FLAG="--headless"
 [ -n "${HEADED:-}" ] && HEADLESS_FLAG=""
 
-# `chromiumoxide::handler WS Invalid message` warnings are benign — newer
-# CDP events the bundled chromiumoxide doesn't recognize; actions still fire.
-# Headless throughput is screenshot-capture-bound — observed ~3-5 actions in
-# 60s on a loaded machine (worse under contention), so the time-windowed
-# `eventually(...).within(N,"seconds")` properties effectively get 0-1
-# actions per window. `--device-scale-factor 1` halves screenshot pixel
-# area vs the default 2 (one fewer thing the capture has to chew on);
-# HEADED=1 is ~60× faster but produces blank screenshots in the bundled
-# Chromium (known — see e2e/bombadil notes). For real liveness coverage,
-# either crank DURATION way up or wait for `bombadil test` to grow a
-# step-count flag.
-timeout "${DURATION}s" bombadil test \
+# `chromiumoxide::handler WS Invalid message` warnings are benign — newer CDP
+# events the bundled chromiumoxide doesn't recognize; actions still fire.
+# 0.6.x drives itself off quiescence timers (not fixed per-action sleeps), so a
+# 120s run captures FAR more states than the 0.4.x screenshot-bound path did
+# (~13 actions/120s → ~100+). `--time-limit` is bombadil's own graceful stop
+# (replaces the old external `timeout`, which hard-killed before the trace
+# flushed). `--output-path-overwrite` lets a re-run reuse ./out (0.6 refuses to
+# clobber an existing trace.jsonl otherwise). `--device-scale-factor 1` keeps
+# screenshots small; HEADED=1 for a visible browser. `--no-sandbox` (CI, Linux)
+# is passed through BOMBADIL_FLAGS.
+bombadil browser test \
   "http://localhost:$PORT" \
   "$HERE/spec.ts" \
   --output-path "$OUT" \
+  --output-path-overwrite \
+  --time-limit "${DURATION}s" \
   --exit-on-violation \
   --device-scale-factor 1 \
   $HEADLESS_FLAG \
   ${BOMBADIL_FLAGS:-} \
-  || true  # timeout exits 124; violations exit nonzero — both expected
+  || true  # --exit-on-violation exits nonzero on a counterexample; the report below classifies
 
 # --- report --------------------------------------------------------------
 if [ -f "$OUT/trace.jsonl" ]; then

@@ -388,10 +388,17 @@ type RebaseOptions struct {
 	SimplifyParents bool
 }
 
-func Rebase(from SelectedRevisions, to, source, target string, opts RebaseOptions) CommandArgs {
+// Rebase emits `jj rebase <source> <from...> <target> <dest> [<target> <dest> …]`.
+// A single destination is the common case (rebase/squash/slide); multiple
+// destinations rewrite a commit's whole parent set in place — the megamerge
+// edit-parents operation. Repeating the target flag per destination mirrors
+// `jj new -r a -r b` (New + FromIDs) and is how jj models a merge's parents.
+func Rebase(from SelectedRevisions, destinations []string, source, target string, opts RebaseOptions) CommandArgs {
 	args := []string{"rebase"}
 	args = append(args, from.AsPrefixedArgs(source)...)
-	args = append(args, target, to)
+	for _, dest := range destinations {
+		args = append(args, target, dest)
+	}
 	if opts.IgnoreImmutable {
 		args = append(args, "--ignore-immutable")
 	}

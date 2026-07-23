@@ -87,7 +87,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     ReviewJumpList.svelte  — Annotation jump-list dropdown over navAnnotations (SearchResults sibling, parent-owned cursor)
     FileSelectionPanel.svelte — Squash/split/review file checkbox panel
     hunk-apply.ts          — PURE — hunk selection model + forward-apply accepted hunks (spec for apply_hunks.go)
-    RevisionHeader.svelte  — Header slot: change_id, description, badges, Describe/Divergence buttons
+    RevisionHeader.svelte  — Header slot: change_id, description, badges, Describe/Divergence/Edit-parents buttons
     DiffFileView.svelte    — Per-file diff: collapse, context expansion, conflict badges, Alt+click annotate
     SymbolHover.svelte     — Go-to-definition hover card (signature + doc context, click → open in $EDITOR)
     symbol-hover.svelte.ts — createSymbolHover() hover controller (span dedup, exit grace, gen-guarded fetch)
@@ -166,7 +166,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     revision-navigator.svelte.ts — createRevisionNavigator(): diff/files/description load orchestration
     diff-derivation.svelte.ts — createDiffDerivation() per-file progressive computation
     keyboard-gate.ts       — PURE — routeKeydown() gate-priority router
-    modes.svelte.ts        — Rebase/squash/split mode state factories (ModeBase: kind/sources/diffFollows/hasDestination)
+    modes.svelte.ts        — Rebase/squash/split/megamerge mode state factories (ModeBase: kind/sources/diffFollows/hasDestination/destinationIds)
     slide.ts               — computeSlide(): Shift+J/K single-step reorder along linear graph segments
     config.svelte.ts       — Reactive config singleton (server config + localStorage cache)
     recent-actions.svelte.ts — State-backed (state.json) last-used timestamps for bookmark recency sort

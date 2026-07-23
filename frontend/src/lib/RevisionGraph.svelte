@@ -2,7 +2,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { createWindower, type VirtualItem } from './virtual.svelte'
   import { effectiveId, type LogEntry, type PullRequest, type RemoteRef, type RemoteVisibility } from './api'
-  import { targetModeLabel, type ModeKind, type RebaseMode, type SquashMode, type SplitMode } from './modes.svelte'
+  import { targetModeLabel, type ModeKind, type RebaseMode, type SquashMode, type SplitMode, type MegamergeMode } from './modes.svelte'
   import { relativeTime } from './time-format'
   import GraphSvg from './GraphSvg.svelte'
 
@@ -35,6 +35,7 @@
     rebase: RebaseMode
     squash: SquashMode
     split: SplitMode
+    megamerge: MegamergeMode
     theme: string
     /** Bumps when ghostty themes lazy-load — see GraphSvg refreshPalette. */
     themeEpoch?: number
@@ -48,14 +49,14 @@
     onselect, ontogglecheck, onrangecheck, oncontextmenu, onresolvedivergence,
     onnewfromchecked, onabandonchecked, onclearchecks,
     onbookmarkclick, onworkspaceclick, onworkspacecontextmenu, currentWorkspace,
-    rebase, squash, split,
+    rebase, squash, split, megamerge,
     theme, themeEpoch = 0, prByBookmark, impliedCommitIds, remoteVisibility,
   }: Props = $props()
 
   // At most one mode is active (App's enter* helpers cancel the others first).
   // The generic ModeBase fields (sources/hasDestination) drive the badge and
   // preview rows below; only LABEL text dispatches on kind.
-  let activeMode = $derived(rebase.active ? rebase : squash.active ? squash : split.active ? split : null)
+  let activeMode = $derived(rebase.active ? rebase : squash.active ? squash : split.active ? split : megamerge.active ? megamerge : null)
   let anyModeActive = $derived(activeMode !== null)
 
   // Stale-while-revalidate: when we already have revisions, don't blank the
@@ -97,11 +98,13 @@
     rebase: () => sourceModeLabel[rebase.sourceMode],
     squash: () => 'from',
     split: () => split.review ? 'review' : 'split',
+    megamerge: () => 'edit parents',
   }
   const targetBadgeLabel: Record<ModeKind, () => string> = {
     rebase: () => targetModeLabel[rebase.targetMode],
     squash: () => 'into',
     split: () => '',  // unreachable — hasDestination=false means no target row
+    megamerge: () => 'parent',  // rendered on EACH row in the parent set
   }
   // jj command preview shown on the operative row's description line: the
   // destination row for rebase/squash, the source row itself for split
@@ -110,6 +113,9 @@
     rebase: (dest) => `rebase ${rebase.sourceMode} ${rebase.sources.map(s => s.slice(0, 8)).join(' ')} ${rebase.targetMode} ${dest.slice(0, 8)}`,
     squash: (dest) => `jj squash --from ${squash.sources.map(s => s.slice(0, 8)).join(' --from ')} --into ${dest.slice(0, 8)}${squash.keepEmptied ? ' --keep-emptied' : ''}`,
     split: (src) => `jj split -r ${src.slice(0, 8)}${split.parallel ? ' --parallel' : ''}`,
+    // Shown on the target (source) row — the parent set is picked across the
+    // graph, not on one destination row.
+    megamerge: () => `jj rebase -r ${megamerge.target.slice(0, 8)}${megamerge.parentIds.map(p => ` -d ${p.slice(0, 8)}`).join('')}`,
   }
 
   // Build a continuation gutter: replace node symbols with │, keep pipes and spaces
@@ -410,11 +416,13 @@
           {#if line.isNode}
             {@const entry = revisions[line.entryIndex]}
             {@const isSource = !!activeMode && activeMode.sources.includes(line.eid)}
-            {@const isTarget = !!activeMode && activeMode.hasDestination && selectedIndex === line.entryIndex && !isSource}
+            {@const multiDest = activeMode?.destinationIds}
+            {@const isTarget = !!activeMode && activeMode.hasDestination && !multiDest && selectedIndex === line.entryIndex && !isSource}
+            {@const isParent = !!multiDest && multiDest.includes(entry.commit.commit_id) && !isSource}
             {#if activeMode && isSource}
               <span class="role-marker badge-source">&lt;&lt; {sourceBadgeLabel[activeMode.kind]()} &gt;&gt;</span>
             {/if}
-            {#if activeMode && isTarget}
+            {#if activeMode && (isTarget || isParent)}
               <span class="role-marker badge-target">&lt;&lt; {targetBadgeLabel[activeMode.kind]()} &gt;&gt;</span>
             {/if}
             {#if entry.commit.divergent}
@@ -496,7 +504,9 @@
             <!-- Preview shows on the operative row: the destination cursor row
                  for modes with a destination (rebase/squash), the source row
                  itself for in-place modes (split). -->
-            {@const showPreview = !!activeMode && (activeMode.hasDestination
+            {@const showPreview = !!activeMode && (activeMode.destinationIds
+              ? activeMode.sources.includes(line.eid)
+              : activeMode.hasDestination
               ? selectedIndex === line.entryIndex && !activeMode.sources.includes(line.eid)
               : activeMode.sources.includes(line.eid))}
             <span class="desc-line-content">

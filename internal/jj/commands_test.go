@@ -192,13 +192,21 @@ func TestGitFetch(t *testing.T) {
 
 func TestRebase(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Rebase(from, "def", "-r", "-d", RebaseOptions{})
+	got := Rebase(from, []string{"def"}, "-r", "-d", RebaseOptions{})
 	assert.Equal(t, []string{"rebase", "-r", "abc", "-d", "def"}, got)
+}
+
+func TestRebase_MultipleDestinations(t *testing.T) {
+	// Megamerge: rewrite abc's parent set to {def, ghi, jkl} — one repeated
+	// target flag per destination.
+	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
+	got := Rebase(from, []string{"def", "ghi", "jkl"}, "-r", "-d", RebaseOptions{})
+	assert.Equal(t, []string{"rebase", "-r", "abc", "-d", "def", "-d", "ghi", "-d", "jkl"}, got)
 }
 
 func TestRebase_Flags(t *testing.T) {
 	from := NewSelectedRevisions(&Commit{ChangeId: "abc"})
-	got := Rebase(from, "def", "-r", "-d", RebaseOptions{SkipEmptied: true, IgnoreImmutable: true, SimplifyParents: true})
+	got := Rebase(from, []string{"def"}, "-r", "-d", RebaseOptions{SkipEmptied: true, IgnoreImmutable: true, SimplifyParents: true})
 	assert.Equal(t, []string{"rebase", "-r", "abc", "-d", "def", "--ignore-immutable", "--skip-emptied", "--simplify-parents"}, got)
 }
 

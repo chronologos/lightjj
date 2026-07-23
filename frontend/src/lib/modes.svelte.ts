@@ -12,7 +12,7 @@ export const targetModeLabel: Record<TargetMode, string> = {
 /** Discriminant for kind-keyed dispatch tables (execute lookups, badge/verb
  *  labels, StatusBar key tables). Prefer the shared ModeBase fields over
  *  branching on kind — branch only where behavior is genuinely per-mode. */
-export type ModeKind = 'rebase' | 'squash' | 'split'
+export type ModeKind = 'rebase' | 'squash' | 'split' | 'megamerge'
 
 export interface ModeBase {
   readonly kind: ModeKind
@@ -36,6 +36,13 @@ export interface ModeBase {
    *  input); split operates in place — no destination cursor, no target badge,
    *  no j/k. */
   readonly hasDestination: boolean
+  /** Multi-destination modes (megamerge) render a badge on EVERY row whose
+   *  commit_id is in this set — the chosen parent set — instead of a single
+   *  target badge on the cursor row. Keyed by commit_id because parents ARE
+   *  commit_ids (commit.parent_ids). `undefined` for single-destination modes,
+   *  which keep the cursor-row target model. RevisionGraph branches on its
+   *  presence; the j/k cursor still moves (see hasDestination) for picking. */
+  readonly destinationIds?: readonly string[]
   cancel(): void
   handleKey(key: string): boolean
 }
@@ -282,5 +289,72 @@ export function createSplitMode(): SplitMode {
       if (key === 'p') { parallel = !parallel; return true }
       return false
     },
+  }
+}
+
+/** Megamerge (jjui's `M`): edit an existing commit's parent set in place. The
+ *  target is the commit being rewritten; the j/k cursor picks rows whose
+ *  commit_ids Space-toggles in/out of the parent set. Enter runs ONE
+ *  `jj rebase -r <target> -d p1 -d p2 …`. Unlike rebase/squash there is no
+ *  single "destination" — `destinationIds` (commit_ids) drives multiple parent
+ *  badges. Space is handled in App (it needs the cursor row's commit_id, which
+ *  the factory can't see), so handleKey is a no-op. */
+export interface MegamergeMode extends ModeBase {
+  readonly kind: 'megamerge'
+  /** effectiveId of the target commit — the `-r` arg. */
+  readonly target: string
+  /** commit_id of the target — guards against toggling it into its own parents. */
+  readonly targetCommitId: string
+  /** Selected parent set, as commit_ids. */
+  readonly parentIds: readonly string[]
+  /** Parent set captured at enter() — for the no-op (unchanged) exit check. */
+  readonly initialParentIds: readonly string[]
+  enter(target: string, targetCommitId: string, parentCommitIds: string[]): void
+  toggle(commitId: string): void
+}
+
+export function createMegamergeMode(): MegamergeMode {
+  let active = $state(false)
+  let target = $state('')
+  let targetCommitId = $state('')
+  let initialParentIds: string[] = $state([])
+  const parents = new SvelteSet<string>()
+
+  return {
+    kind: 'megamerge' as const,
+    get active() { return active },
+    diffFollows: false,  // frozen on the target — you're editing ITS parents, not previewing
+    hasDestination: true,  // j/k moves the cursor to pick parent rows
+    get sources() { return target ? [target] : [] },
+    get destinationIds() { return [...parents] },
+    get target() { return target },
+    get targetCommitId() { return targetCommitId },
+    get parentIds() { return [...parents] },
+    get initialParentIds() { return initialParentIds },
+
+    enter(t, tCommitId, parentCommitIds) {
+      target = t
+      targetCommitId = tCommitId
+      initialParentIds = [...parentCommitIds]
+      parents.clear()
+      for (const p of parentCommitIds) parents.add(p)
+      active = true
+    },
+
+    toggle(commitId) {
+      // A commit can never be its own parent — silently ignore.
+      if (commitId === targetCommitId) return
+      parents.has(commitId) ? parents.delete(commitId) : parents.add(commitId)
+    },
+
+    cancel() {
+      active = false
+      target = ''
+      targetCommitId = ''
+      initialParentIds = []
+      parents.clear()
+    },
+
+    handleKey() { return false },
   }
 }

@@ -3,13 +3,19 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import RevisionGraph from './RevisionGraph.svelte'
 import type { LogEntry, LocalRef } from './api'
-import { createRebaseMode, createSquashMode, createSplitMode } from './modes.svelte'
+import { createRebaseMode, createSquashMode, createSplitMode, createMegamergeMode } from './modes.svelte'
 
 function activeRebase(sources: string[], sourceKey?: string, targetKey?: string) {
   const m = createRebaseMode()
   m.enter(sources)
   if (sourceKey) m.handleKey(sourceKey)
   if (targetKey) m.handleKey(targetKey)
+  return m
+}
+
+function activeMegamerge(target: string, targetCommitId: string, parentCommitIds: string[]) {
+  const m = createMegamergeMode()
+  m.enter(target, targetCommitId, parentCommitIds)
   return m
 }
 
@@ -86,6 +92,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     rebase: createRebaseMode(),
     squash: createSquashMode(),
     split: createSplitMode(),
+    megamerge: createMegamergeMode(),
     theme: 'dark',
     prByBookmark: new Map(),
     impliedCommitIds: new Set<string>(),
@@ -353,6 +360,37 @@ describe('RevisionGraph', () => {
         props: defaultProps({ revisions: [entry], split }),
       })
       expect(container.querySelector('.badge-source')?.textContent).toContain('review')
+    })
+  })
+
+  describe('megamerge mode', () => {
+    // Multi-destination: the target row shows the source badge ("edit parents"),
+    // and EVERY row whose commit_id is in the parent set shows a target badge —
+    // matched by commit_id (parents ARE commit_ids), not the cursor position.
+    it('marks the target as source and each selected parent as target (by commit_id)', () => {
+      const target = makeEntry({ change_id: 'ctarget', commit_id: 'ktarget' })
+      const p1 = makeEntry({ change_id: 'cp1', commit_id: 'kp1' })
+      const p2 = makeEntry({ change_id: 'cp2', commit_id: 'kp2' })
+      const other = makeEntry({ change_id: 'cother', commit_id: 'kother' })
+      const { container } = render(RevisionGraph, {
+        props: defaultProps({
+          revisions: [target, p1, p2, other],
+          // cursor sits on `other` — proves parent badges are NOT cursor-driven
+          selectedIndex: 3,
+          megamerge: activeMegamerge('ctarget', 'ktarget', ['kp1', 'kp2']),
+        }),
+      })
+      const source = container.querySelector('.badge-source')
+      expect(source?.textContent).toContain('edit parents')
+      const targets = container.querySelectorAll('.badge-target')
+      // Exactly the two selected parents — not the cursor row, not the target.
+      expect(targets).toHaveLength(2)
+      for (const t of targets) expect(t.textContent).toContain('parent')
+      // Command preview renders on the target (source) row.
+      const preview = container.querySelector('.rebase-preview')
+      expect(preview?.textContent).toContain('jj rebase -r ctarget')
+      expect(preview?.textContent).toContain('-d kp1')
+      expect(preview?.textContent).toContain('-d kp2')
     })
   })
 

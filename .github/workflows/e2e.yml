@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 10
     env:
       JJ_VERSION: v0.40.0
-      BOMBADIL_VERSION: v0.4.2
+      BOMBADIL_VERSION: v0.6.1
     steps:
       - uses: actions/checkout@v4
 

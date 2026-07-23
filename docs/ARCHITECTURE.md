@@ -93,7 +93,7 @@ flowchart TD
 | POST | `/api/describe` | Set description (stdin via `RunWithInput`) |
 | POST | `/api/restore` | Reset listed files to parent content |
 | POST | `/api/restore-from` | Restore content from one revision into another |
-| POST | `/api/rebase` | Rebase (`-r`/`-s`/`-b` × `-d`/`--insert-after`/`--insert-before`) |
+| POST | `/api/rebase` | Rebase (`-r`/`-s`/`-b` × `-d`/`--insert-after`/`--insert-before`); `destination` (single) or `destinations[]` (megamerge edit-parents — repeated `-d` per parent) |
 | POST | `/api/squash` | Squash selected files into a target revision; `description_mode` (destination/source/combine) picks which description survives |
 | POST | `/api/split` | Split revision by file selection |
 | POST | `/api/split-hunks` | Hunk-level split via `jj split --tool` re-entry (local-only) |

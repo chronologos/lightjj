@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ModeBase, RebaseMode, SquashMode, SplitMode } from './modes.svelte'
+  import type { ModeBase, RebaseMode, SquashMode, SplitMode, MegamergeMode } from './modes.svelte'
 
   interface Props {
     statusText: string
@@ -8,14 +8,15 @@
     squashFileCount: { selected: number, total: number } | null
     split: SplitMode
     splitFileCount: { selected: number, total: number } | null
+    megamerge: MegamergeMode
     activeView: 'log' | 'branches' | 'merge'
   }
 
-  let { statusText, rebase, squash, squashFileCount, split, splitFileCount, activeView }: Props = $props()
+  let { statusText, rebase, squash, squashFileCount, split, splitFileCount, megamerge, activeView }: Props = $props()
 
   // At most one mode is active (App's enter* helpers cancel the others first).
   let activeMode: ModeBase | null = $derived(
-    rebase.active ? rebase : squash.active ? squash : split.active ? split : null)
+    rebase.active ? rebase : squash.active ? squash : split.active ? split : megamerge.active ? megamerge : null)
 
   const sourceKeys: { key: string; flag: string; label: string }[] = [
     { key: 'r', flag: '-r', label: 'revision' },
@@ -59,6 +60,9 @@
           ? [{ keys: ['j', 'k'], label: 'hunk' }, { keys: ['Space'], label: 'toggle' }, { keys: ['a', 'n'], label: 'file' }]
           : [{ keys: ['p'], label: 'parallel', active: split.parallel }],
       ]
+      case 'megamerge': return [
+        [{ keys: ['j', 'k'], label: 'move' }, { keys: ['Space'], label: 'toggle parent' }],
+      ]
       default: return []
     }
   })
@@ -82,17 +86,24 @@
 <footer class="statusbar"
   class:rebase-active={activeMode?.kind === 'rebase'}
   class:squash-active={activeMode?.kind === 'squash'}
-  class:split-active={activeMode?.kind === 'split'}>
+  class:split-active={activeMode?.kind === 'split'}
+  class:megamerge-active={activeMode?.kind === 'megamerge'}>
   {#if activeMode}
     <div class="statusbar-left">
       <span class="mode-badge">{badgeLabel}</span>
       <span class="key-group">
         <kbd class="key action-key">Enter</kbd><span class="key-label">apply</span>
         <kbd class="key action-key">Esc</kbd><span class="key-label">cancel</span>
-        {#if activeMode.hasDestination}
+        {#if activeMode.hasDestination && activeMode.kind !== 'megamerge'}
           <kbd class="key action-key">/</kbd><span class="key-label">type dest</span>
         {/if}
       </span>
+      {#if activeMode.kind === 'megamerge'}
+        <span class="key-divider"></span>
+        <span class="key-group">
+          <span class="mm-parent-count" class:file-count-empty={megamerge.parentIds.length === 0}>{megamerge.parentIds.length} parent{megamerge.parentIds.length === 1 ? '' : 's'}</span>
+        </span>
+      {/if}
       {#each keyGroups as group}
         <span class="key-divider"></span>
         <span class="key-group">
@@ -175,6 +186,10 @@
     border-top-color: var(--amber);
   }
 
+  .statusbar.megamerge-active {
+    border-top-color: var(--blue);
+  }
+
   .statusbar-left {
     display: flex;
     align-items: center;
@@ -242,7 +257,8 @@
   }
 
 
-  .file-count {
+  .file-count,
+  .mm-parent-count {
     color: var(--subtext0);
     font-size: var(--fs-xs);
   }
