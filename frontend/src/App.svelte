@@ -25,22 +25,43 @@
   import { untrack, onDestroy, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 
-  let { tabBar, onOpenTab, initialState, initialWsName }: {
+  let {
+    tabBar, onOpenTab, initialState, initialWsName,
+    tabs = [], onSwitchTab, onOpenWorkspaceMenu, onSshMode,
+  }: {
     tabBar?: Snippet
     onOpenTab?: (path: string) => void
     initialState?: TabState
-    /** The active tab's wsName from GET /tabs — seeds currentWorkspace so the
-     *  ◇ toolbar button doesn't flicker away during the {#key} remount while
-     *  api.workspaces() is in flight. */
+    /** The active tab's wsName from GET /tabs — seeds currentWorkspace so it's
+     *  known immediately during the {#key} remount while api.workspaces() is in
+     *  flight (used by the RevisionGraph badge menu's current-workspace check). */
     initialWsName?: string
+    /** The open tab list (AppShell state) — powers the Cmd+K "Switch to repo"
+     *  palette entries (one per distinct open repo group). */
+    tabs?: TabInfo[]
+    /** Switch to a tab by id (Cmd+K "Switch to repo"). */
+    onSwitchTab?: (id: string) => void
+    /** `w` key → open the active tab's workspace menu (hosted by AppShell). */
+    onOpenWorkspaceMenu?: () => void
+    /** Report session SSH mode up to AppShell (gates its Add-workspace item). */
+    onSshMode?: (ssh: boolean) => void
   } = $props()
+
+  /** Whether an inline mode (rebase/squash/split/megamerge) is active. Read by
+   *  AppShell when building the tab/workspace menu — opening or switching a tab
+   *  remounts App and silently drops a half-configured mode, so those items are
+   *  disabled while one is in progress. */
+  export function inInlineMode(): boolean {
+    return inlineMode
+  }
 
   // initialState is passed inside {#key activeTabId} — it never changes
   // mid-lifetime (key change = remount). untrack() silences Svelte's
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload } from './lib/api'
+  import { api, effectiveId, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload, type TabInfo } from './lib/api'
+  import { groupTabs } from './lib/tab-groups'
   import { setDetectedJJVersion, missingJJFeatures } from './lib/jj-features.svelte'
   import { canCreatePR, bookmarkCreatePREligibility, prCompareUrl } from './lib/bookmark-sync'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
@@ -638,8 +659,6 @@
   let diffPanelRef: ReturnType<typeof DiffPanel> | undefined = $state(undefined)
   let bookmarksPanelRef: ReturnType<typeof BookmarksPanel> | undefined = $state(undefined)
   let revsetInputEl: HTMLInputElement | undefined = $state(undefined)
-  let wsDropdownOpen: boolean = $state(false)
-  let wsSelectorEl: HTMLElement | undefined = $state(undefined)
 
   // --- Derived ---
   // Scoped so it only re-scans when revisions changes, not on every loading/mutating flip.
@@ -905,6 +924,20 @@
     { label: `View: Open PRs (${pullRequests.length})`, hint: prsRevset, category: 'Navigation', action: () => applyRevsetExample(prsRevset), when: () => pullRequests.length > 0 },
   ])
 
+  // "Switch to repo: <name>" — one per distinct open repo group (issue #30
+  // follow-up). Fuzzy repo switching without inverting the tab hierarchy into a
+  // dropdown; switches to the group's first (primary) tab. !inlineMode: a switch
+  // remounts App and would drop a half-configured mode.
+  let repoSwitchCommands = $derived<PaletteCommand[]>(
+    groupTabs(tabs).map(g => ({
+      label: `Switch to repo: ${g.label}`,
+      hint: g.tabs.length > 1 ? `${g.tabs.length} tabs` : undefined,
+      category: 'Navigation',
+      action: () => onSwitchTab?.(g.tabs[0].id),
+      when: () => !inlineMode,
+    })),
+  )
+
   let aliasCommands = $derived<PaletteCommand[]>(
     aliases
       .filter(a => !isBuiltinAlias(a))
@@ -956,7 +989,7 @@
   // Category grouping in the palette's cheatsheet view is handled by Map.groupBy
   // (CommandPalette.svelte), so spread order here doesn't affect visual grouping.
   let commands = $derived<PaletteCommand[]>(
-    [...staticCommands, ...dynamicCommands, ...aliasCommands, ...createPRCommands].map(c =>
+    [...staticCommands, ...dynamicCommands, ...repoSwitchCommands, ...aliasCommands, ...createPRCommands].map(c =>
       INLINE_GATED_CATEGORIES.has(c.category ?? '')
         ? { ...c, when: () => !inlineMode && (c.when?.() ?? true) }
         : c,
@@ -969,6 +1002,7 @@
       const { hostname, repo_path, ssh_mode, default_remote, log_revset, jj_version, watchman_snapshot_trigger } = await api.info()
       pageTitle = formatTitle(hostname, repo_path)
       sshMode = ssh_mode
+      onSshMode?.(ssh_mode) // session-wide; AppShell gates its Add-workspace item
       defaultRemote = default_remote
       repoPath = repo_path
       configuredLogRevset = log_revset
@@ -2792,8 +2826,10 @@
       case 'p': e.preventDefault(); handleGitOp('push', []); return true
       case 'g': e.preventDefault(); openModal('git'); return true
       case 'w':
+        // Open the active tab's workspace menu (hosted by AppShell, anchored at
+        // the tab's ◇N icon). No-op when the repo is single-workspace.
         e.preventDefault()
-        if (workspaceList.length > 1) wsDropdownOpen = !wsDropdownOpen
+        onOpenWorkspaceMenu?.()
         return true
       case '1': e.preventDefault(); switchToLogView(); return true
       case '2': e.preventDefault(); switchToBranchesView(); return true
@@ -3091,9 +3127,7 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} onclick={(e: MouseEvent) => {
-  if (wsDropdownOpen && wsSelectorEl && !wsSelectorEl.contains(e.target as Node)) wsDropdownOpen = false
-}} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="app">
   <div class="main-content">
@@ -3114,67 +3148,7 @@
             </span>
           </span>
         {/if}
-        {#if currentWorkspace}
-          <span class="toolbar-divider"></span>
-          <div class="toolbar-workspace" bind:this={wsSelectorEl}>
-            <button
-              class="toolbar-ws-btn"
-              onclick={() => { if (workspaceList.length > 1) wsDropdownOpen = !wsDropdownOpen }}
-              title={workspaceList.length > 1 ? `Workspace: ${currentWorkspace} — switch (w)` : `Workspace: ${currentWorkspace}`}
-            >
-              <span class="toolbar-ws-glyph">◇</span>
-              <span class="toolbar-ws-name">{currentWorkspace}</span>
-              {#if workspaceList.length > 1}
-                <span class="toolbar-ws-chevron">{wsDropdownOpen ? '▴' : '▾'}</span>
-              {/if}
-            </button>
-            {#if wsDropdownOpen && workspaceList.length > 1}
-              <div class="toolbar-ws-dropdown">
-                <!-- Recover every workspace at once (issue #21) — the bulk
-                     answer to "after a rebase, update my stale workspaces". -->
-                <button
-                  class="toolbar-ws-option toolbar-ws-action"
-                  disabled={inlineMode}
-                  title="Run update-stale across all workspaces"
-                  onclick={() => { wsDropdownOpen = false; updateAllStaleWorkspaces() }}
-                >
-                  <span class="toolbar-ws-glyph">⟳</span>
-                  <span>Update all workspaces (recover stale)</span>
-                </button>
-                <div class="toolbar-ws-sep"></div>
-                {#each workspaceList as ws (ws.name)}
-                  {#if ws.name === currentWorkspace}
-                    <!-- svelte-ignore a11y_no_static_element_interactions -->
-                    <div
-                      class="toolbar-ws-option toolbar-ws-active"
-                      title="Current workspace — right-click to rename or recover"
-                      oncontextmenu={(e: MouseEvent) => { e.preventDefault(); wsDropdownOpen = false; openWorkspaceContextMenu(ws.name, e.clientX, e.clientY) }}
-                    >
-                      <span class="toolbar-ws-glyph">◇</span>
-                      <span>{ws.name}</span>
-                    </div>
-                  {:else}
-                    <!-- Workspaces are just repo paths — open as a tab. Path absent
-                         when the workspace predates jj's workspace_store index
-                         (additive-only; no backfill). Click-to-warn instead of
-                         disabled+title — title is keyboard-inaccessible.
-                         Right-click → forget. -->
-                    <button
-                      class="toolbar-ws-option"
-                      class:toolbar-ws-unavailable={!ws.path}
-                      onclick={() => { wsDropdownOpen = false; openWorkspaceTab(ws.name) }}
-                      oncontextmenu={(e: MouseEvent) => { e.preventDefault(); wsDropdownOpen = false; openWorkspaceContextMenu(ws.name, e.clientX, e.clientY) }}
-                    >
-                      <span class="toolbar-ws-glyph">◇</span>
-                      <span>{ws.name}</span>
-                      {#if ws.path}<span class="toolbar-ws-open">↗</span>{/if}
-                    </button>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <span class="toolbar-divider"></span>
         <nav class="seg">
           <button
             class="seg-btn"
@@ -4009,116 +3983,6 @@
   .toolbar-divider {
     width: 1px;
     height: 14px;
-    background: var(--surface1);
-  }
-
-  .toolbar-workspace {
-    position: relative;
-  }
-
-  .toolbar-ws-btn {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 8px;
-    background: transparent;
-    border: 1px solid var(--surface1);
-    border-radius: 4px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    color: var(--subtext0);
-    cursor: pointer;
-  }
-
-  .toolbar-ws-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--surface2);
-  }
-
-  .toolbar-ws-glyph {
-    color: var(--subtext0);
-    font-size: var(--fs-xs);
-  }
-
-  .toolbar-ws-name {
-    color: var(--text);
-  }
-
-  .toolbar-ws-chevron {
-    font-size: var(--fs-2xs);
-    color: var(--text-faint);
-  }
-
-  .toolbar-ws-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 160px;
-    background: var(--mantle);
-    border: 1px solid var(--surface1);
-    border-radius: 5px;
-    padding: 3px;
-    z-index: 100;
-    box-shadow: var(--shadow-heavy);
-  }
-
-  .toolbar-ws-option {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    padding: 5px 8px;
-    background: transparent;
-    border: none;
-    border-radius: 4px;
-    color: var(--subtext0);
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .toolbar-ws-option:not(.toolbar-ws-active):hover {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-
-  .toolbar-ws-active {
-    color: var(--amber);
-    cursor: default;
-  }
-
-  .toolbar-ws-active .toolbar-ws-glyph {
-    color: var(--amber);
-  }
-
-  .toolbar-ws-open {
-    font-size: var(--fs-xs);
-    color: var(--text-faint);
-    margin-left: auto;
-    opacity: 0;
-  }
-
-  .toolbar-ws-option:hover .toolbar-ws-open {
-    opacity: 1;
-  }
-
-  .toolbar-ws-unavailable {
-    opacity: 0.5;
-  }
-
-  /* "Update all" header action — same row chrome as an option, dimmed glyph,
-     disabled while an inline mode is active. */
-  .toolbar-ws-action {
-    color: var(--text-faint);
-  }
-  .toolbar-ws-action:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-  .toolbar-ws-sep {
-    height: 1px;
-    margin: 3px 4px;
     background: var(--surface1);
   }
 

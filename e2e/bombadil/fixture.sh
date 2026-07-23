@@ -9,6 +9,9 @@
 #   - README.md with a mermaid block (markdown preview toggle)
 #   - multi-file commits (file stepping [ / ])
 #   - 2 bookmarks (BookmarksPanel / BookmarkModal)
+#   - a SECOND workspace (so the tab `◇N` workspace icon renders — the icon
+#     only appears when a repo has ≥2 workspaces; see spec.ts / the
+#     tab-workspace-menu design note)
 #
 # Usage:  ./fixture.sh /tmp/lightjj-fixture
 # Re-runnable — nukes the target dir first. The fixture is cheap to recreate
@@ -17,7 +20,7 @@
 set -euo pipefail
 
 REPO="${1:?usage: fixture.sh <target-dir>}"
-rm -rf "$REPO"
+rm -rf "$REPO" "$REPO-ws2"
 mkdir -p "$REPO"
 cd "$REPO"
 
@@ -150,6 +153,14 @@ jj new trunk -m "mm-b: add two.txt"
 write two.txt 'two'
 jj bookmark create mm-b -r @
 jj new mm-a mm-b -m "megamerge target: clean 2-parent merge"
+
+# --- second workspace ----------------------------------------------------
+# The tab `◇N` workspace icon renders only when a repo has ≥2 workspaces, so
+# the fixture (served as the `default` workspace via -R) needs a sibling. Rooted
+# at trunk with an explicit --name for determinism; the server never opens it as
+# a tab (run.sh mounts only the default workspace), it just needs to exist in the
+# workspace_store index so /tab/0/api/workspaces reports a count of 2.
+jj workspace add --name ws2 -r trunk "$REPO-ws2"
 
 # --- park @ on an empty commit off trunk ---------------------------------
 # Leaves the merge + divergence intact while giving j/k somewhere harmless

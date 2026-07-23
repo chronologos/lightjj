@@ -380,6 +380,24 @@ export const openTab = (path: string) =>
 export const closeTab = (id: string) =>
   request<void>('/tabs/' + id, { method: 'DELETE' })
 
+// Tab-TARGETED workspace calls — address a SPECIFIC tab's Server, not the active
+// one. AppShell needs per-repo workspace info for background tabs (the `◇N` tab
+// icon) and must run add/recover against the repo the menu was opened on, not
+// wherever basePath currently points. The `/tab/{id}/api/…` URL doesn't start
+// with `/api/`, so tabScoped() leaves it as-is instead of prepending the active
+// tab's basePath. (These still go through request() → trackOpId; a background
+// mutation's op-id can fire one redundant onStale on the active tab — bounded,
+// guarded by App's !loading check, same as the setActiveTab race note above.)
+const tabURL = (id: string, apiPath: string) => '/tab/' + id + apiPath
+export const workspacesForTab = (id: string) =>
+  request<WorkspacesResponse>(tabURL(id, '/api/workspaces'))
+export const workspaceAddForTab = (id: string, name: string, revision?: string) =>
+  post<MutationResult>(tabURL(id, '/api/workspace/add'), revision ? { name, revision } : { name })
+export const workspaceUpdateStaleForTab = (id: string) =>
+  post<MutationResult>(tabURL(id, '/api/workspace/update-stale'), {})
+export const updateStaleWorkspaceForTab = (id: string, name: string) =>
+  post<MutationResult>(tabURL(id, '/api/workspace/update-stale-other'), { name })
+
 // notifyOpId is the single op-id ingestion point. Called by both the HTTP
 // header path (trackOpId) and the SSE push path (wireAutoRefresh). The lastOpId
 // comparison deduplicates across sources: a UI-initiated mutation fires the

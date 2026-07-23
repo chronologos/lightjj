@@ -156,3 +156,61 @@ describe('TabBar grouping', () => {
     expect(colorA).toMatch(/^var\(--graph-[0-7]\)$/)
   })
 })
+
+describe('TabBar ◇N workspace icon', () => {
+  const props = { activeId: '0', onswitch: noop, onopen: noop, onclose: noop }
+  const solo: TabInfo[] = [
+    { id: '0', kind: 'repo', name: 'proj', path: '/x/proj', repoRoot: '/x/proj', wsName: 'default' },
+  ]
+
+  it('shows ◇N on a solo tab when its repo has ≥2 workspaces', () => {
+    const { container } = render(TabBar, { ...props, tabs: solo, wsCounts: new Map([['/x/proj', 2]]) })
+    const icon = container.querySelector('.ws-tab-icon')
+    expect(icon).not.toBeNull()
+    expect(icon).toHaveTextContent('◇2')
+  })
+
+  it('hides ◇N when the repo has a single workspace', () => {
+    const { container } = render(TabBar, { ...props, tabs: solo, wsCounts: new Map([['/x/proj', 1]]) })
+    expect(container.querySelector('.ws-tab-icon')).toBeNull()
+  })
+
+  it('hides ◇N when no workspace info is present at all', () => {
+    const { container } = render(TabBar, { ...props, tabs: solo })
+    expect(container.querySelector('.ws-tab-icon')).toBeNull()
+  })
+
+  it('renders ◇N on the repo chip for grouped tabs', () => {
+    const grouped: TabInfo[] = [
+      { id: '0', kind: 'repo', name: 'proj', path: '/x/proj', repoRoot: '/x/proj', wsName: 'default' },
+      { id: '1', kind: 'repo', name: 'ws', path: '/x/ws', repoRoot: '/x/proj', wsName: 'feature' },
+    ]
+    const { container } = render(TabBar, { ...props, tabs: grouped, wsCounts: new Map([['/x/proj', 3]]) })
+    expect(container.querySelector('.repo-chip .ws-tab-icon')).toHaveTextContent('◇3')
+  })
+
+  it('left-clicking the icon emits onWorkspaceIcon(key) and does NOT switch/close', async () => {
+    const onWorkspaceIcon = vi.fn()
+    const onswitch = vi.fn()
+    const other: TabInfo = { id: '1', kind: 'repo', name: 'proj', path: '/x/proj', repoRoot: '/x/proj', wsName: 'default' }
+    const { container } = render(TabBar, {
+      ...props, activeId: '0', tabs: [{ ...solo[0], id: '0' }, other],
+      wsCounts: new Map([['/x/proj', 2], ['/p1', 0]]),
+      onWorkspaceIcon, onswitch,
+    })
+    const icon = container.querySelector('.ws-tab-icon')!
+    await fireEvent.click(icon)
+    expect(onWorkspaceIcon).toHaveBeenCalledWith('/x/proj', expect.any(Number), expect.any(Number))
+    expect(onswitch).not.toHaveBeenCalled()
+  })
+
+  it('right-clicking a tab emits onTabMenu(tab) and suppresses the native menu', async () => {
+    const onTabMenu = vi.fn()
+    const { container } = render(TabBar, { ...props, tabs: solo, wsCounts: new Map(), onTabMenu })
+    const evt = await fireEvent.contextMenu(container.querySelector('.tab')!)
+    expect(evt).toBe(false) // preventDefault called
+    expect(onTabMenu).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '0' }), expect.any(Number), expect.any(Number),
+    )
+  })
+})

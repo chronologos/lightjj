@@ -361,3 +361,51 @@ describe('staleness + identity cursor', () => {
     await waitFor(() => selectedEntry() === '1')
   })
 })
+
+// Tab/workspace surface: the `w`-key retarget + Cmd+K "Switch to repo" entries.
+// The menu itself is hosted by AppShell (not App), so App's job is to (a) route
+// `w` to the onOpenWorkspaceMenu callback and (b) surface one palette entry per
+// distinct open repo group from the `tabs` prop.
+describe('App tab/workspace integration', () => {
+  const mkTab = (id: string, name: string) => ({
+    id, kind: 'repo', name, path: '/x/' + name, repoRoot: '/x/' + name, wsName: 'default',
+  })
+
+  async function mountWith(props: Record<string, unknown>) {
+    const r = render(App, { props })
+    await waitFor(() => document.querySelectorAll('.graph-row.node-row').length === 3)
+    return r
+  }
+
+  it("'w' calls onOpenWorkspaceMenu and the old toolbar dropdown is gone", async () => {
+    const onOpenWorkspaceMenu = vi.fn()
+    await mountWith({ onOpenWorkspaceMenu })
+    // The toolbar workspace dropdown was removed entirely.
+    expect(qs('.toolbar-ws-dropdown')).toBeNull()
+    expect(qs('.toolbar-workspace')).toBeNull()
+    await press('w')
+    expect(onOpenWorkspaceMenu).toHaveBeenCalledTimes(1)
+  })
+
+  it('Cmd+K surfaces "Switch to repo: <name>" per group; clicking fires onSwitchTab', async () => {
+    const onSwitchTab = vi.fn()
+    await mountWith({
+      tabs: [mkTab('0', 'alpha'), mkTab('1', 'beta')],
+      onSwitchTab,
+    })
+    // Open the command palette (Cmd+K).
+    await fireEvent.keyDown(document.body, { key: 'k', metaKey: true })
+    await waitFor(() => qs('.palette') !== null)
+
+    const input = qs('.palette-input') as HTMLInputElement
+    input.value = 'Switch to repo: beta'
+    await fireEvent.input(input)
+
+    await waitFor(() => Array.from(document.querySelectorAll('.palette-label'))
+      .some(el => el.textContent?.includes('Switch to repo: beta')))
+    const item = Array.from(document.querySelectorAll('.palette-item'))
+      .find(el => el.querySelector('.palette-label')?.textContent?.includes('Switch to repo: beta'))!
+    await fireEvent.click(item)
+    expect(onSwitchTab).toHaveBeenCalledWith('1')
+  })
+})

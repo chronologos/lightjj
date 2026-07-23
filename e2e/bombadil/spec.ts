@@ -126,6 +126,25 @@ const selectedChangeId = extract((s) =>
     ?.textContent?.slice(0, 8) ?? null
 );
 
+// Number of open tabs. The tab strip (`.tab`) lives OUTSIDE the {#key} remount,
+// so this is stable across tab switches. Used by tabCountMonotonic below.
+const tabCount = extract((s) => s.document.querySelectorAll(".tab").length);
+
+// The tab WORKSPACE menu is open — a `.ctx-menu` whose items include the `◇`
+// per-workspace rows / "Add workspace" / "Update all". This is the ONLY context
+// menu Bombadil can reach: every other ctx-menu surface (revision rows, bookmark
+// badges, diff lines) is right-click-only, and Bombadil cannot right-click
+// (antithesishq/bombadil#251). So a rendered `.ctx-menu` here is proof the
+// LEFT-click `◇N` icon opened the workspace menu — the trace evidence the run
+// asserts. (It's also an arm of modalOpen → noModalTraps guarantees it closes.)
+const wsMenuOpen = extract((s) => {
+  const menu = s.document.querySelector(".ctx-menu");
+  if (!menu) return false;
+  return Array.from(menu.querySelectorAll(".ctx-label"))
+    .some((el) => (el.textContent ?? "").includes("◇") ||
+                  (el.textContent ?? "").includes("workspace"));
+});
+
 // document.activeElement is a text input. The v1.12.1 bug class: focus
 // stuck in the revset filter / search input → j/k route to the input via
 // keyboard-gate's inInput slot, graph nav dead. The gate is correct; the
@@ -279,6 +298,22 @@ export const focusEscapable = always(
     eventually(() => !focusInInput.current).within(10, "seconds")
   )
 );
+
+// Tab count is monotonic non-decreasing across the fuzzable action set. The only
+// tab-CLOSING paths are the ✕ button (no generator targets it) and the RIGHT-
+// click tab menu's "Close tab" / "Close group" (unreachable — #251). So the one
+// tab surface Bombadil CAN drive is the LEFT-click `◇N` workspace menu, whose
+// items only switch to / open / add workspaces — never close one. A decrease
+// therefore means a workspace-menu action wrongly tore a tab down. `>=` (not
+// `===`): "open in new tab" / "add workspace" legitimately grow the count, and
+// the initial mount grows it 0→1. wsMenuOpen anchors this to the menu surface in
+// the trace (referenced so it is snapshotted every state).
+const tabCountKept = now(() => {
+  const c = tabCount.current;
+  void wsMenuOpen.current; // keep the menu-open snapshot in the trace
+  return next(() => tabCount.current >= c);
+});
+export const tabCountMonotonic = always(tabCountKept);
 
 // -------------------------------------------------------------------------
 // Action generators
@@ -443,6 +478,21 @@ export const clickEditParents = clicks("editparents", editParentsCenters);
 const inputCenters = centers('.revset-input, .modal-input, input[type="text"]');
 export const clickInputs = clicks("input", inputCenters);
 
+// `◇N` workspace icon (left-click) → opens the tab workspace menu. This is the
+// reachability layer for the tab-workspace surface: the fixture's second
+// workspace makes the icon render on tab 0, and a left-Click is in Bombadil's
+// vocabulary (unlike the right-click tab menu — #251). Opening it exercises
+// noModalTraps's `.ctx-menu` arm and tabCountMonotonic non-vacuously.
+const wsIconCenters = centers(".ws-tab-icon");
+export const clickWsIcon = clicks("wsicon", wsIconCenters);
+
+// Workspace-menu items. `.ctx-item` is ONLY ever the workspace menu here (all
+// other ctx-menus are right-click-only → unreachable), so this drives the menu's
+// actions: switch to / open a workspace (tab churn), Add (prompt — auto-accepted
+// empty → no-op), Update all (idempotent update-stale). Disabled items excluded.
+const wsMenuItemCenters = centers(".ctx-item:not(.ctx-item-disabled)");
+export const clickWsMenuItem = clicks("wsmenu", wsMenuItemCenters);
+
 // Weighted composition. Escape is weighted highest — it's the universal
 // "get me out" key, and the trap properties depend on it being tried
 // frequently. Nav second (primary exploration). Mode entry lowest
@@ -453,7 +503,9 @@ export const lightjjActions = weighted([
   [15, clickRows],
   [12, clickEditParents], // reach megamerge via the RevisionHeader button (Click)
   [10, clickTriggers],
+  [9,  clickWsIcon],    // open the tab workspace menu (◇N icon — left-click)
   [8,  clickDismiss],
+  [7,  clickWsMenuItem],// drive the workspace menu's actions (switch/open/add)
   [6,  megamergeKeys],  // reach megamerge (TypeText 'M') — see generator note; undriveable on 0.6.1
   [5,  modeKeys],
   [4,  clickInputs],

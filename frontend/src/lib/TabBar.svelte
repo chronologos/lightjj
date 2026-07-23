@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TabInfo } from './api'
-  import { basename } from './paths'
+  import { groupTabs, type TabGroup } from './tab-groups'
 
   let {
     tabs,
@@ -8,12 +8,24 @@
     onswitch,
     onopen,
     onclose,
+    wsCounts,
+    onWorkspaceIcon,
+    onTabMenu,
   }: {
     tabs: TabInfo[]
     activeId: string
     onswitch: (id: string) => void
     onopen: (path: string) => void
     onclose: (id: string) => void
+    /** groupKey → number of workspaces in that repo. The `◇N` icon renders when
+     *  the count is ≥ 2. Owned + fetched by AppShell (per-repo, background tabs
+     *  included). Optional so plain renders (tests) don't need it. */
+    wsCounts?: Map<string, number>
+    /** Left-click the `◇N` icon → open that repo's workspace menu (AppShell
+     *  builds the items — this only reports the domain object + anchor). */
+    onWorkspaceIcon?: (groupKey: string, x: number, y: number) => void
+    /** Right-click any tab → open its tab menu (workspace section + tab ops). */
+    onTabMenu?: (tab: TabInfo, x: number, y: number) => void
   } = $props()
 
   let opening = $state(false)
@@ -21,44 +33,14 @@
   let inputEl: HTMLInputElement | undefined = $state()
   let scrollEl: HTMLElement | undefined = $state()
 
-  interface TabGroup {
-    key: string
-    label: string
-    colorIdx: number
-    stale: boolean
-    tabs: TabInfo[]
-  }
+  // Grouping is shared with AppShell (workspace menu) + App (Cmd+K switch-repo)
+  // via tab-groups.ts — single source of truth so the icon's repo maps to the
+  // same key AppShell fetched workspace info under.
+  let groups = $derived(groupTabs(tabs))
 
-  // Stable non-negative hash → --graph-{0..7}. Collision-tolerant: color is a
-  // hint, chip text is the identity. >>> 0 keeps it unsigned so % is positive.
-  function colorFor(s: string): number {
-    let h = 0
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
-    return h % 8
-  }
-
-  // Group tabs by repoRoot. Ungroupable (repoRoot="") key on their own path so
-  // they render solo. Group order = first-seen in the tabs array (which is
-  // backend-sorted by open order).
-  let groups = $derived.by((): TabGroup[] => {
-    const byKey = new Map<string, TabInfo[]>()
-    const order: string[] = []
-    for (const t of tabs) {
-      const key = t.repoRoot || t.path
-      if (!byKey.has(key)) { byKey.set(key, []); order.push(key) }
-      byKey.get(key)!.push(t)
-    }
-    return order.map(key => {
-      const ts = byKey.get(key)!
-      return {
-        key,
-        label: basename(key),
-        colorIdx: colorFor(key),
-        stale: ts.some(t => t.stale),
-        tabs: ts,
-      }
-    })
-  })
+  // Workspaces per group; the `◇N` icon shows only at ≥ 2 (a repo with one
+  // workspace has nothing to switch between).
+  const wsCountFor = (key: string): number => wsCounts?.get(key) ?? 0
 
   // Per-tab display label. See spec §Rendering: don't degrade the primary
   // workspace to "◇ default" — nobody names their primary, so 3 multi-ws repos
@@ -108,15 +90,33 @@
   }
 </script>
 
+{#snippet wsIcon(key: string)}
+  <!-- `◇N` workspace icon (N = workspace count). Left-click → AppShell opens the
+       repo's workspace menu. stopPropagation so it never switches/closes the tab.
+       data-ws-key lets AppShell anchor the `w`-key menu at the active tab's icon. -->
+  <span
+    class="ws-tab-icon"
+    role="button"
+    tabindex="-1"
+    data-ws-key={key}
+    title="Workspaces ({wsCountFor(key)}) — switch or add"
+    onclick={(e) => { e.stopPropagation(); onWorkspaceIcon?.(key, e.clientX, e.clientY) }}
+    onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onWorkspaceIcon?.(key, 0, 0) } }}
+  >◇{wsCountFor(key)}</span>
+{/snippet}
+
 {#snippet tabButton(g: TabGroup, t: TabInfo, glyph: string)}
   <button
     class="tab"
     class:active={t.id === activeId}
     onclick={() => { if (t.id !== activeId) onswitch(t.id) }}
+    oncontextmenu={(e) => { e.preventDefault(); onTabMenu?.(t, e.clientX, e.clientY) }}
     title={t.path}
   >
     <span class="tab-glyph">{glyph}</span>
     <span class="tab-name">{tabLabel(g, t)}</span>
+    <!-- Solo tabs carry the icon inline; grouped tabs carry it on the chip. -->
+    {#if g.tabs.length === 1 && wsCountFor(g.key) >= 2}{@render wsIcon(g.key)}{/if}
     {#if t.stale}<span class="stale-dot" title="stale working copy"></span>{/if}
     {#if tabs.length > 1}
       <span
@@ -140,6 +140,7 @@
           <span class="repo-chip">
             {g.label}
             {#if g.stale}<span class="stale-dot"></span>{/if}
+            {#if wsCountFor(g.key) >= 2}{@render wsIcon(g.key)}{/if}
           </span>
           {#each g.tabs as t (t.id)}
             {@render tabButton(g, t, '◇')}
@@ -264,6 +265,27 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  /* `◇N` workspace icon — a compact inline pill. Sits within the 26px bar like
+     the other inline glyphs; hover brightens to signal it's clickable. */
+  .ws-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 0 3px;
+    height: 15px;
+    border-radius: 3px;
+    font-size: var(--fs-2xs);
+    line-height: 1;
+    color: var(--text-faint);
+    cursor: pointer;
+    user-select: none;
+  }
+  .ws-tab-icon:hover {
+    color: var(--amber);
+    background: var(--bg-hover);
+  }
+  .repo-chip .ws-tab-icon { margin-left: -1px; }
 
   .stale-dot {
     width: 5px;
