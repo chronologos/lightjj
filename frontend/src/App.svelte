@@ -2530,7 +2530,7 @@
     diff.reset()
     files.reset()
     clearChecks()
-    userRefresh(true)
+    return userRefresh(true)
   }
 
   function clearRevsetFilter() {
@@ -2886,6 +2886,14 @@
     if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') {
       setMessage({ kind: 'warning', text: 'Agent navigate ignored — finish or Esc current mode' })
       return
+    }
+    if (p.revset !== undefined) {
+      pendingNavScroll = null
+      switchToLogView()
+      revsetFilter = p.revset
+      const ok = await handleRevsetSubmit()
+      if (!ok) return
+      if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') return
     }
     // comment_id → position resolution. Agents reference comments by id (the
     // only stable handle they have). Two stores, distinguished by the OTHER
