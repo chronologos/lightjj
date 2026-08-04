@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -1671,6 +1672,55 @@ func TestIntegrationDivergentLogChangeIdRevset(t *testing.T) {
 		assert.Equal(t, changeId, row.Commit.ChangeId)
 		assert.True(t, row.Commit.Divergent)
 	}
+}
+
+// A hidden commit resurrected by an explicit revset reference renders with a
+// NORMAL `○` glyph (not `◌`), so graph-glyph inference misses it. The
+// self.hidden() template marker is what flags it. Without hidden=true the old
+// and new commits share a change_id with divergent=false && hidden=false →
+// identical frontend effectiveId() → duplicate Svelte each-keys → crashed
+// reactive flush → frozen app. This is the exact bug this change fixes.
+func TestIntegrationHiddenResurrectedByRevset(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	t.Parallel()
+
+	// Create a change and record its commit_id, then rewrite it (jj describe
+	// changes the commit_id, hiding the old one).
+	writeFile(t, r.RepoDir, "a.txt", "content")
+	jjExec("describe", "-m", "original")
+	oldCommit := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "--ignore-working-copy", "-T", "commit_id.short()"))
+	changeId := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "--ignore-working-copy", "-T", "change_id.short()"))
+	jjExec("describe", "-m", "rewritten")
+	newCommit := strings.TrimSpace(jjExec("log", "--no-graph", "-r", "@", "--color", "never", "--ignore-working-copy", "-T", "commit_id.short()"))
+	require.NotEqual(t, oldCommit, newCommit, "describe must rewrite the commit_id")
+
+	srv := NewServer(r, "")
+
+	// Reference the hidden old commit explicitly alongside @. jj resurrects it
+	// into the log with a normal ○ glyph.
+	rows := getLogRows(t, srv, "revset="+url.QueryEscape(oldCommit+" | @"))
+
+	var oldRow, newRow *parser.GraphRow
+	for i := range rows {
+		switch rows[i].Commit.CommitId {
+		case oldCommit:
+			oldRow = &rows[i]
+		case newCommit:
+			newRow = &rows[i]
+		}
+	}
+	require.NotNil(t, oldRow, "old (hidden) commit %s should appear in the log", oldCommit)
+	require.NotNil(t, newRow, "new commit %s should appear in the log", newCommit)
+
+	// Both rows share the change_id and neither is divergent — hidden is the
+	// ONLY thing distinguishing their effectiveId().
+	assert.Equal(t, changeId, oldRow.Commit.ChangeId)
+	assert.Equal(t, changeId, newRow.Commit.ChangeId)
+	assert.False(t, oldRow.Commit.Divergent)
+	assert.False(t, newRow.Commit.Divergent)
+
+	assert.True(t, oldRow.Commit.Hidden, "revset-resurrected old commit must be flagged hidden via self.hidden()")
+	assert.False(t, newRow.Commit.Hidden, "the working-copy commit must NOT be hidden")
 }
 
 func TestIntegrationDiffRange(t *testing.T) {

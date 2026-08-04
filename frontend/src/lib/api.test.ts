@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, type LogEntry } from './api'
+import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -923,6 +923,59 @@ describe('computeConnectedCommitIds', () => {
     const revs = [entry('a', ['b']), entry('b', ['invisible'])]
     const result = computeConnectedCommitIds(new Set(['a', 'b']), revs)
     expect(result).toEqual(new Set(['a', 'b'])) // 'invisible' not added
+  })
+})
+
+describe('guardEffectiveIdCollisions', () => {
+  // Builds a LogEntry with a given change_id/commit_id and hidden/divergent flags.
+  const entry = (change_id: string, commit_id: string, flags: Partial<{ hidden: boolean; divergent: boolean }> = {}): LogEntry => ({
+    commit: {
+      commit_id, change_id, parent_ids: [],
+      change_prefix: 1, commit_prefix: 1,
+      is_working_copy: false, hidden: flags.hidden ?? false, immutable: false,
+      conflicted: false, divergent: flags.divergent ?? false, empty: false, mine: true,
+    },
+    description: '', graph_lines: [],
+  })
+
+  it('forces hidden on the later of two same-change_id non-divergent rows', () => {
+    // The exact bug: two rows, same change_id, both divergent=false && hidden=false
+    // → identical effectiveId() → duplicate Svelte each-keys → poisoned flush → frozen app.
+    const rows = [entry('cid', 'new_commit'), entry('cid', 'old_commit')]
+    const out = guardEffectiveIdCollisions(rows)
+
+    // First row keeps the change_id; second is forced hidden → falls back to commit_id.
+    expect(out[0].commit.hidden).toBe(false)
+    expect(out[1].commit.hidden).toBe(true)
+
+    // effectiveIds are now unique — no duplicate each-keys.
+    const ids = out.map((r) => effectiveId(r.commit))
+    expect(ids).toEqual(['cid', 'old_commit'])
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('leaves already-distinct rows untouched', () => {
+    const rows = [entry('c1', 'k1'), entry('c2', 'k2')]
+    const out = guardEffectiveIdCollisions(rows)
+    expect(out.map((r) => r.commit.hidden)).toEqual([false, false])
+    expect(out.map((r) => effectiveId(r.commit))).toEqual(['c1', 'c2'])
+  })
+
+  it('does not re-flag divergent rows (they already fall back to commit_id)', () => {
+    // Divergent rows share change_id but effectiveId already returns commit_id,
+    // so there is no collision to guard against and hidden stays untouched.
+    const rows = [entry('cid', 'k1', { divergent: true }), entry('cid', 'k2', { divergent: true })]
+    const out = guardEffectiveIdCollisions(rows)
+    expect(out.map((r) => r.commit.hidden)).toEqual([false, false])
+    expect(new Set(out.map((r) => effectiveId(r.commit))).size).toBe(2)
+  })
+
+  it('api.log() applies the guard to the response', async () => {
+    const rows = [entry('cid', 'new_commit'), entry('cid', 'old_commit')]
+    mockFetch.mockResolvedValueOnce(mockResponse(rows))
+    const out = await api.log()
+    expect(new Set(out.map((r) => effectiveId(r.commit))).size).toBe(2)
+    expect(out[1].commit.hidden).toBe(true)
   })
 })
 

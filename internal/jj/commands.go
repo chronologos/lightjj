@@ -70,7 +70,7 @@ func LogGraph(revset string, limit int) CommandArgs {
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
-	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent_PREFIX:empty_PREFIX:mine_PREFIX:author.email_PREFIX:committer.timestamp \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F parent_ids \x1F bookmarks
+	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent_PREFIX:empty_PREFIX:mine_PREFIX:author.email_PREFIX:committer.timestamp_PREFIX:hidden \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F parent_ids \x1F bookmarks
 	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
 	// Parent IDs are comma-joined (commit IDs are hex, commas can't appear).
 	// Bookmarks are joined with \x1F and MUST be the last field — the parser's SplitN leaves the tail unsplit.
@@ -84,15 +84,25 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// @ CAN appear in git-created branch names, which jj imports and RefSymbol-quotes.
 	// .name() quote-wraps names containing revset-special chars; the parser strips
 	// those quotes and filters the @git colocation synthetic remote.
-	// mine + author.email() + committer.timestamp() appended via EXPLICIT '++ _PREFIX: ++'
-	// — NOT inside separate(). separate() skips empty args (see bookmarkListTemplate
-	// comment below); a root commit or malformed-import author.email() would shift
-	// field positions. Explicit concat guarantees the _PREFIX markers are always
-	// present even if the value is empty. Parser's len(prefixParts)>=6/>=7/>=8
-	// checks still keep old test fixtures backward-compatible.
+	// mine + author.email() + committer.timestamp() + self.hidden() appended via
+	// EXPLICIT '++ _PREFIX: ++' — NOT inside separate(). separate() skips empty args
+	// (see bookmarkListTemplate comment below); a root commit or malformed-import
+	// author.email() would shift field positions. Explicit concat guarantees the
+	// _PREFIX markers are always present even if the value is empty. Parser's
+	// len(prefixParts)>=6/>=7/>=8/>=9 checks still keep old test fixtures
+	// backward-compatible.
+	//
+	// self.hidden() (jj ≥ 0.30 template method — well below the 0.39 test baseline,
+	// so no version gate) is REQUIRED for correctness, not just enrichment: a
+	// hidden commit resurrected by an explicit revset reference (e.g.
+	// `ancestors(OLD, 20) | @`) renders with a NORMAL `○` glyph, not `◌`, so the
+	// parser's glyph-only inference (graph.go) misses it. The parser OR-s this
+	// field with the `◌` glyph detection. Without it two rows can share a
+	// change_id yet both report divergent=false && hidden=false → identical
+	// effectiveId() → duplicate Svelte each-keys → crashed reactive flush.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ '%s' ++ stringify(mine) ++ '%s' ++ author.email() ++ '%s' ++ committer.timestamp() ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name() ++ "\x1D" ++ stringify(b.conflict()) ++ "\x1D" ++ stringify(b.synced())).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
-		JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix)
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ '%s' ++ stringify(mine) ++ '%s' ++ author.email() ++ '%s' ++ committer.timestamp() ++ '%s' ++ stringify(self.hidden()) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name() ++ "\x1D" ++ stringify(b.conflict()) ++ "\x1D" ++ stringify(b.synced())).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
+		JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args
 }

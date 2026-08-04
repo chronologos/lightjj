@@ -66,7 +66,7 @@ internal/
     open_windows.go        — detachProcess no-op (windows)
     gzip.go                — Gzip response middleware (Flush passthrough for SSE)
   parser/                  — Graph log parser
-    graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[]
+    graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[] (Hidden = self.hidden() marker OR `◌` glyph)
 testutil/                  — Go test infrastructure
   mock_runner.go           — MockRunner with Expect(args)/Verify() pattern
 frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)

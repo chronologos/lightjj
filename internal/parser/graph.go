@@ -161,6 +161,16 @@ func parseNodeLine(line string) GraphRow {
 	if len(prefixParts) >= 8 {
 		row.Commit.Timestamp = strings.TrimSpace(prefixParts[7])
 	}
+	// self.hidden() from the template. REQUIRED for revset-resurrected hidden
+	// commits: jj renders those with a normal `○` glyph (not `◌`), so the
+	// glyph-only inference below misses them and two rows can share a change_id
+	// while both report hidden=false — identical effectiveId() in the frontend →
+	// duplicate Svelte each-keys → crashed reactive flush. OR-ed with the `◌`
+	// glyph detection below (belt-and-suspenders; older fixtures without the
+	// field fall through to the glyph path).
+	if len(prefixParts) >= 9 {
+		row.Commit.Hidden, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[8]))
+	}
 
 	// Full IDs and content fields override the shortest prefix fallbacks
 	if len(parts) >= 4 {
@@ -222,9 +232,12 @@ func parseNodeLine(line string) GraphRow {
 		}
 	}
 
-	// Detect working copy, hidden, immutable, and conflicted from graph characters
+	// Detect working copy, hidden, immutable, and conflicted from graph characters.
+	// Hidden OR-s the `◌` glyph with the self.hidden() marker parsed above — the
+	// glyph catches the ordinary abandoned-commit case, the marker catches
+	// revset-resurrected hidden commits that render with a normal `○` glyph.
 	row.Commit.IsWorkingCopy = strings.ContainsRune(gutter, '@')
-	row.Commit.Hidden = strings.ContainsRune(gutter, '◌')
+	row.Commit.Hidden = row.Commit.Hidden || strings.ContainsRune(gutter, '◌')
 	row.Commit.Immutable = strings.ContainsRune(gutter, '◆')
 	row.Commit.Conflicted = strings.ContainsRune(gutter, '×')
 

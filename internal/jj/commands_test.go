@@ -31,6 +31,11 @@ func TestLogGraph(t *testing.T) {
 	// Outside separate() — explicit concat so empty email doesn't shift positions.
 	assert.Contains(t, joined, "stringify(mine)")
 	assert.Contains(t, joined, "author.email()")
+	// self.hidden() marker — REQUIRED so revset-resurrected hidden commits
+	// (normal `○` glyph, glyph inference misses them) are flagged; without it two
+	// rows can share a change_id with hidden=false → duplicate frontend each-keys.
+	// Explicit '++ _PREFIX: ++' concat, NOT separate().
+	assert.Contains(t, joined, "stringify(self.hidden())")
 	assert.Contains(t, joined, "parents")
 	// local_bookmarks + remote_bookmarks concatenated — `bookmarks` alone
 	// collapses tracked-and-synced remotes into the local form.

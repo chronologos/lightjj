@@ -941,9 +941,40 @@ export function bookmarkPushFlags(name: string, remote: string): string[] {
 
 /** Returns the best unique identifier for a commit.
  *  Divergent and hidden commits share change_id, so we fall back to commit_id.
- *  Mirrors the Go Commit.GetChangeId() logic. */
+ *  Mirrors the Go Commit.GetChangeId() logic. The backend is the source of
+ *  truth for `hidden` (self.hidden() template marker + `◌` glyph, graph.go);
+ *  `guardEffectiveIdCollisions` below is a client-side safety net that forces
+ *  `hidden` when a stale/buggy backend still produces a collision. */
 export function effectiveId(commit: LogEntry['commit']): string {
   return (commit.divergent || commit.hidden) ? commit.commit_id : commit.change_id
+}
+
+/** Defense-in-depth against duplicate effectiveId()s in a LogEntry[].
+ *
+ *  Bug class this prevents (do not remove without an equivalent guard):
+ *  two log rows sharing a change_id with `divergent === false && hidden === false`
+ *  → identical effectiveId() → duplicate keys in RevisionGraph's keyed `{#each}`
+ *  → Svelte throws `each_key_duplicate` → the reactive flush is POISONED → the
+ *  entire app freezes on a stale frame (eternal "Refreshing…", no further
+ *  network requests). The primary fix lives in the backend (graph.go emits
+ *  `hidden` from self.hidden()); this pass ensures a data regression can never
+ *  again brick the UI.
+ *
+ *  O(n), single Set pass: the FIRST row to claim an effectiveId keeps it; any
+ *  later row colliding on that id is forced `hidden = true`, so its effectiveId
+ *  falls back to the (unique) commit_id. Mutates entries in place and returns
+ *  them for call-site chaining. */
+export function guardEffectiveIdCollisions(entries: LogEntry[]): LogEntry[] {
+  const seen = new Set<string>()
+  for (const e of entries) {
+    let id = effectiveId(e.commit)
+    if (seen.has(id)) {
+      e.commit.hidden = true
+      id = effectiveId(e.commit) // recompute: now commit_id
+    }
+    seen.add(id)
+  }
+  return entries
 }
 
 /** What the diff panel is currently showing. Replaces the stringly-typed
@@ -1050,7 +1081,7 @@ export const api = {
     const params = new URLSearchParams()
     if (revset) params.set('revset', revset)
     if (limit) params.set('limit', String(limit))
-    return request<LogEntry[]>(`/api/log?${params}`)
+    return request<LogEntry[]>(`/api/log?${params}`).then(guardEffectiveIdCollisions)
   },
 
   bookmarks: (opts?: { revset?: string; local?: boolean }) => {
@@ -1167,7 +1198,7 @@ export const api = {
   // indexPaths() first so the files() revset has the changed-path index to
   // consult, otherwise it's O(commits×tree-diff) and times out on large repos.
   fileHistory: (path: string, full = false) =>
-    request<LogEntry[]>(`/api/file-history?path=${encodeURIComponent(path)}${full ? '&full=1' : ''}`),
+    request<LogEntry[]>(`/api/file-history?path=${encodeURIComponent(path)}${full ? '&full=1' : ''}`).then(guardEffectiveIdCollisions),
 
   // Build jj's changed-path index (jj#7250). Streaming because first build on
   // a large repo can take minutes (the 30s read timeout would kill it).

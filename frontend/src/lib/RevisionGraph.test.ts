@@ -3,6 +3,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import RevisionGraph from './RevisionGraph.svelte'
 import type { LogEntry, LocalRef } from './api'
+import { effectiveId, guardEffectiveIdCollisions } from './api'
 import { createRebaseMode, createSquashMode, createSplitMode, createMegamergeMode } from './modes.svelte'
 
 function activeRebase(sources: string[], sourceKey?: string, targetKey?: string) {
@@ -190,6 +191,30 @@ describe('RevisionGraph', () => {
       const { container } = render(RevisionGraph, { props: defaultProps({ revisions: [entry] }) })
       const hiddenRows = container.querySelectorAll('.graph-row.hidden-rev')
       expect(hiddenRows.length).toBeGreaterThan(0)
+    })
+
+    // Regression: two rows sharing a change_id with divergent=false && hidden=false
+    // (a revset-resurrected hidden commit the backend failed to flag) produce
+    // identical effectiveId()s. RevisionGraph keys its `{#each}` by eid, so
+    // duplicate eids throw Svelte's each_key_duplicate → poisoned reactive flush
+    // → frozen app. guardEffectiveIdCollisions (applied in api.log()) must make
+    // the eids unique so the component renders both rows without throwing.
+    it('renders same-change_id non-divergent rows without crashing (collision guard)', () => {
+      const raw = [
+        makeEntry({ change_id: 'samecid', commit_id: 'new_commit', gutter: '@ ', is_working_copy: true }),
+        makeEntry({ change_id: 'samecid', commit_id: 'old_commit', gutter: '○ ' }),
+      ]
+      // Pre-guard the two rows collide on effectiveId.
+      expect(effectiveId(raw[0].commit)).toBe(effectiveId(raw[1].commit))
+
+      const revisions = guardEffectiveIdCollisions(raw)
+      const ids = revisions.map((r) => effectiveId(r.commit))
+      expect(new Set(ids).size).toBe(2) // unique after guard
+
+      // The render must not throw each_key_duplicate.
+      expect(() =>
+        render(RevisionGraph, { props: defaultProps({ revisions }) }),
+      ).not.toThrow()
     })
 
     it('shows (no description) placeholder when not empty but undescribed', () => {

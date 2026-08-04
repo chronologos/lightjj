@@ -214,6 +214,32 @@ func TestParseGraphLog_HiddenCommit(t *testing.T) {
 	assert.Equal(t, "hidden change", rows[0].Description)
 }
 
+// A revset-resurrected hidden commit renders with a NORMAL `○` glyph (not `◌`),
+// so glyph inference alone misses it. The 9-part _PREFIX block's self.hidden()
+// marker (position 8) is what flags it. This is the exact bug fix: without the
+// marker two rows share a change_id with hidden=false → duplicate frontend
+// each-keys → poisoned reactive flush → frozen app.
+func TestParseGraphLog_HiddenMarkerNormalGlyph(t *testing.T) {
+	// Prefix block: change_PREFIX:commit_PREFIX:divergent_PREFIX:empty_PREFIX:mine_PREFIX:email_PREFIX:ts_PREFIX:hidden
+	output := "○  _PREFIX:h_PREFIX:5_PREFIX:false_PREFIX:false_PREFIX:true_PREFIX:me@x.com_PREFIX:1700000000_PREFIX:true\x1fhhhhhhhh\x1f55555555\x1fresurrected\x1f\x1f\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].Commit.Hidden, "self.hidden() marker must set Hidden even with normal ○ glyph")
+	assert.False(t, rows[0].Commit.Divergent)
+	assert.Equal(t, "hhhhhhhh", rows[0].Commit.ChangeId)
+	assert.Equal(t, "1700000000", rows[0].Commit.Timestamp) // position not shifted by the new field
+	assert.Equal(t, "resurrected", rows[0].Description)
+}
+
+// The marker=false + normal glyph case must NOT over-flag a visible commit as
+// hidden — the OR with the `◌` glyph stays false.
+func TestParseGraphLog_HiddenMarkerFalse(t *testing.T) {
+	output := "○  _PREFIX:v_PREFIX:5_PREFIX:false_PREFIX:false_PREFIX:true_PREFIX:me@x.com_PREFIX:1700000000_PREFIX:false\x1fvvvvvvvv\x1f55555555\x1fvisible\x1f\x1f\x1f\n"
+	rows := ParseGraphLog(output)
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].Commit.Hidden)
+}
+
 func TestParseGraphLog_ImmutableCommit(t *testing.T) {
 	output := "◆  _PREFIX:i_PREFIX:5_PREFIX:false_PREFIX:false\x1fiiiiiiii\x1f55555555\x1fimmutable change\x1f\x1f\x1f\n"
 	rows := ParseGraphLog(output)
