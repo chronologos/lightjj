@@ -268,6 +268,20 @@ describe('App.svelte interactions', () => {
     await waitFor(() => qs('.message-text')?.textContent?.includes('not in current revset') === true)
     expect(selectedEntry()).toBe('0')
   })
+
+  it('agent navigate can apply a revset before selecting a change', async () => {
+    await mountApp()
+
+    await press(' ')
+    expect(qs('.graph-row.checked')).not.toBeNull()
+
+    triggerNavigate({ revset: 'trunk()..@', change_id: 'cmid' })
+
+    await waitFor(() => selectedEntry() === '1')
+    expect(calls.some(c => c.method === 'log' && c.args[0] === 'trunk()..@')).toBe(true)
+    expect((qs('.revset-input') as HTMLInputElement | null)?.value).toBe('trunk()..@')
+    expect(qs('.graph-row.checked')).toBeNull()
+  })
 })
 
 // ── Staleness model + identity-keyed cursor ─────────────────────────────────

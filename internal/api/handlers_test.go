@@ -3971,6 +3971,34 @@ func TestHandleNavigate(t *testing.T) {
 	}
 }
 
+func TestHandleNavigateWithRevsetAndChange(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+
+	ch, unsub := srv.Watcher.subscribe()
+	defer unsub()
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"change_id":"abc","file_path":"src/a.go","line":42,"revset":"trunk()..@"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	select {
+	case msg := <-ch:
+		require.Equal(t, evNameNav, msg.name)
+		var p navigateRequest
+		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		assert.Equal(t, "abc", p.ChangeID)
+		assert.Equal(t, "src/a.go", p.FilePath)
+		assert.Equal(t, 42, p.Line)
+		require.NotNil(t, p.Revset)
+		assert.Equal(t, "trunk()..@", *p.Revset)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("navigate not broadcast")
+	}
+}
+
 func TestHandleNavigate_ReMarshalsSSEInjection(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
@@ -4007,6 +4035,32 @@ func TestHandleNavigate_BadRequest(t *testing.T) {
 			srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(tc.body)))
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 		})
+	}
+}
+
+func TestHandleNavigateRevsetOnly(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+
+	ch, unsub := srv.Watcher.subscribe()
+	defer unsub()
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"revset":"@"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	select {
+	case msg := <-ch:
+		require.Equal(t, evNameNav, msg.name)
+		var p navigateRequest
+		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NotNil(t, p.Revset)
+		assert.Equal(t, "@", *p.Revset)
+		assert.Empty(t, p.ChangeID)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("navigate not broadcast")
 	}
 }
 

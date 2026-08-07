@@ -306,6 +306,14 @@ against its loaded comment stores and scrolls to that thread. If the id isn't
 loaded in the user's current view, nothing happens. Combine with `change_id`
 or `file_path` if you want a fallback scroll target.
 
+To change the visible graph filter first, include `revset`. A revset-only
+payload updates the filter without selecting a revision; combining `revset`
+with `change_id` reloads the graph and then selects that change:
+
+```jsonc
+{"revset": "trunk()..@", "change_id": "wqnwkozp"}
+```
+
 ## Read the user's current view
 
 ```
