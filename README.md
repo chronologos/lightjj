@@ -89,6 +89,22 @@ SSH proxy mode adds ~400ms per command (reduce to ~20ms with ControlMaster). Aut
 
 **Updating:** re-run the install command. Check your version with `lightjj --version`.
 
+**Docker:**
+
+```bash
+# Build docker image
+git clone https://github.com/chronologos/lightjj
+cd lightjj
+docker build -t lightjj .
+
+# Run docker container
+cd path/to/your/project
+run --rm -p 8080:8080 \
+  -v .:/repo \
+  -v ~/.config/jj/config.toml:/.config/jj/config.toml:ro \
+  lightjj
+```
+
 ## Roadmap
 
 |         | Theme                 |                                                                                              |
