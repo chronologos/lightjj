@@ -111,6 +111,17 @@ Browser (headless Chrome/Blink, paint-accurate endpoint):
 
 What this run says: navigation latency on a very large *local* repo is fetch-bound; render-side at-arrival work stays well inside the ≤150 ms budget on fast hardware in both engines. Phase 3's own trigger ("near-viewport mounting still >150 ms after Phase 2") was measured **not met** on fast hardware (expand-all ≤62 ms to paint, ≤57 ms worst block) — Phase 3 stays dormant per its kill criteria in specs/pierre-diffs.md, not killed; the slower-hardware / battery-throttled / heap / Cmd+F / annotations-at-scale / SSH validation gates remain open and unmeasured.
 
+### Split view → single CSS grid (2026-10-17, issue #41, headless Chrome 155, fast Apple-silicon machine)
+
+Split markup changed from two independent column stacks to one 2-column grid with cells in pair order (rows can no longer drift when a line soft-wraps). Measured split toggle on an expanded **wide** fixture (`Expand all`, then scrolled through to mount every deferred body: 1,312 mounted `.diff-line`s in unified), production build, `--no-watch --snapshot-interval 0`, 7 toggles per run (median), runs alternated old/new binary:
+
+| viewport | old (two columns) median of runs | new (grid) median of runs | forced layout after first rAF |
+|---|---|---|---|
+| 1400 px | 112 / 96 / 97 ms | 99 / 111 / 97 ms | 21–22 ms both |
+| 800 px (heavy wrapping) | 97 / 94 ms | 97 / 99 ms | 21–22 ms both |
+
+DOM nodes in split: 26,211 → 26,108 (two column wrappers + the duplicate right-side hunk header per file removed). Unified unaffected (~80 ms, 16,713 nodes both). A first cut that wrapped each cell in a snippet with nested `{#if}`s measured ~15% slower (≈113 vs ≈97 ms; CPU profile: native `before()` insertion 18 → 30 ms from the extra comment anchors per cell) — the shipped markup keeps the old per-row block count. Grid layout itself cost no more than the two block columns at either width. Methodology caveats as above (click → rAF → forced `offsetHeight` → double rAF; single machine).
+
 ### Scenarios not yet measured (needed before further default changes)
 
 One slow / battery-throttled machine (Chrome/Blink is now partially covered — fast machine, headless, 2026-05-26 section above); heap/retained-DOM across cached revisions and tabs; rapid j/k across several consecutive large revisions; Cmd+F (browser find) over a fully expanded huge diff; annotations + word-diff active at scale; a single 1–3k-line *single-hunk* highlighted file; a ~1.5–2k-line revision that renders bodies eagerly (both 2026-05-26 sampled revisions exceeded the 2,000-line total-collapse threshold, so first paint was collapsed headers); lock-file / minified / very-long-line fixtures; SSH mode. Backend `jj diff` latency on a very large repository (1M+ commits) is now measured (2026-05-26 section above). The validation gates in specs/pierre-diffs.md reference this list.

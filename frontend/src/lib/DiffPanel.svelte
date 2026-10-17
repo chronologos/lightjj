@@ -725,6 +725,16 @@
   // Pre-built map for O(1) file stats lookup
   let fileStatsMap = $derived(new Map(changedFiles.map(f => [f.path, f])))
 
+  // Rename destination → source (issue #44), from the parser's `rename from`
+  // header — the file list (FileChange) only carries the destination path.
+  // Display-only: file-tab tooltip + FileSelectionPanel's `old →` prefix.
+  // Empty until the diff loads (diff and file-list load independently).
+  let renameSources = $derived.by(() => {
+    const m = new Map<string, string>()
+    for (const f of parsedDiff) if (f.sourcePath && f.sourcePath !== f.filePath) m.set(f.filePath, f.sourcePath)
+    return m
+  })
+
   // Conflict-only files: in changedFiles with conflict=true but not in parsedDiff.
   // These don't appear in jj diff --tool :git output — we fetch their content via
   // jj file show and convert to DiffFile objects with all lines as 'add' type.
@@ -1727,7 +1737,7 @@
     </div>
   {/if}
   {#if fileSelectionMode}
-    <FileSelectionPanel mode={fileSelectionMode} files={changedFiles} selected={selectedFiles} ontoggle={ontogglefile} {oncontextmenu} />
+    <FileSelectionPanel mode={fileSelectionMode} files={changedFiles} selected={selectedFiles} ontoggle={ontogglefile} {oncontextmenu} {renameSources} />
   {/if}
   {#if diffTarget && changedFiles.length > 0 && !fileSelectionMode}
     <div class="file-list-bar">
@@ -1745,7 +1755,7 @@
               class="file-tab"
               class:file-tab-active={activeFilePath === file.path}
               onclick={() => scrollToFile(file.path)}
-              title={file.path}
+              title={renameSources.has(file.path) ? `${renameSources.get(file.path)} → ${file.path}` : file.path}
               aria-current={activeFilePath === file.path ? 'true' : undefined}
             >
               {#if file.conflict}

@@ -13,9 +13,12 @@
     selected: SvelteSet<string>
     ontoggle: (path: string) => void
     oncontextmenu?: ContextMenuHandler
+    /** Rename destination → source path (from the parsed diff). Display-only:
+     *  selection stays keyed by the destination path. */
+    renameSources?: ReadonlyMap<string, string>
   }
 
-  let { mode, files, selected, ontoggle, oncontextmenu }: Props = $props()
+  let { mode, files, selected, ontoggle, oncontextmenu, renameSources }: Props = $props()
 
   let listEl: HTMLElement | undefined = $state(undefined)
 
@@ -102,6 +105,7 @@
     onmouseleave={cursor.onRowsMouseLeave}
     bind:this={listEl}>
     {#each files as file, i (file.path)}
+      {@const renamedFrom = renameSources?.get(file.path)}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="file-select-row"
@@ -120,7 +124,7 @@
         {:else}
           <span class="file-dot" class:dot-A={file.type === 'A'} class:dot-D={file.type === 'D'} class:dot-M={file.type === 'M'} title={FILE_TYPE_LABELS[file.type] ?? file.type}></span>
         {/if}
-        <span class="file-select-path">{file.path}</span>
+        <span class="file-select-path" title={renamedFrom ? `${renamedFrom} → ${file.path}` : undefined}>{#if renamedFrom}<span class="rename-from">{`${renamedFrom} → `}</span>{/if}{file.path}</span>
         {#if file.additions > 0 || file.deletions > 0}
           <span class="file-tab-stats">
             {#if file.additions > 0}<span class="stat-add">+{file.additions}</span>{/if}
@@ -248,6 +252,9 @@
   .file-select-row.file-checked .file-select-path {
     color: var(--text);
   }
+
+  /* Rename source — dimmer than the path itself in both checked states. */
+  .rename-from { color: var(--text-faint); }
 
   .file-dot {
     width: 5px;

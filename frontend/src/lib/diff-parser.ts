@@ -20,11 +20,15 @@ export interface DiffHunk {
 export interface DiffFile {
   header: string
   filePath: string
-  // Source path for pure renames (from `rename from <path>` in git-diff header).
-  // Only present when jj emits an explicit rename record — rename-with-edits
-  // decomposes into separate A+D entries instead. Used by Discard to pass BOTH
-  // paths to `jj restore -c`: dest-only would delete the new path without
-  // restoring the source, turning the rename into a delete.
+  // Source path of a rename (from `rename from <path>` in the git-diff header).
+  // jj emits it for pure renames AND rename-with-edits (verified on jj 0.45:
+  // `rename from/to` then `index`/`---`/`+++`/hunks); a rewrite too dissimilar
+  // to be detected as a rename decomposes into separate D+A entries instead.
+  // Paths are raw (jj does not C-quote spaces/quotes/tabs/non-ASCII). Display
+  // + write-back only — filePath (the destination) stays the identity. Used by
+  // the header's `old → new` and by Discard to pass BOTH paths to `jj restore
+  // -c`: dest-only would delete the new path without restoring the source,
+  // turning the rename into a delete.
   sourcePath?: string
   hunks: DiffHunk[]
   // True when the file has 0 hunks and the header carries a binary marker

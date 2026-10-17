@@ -188,6 +188,8 @@
   )
 
   let filePath = $derived(file.filePath)
+  // Header-only: the old path of a rename. Display, never identity.
+  let renameFrom = $derived(file.sourcePath && file.sourcePath !== filePath ? file.sourcePath : undefined)
 
   // File-level annotations (lineNum=0). The reviewed MARKER (severity=reviewed
   // + empty body) is the checkbox state; everything else renders inline below.
@@ -215,9 +217,10 @@
   // Image with no text body to diff: a binary image (png/jpg… — `Binary files
   // … differ`, 0 hunks) OR a pure rename, which `jj diff --git` emits as ONLY
   // `rename from/to` lines — no Binary marker, so isBinary is false and the
-  // hunk-less body used to render empty. Rename-with-content-change never
-  // reaches here as R (jj decomposes it to D+A). Drives both the ImageDiff
-  // body and hiding the text-only header actions (Preview/Edit).
+  // hunk-less body used to render empty. A binary rename-with-edits arrives
+  // as R + `rename from` + the Binary marker → the isBinary arm, before side
+  // at sourcePath. Drives both the ImageDiff body and hiding the text-only
+  // header actions (Preview/Edit).
   let imageOnly = $derived(isImage && file.hunks.length === 0 && (file.isBinary || fileStats?.type === 'R'))
   // Sources wait for fileStats: diff and file-list load independently, and
   // guessing "both sides" in the undefined window would fire a doomed parent
@@ -331,6 +334,16 @@
   // Save/Cancel with NO editing surface and a permanently-disabled Save
   // (editorRef stays undefined). Allowing split when editing mounts the editor.
   let effectiveSplit = $derived(splitView && (!isConflict || editing))
+
+  // Split-grid selection latch (issue #41). Pair-order DOM interleaves the
+  // two sides, so a native drag-select would sweep both; mousedown records
+  // the side the gesture started on and CSS makes the other side
+  // user-select:none. One write per mousedown — no per-row listeners.
+  let selectSide: 'left' | 'right' | undefined = $state(undefined)
+  function latchSelectSide(e: MouseEvent) {
+    const cell = (e.target as Element).closest('.split-left, .split-right')
+    if (cell) selectSide = cell.classList.contains('split-left') ? 'left' : 'right'
+  }
 
   // Memoized split-view data — depends only on file.hunks, not on
   // highlightedLines/wordDiffs which update frequently during rendering
@@ -456,12 +469,22 @@
     let lines: { lineNum: number | null, content: string, side?: DiffSide }[] = []
 
     if (selection && !selection.isCollapsed && fileEl) {
-      const range = selection.getRangeAt(0)
-      for (const el of fileEl.querySelectorAll('.diff-line:not(.conflict-marker-line)')) {
-        if (range.intersectsNode(el)) {
-          // Split-LEFT rows carry old-side line numbers; everything else is new-side.
-          lines.push(extractLineFromDom(el, !!el.closest('.split-left')))
-        }
+      // Split grid interleaves old/new cells in DOM order, so a range that
+      // starts on one side also "intersects" every other-side cell between
+      // its endpoints (they're user-select:none via the side latch, but
+      // Blink still keeps one contiguous Range over them). Keep only cells
+      // on the side the selection started on. Unified: anchorSide = null.
+      const anchorEl = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement
+      const anchorSide = anchorEl?.closest('.split-left, .split-right') ?? null
+      const anchorIsLeft = anchorSide?.classList.contains('split-left')
+      // All ranges, not just the first: Gecko splits a selection around
+      // user-select:none nodes into one Range per selectable run.
+      const ranges = Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i))
+      for (const el of fileEl.querySelectorAll('.diff-line:not(.conflict-marker-line):not(.diff-empty)')) {
+        // Split-LEFT rows carry old-side line numbers; everything else is new-side.
+        const isLeft = !!el.closest('.split-left')
+        if (anchorSide && isLeft !== anchorIsLeft) continue
+        if (ranges.some(r => r.intersectsNode(el))) lines.push(extractLineFromDom(el, isLeft))
       }
     }
 
@@ -618,7 +641,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- annOld/annNew defaults derive from lineNumbers shape: unified=[old,new] →
      both set; split-right=[new] → annOld=null; split-left passes explicitly. -->
-{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number, conflictMeta?: ConflictLineMeta, annOld: number | null = lineNumbers.length === 2 ? lineNumbers[0] : null, annNew: number | null = lineNumbers[lineNumbers.length - 1])}
+{#snippet diffLine(line: DiffLine, hlKey: string, spans: WordSpan[] | undefined, lineNumbers: (number | null)[], hunkIdx?: number, lineIdx?: number, conflictMeta?: ConflictLineMeta, annOld: number | null = lineNumbers.length === 2 ? lineNumbers[0] : null, annNew: number | null = lineNumbers[lineNumbers.length - 1], cellClass: string = '')}
   {@const searchKey = hunkIdx !== undefined && lineIdx !== undefined ? `${hunkIdx}:${lineIdx}` : ''}
   {@const lm = searchKey ? lineMatchMap.get(searchKey) : undefined}
   {@const inConflict = !!conflictMeta}
@@ -634,11 +657,11 @@
     unless e.altKey). Keyboard users get the annotation bubble; this is the
     fast-path for mouse users. -->
   {#if isMarker}
-    <div class="diff-line conflict-marker-line">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
+    <div class="diff-line conflict-marker-line {cellClass}">{#each lineNumbers as n}<span class="line-num"></span>{/each}</div>
   {:else if lm && lm.length > 0}
     {@const hasCurrent = lm.some(m => m.globalIndex === currentMatchIdx)}
     <div
-      class="diff-line"
+      class="diff-line {cellClass}"
       class:diff-add={!inConflict && line.type === 'add'}
       class:diff-remove={!inConflict && line.type === 'remove'}
       class:diff-context={!inConflict && line.type === 'context'}
@@ -650,7 +673,7 @@
     >{@render gutter(lineNumbers, rawContent, annOld, annNew)}<span class="diff-prefix">{displayPrefix}</span>{@html highlightSearchInText(displayContent, lm, currentMatchIdx)}</div>
   {:else if highlightedLines.has(hlKey)}
     <div
-      class="diff-line highlighted"
+      class="diff-line highlighted {cellClass}"
       class:diff-add={!inConflict && line.type === 'add'}
       class:diff-remove={!inConflict && line.type === 'remove'}
       class:diff-context={!inConflict && line.type === 'context'}
@@ -661,7 +684,7 @@
     >{@render gutter(lineNumbers, rawContent, annOld, annNew)}{@html highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
-      class="diff-line"
+      class="diff-line {cellClass}"
       class:diff-add={!inConflict && line.type === 'add'}
       class:diff-remove={!inConflict && line.type === 'remove'}
       class:conflict-inner-add={innerType === 'add'}
@@ -673,7 +696,7 @@
         >{span.text}</span>{:else}{span.text}{/if}{/each}</div>
   {:else}
     <div
-      class="diff-line"
+      class="diff-line {cellClass}"
       class:diff-add={!inConflict && line.type === 'add'}
       class:diff-remove={!inConflict && line.type === 'remove'}
       class:diff-context={!inConflict && line.type === 'context'}
@@ -719,11 +742,20 @@
       <span class="file-type-badge" class:badge-A={fileStats.type === 'A'} class:badge-M={fileStats.type === 'M'} class:badge-D={fileStats.type === 'D'} class:badge-R={fileStats.type === 'R'} title={FILE_TYPE_LABELS[fileStats.type] ?? fileStats.type}>{fileStats.type}</span>
     {/if}
     <span class="diff-file-path">
-      {#if filePath.includes('/')}
-        <span class="file-dir">{filePath.slice(0, filePath.lastIndexOf('/') + 1)}</span><span class="file-name">{filePath.slice(filePath.lastIndexOf('/') + 1)}</span>
-      {:else}
-        <span class="file-name">{filePath}</span>
+      <!-- Rename (issue #44): `old/path → new/path`. The old path comes from
+           the parser's `rename from` line (present for pure renames AND
+           rename-with-edits), never from fileStats — the new path stays the
+           file's identity. Old path ellipsizes first (see .rename-from). -->
+      {#if renameFrom}
+        <span class="rename-from" title="Renamed from {renameFrom}">{renameFrom}</span><span class="rename-arrow" aria-label="renamed to">→</span>
       {/if}
+      <span class="path-to" title={renameFrom ? filePath : undefined}>
+        {#if filePath.includes('/')}
+          <span class="file-dir">{filePath.slice(0, filePath.lastIndexOf('/') + 1)}</span><span class="file-name">{filePath.slice(filePath.lastIndexOf('/') + 1)}</span>
+        {:else}
+          <span class="file-name">{filePath}</span>
+        {/if}
+      </span>
     </span>
     {#if fileStats && (fileStats.additions > 0 || fileStats.deletions > 0)}
       <span class="file-stats">
@@ -774,8 +806,9 @@
       <button class="btn btn-sm" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); onedit(filePath) }} title="Edit this file (switches to split view)">{editBusy ? 'Loading…' : 'Edit'}</button>
     {/if}
     {#if ondiscard && !editing}
-      <!-- A→delete-file, D→undelete, M→revert, R→undo-rename (pass both paths).
-           Rename-with-edits never hits the R path: jj decomposes it to A+D. -->
+      <!-- A→delete-file, D→undelete, M→revert, R→undo-rename (pass both paths;
+           also right for rename-with-edits, which jj ≥0.45 reports as R with
+           `rename from` + hunks — restoring both paths undoes move AND edit). -->
       <button class="btn btn-sm btn-danger" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); ondiscard(filePath, file.sourcePath) }} title="Discard changes to this file from this revision (jj restore)">Discard</button>
     {/if}
     {#if editing && onsavefile && oncanceledit}
@@ -874,7 +907,10 @@
           <span class="expand-label">full context</span>
         </button>
       {/if}
-      <div class="split-view" class:split-editing={editing}>
+      {#if editing && editContent !== undefined}
+      <!-- Editing: old-side rows in a column beside the full-file editor —
+           there is no row pairing to keep (the editor shows the whole file). -->
+      <div class="split-view split-editing">
         <div class="split-col split-left">
           {#each splitLines as sl, si}
             {#if sl.left?.line.type === 'header'}
@@ -883,44 +919,69 @@
               {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
               {@const spans = wordDiffs.get(String(sl.left.hunkIdx))?.get(sl.left.lineIdx)}
               {@const slCm = conflictData?.lineMeta.get(sl.left.hunkIdx)?.get(sl.left.lineIdx)}
-              <!-- Split-left = OLD column: annOld=oldLeft, annNew=null. The
-                   length-based default would mis-infer annNew=oldLeft. -->
               {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft], sl.left.hunkIdx, sl.left.lineIdx, slCm, splitNums[si].oldLeft, null)}
             {:else}
               <div class="diff-line diff-empty">&nbsp;</div>
             {/if}
           {/each}
         </div>
-        {#if editing && editContent !== undefined}
-          <div class="split-col split-right split-editor">
-            {#await import('./FileEditor.svelte') then { default: FileEditor }}
-              <FileEditor
-                bind:this={editorRef}
-                content={editContent}
-                {filePath}
-                {changedRanges}
-                onsave={(c) => onsavefile?.(filePath, c)}
-                oncancel={() => oncanceledit?.(filePath)}
-              />
-            {/await}
-          </div>
-        {:else}
-        <div class="split-col split-right">
-          {#each splitLines as sl, si}
-            {#if sl.right?.line.type === 'header'}
-              {#if !isExpanded}<div class="diff-hunk-header">{sl.right.line.content}</div>{/if}
-            {:else if sl.right}
-              {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
-              {@const spans = wordDiffs.get(String(sl.right.hunkIdx))?.get(sl.right.lineIdx)}
-              {@const srCm = conflictData?.lineMeta.get(sl.right.hunkIdx)?.get(sl.right.lineIdx)}
-              {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight], sl.right.hunkIdx, sl.right.lineIdx, srCm)}
-            {:else}
-              <div class="diff-line diff-empty">&nbsp;</div>
-            {/if}
-          {/each}
+        <div class="split-col split-right split-editor">
+          {#await import('./FileEditor.svelte') then { default: FileEditor }}
+            <FileEditor
+              bind:this={editorRef}
+              content={editContent}
+              {filePath}
+              {changedRanges}
+              onsave={(c) => onsavefile?.(filePath, c)}
+              oncancel={() => oncanceledit?.(filePath)}
+            />
+          {/await}
         </div>
-        {/if}
       </div>
+      {:else}
+      <!-- Issue #41: ONE grid, cells emitted in pair order (old, new, old,
+           new…) so each left/right pair shares a grid row and a soft-wrap on
+           either side grows both cells — alignment is structural (browser
+           layout), not per-row JS. Two independent column stacks used to
+           drift by every wrapped line. Hunk headers span both columns.
+           Interleaved DOM order would let a drag-selection run across both
+           sides; the mousedown side-latch below makes the OTHER side
+           user-select:none, so a selection stays on the side it started. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="split-view split-grid" data-select-side={selectSide} onmousedown={latchSelectSide}>
+        <!-- Both sides ALWAYS emit exactly one cell per non-header row (an
+             empty side renders a .diff-empty filler), so auto-placement keeps
+             old in column 1 and new in column 2. The header row is emitted by
+             the LEFT chain only (spanning); the right chain skips it. Kept as
+             two flat if-chains — the same block/anchor count per row as the
+             old two-column markup (a per-cell snippet wrapper measured ~15%
+             slower on split toggle: extra comment anchors per cell). -->
+        {#each splitLines as sl, si}
+          {#if sl.left?.line.type === 'header'}
+            {#if !isExpanded}<div class="diff-hunk-header split-span" data-hunk={sl.left.hunkIdx}>{sl.left.line.content}</div>{/if}
+          {:else if sl.left}
+            {@const slKey = `${filePath}:${sl.left.hunkIdx}:${sl.left.lineIdx}`}
+            {@const spans = wordDiffs.get(String(sl.left.hunkIdx))?.get(sl.left.lineIdx)}
+            {@const slCm = conflictData?.lineMeta.get(sl.left.hunkIdx)?.get(sl.left.lineIdx)}
+            <!-- Split-left = OLD column: annOld=oldLeft, annNew=null. The
+                 length-based default would mis-infer annNew=oldLeft. -->
+            {@render diffLine(sl.left.line, slKey, spans, [splitNums[si].oldLeft], sl.left.hunkIdx, sl.left.lineIdx, slCm, splitNums[si].oldLeft, null, 'split-left')}
+          {:else}
+            <div class="diff-line diff-empty split-left">&nbsp;</div>
+          {/if}
+          {#if sl.right?.line.type === 'header'}
+            <!-- spanning header already emitted by the left chain -->
+          {:else if sl.right}
+            {@const srKey = `${filePath}:${sl.right.hunkIdx}:${sl.right.lineIdx}`}
+            {@const spans = wordDiffs.get(String(sl.right.hunkIdx))?.get(sl.right.lineIdx)}
+            {@const srCm = conflictData?.lineMeta.get(sl.right.hunkIdx)?.get(sl.right.lineIdx)}
+            {@render diffLine(sl.right.line, srKey, spans, [splitNums[si].newRight], sl.right.hunkIdx, sl.right.lineIdx, srCm, null, splitNums[si].newRight, 'split-right')}
+          {:else}
+            <div class="diff-line diff-empty split-right">&nbsp;</div>
+          {/if}
+        {/each}
+      </div>
+      {/if}
     {:else}
       <!-- Unified view -->
       {#each file.hunks as hunk, hunkIdx}
@@ -1212,12 +1273,40 @@
     color: var(--amber);
   }
 
+  /* Flex row so a rename's two paths can shrink at different rates: the
+     ellipsis lives on each path span, not here. */
   .diff-file-path {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: baseline;
+    white-space: nowrap;
+  }
+
+  .path-to {
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  /* Old path of a rename gives up its width first (shrink weight ≫ the new
+     path's) down to a bare "…" stub; only then does the new path — the
+     identity — start to ellipsize. Full old path is in the title tooltip. */
+  .rename-from {
+    flex: 0 1000 auto;
+    min-width: 2ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-faint);
+    font-weight: 400;
+  }
+
+  .rename-arrow {
+    flex-shrink: 0;
+    margin: 0 0.6ch;
+    color: var(--text-faint);
+    font-weight: 400;
   }
 
   .file-dir {
@@ -1508,10 +1597,31 @@
   }
 
   /* --- Split view --- */
-  .split-view {
-    display: flex;
+  /* Read view: one 2-column grid, a pair of cells per row → each row is as
+     tall as its taller cell, so soft-wraps can't misalign the sides (#41).
+     minmax(0, 1fr): columns are fixed halves regardless of content (long
+     unbreakable runs wrap via break-all instead of widening a track), which
+     also keeps track sizing content-independent for big diffs. */
+  .split-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    line-height: 18px;
+  }
+  .split-span { grid-column: 1 / -1; }
+  /* Side latch (see latchSelectSide): the side a drag did NOT start on is
+     unselectable, so a selection stays within one column. */
+  .split-grid[data-select-side='left'] > .split-right,
+  .split-grid[data-select-side='right'] > .split-left {
+    user-select: none;
+    -webkit-user-select: none;
   }
 
+  /* Edit view: old-side column beside the full-file editor (no pairing). */
+  .split-editing {
+    display: flex;
+  }
   .split-col {
     flex: 1;
     min-width: 0;
@@ -1520,7 +1630,8 @@
     font-size: var(--fs-md);
     line-height: 18px;
   }
-  .split-col .diff-line { --diff-gutter-w: 6ch; }
+  .split-col .diff-line,
+  .split-grid .diff-line { --diff-gutter-w: 6ch; }
 
   .split-left {
     border-right: 1px solid var(--surface0);

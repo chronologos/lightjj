@@ -331,6 +331,49 @@ rename to src/new.go`
     expect(files[0].header).toContain('rename from src/old.go')
   })
 
+  it('parses sourcePath for rename-with-edits (real jj 0.45 shape: rename lines, then index/---/+++/hunks)', () => {
+    // Captured verbatim (content trimmed) from `jj diff --git` on jj 0.45.1
+    // after `mv edited.txt renamed-edited.txt` + a one-line edit: the rename
+    // record is NOT decomposed into D+A — it carries both paths and a hunk.
+    const raw = `diff --git a/edited.txt b/renamed-edited.txt
+rename from edited.txt
+rename to renamed-edited.txt
+index 1d615085d7..d7d63235bd 100644
+--- a/edited.txt
++++ b/renamed-edited.txt
+@@ -19,3 +19,3 @@
+ line 19
+-line 20
++line twenty CHANGED
+ line 21
+diff --git a/long.ts b/long.ts
+index 804fcd6fc6..6d509b8f6d 100644
+--- a/long.ts
++++ b/long.ts
+@@ -1 +1 @@
+-a
++b
+`
+    const files = parseDiffContent(raw)
+    expect(files.map(f => f.filePath)).toEqual(['renamed-edited.txt', 'long.ts'])
+    expect(files[0].sourcePath).toBe('edited.txt')
+    expect(files[0].hunks).toHaveLength(1)
+    expect(files[0].hunks[0].lines.map(l => l.type)).toEqual(['context', 'remove', 'add', 'context'])
+    // The following, non-renamed file must not inherit the previous sourcePath.
+    expect(files[1].sourcePath).toBeUndefined()
+  })
+
+  it('keeps raw (unquoted) rename paths with spaces, quotes and non-ASCII', () => {
+    // jj does not C-quote paths the way git does — verified on jj 0.45.1.
+    const raw = `diff --git a/dir with space/ünï cödé.txt b/dir with space/rënamed "fïle".txt
+rename from dir with space/ünï cödé.txt
+rename to dir with space/rënamed "fïle".txt
+`
+    const [f] = parseDiffContent(raw)
+    expect(f.filePath).toBe('dir with space/rënamed "fïle".txt')
+    expect(f.sourcePath).toBe('dir with space/ünï cödé.txt')
+  })
+
   it('leaves sourcePath undefined for non-rename diffs', () => {
     const raw = `diff --git a/foo.ts b/foo.ts
 --- a/foo.ts

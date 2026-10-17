@@ -57,6 +57,24 @@ describe('FileSelectionPanel', () => {
       })
       expect(container.querySelector('.file-dot.dot-C')).toBeInTheDocument()
     })
+
+    it('renamed file shows `old → ` prefix; toggling still keys on the destination path', async () => {
+      const ontoggle = vi.fn()
+      const { container } = render(FileSelectionPanel, {
+        props: props({
+          files: [mkFile('pkg/new.go', { type: 'R' }), mkFile('b.go')],
+          renameSources: new Map([['pkg/new.go', 'src/old.go']]),
+          ontoggle,
+        }),
+      })
+      const paths = container.querySelectorAll('.file-select-path')
+      expect(paths[0].textContent).toBe('src/old.go → pkg/new.go')
+      expect(paths[0].querySelector('.rename-from')?.textContent).toBe('src/old.go → ')
+      expect(paths[0].getAttribute('title')).toBe('src/old.go → pkg/new.go')
+      expect(paths[1].querySelector('.rename-from')).toBeNull()
+      await fireEvent.click(rows(container)[0])
+      expect(ontoggle).toHaveBeenCalledWith('pkg/new.go')
+    })
   })
 
   describe('keyboard', () => {

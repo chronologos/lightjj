@@ -263,6 +263,136 @@ describe('DiffFileView', () => {
       expect(badge?.textContent).toBe('A')
       expect(badge?.classList.contains('badge-A')).toBe(true)
     })
+
+    it('rename (issue #44): shows `old → new` with the old path in a tooltip; new path stays the identity', () => {
+      // Real jj 0.45 rename-with-edits shape: rename lines AND a hunk.
+      const [file] = parseDiffContent([
+        'diff --git a/src/old name.go b/pkg/deep/new.go',
+        'rename from src/old name.go',
+        'rename to pkg/deep/new.go',
+        'index 1111111..2222222 100644',
+        '--- a/src/old name.go',
+        '+++ b/pkg/deep/new.go',
+        '@@ -1 +1 @@',
+        '-a',
+        '+b',
+        '',
+      ].join('\n'))
+      const ondiscard = vi.fn()
+      const { container } = render(DiffFileView, {
+        props: defaultProps({ file, fileStats: makeStats('pkg/deep/new.go', { type: 'R' }), ondiscard }),
+      })
+      const from = container.querySelector('.diff-file-path .rename-from')!
+      expect(from.textContent).toBe('src/old name.go')
+      expect(from.getAttribute('title')).toBe('Renamed from src/old name.go')
+      expect(container.querySelector('.rename-arrow')?.textContent).toBe('→')
+      expect(container.querySelector('.path-to')?.textContent?.trim()).toBe('pkg/deep/new.go')
+      // Reading order: old path, arrow, new path.
+      expect(container.querySelector('.diff-file-path')?.textContent?.replace(/\s+/g, ''))
+        .toBe('src/oldname.go→pkg/deep/new.go')
+      // Identity unchanged: data attribute + aria label use the destination.
+      expect(container.querySelector('.diff-file')?.getAttribute('data-file-path')).toBe('pkg/deep/new.go')
+      expect(container.querySelector('.diff-file-header')?.getAttribute('aria-label')).toBe('Collapse pkg/deep/new.go')
+      // Undo-rename still receives both paths.
+      const discard = Array.from(container.querySelectorAll('.diff-file-header .btn')).find(b => b.textContent === 'Discard')!
+      ;(discard as HTMLButtonElement).click()
+      expect(ondiscard).toHaveBeenCalledWith('pkg/deep/new.go', 'src/old name.go')
+    })
+
+    it('non-rename: no rename-from / arrow in the header', () => {
+      const { container } = render(DiffFileView, { props: defaultProps({ file: makeFile('src/main.go') }) })
+      expect(container.querySelector('.rename-from')).toBeNull()
+      expect(container.querySelector('.rename-arrow')).toBeNull()
+      expect(container.querySelector('.path-to')?.textContent?.trim()).toBe('src/main.go')
+    })
+  })
+
+  describe('split view rows (issue #41)', () => {
+    // Two hunks: replace-block with unequal sides (2 removes vs 1 add → one
+    // pair with an empty right side), context, then a pure add.
+    const twoHunks = (): DiffFile => ({
+      header: 'diff --git a/s.ts b/s.ts',
+      filePath: 's.ts',
+      isBinary: false,
+      hunks: [
+        { header: '@@ -1,3 +1,2 @@', oldStart: 1, newStart: 1, newCount: 2, lines: [
+          { type: 'remove', content: '-old one' },
+          { type: 'remove', content: '-old two' },
+          { type: 'add', content: '+new one' },
+          { type: 'context', content: ' same' },
+        ] },
+        { header: '@@ -10 +9,2 @@', oldStart: 10, newStart: 9, newCount: 2, lines: [
+          { type: 'context', content: ' ctx' },
+          { type: 'add', content: '+added' },
+        ] },
+      ],
+    })
+
+    it('renders ONE grid whose children are spanning hunk headers or old/new cell PAIRS', () => {
+      const { container } = render(DiffFileView, { props: defaultProps({ file: twoHunks(), splitView: true }) })
+      const grids = container.querySelectorAll('.split-grid')
+      expect(grids).toHaveLength(1)
+      // No per-side column stacks (the structure that drifted on soft-wrap).
+      expect(container.querySelector('.split-col')).toBeNull()
+      const kids = Array.from(grids[0].children)
+      const shape = kids.map(k =>
+        k.classList.contains('split-span') ? 'H' : k.classList.contains('split-left') ? 'L' : k.classList.contains('split-right') ? 'R' : '?')
+      // H, 3 pairs (old two↔∅ included), H, 2 pairs.
+      expect(shape.join('')).toBe('HLRLRLRHLRLR')
+      // Pair invariant: every L is immediately followed by its R — so each
+      // pair occupies exactly one grid row (columns 1 and 2).
+      for (let i = 0; i < kids.length; i++) {
+        if (shape[i] === 'L') expect(shape[i + 1]).toBe('R')
+      }
+      // Headers carry data-hunk (scrollToHunk / hunk nav target) once each.
+      expect(Array.from(grids[0].querySelectorAll('[data-hunk]')).map(h => h.getAttribute('data-hunk'))).toEqual(['0', '1'])
+      // Line numbers stay per side: old 1,2,3 / new 1,_,2 for hunk 0.
+      const cellText = (sel: string) => Array.from(grids[0].querySelectorAll(sel)).map(c => c.querySelector('.line-num')?.textContent ?? '∅')
+      expect(cellText('.split-left')).toEqual(['1', '2', '3', '10', '∅'])
+      expect(cellText('.split-right')).toEqual(['1', '∅', '2', '9', '10'])
+      expect(grids[0].querySelectorAll('.split-right.diff-empty')).toHaveLength(1)
+      expect(grids[0].querySelectorAll('.split-left.diff-empty')).toHaveLength(1)
+    })
+
+    it('expanded (full context) view omits hunk headers but keeps the pairs', () => {
+      const { container } = render(DiffFileView, { props: defaultProps({ file: twoHunks(), splitView: true, isExpanded: true }) })
+      const shape = Array.from(container.querySelector('.split-grid')!.children)
+        .map(k => k.classList.contains('split-left') ? 'L' : k.classList.contains('split-right') ? 'R' : '?')
+      expect(shape.join('')).toBe('LRLRLRLRLR')
+    })
+
+    it('mousedown latches the selection side (other side becomes unselectable via CSS)', async () => {
+      const { container } = render(DiffFileView, { props: defaultProps({ file: twoHunks(), splitView: true }) })
+      const grid = container.querySelector('.split-grid')!
+      expect(grid.getAttribute('data-select-side')).toBeNull()
+      await fireEvent.mouseDown(grid.querySelector('.split-right .line-num')!)
+      expect(grid.getAttribute('data-select-side')).toBe('right')
+      await fireEvent.mouseDown(grid.querySelector('.split-left')!)
+      expect(grid.getAttribute('data-select-side')).toBe('left')
+    })
+
+    it('Copy-reference selection keeps only the side the selection started on', async () => {
+      const onlinecontext = vi.fn()
+      const { container } = render(DiffFileView, { props: defaultProps({ file: twoHunks(), splitView: true, onlinecontext }) })
+      const lefts = container.querySelectorAll('.split-grid > .split-left')
+      // Drag from old line 1 to old line 3: in pair-order DOM the range also
+      // spans the right cells of rows 1–2, which must NOT be reported.
+      const range = document.createRange()
+      range.setStart(lefts[0].lastChild!, 0)
+      range.setEnd(lefts[2].lastChild!, 1)
+      const sel = window.getSelection()!
+      sel.removeAllRanges()
+      sel.addRange(range)
+      await fireEvent.contextMenu(lefts[1])
+      sel.removeAllRanges()
+      expect(onlinecontext).toHaveBeenCalledTimes(1)
+      const info = onlinecontext.mock.calls[0][1]
+      expect(info.lines).toEqual([
+        { lineNum: 1, content: 'old one', side: 'old' },
+        { lineNum: 2, content: 'old two', side: 'old' },
+        { lineNum: 3, content: 'same', side: 'old' },
+      ])
+    })
   })
 
   describe('collapse and expand', () => {
@@ -783,7 +913,7 @@ describe('DiffFileView', () => {
     it('pure rename: real `jj diff --git` shape (rename from/to, NO Binary line) → image body via sourcePath, no Edit/Preview', () => {
       // What the parser actually produces for a pure-renamed PNG: isBinary
       // stays false (no "Binary files … differ" marker), hunks [], sourcePath
-      // from `rename from`. Rename-with-content-change decomposes to D+A.
+      // from `rename from`.
       const [file] = parseDiffContent(
         'diff --git a/img/old.png b/img/new.png\nrename from img/old.png\nrename to img/new.png\n')
       expect(file.isBinary).toBe(false)
