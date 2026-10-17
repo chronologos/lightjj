@@ -39,6 +39,7 @@ internal/
     bookmark.go            — Bookmark model + output parsers
     alias.go               — jj config alias parser
     file_change.go         — FileChange model, FilesTemplate, ParseFilesTemplate
+    file_list.go           — TreeFile model + FileListJSON/FileList(pre-json fallback)/ResolveCommitId builders + parsers (full tree at a revision)
     divergence.go          — DivergenceEntry, Divergence() template builder, ParseDivergence
     selected_revisions.go  — Multi-revision selection helper
     version.go             — Semver type + named jj feature gates + FeatureGates wire registry (→ /api/info features)
@@ -62,6 +63,7 @@ internal/
     agent_docs.go          — GET /api/agent serves embedded agent_api.md (doc/route drift guard test)
     symbol.go              — rg-backed go-to-definition (GET /api/symbol) via RunRaw rg --json
     focus.go               — GET/POST /api/focus: frontend view-state report for agent steering
+    file_tree.go           — GET /api/file-tree (+/search): per-commit LRU index of one `jj file list` run (in-flight dedup, caps) → dir children + ranked path search
     open.go                — Open-in-$EDITOR ({file}/{line} substitution, detached process)
     open_unix.go           — detachProcess via Setsid (!windows)
     open_windows.go        — detachProcess no-op (windows)
@@ -119,6 +121,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     FileHistoryPanel.svelte — Two-cursor file history overlay
     FileHistoryRail.svelte — Reusable file-history revision rail (two-tier mutable→full loading)
     FileComparePicker.svelte — Compare a file against another revision (FileHistoryRail + diffRange)
+    FileTreePanel.svelte   — Full-tree-at-revision overlay (F / "Files"): lazy tree + server-search filter + read-only highlighted viewer
+    file-tree.ts           — PURE — FileTreePanel view model: flattenTree, changeMarks, ancestorDirs, contentKind/contentLines, visiblePath
     SplitToggle.svelte     — ◫/≡ split/unified button (glyph + a11y strings); parent owns the boolean
     DescriptionEditor.svelte — Inline commit message editor
     CommandPalette.svelte  — Fuzzy-search command palette (Cmd+K) with submenus

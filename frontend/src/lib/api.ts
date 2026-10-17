@@ -864,6 +864,35 @@ export interface FileChange {
 
 export const FILE_TYPE_LABELS: Record<string, string> = { A: 'Added', D: 'Deleted', M: 'Modified', R: 'Renamed', C: 'Copied' }
 
+/** One child of a directory in a revision's FULL tree (GET /api/file-tree).
+ *  `dir` rows are synthesized server-side; the rest are jj's file_type(). */
+export type TreeEntryType = 'dir' | 'file' | 'symlink' | 'git-submodule' | 'conflict'
+export interface TreeEntry {
+  name: string
+  path: string
+  type: TreeEntryType
+  executable?: boolean
+  /** dirs only: files beneath (recursive). */
+  files?: number
+}
+export interface FileTreeResponse {
+  commit_id: string
+  dir: string
+  entries: TreeEntry[]
+  /** Children beyond the server's per-directory cap (reachable via search). */
+  omitted?: number
+  total_files: number
+  /** The whole listing hit the server's file cap (lexicographic prefix kept). */
+  truncated: boolean
+}
+export interface FileTreeSearchResponse {
+  commit_id: string
+  matches: { path: string; type: TreeEntryType; executable?: boolean }[]
+  /** All matches, before the limit. */
+  total: number
+  truncated: boolean
+}
+
 export const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i
 
 export interface OpEntry {
@@ -1156,6 +1185,23 @@ export const api = {
   // so SSH-mode images load. Not a fetch wrapper (the browser loads it).
   fileRawUrl: (revision: string, path: string) =>
     tabScoped(`/api/file-raw?${new URLSearchParams({ revision, path })}`),
+
+  /** One directory's children in `revision`'s full tree (dirs first). `dir`
+   *  '' = root. Deliberately NOT in the commit_id LRU: one browse session can
+   *  expand dozens of dirs, which would evict diffs the j/k path relies on.
+   *  The server keeps a per-commit index (one `jj file list`), so a repeat
+   *  request is an in-memory lookup there; FileTreePanel keeps its own
+   *  per-open map. */
+  fileTree: (revision: string, dir = '') =>
+    request<FileTreeResponse>(`/api/file-tree?${new URLSearchParams({ revision, dir })}`),
+
+  /** Ranked fuzzy path search over `revision`'s full tree. Uncached — every
+   *  keystroke is a new query; the server's per-commit index makes it cheap. */
+  fileTreeSearch: (revision: string, q: string, limit?: number) => {
+    const params = new URLSearchParams({ revision, q })
+    if (limit) params.set('limit', String(limit))
+    return request<FileTreeSearchResponse>(`/api/file-tree/search?${params}`)
+  },
 
   fileWrite: (path: string, content: string) =>
     post<MutationResult>('/api/file-write', { path, content }),

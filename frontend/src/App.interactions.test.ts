@@ -198,6 +198,29 @@ describe('App.svelte interactions', () => {
     expect(qs('.edit-parents-btn')).toBeNull()
   })
 
+  // Full-tree browser (issue #39): F opens the overlay for the DISPLAYED
+  // revision; while open, keys go to the panel (j/k don't move the graph
+  // cursor beneath — anyModalOpen) and Escape closes it.
+  it('F opens the file-tree overlay; keys stay inside; Escape closes', async () => {
+    await mountApp()
+    await waitFor(() => qs('.detail-change-id') !== null)
+    await press('F')
+    await waitFor(() => qs('.ft-root') !== null)
+    expect(calls.some(c => c.method === 'fileTree' && c.args[0] === 'kwc' && c.args[1] === '')).toBe(true)
+    await waitFor(() => qs('.ft-row .ft-name')?.textContent === 'README.md')
+    await press('j')
+    expect(selectedEntry()).toBe('0') // graph cursor untouched beneath the overlay
+    await press('Escape')
+    await waitFor(() => qs('.ft-root') === null)
+  })
+
+  it('RevisionHeader "Files" button opens the file-tree overlay', async () => {
+    await mountApp()
+    await waitFor(() => qs('.browse-files-btn') !== null)
+    await fireEvent.click(qs('.browse-files-btn')!)
+    await waitFor(() => qs('.ft-root') !== null)
+  })
+
   // App-level Escape fallback closes the oplog/evolog drawers (they're opened
   // via 4/5 without focus, so the panel's own Escape handler can't fire). Guards
   // the soft-trap the e2e noModalTraps property caught.

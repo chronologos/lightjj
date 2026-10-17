@@ -133,6 +133,7 @@
           <kbd>e</kbd> describe
           <kbd>R</kbd> rebase
           <kbd>S</kbd> squash
+          <kbd>F</kbd> files
           <kbd>/</kbd> filter
           <kbd>⌘F</kbd> search
         </span>

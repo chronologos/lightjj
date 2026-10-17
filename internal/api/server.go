@@ -89,6 +89,10 @@ type Server struct {
 	// Server per tab); no cross-tab coordination.
 	focus   FocusState
 	focusMu sync.Mutex
+
+	// fileTrees caches per-commit full-tree indexes for GET /api/file-tree
+	// (+ /search). Keyed by commit id → never stale; LRU-bounded (file_tree.go).
+	fileTrees *fileTreeCache
 }
 
 // hasLocalFS reports whether this Server can read the repo filesystem directly
@@ -190,6 +194,7 @@ func NewServer(r runner.CommandRunner, repoDir string) *Server {
 		Mux:           http.NewServeMux(),
 		RepoDir:       repoDir,
 		DefaultRemote: "origin",
+		fileTrees:     newFileTreeCache(),
 	}
 	s.routes()
 	return s
@@ -231,6 +236,8 @@ func (s *Server) routes() {
 	reg("GET /api/diff-range", s.handleDiffRange)
 	reg("GET /api/file-show", s.handleFileShow)
 	reg("GET /api/file-raw", s.handleFileRaw)
+	reg("GET /api/file-tree", s.handleFileTree)
+	reg("GET /api/file-tree/search", s.handleFileTreeSearch)
 	reg("GET /api/info", s.handleInfo)
 	reg("GET /api/workspaces", s.handleWorkspaces)
 

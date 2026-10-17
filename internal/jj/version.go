@@ -35,6 +35,14 @@ var (
 	// handleFileRaw wraps content-addressed revisions in it so the immutable
 	// cache can't be pointed at a movable ref's bytes. Backend-only gate.
 	CommitIdRevsetFn = Semver{0, 31}
+
+	// JSONTemplates: the json(value) template function (jj 0.31.0 changelog:
+	// "Templates now support json(x) function to serialize values in JSON
+	// format"). Handlers that wire a *JSON builder/parser pair branch on
+	// s.jjSupports(ctx, jj.JSONTemplates) and keep the delimiter/plain builder
+	// as the older-jj fallback. First adopter: handleFileTree (FileListJSON →
+	// FileList). OpLogJSON is the reference builder. Backend-only gate.
+	JSONTemplates = Semver{0, 31}
 )
 
 // CommitIdRevset pins `hex` to commit-id resolution — `commit_id(hex)` — so a

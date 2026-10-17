@@ -78,6 +78,8 @@ flowchart TD
 | GET | `/api/file-show` | File content at a revision (conflict view, inline editor) |
 | GET | `/api/file-raw` | Raw bytes with Content-Type (markdown images; CSP-hardened) |
 | GET | `/api/file-history` | Log scoped to commits touching one file |
+| GET | `/api/file-tree` | One directory's children in a revision's FULL tree (dirs first; per-commit cached `jj file list` index) |
+| GET | `/api/file-tree/search` | Ranked fuzzy path search over a revision's full tree (same cached index) |
 | POST | `/api/index-paths` | Build jj's changed-path index (streamed output) |
 | POST | `/api/file-write` | Write file to working copy (inline editor save; path-validated) |
 | POST | `/api/open-file` | Open file in the user's editor (`{file}`/`{line}` substitution) |

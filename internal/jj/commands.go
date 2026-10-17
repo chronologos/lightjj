@@ -529,17 +529,6 @@ func ParseOpLog(output string) []OpEntry {
 	return entries
 }
 
-// JSONTemplates names the first jj release whose template language has the
-// json(value) function (jj 0.31.0 changelog: "Templates now support json(x)
-// function to serialize values in JSON format"). Handlers that wire a
-// *JSON builder/parser pair branch on s.jjSupports(ctx, jj.JSONTemplates)
-// and keep the delimiter builder as the older-jj fallback. The constant
-// lives here (next to the exemplar) rather than in version.go's gate list
-// because that list only carries gates a handler already branches on; move
-// it there — plus a FeatureGates entry if the frontend needs the boolean —
-// when the first handler adopts it.
-var JSONTemplates = Semver{0, 31}
-
 // OpLogJSON is the json()-template counterpart of OpLog — the reference
 // migration for the "new jj output parsing uses json() templates" rule
 // (CLAUDE.md, Go conventions). One JSON object per line with a schema WE

@@ -16,12 +16,14 @@
     onbookmarkclick: (name: string) => void
     onresolveDivergence: () => void
     oneditparents: () => void
+    /** Open the full-tree browser for this revision (issue #39). */
+    onbrowsefiles?: () => void
   }
 
   let {
     revision, fullDescription, descriptionEditing, descriptionDraft,
     commitMode, prByBookmark, onstartdescribe, ondescribe, oncanceldescribe,
-    ondraftchange, onbookmarkclick, onresolveDivergence, oneditparents,
+    ondraftchange, onbookmarkclick, onresolveDivergence, oneditparents, onbrowsefiles,
   }: Props = $props()
 
   // descExpanded resets on navigation via {#key} in App.svelte (component
@@ -45,6 +47,11 @@
       {#if descIsMultiline}
         <button class="btn desc-expand-btn" onclick={() => descExpanded = !descExpanded} title={descExpanded ? 'Collapse description' : 'Expand description'}>
           <svg class="desc-expand-icon" class:desc-expand-open={descExpanded} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,4.5 6,7.5 9,4.5"/></svg>
+        </button>
+      {/if}
+      {#if onbrowsefiles}
+        <button class="btn browse-files-btn" onclick={onbrowsefiles} title="Browse every file at this revision, not just the changed ones (F)">
+          Files
         </button>
       {/if}
       <button class="btn" onclick={onstartdescribe} title="Edit description (e)">

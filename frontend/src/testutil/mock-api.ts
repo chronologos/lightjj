@@ -174,6 +174,11 @@ export const mockApi = new Proxy({} as Record<string, (...args: unknown[]) => Pr
         case 'files': return Promise.resolve(_fixtures.files[a0!] ?? [])
         case 'description': return Promise.resolve({ description: _fixtures.descriptions[a0!] ?? '' })
         case 'fileShow': return Promise.resolve({ content: '' })
+        // Full-tree browser: every revision has one top-level README.md.
+        case 'fileTree': return Promise.resolve({
+          commit_id: a0, dir: args[1] ?? '', total_files: 1, truncated: false,
+          entries: args[1] ? [] : [{ name: 'README.md', path: 'README.md', type: 'file' }],
+        })
         case 'conflicts': return Promise.resolve([])
         case 'divergence': return Promise.resolve([])
         case 'staleImmutable': return Promise.resolve([])

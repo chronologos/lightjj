@@ -111,6 +111,7 @@
   import { buildVisibilityRevset, revsetQuote, syncVisibility } from './lib/remote-visibility'
   import ConflictQueue from './lib/ConflictQueue.svelte'
   import FileHistoryPanel from './lib/FileHistoryPanel.svelte'
+  import FileTreePanel from './lib/FileTreePanel.svelte'
   import { createMergeController } from './lib/merge-controller.svelte'
   import type { DocSession } from './lib/doc-session.svelte'
 
@@ -415,6 +416,21 @@
     fileHistoryPin = loadedTarget?.kind === 'single' ? loadedTarget.commitId : null
   }
 
+  // Full-tree browser overlay (issue #39) — every file at the DISPLAYED
+  // revision (loadedTarget, not the cursor: the tree's changed-file marks must
+  // match the diff on screen). Single-revision only. Null = closed;
+  // {#key commitId} remounts per revision. Shares FileHistory's overlay key
+  // delegate (routeKeydown's fileHistoryOpen slot) — only one is ever open.
+  let fileTree: { commitId: string; changeId: string; isWorkingCopy: boolean } | null = $state(null)
+  let fileTreeRef: FileTreePanel | undefined = $state()
+
+  function openFileTree() {
+    const t = loadedTarget
+    if (t?.kind !== 'single') return
+    closeModals()
+    fileTree = { commitId: t.commitId, changeId: t.changeId, isWorkingCopy: t.isWorkingCopy }
+  }
+
   // Doc mode — ProseMirror view of a single .md with range-anchored comments.
   // Per-file like FileHistory, but as an activeView (full-width, hides graph)
   // not an overlay. {#key docFilePath} remounts the lazy-loaded view per path.
@@ -573,7 +589,7 @@
       : config.editorArgs.length > 0
   )
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || configModalOpen || !!contextMenu || divergence.active || welcomeOpen || !!fileHistoryPath)
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || configModalOpen || !!contextMenu || divergence.active || welcomeOpen || !!fileHistoryPath || !!fileTree)
   let inlineMode = $derived(rebase.active || squash.active || split.active || megamerge.active)
   // Which mode (if any). `inlineMode` answers "is ANY mode active?" for
   // toolbar gates; `activeInlineMode.diffFollows` answers the per-mode
@@ -899,6 +915,7 @@
       if (diffPanelRef) diffPanelRef.toggleSplitView()
       else config.splitView = !config.splitView
     }, when: () => !fileHistoryPath },
+    { label: 'Browse files at revision', shortcut: 'F', category: 'View', hint: 'full tree, not just changed files', action: openFileTree, when: () => loadedTarget?.kind === 'single' },
     { label: 'Toggle operation log', shortcut: 'O', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', shortcut: 'E', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
     // Help — showInCheatsheet lets shortcut-less entries appear in the empty-query grid
@@ -2640,6 +2657,7 @@
 
   function closeModals() {
     fileHistoryPath = null
+    fileTree = null
     paletteOpen = false
     bookmarkModalOpen = false
     bookmarkInputOpen = false
@@ -2808,7 +2826,7 @@
         hasModifier: e.metaKey || e.ctrlKey,
         inInput: isInInput(target),
         defaultPrevented: e.defaultPrevented,
-        fileHistoryOpen: !!fileHistoryPath,
+        fileHistoryOpen: !!fileHistoryPath || !!fileTree, // the overlay-delegate slot
         anyModalOpen,
         inlineMode,
         activeView,
@@ -2818,7 +2836,7 @@
         inlineCommit: () => handleInlineCommit(e, target),
         diffScroll: () => handleDiffScroll(e),
         delegateFileHistory: () => {
-          if (fileHistoryRef?.handleKeydown(e)) { e.preventDefault(); return true }
+          if (fileHistoryRef?.handleKeydown(e) || fileTreeRef?.handleKeydown(e)) { e.preventDefault(); return true }
           return false
         },
         inlineNav: () => handleInlineNav(e),
@@ -2873,7 +2891,7 @@
     // and file-history overlay would open DiffPanel's search BEHIND itself
     // (bug_030 — steals focus, invisible input). Falling through to native
     // Cmd+F lets the user search the overlay's visible diff text.
-    if (e.key === 'f' && diffPanelRef && !fileHistoryPath) {
+    if (e.key === 'f' && diffPanelRef && !fileHistoryPath && !fileTree) {
       e.preventDefault()
       diffPanelRef.openSearch()
       return true
@@ -3086,6 +3104,9 @@
       case 'M': if (singleOnly) { e.preventDefault(); enterMegamergeMode() } break
       case 'J': if (singleOnly) { e.preventDefault(); handleSlide('down') } break
       case 'K': if (singleOnly) { e.preventDefault(); handleSlide('up') } break
+      // Browse the full tree of the DISPLAYED revision (gated inside on a
+      // single loadedTarget — a multi-check diff has no one tree).
+      case 'F': if (loadedTarget?.kind === 'single') { e.preventDefault(); openFileTree() } break
     }
   }
 
@@ -3784,6 +3805,7 @@
                 onbookmarkclick={openBookmarkModal}
                 onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
                 oneditparents={() => enterMegamergeMode()}
+                onbrowsefiles={openFileTree}
               />
               {/key}
               {/if}
@@ -3902,6 +3924,22 @@
           path={fileHistoryPath}
           initialPin={fileHistoryPin}
           onclose={() => { fileHistoryPath = null; fileHistoryPin = null }}
+        />
+      {/key}
+    </div>
+  {/if}
+
+  {#if fileTree}
+    <div class="file-history-overlay">
+      {#key fileTree.commitId}
+        <FileTreePanel
+          bind:this={fileTreeRef}
+          commitId={fileTree.commitId}
+          changeId={fileTree.changeId}
+          isWorkingCopy={fileTree.isWorkingCopy}
+          onclose={() => { fileTree = null }}
+          onfilehistory={(p) => { fileTree = null; openFileHistory(p) }}
+          onopenfile={editorConfigured ? handleOpenFile : undefined}
         />
       {/key}
     </div>
