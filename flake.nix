@@ -36,7 +36,7 @@
               inherit version pnpm;
               fetcherVersion = 3;
               src = "${src}/frontend";
-              hash = "sha256-v/WqSpzFIBf126De8DT1043QCov88imMhcpkhUPUI4s=";
+              hash = "sha256-CjNheIJIDkY7KKHZjHHFdAldIlIhtteTHCnsOYfTNg0=";
             };
 
             nativeBuildInputs = [
@@ -71,7 +71,7 @@
             pname = "lightjj";
             inherit version src;
 
-            vendorHash = "sha256-89TeEW1nira+ivr4VMtMcyQhUxaJuVYZTzECvaLReNg=";
+            vendorHash = "sha256-M85G5YrM9I7Dufpqzh+e0jjGBEJz3spWsMnnCNlFOO4=";
 
             env.CGO_ENABLED = "0";
 
