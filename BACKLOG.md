@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-10** v1.39.0 — full file tree at a revision (#39), `--allowed-host` for reverse proxies (#45), split-view rows aligned under soft-wrap (#41), rename source in diff headers (#44), theme-following CodeMirror editors (#40), delta-based resize dividers (#43), dependency bumps (vitest 5, vite 8.3). Before that: v1.38.0 — split/unified toggle in FileHistoryPanel + FileComparePicker with `|` as the app-wide split-view key (#38), PR badges for non-`@me` same-repo PRs + "Open PR" on bookmark right-click (#36 GitHub half).
+Last shipped: **2026-10** v1.40.0 — agent revset steering: `POST /api/navigate` takes `revset` (PR #29), `/api/focus` reports the applied revset. Before that: v1.39.0 — full file tree at a revision (#39), `--allowed-host` for reverse proxies (#45), split-view rows aligned under soft-wrap (#41), rename source in diff headers (#44), theme-following CodeMirror editors (#40), delta-based resize dividers (#43), dependency bumps (vitest 5, vite 8.3). Before that: v1.38.0 — split/unified toggle in FileHistoryPanel + FileComparePicker with `|` as the app-wide split-view key (#38), PR badges for non-`@me` same-repo PRs + "Open PR" on bookmark right-click (#36 GitHub half).
 
 ## Active
 
