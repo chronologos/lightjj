@@ -10,7 +10,7 @@
 //   2000 = AUTO_COLLAPSE_TOTAL_LINES (collapse all files)
 //   5000 = HIGHLIGHT_SKIP_LINE_LIMIT / WORD_DIFF_LINE_LIMIT (compute caps)
 
-import { bench, describe } from 'vitest'
+import { test } from 'vitest'
 import { parseDiffContent, type DiffFile } from './diff-parser'
 import { highlightLines } from './highlighter'
 import { computeWordDiffs } from './word-diff'
@@ -57,42 +57,62 @@ function wordDiffFile(file: DiffFile) {
 }
 
 // ── Benchmarks ──────────────────────────────────────────────────────────────
+//
+// Vitest 5 API: `bench` is a test-context fixture, not a top-level import.
+// Each former describe-group is one test whose benches run together via
+// bench.compare() (one comparison table per group). Benches can run well past
+// the default 5s testTimeout, so each test opts out with timeout: 0.
 
-describe('parseDiffContent', () => {
-  bench('2k lines (4 files)', () => { parseDiffContent(RAW_2K) })
-  bench('10k lines (20 files)', () => { parseDiffContent(RAW_10K) })
-  bench('40k lines (40 files)', () => { parseDiffContent(RAW_40K) })
+const NO_TIMEOUT = { timeout: 0 }
+
+test('parseDiffContent', NO_TIMEOUT, async ({ bench }) => {
+  await bench.compare(
+    bench('2k lines (4 files)', () => { parseDiffContent(RAW_2K) }),
+    bench('10k lines (20 files)', () => { parseDiffContent(RAW_10K) }),
+    bench('40k lines (40 files)', () => { parseDiffContent(RAW_40K) }),
+  )
 })
 
-describe('highlightLines (Lezer)', () => {
-  bench('ts 100 lines', () => { highlightLines(TS_100, 'typescript') })
-  bench('ts 500 lines', () => { highlightLines(TS_500, 'typescript') })
-  bench('ts 2000 lines', () => { highlightLines(TS_2000, 'typescript') })
-  bench('go 500 lines', () => { highlightLines(GO_500, 'go') })
+test('highlightLines (Lezer)', NO_TIMEOUT, async ({ bench }) => {
+  await bench.compare(
+    bench('ts 100 lines', () => { highlightLines(TS_100, 'typescript') }),
+    bench('ts 500 lines', () => { highlightLines(TS_500, 'typescript') }),
+    bench('ts 2000 lines', () => { highlightLines(TS_2000, 'typescript') }),
+    bench('go 500 lines', () => { highlightLines(GO_500, 'go') }),
+  )
 })
 
-describe('word-diff (LCS)', () => {
-  bench('500-line file (per-hunk pairs)', () => { wordDiffFile(PARSED_2K[0]) })
-  bench('5000-line file', () => { wordDiffFile(PARSED_SINGLE_5K[0]) })
+test('word-diff (LCS)', NO_TIMEOUT, async ({ bench }) => {
+  await bench.compare(
+    bench('500-line file (per-hunk pairs)', () => { wordDiffFile(PARSED_2K[0]) }),
+    bench('5000-line file', () => { wordDiffFile(PARSED_SINGLE_5K[0]) }),
+  )
 })
 
-describe('toSplitView', () => {
-  bench('500-line file', () => { toSplitView(PARSED_2K[0].hunks) })
-  bench('5000-line file', () => { toSplitView(PARSED_SINGLE_5K[0].hunks) })
+test('toSplitView', NO_TIMEOUT, async ({ bench }) => {
+  await bench.compare(
+    bench('500-line file', () => { toSplitView(PARSED_2K[0].hunks) }),
+    bench('5000-line file', () => { toSplitView(PARSED_SINGLE_5K[0].hunks) }),
+  )
 })
 
-describe('full compute pipeline (parse + highlight + word-diff, all files)', () => {
-  bench('2k-line diff', () => {
-    const files = parseDiffContent(RAW_2K)
-    for (const f of files) { highlightFileSync(f); wordDiffFile(f) }
-  })
-  bench('10k-line diff', () => {
-    const files = parseDiffContent(RAW_10K)
-    for (const f of files) { highlightFileSync(f); wordDiffFile(f) }
-  }, { time: 1000 })
+test('full compute pipeline (parse + highlight + word-diff, all files)', NO_TIMEOUT, async ({ bench }) => {
+  // Run options are per-compare in v5 (v4 set time: 1000 on the 10k bench
+  // only); the slow 10k pipeline needs the longer window for stable samples.
+  await bench.compare(
+    bench('2k-line diff', () => {
+      const files = parseDiffContent(RAW_2K)
+      for (const f of files) { highlightFileSync(f); wordDiffFile(f) }
+    }),
+    bench('10k-line diff', () => {
+      const files = parseDiffContent(RAW_10K)
+      for (const f of files) { highlightFileSync(f); wordDiffFile(f) }
+    }),
+    { time: 1000 },
+  )
 })
 
-describe('search scan (findMatches-equivalent over parsed diff)', () => {
+test('search scan (findMatches-equivalent over parsed diff)', NO_TIMEOUT, async ({ bench }) => {
   // Approximates DiffPanel.findMatchesInFile: lowercase + indexOf per line.
   function scan(files: DiffFile[], query: string): number {
     let n = 0
@@ -105,5 +125,5 @@ describe('search scan (findMatches-equivalent over parsed diff)', () => {
     }
     return n
   }
-  bench('10k-line diff, query "total"', () => { scan(PARSED_10K, 'total') })
+  await bench('10k-line diff, query "total"', () => { scan(PARSED_10K, 'total') }).run()
 })
