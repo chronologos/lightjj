@@ -146,11 +146,13 @@ func handleConfigGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // isLocalOrigin checks whether an Origin header value points at a loopback
-// host. Defense-in-depth against a malicious page POSTing editorArgs (then
-// social-engineering the user into right-click → Open). localhostOnly already
-// validates Host, but browsers set Host=localhost on cross-origin fetch() so
-// that gate doesn't block CORS writes. Non-browser clients (curl) typically
-// omit Origin → permitted.
+// host — the baseline of HostPolicy.AllowsOrigin (hostgate.go), which handlers
+// reach through originAllowed(r) so --allowed-host applies to Origin too.
+// Defense-in-depth against a malicious page POSTing editorArgs (then
+// social-engineering the user into right-click → Open). HostPolicy.Middleware
+// already validates Host, but browsers set Host=localhost on cross-origin
+// fetch() so that gate doesn't block CORS writes. Non-browser clients (curl)
+// typically omit Origin → permitted.
 func isLocalOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
@@ -168,7 +170,7 @@ func isLocalOrigin(origin string) bool {
 }
 
 func handleConfigSet(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" && !isLocalOrigin(origin) {
+	if !originAllowed(r) {
 		writeJSONError(w, http.StatusForbidden, "cross-origin config write rejected")
 		return
 	}
@@ -306,12 +308,12 @@ func handleConfigGetRaw(w http.ResponseWriter, r *http.Request) {
 // POSTing editorArgs through here has the same reach as through the typed
 // endpoint.
 func handleConfigSetRaw(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" && !isLocalOrigin(origin) {
+	if !originAllowed(r) {
 		writeJSONError(w, http.StatusForbidden, "cross-origin config write rejected")
 		return
 	}
 	// NOTE: text/plain is a CORS-safelisted Content-Type — it does NOT force
-	// preflight (unlike application/json on the typed endpoint). isLocalOrigin
+	// preflight (unlike application/json on the typed endpoint). originAllowed
 	// above is the SOLE cross-origin gate for this handler; do not relax it.
 	// The CT check below only normalises the request shape (rejects accidental
 	// application/json POSTs expecting per-key merge semantics).

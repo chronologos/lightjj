@@ -277,7 +277,7 @@ func handleStateRecentActionsGet(w http.ResponseWriter, r *http.Request) {
 // handleConfigSet — defense-in-depth on top of decodeBody's
 // application/json requirement (which already forces CORS preflight).
 func handleStateRecentActionsSet(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" && !isLocalOrigin(origin) {
+	if !originAllowed(r) {
 		writeJSONError(w, http.StatusForbidden, "cross-origin state write rejected")
 		return
 	}

@@ -64,6 +64,14 @@ lightjj --addr localhost:8080      # custom listen address
 lightjj --no-browser               # don't auto-open browser
 ```
 
+**Behind a reverse proxy** — lightjj only answers requests addressed to `localhost`/`127.0.0.1`/`::1` (DNS-rebinding defense), so a proxy that forwards its own `Host` gets `forbidden`. Allow the proxy's hostname explicitly:
+
+```bash
+lightjj --addr localhost:8080 --no-browser --allowed-host lightjj.example.com
+```
+
+`--allowed-host` is repeatable or comma-separated; matching is exact and case-insensitive (port ignored, no wildcards), and it applies to both the `Host` and browser `Origin` checks. It does not change the bind address. lightjj has **no authentication** — anyone who can reach the proxy can run jj commands, including rewriting history, so put auth in front of it. The proxy must serve lightjj at the root of a hostname (sub-path mounts like `/lightjj/` are not supported) and must pass server-sent events through unbuffered (`/tab/{id}/api/events`) for auto-refresh.
+
 **Agent integration** — point a coding agent at the running instance:
 
 ```bash

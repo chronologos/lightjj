@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -64,6 +65,8 @@ func main() {
 	defaultRemote := flag.String("default-remote", "", "Remote name to prefer (overrides jj config git.push; defaults to origin)")
 	autoShutdown := flag.Duration("auto-shutdown", 0, "Shut down after this `duration` with no browser tabs connected (0 to disable)")
 	applyHunks := flag.String("apply-hunks", "", "Internal: diff-editor re-entry. Args: <spec.json> $left $right")
+	var allowedHosts hostList
+	flag.Var(&allowedHosts, "allowed-host", "Extra `hostname` to accept in Host/Origin, e.g. when behind a reverse proxy (repeatable or comma-separated; exact match, no wildcards). lightjj has no auth — anyone who can reach it via this host can run jj commands")
 	flag.Parse()
 
 	if *showVersion {
@@ -93,6 +96,14 @@ func main() {
 	// (`lightjj API`) silently launches the server. Error instead.
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "lightjj: unexpected argument %q (did you mean a subcommand? try `lightjj api` or `lightjj sessions`)\n", flag.Arg(0))
+		os.Exit(2)
+	}
+
+	// Validated before any jj/SSH work so a typo fails fast. Empty list →
+	// loopback-only, identical to the pre-#45 localhostOnly middleware.
+	hostPolicy, err := api.NewHostPolicy(allowedHosts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lightjj: %v\n", err)
 		os.Exit(2)
 	}
 
@@ -281,11 +292,19 @@ func main() {
 
 	url := fmt.Sprintf("http://%s", listener.Addr().String())
 	fmt.Printf("lightjj v%s listening on %s\n", resolvedVersion(), url)
+	if hosts := hostPolicy.Hosts(); len(hosts) > 0 {
+		sort.Strings(hosts)
+		// Loud on purpose: the flag exists for reverse proxies the user may not
+		// control, and lightjj has no authentication of its own.
+		fmt.Fprintf(os.Stderr, "lightjj: WARNING: also accepting requests addressed to %s. lightjj has no authentication — anyone who can reach it through that name can run jj commands (including rewriting history) and write files in the open repos. Bind address is still %s.\n",
+			strings.Join(hosts, ", "), listener.Addr().String())
+	}
 
 	// Agent-discovery metadata. Best-effort — sessionFile is "" on error and
 	// os.Remove("") is a harmless ENOENT. addr is normalized to a dialable form:
 	// a wildcard bind ("[::]:N", "0.0.0.0:N") would be unconnectable, and the
-	// localhostOnly middleware rejects non-localhost Host headers anyway.
+	// HostPolicy middleware rejects non-localhost Host headers anyway (the
+	// CLI is loopback-only regardless of --allowed-host).
 	var port int
 	dialAddr := listener.Addr().String()
 	if tcp, ok := listener.Addr().(*net.TCPAddr); ok {
@@ -327,7 +346,7 @@ func main() {
 	}()
 
 	httpServer := &http.Server{
-		Handler:           localhostOnly(api.Gzip(tm.Mux)),
+		Handler:           hostPolicy.Middleware(api.Gzip(tm.Mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -337,20 +356,15 @@ func main() {
 	}
 }
 
-// localhostOnly rejects requests where the Host header is not localhost.
-// This prevents DNS rebinding attacks against the local server.
-func localhostOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// hostList is the repeatable, comma-separated --allowed-host flag value.
+// Entries are split only; api.NewHostPolicy owns validation, so an empty
+// segment ("a,,b" or a trailing comma) is kept and rejected there.
+type hostList []string
+
+func (h *hostList) String() string { return strings.Join(*h, ",") }
+func (h *hostList) Set(v string) error {
+	*h = append(*h, strings.Split(v, ",")...)
+	return nil
 }
 
 func openBrowser(url string) {

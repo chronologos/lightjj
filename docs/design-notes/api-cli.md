@@ -26,7 +26,7 @@ This is also strictly better than curl for the agent use case:
    users have to know to pass `-H`. The CLI sets it whenever a body is present.
 3. **Stale-pid hygiene for free.** Discovery filters dead pids; curl users hit
    stale ports and get an unexplained connection-refused.
-4. **Loopback-only enforced client-side.** The server's `localhostOnly` defends
+4. **Loopback-only enforced client-side.** The server's Host gate (`HostPolicy`, hostgate.go) defends
    against DNS rebinding (browser-originated requests with a hostile `Host`).
    It does *nothing* if a planted session file points the CLI at an attacker
    server — the request never reaches lightjj. The CLI validates the
@@ -319,7 +319,7 @@ func doAPIRequest(addr, method, path string, body io.Reader, extraHeaders []stri
   `?query`; `url.Parse(path)` extracts `Path` + `RawQuery`.
 - If `body != nil`, set `Content-Type: application/json`. Override allowed via
   `-H`.
-- `req.Host` left at default. The server's `localhostOnly` accepts
+- `req.Host` left at default. The server's Host gate (`HostPolicy`) always accepts
   `127.0.0.1`/`::1`/`localhost` after `net.SplitHostPort` — all three are what
   validation permits. IPv6 round-trips correctly (`listener.Addr()` brackets,
   Go preserves brackets in `req.Host`, `SplitHostPort` strips them). The

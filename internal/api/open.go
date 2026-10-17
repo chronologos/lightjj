@@ -141,7 +141,7 @@ func (s *Server) handleOpenFile(w http.ResponseWriter, r *http.Request) {
 	// origin page → config-poison editorArgs → social-engineer right-click)
 	// terminates here; if this endpoint rejects cross-origin, poisoned
 	// config can't fire.
-	if origin := r.Header.Get("Origin"); origin != "" && !isLocalOrigin(origin) {
+	if !originAllowed(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin open-file rejected")
 		return
 	}

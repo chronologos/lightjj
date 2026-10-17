@@ -18,8 +18,8 @@ import (
 
 // Runtime session metadata for agent discovery. Written after net.Listen binds
 // so agents can find a running lightjj by repo path instead of port. The
-// localhost-only middleware (main.go localhostOnly) is the security boundary;
-// this file just makes the port discoverable to local processes.
+// Host-allow-list middleware (api.HostPolicy, hostgate.go) is the security
+// boundary; this file just makes the port discoverable to local processes.
 
 // sessionTab is one open tab of a running instance: its route id (the N in
 // /tab/{N}/api/...) and canonical workspace root. In --remote mode Path is a
