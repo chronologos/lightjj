@@ -152,7 +152,15 @@
 <style>
   .evolog-panel {
     border-top: 1px solid var(--surface1);
-    flex-shrink: 0;
+    /* Inline height (config.evologPanelHeight) is the flex-basis; shrinkable so
+       a height persisted on a taller window can't push StatusBar off-screen —
+       App's .workspace min-height bounds how far it squeezes the graph/diff.
+       1000 (vs the Oplog drawer's 1) makes this drawer absorb ~all of any
+       overflow before Oplog gives up a pixel. Flex shrink is shared in
+       proportion to shrink×basis, so with equal weights a divider drag in the
+       squeezed state would split each pointer px between both drawers and the
+       divider would lag the cursor (issue #43). */
+    flex-shrink: 1000;
     display: flex;
     flex-direction: column;
     min-height: 0;

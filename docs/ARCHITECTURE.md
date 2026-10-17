@@ -591,7 +591,7 @@ Both read-only diffs and the inline editor use Lezer grammars. `highlighter.ts` 
 
 **Language coverage.** First-party `@lezer/*` grammars cover TS/JS, Go, Python, Rust, CSS, HTML, JSON, YAML. Bash and TOML wrap `@codemirror/legacy-modes` tokenizers via `StreamLanguage.define()` — the wrapper produces a Lezer `Parser` whose tree feeds `highlightCode` like any first-party grammar. Svelte has no Lezer grammar; `PARSERS['svelte']` maps to the HTML parser (tags/attrs/strings highlighted, `{interpolation}` and `<script>` bodies plain).
 
-`FileEditor` (the inline CM6 editor) shares the same `@lezer/*` grammars via `@codemirror/lang-*`'s `LanguageSupport`, but renders through CM6's `syntaxHighlighting(defaultHighlightStyle)` (style-module CSS, not `tok-*`). Unifying onto `classHighlighter` would make `FileEditor` honor the same `tok-*` CSS — deferred; `defaultHighlightStyle` is good enough for an occasional inline edit.
+Every CM6 editor (`FileEditor` — also behind ConfigModal — and the three `MergePanel` panes) shares the same `@lezer/*` grammars via `@codemirror/lang-*`'s `LanguageSupport` and renders through `cmHighlight` = `syntaxHighlighting(classHighlighter)` (cm-shared.ts), so editors emit the same `tok-*` classes as diff HTML and follow every theme via the same CSS vars — a live theme switch never touches the editor. (They used `defaultHighlightStyle` until issue #40: its baked-in light-theme colors rendered navy/maroon syntax on every dark theme.) `cmTheme` additionally out-specifies the CM base-theme `&light` rules that would otherwise leak (CM tags our editors with its light scope because no theme registers `{dark: true}`).
 
 ## Graph View
 

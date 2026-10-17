@@ -51,9 +51,9 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { defaultKeymap, indentWithTab, historyKeymap, moveLineUp, moveLineDown, copyLineUp, copyLineDown } from '@codemirror/commands'
-  import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language'
+  import { indentUnit } from '@codemirror/language'
   import { highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
-  import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
+  import { detectIndent, getCmLanguage, cmTheme, cmHighlight } from './cm-shared'
   import { blocksToLineSets } from './merge-diff'
   import { initialTrackPos } from './merge-surgery'
   import type { MergeSides } from './conflict-extract'
@@ -161,7 +161,7 @@
 
     const sharedExts: Extension[] = [
       lineNumbers(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      cmHighlight,  // tok-* classes → theme.css --syn-* vars (see cm-shared.ts)
       EditorState.tabSize.of(4),
       indentUnit.of(usesTabs ? '\t' : ' '.repeat(width)),
       cmTheme,

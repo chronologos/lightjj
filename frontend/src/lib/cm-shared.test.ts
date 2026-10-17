@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { detectIndent, getCmLanguage } from './cm-shared'
+import { describe, it, expect, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { EditorState } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
+import { javascript } from '@codemirror/lang-javascript'
+import { detectIndent, getCmLanguage, cmHighlight, cmTheme } from './cm-shared'
+import { THEMES } from './themes'
 
 describe('detectIndent', () => {
   it('empty file → default (2-space)', () => {
@@ -97,5 +102,61 @@ describe('getCmLanguage', () => {
     ['Makefile'],
   ])('%s → null (plain text)', async (path) => {
     expect(await getCmLanguage(path)).toBeNull()
+  })
+})
+
+// Issue #40: editors used defaultHighlightStyle (light-only inline colors), so
+// syntax stayed navy/maroon on every dark theme. The contract now: CM tokens
+// carry the same tok-* classes as diff HTML, and theme.css colors them via
+// --syn-* vars — a theme switch is a pure CSS swap on a live editor.
+describe('editor syntax highlighting is theme-driven (tok-* classes)', () => {
+  let view: EditorView | undefined
+  afterEach(() => { view?.destroy(); view = undefined; delete document.documentElement.dataset.theme })
+
+  function mount(doc: string) {
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: [javascript({ typescript: true }), cmHighlight, cmTheme] }),
+      parent,
+    })
+    return view
+  }
+  const tokenClasses = (v: EditorView) =>
+    [...v.contentDOM.querySelectorAll('.cm-line span')].map(s => [s.textContent, s.className] as const)
+
+  it('emits tok-* classes, never generated (ͼ) highlight-style classes', () => {
+    const v = mount("const key = 'x' // note")
+    const toks = tokenClasses(v)
+    expect(toks).toContainEqual(['const', 'tok-keyword'])
+    expect(toks).toContainEqual(["'x'", 'tok-string'])
+    expect(toks.find(([t]) => t === '// note')?.[1]).toBe('tok-comment')
+    // Every token span class is a tok-* class — a HighlightStyle (light or
+    // dark) would emit StyleModule-generated ͼ classes with baked-in colors.
+    for (const [, cls] of toks) expect(cls).toMatch(/^(tok-[\w]+\s?)+$/)
+  })
+
+  it('a live theme switch leaves the editor DOM untouched (pure CSS swap)', () => {
+    const v = mount("const key = 'x'")
+    const before = v.contentDOM.innerHTML
+    for (const t of THEMES) {
+      document.documentElement.dataset.theme = t.id
+      expect(v.contentDOM.innerHTML).toBe(before)
+    }
+  })
+
+  it('every builtin theme defines every --syn-* var the tok-* rules use', () => {
+    // A theme missing a var would fall back to inherited --text (or nothing),
+    // silently un-highlighting that token class in both diffs and editors.
+    const css = readFileSync('src/theme.css', 'utf8')
+    const used = new Set([...css.matchAll(/\.tok-[^{]+\{[^}]*var\((--syn-[\w-]+)\)/g)].map(m => m[1]))
+    expect(used.size).toBeGreaterThanOrEqual(9)
+    for (const t of THEMES) {
+      const sel = t.id === 'dark' ? ':root, :root[data-theme="dark"]' : `:root[data-theme="${t.id}"]`
+      const start = css.indexOf(sel + ' {')
+      expect(start, `no block for ${t.id}`).toBeGreaterThanOrEqual(0)
+      const block = css.slice(start, css.indexOf('}', start))
+      for (const v of used) expect(block, `${t.id} missing ${v}`).toContain(`${v}:`)
+    }
   })
 })

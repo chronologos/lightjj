@@ -2,8 +2,8 @@
   import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
   import { EditorState, Compartment } from '@codemirror/state'
   import { defaultKeymap, indentWithTab } from '@codemirror/commands'
-  import { foldGutter, foldEffect, unfoldAll, syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentUnit } from '@codemirror/language'
-  import { detectIndent, getCmLanguage, cmTheme } from './cm-shared'
+  import { foldGutter, foldEffect, unfoldAll, bracketMatching, indentUnit } from '@codemirror/language'
+  import { detectIndent, getCmLanguage, cmTheme, cmHighlight } from './cm-shared'
 
   interface Props {
     content: string
@@ -78,7 +78,7 @@
       highlightActiveLineGutter(),
       foldGutter(),
       bracketMatching(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      cmHighlight,  // tok-* classes → theme.css --syn-* vars (see cm-shared.ts)
       // tab-size must match DiffFileView's .diff-line { tab-size: 4 } so the
       // left (diff) and right (editor) columns align in split view.
       EditorState.tabSize.of(4),

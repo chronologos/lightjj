@@ -148,8 +148,13 @@
 <style>
   .oplog-panel {
     border-top: 1px solid var(--surface1);
-    flex: 1;
-    max-height: 200px;
+    /* Fixed 200px drawer that only SHRINKS (when the window is too short).
+       Must not be flex-grow: it used to be `flex: 1; max-height: 200px`, which
+       split free space with App's .workspace whenever that was < 400px — so
+       resizing the Evolog drawer above it moved its divider at half the
+       pointer speed (issue #43). .workspace is the column's only grower.
+       Shrink weight 1 vs EvologPanel's 1000: Evolog gives up space first. */
+    flex: 0 1 200px;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -157,7 +162,7 @@
 
   /* When used as fullwidth view via .fullwidth-panel parent */
   :global(.fullwidth-panel) .oplog-panel {
-    max-height: none;
+    flex: 1 1 auto;
     border-top: none;
   }
 

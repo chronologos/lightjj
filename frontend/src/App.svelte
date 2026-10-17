@@ -84,6 +84,7 @@
   import DiffPanel from './lib/DiffPanel.svelte'
   import RevisionHeader from './lib/RevisionHeader.svelte'
   import EvologPanel from './lib/EvologPanel.svelte'
+  import { startResizeDrag } from './lib/drag-resize'
   import OplogPanel from './lib/OplogPanel.svelte'
   import BookmarkModal, { type BookmarkOp } from './lib/BookmarkModal.svelte'
   import BookmarksPanel, { type BookmarkRowActions } from './lib/BookmarksPanel.svelte'
@@ -314,39 +315,49 @@
   let evologLoading = $derived(evolog.loading)
 
   // --- Draggable dividers (revision panel width + evolog panel height) ---
-  // Shared helper handles the listener-cleanup boilerplate; callers supply only
-  // the cursor style and the per-move resize math.
-  function startDrag(e: MouseEvent, cursor: string, setDragging: (v: boolean) => void, onMove: (e: MouseEvent) => void) {
-    e.preventDefault()
-    setDragging(true)
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = cursor
-    function onMouseUp() {
-      setDragging(false)
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onMouseUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onMouseUp)
-  }
+  // Both go through startResizeDrag (drag-resize.ts): size = rendered size at
+  // mousedown ± pointer delta, so the divider stays under the cursor whatever
+  // sits beyond the panel (issue #43 — the old `innerHeight - clientY` math
+  // added StatusBar + Oplog drawer height to the evolog panel). Each handle is
+  // the DOM sibling of the panel it sizes; measure that, not the config value,
+  // because CSS may be clamping/shrinking the panel (window shrank since the
+  // height was persisted).
+  const REVISION_PANEL_MIN_W = 280  // keep in sync with .revision-panel-wrapper min/max-width
+  const REVISION_PANEL_MAX_W = 600
+  const EVOLOG_MIN_H = 120
+  // Space the drag must leave for the diff/graph row above the evolog drawer.
+  // Mirrors .workspace { min-height } so the clamp and the CSS agree.
+  const WORKSPACE_MIN_H = 120
+  let workspaceEl: HTMLDivElement | undefined = $state(undefined)
 
   let draggingDivider = $state(false)
   function startDividerDrag(e: MouseEvent) {
-    startDrag(e, 'col-resize', v => draggingDivider = v, e => {
-      config.revisionPanelWidth = Math.max(280, Math.min(600, e.clientX))
+    const panel = (e.currentTarget as HTMLElement).previousElementSibling
+    startResizeDrag(e, {
+      axis: 'x', sign: 1,
+      startSize: panel?.getBoundingClientRect().width ?? config.revisionPanelWidth,
+      min: REVISION_PANEL_MIN_W, max: REVISION_PANEL_MAX_W,
+      setDragging: v => draggingDivider = v,
+      onResize: w => config.revisionPanelWidth = w,
     })
   }
 
   let draggingEvologDivider = $state(false)
   function startEvologDividerDrag(e: MouseEvent) {
-    startDrag(e, 'row-resize', v => draggingEvologDivider = v, e => {
-      // Height is distance from viewport bottom (dragging up = taller).
-      // StatusBar offset is intentionally ignored — matches the X-axis divider
-      // which uses raw clientX assuming panel edge is at viewport left.
-      const maxH = Math.floor(window.innerHeight * 0.7)
-      config.evologPanelHeight = Math.max(120, Math.min(maxH, window.innerHeight - e.clientY))
+    // Panel is below its divider, so dragging UP (pointer delta < 0) grows it.
+    const panel = (e.currentTarget as HTMLElement).nextElementSibling
+    const startH = panel?.getBoundingClientRect().height ?? config.evologPanelHeight
+    // Available growth = whatever .workspace can give up above its min-height.
+    // Measured at mousedown: .workspace is the only flex-grow sibling in the
+    // column (Oplog drawer is flex-basis-sized, StatusBar fixed), so each px
+    // the panel grows comes 1:1 out of .workspace for the whole drag.
+    const slack = workspaceEl ? Math.max(0, workspaceEl.getBoundingClientRect().height - WORKSPACE_MIN_H) : 0
+    startResizeDrag(e, {
+      axis: 'y', sign: -1,
+      startSize: startH,
+      min: EVOLOG_MIN_H, max: Math.max(EVOLOG_MIN_H, startH + slack),
+      setDragging: v => draggingEvologDivider = v,
+      onResize: h => config.evologPanelHeight = h,
     })
   }
 
@@ -3413,7 +3424,7 @@
 
     {@render tabBar?.()}
 
-    <div class="workspace">
+    <div class="workspace" bind:this={workspaceEl}>
       {#if activeView !== 'merge' && activeView !== 'doc'}
         <!-- Merge/doc modes hide the graph entirely — ConflictQueue + 3-pane
              MergePanel and DocView + comment-rail both need the full width.
@@ -3918,6 +3929,11 @@
     display: flex;
     flex: 1;
     overflow: hidden;
+    /* WORKSPACE_MIN_H. With the bottom drawers flex-shrinkable (EvologPanel,
+       OplogPanel), a persisted evologPanelHeight taller than a since-shrunk
+       window squeezes the drawers instead of pushing the StatusBar (and the
+       Oplog drawer) off the bottom of the overflow:hidden column. */
+    min-height: 120px;
   }
 
   .revision-panel-wrapper {

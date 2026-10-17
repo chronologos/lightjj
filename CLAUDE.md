@@ -99,7 +99,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     MergePanel.svelte      — 3-pane conflict editor (ours | result | theirs)
     merge-surgery.ts       — PURE — line-range position model: planTake/planTakeBoth/remapBlock/normalizeBlocks surgery
     merge-tracker.ts       — Center block tracker: CM StateField + whole-array undo snapshots + take/takeAll transaction specs (MergePanel's state half)
-    cm-shared.ts           — CM6 helpers: detectIndent, getCmLanguage, cmTheme
+    cm-shared.ts           — CM6 helpers: detectIndent, getCmLanguage, cmTheme, cmHighlight (tok-* classes — theme-following syntax)
     conflict-markers.ts    — PURE — shared conflict-marker scanner (escalation-aware width discovery, exact-width matching)
     conflict-extract.ts    — reconstructSides(): jj conflict markers → {base, ours, theirs, blocks}
     conflict-resolve.ts    — PURE — resolveConflictFile(): single @/non-@/SSH conflict-resolution strategy (both surfaces)
@@ -137,6 +137,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
     themes.ts              — 7 builtin themes + lazy Ghostty palettes + deriveTheme()
     jj-features.svelte.ts  — jj feature labels; booleans come from /api/info features (optimistic until loaded)
     confirm-gate.svelte.ts — createConfirmGate() double-press confirm factory
+    drag-resize.ts         — resizeFromDelta() (pure) + startResizeDrag(): delta-based divider drags (rendered start size ± pointer delta)
     list-cursor.svelte.ts  — createListCursor() keyboard-list cursor factory (nav/hover/clamp/scroll)
     BookmarkPicker.svelte  — Shared autocomplete bookmark-picker modal (BookmarkInput/DestinationInput wrap it)
     BookmarkInput.svelte   — Bookmark name input with autocomplete (BookmarkPicker wrapper)
