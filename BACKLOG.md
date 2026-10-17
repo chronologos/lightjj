@@ -2,7 +2,7 @@
 
 Open items only. Done-item narratives live in [docs/CHANGELOG-ARCHIVE.md](docs/CHANGELOG-ARCHIVE.md).
 
-Last shipped: **2026-08** v1.37.2 — merge-editor line-range position model, image diffs (#20), routable `?change=`/`?revset=` URLs (#35), `lightjj api` multi-tab discovery, restored `pnpm check` gate. Unreleased on top (v1.38.0): split/unified toggle in FileHistoryPanel + FileComparePicker with `|` as the app-wide split-view key (#38), PR badges for non-`@me` same-repo PRs (author in tooltip) + "Open PR" on bookmark right-click (#36 GitHub half), file-history `initialPin` identity-keyed (no more wrong-commit pin from the two-tier race), agent `navigate` accepts id prefixes and 409s when no browser views the tab, `/api/file-raw` immutable cache now fires for 12-hex ids (resolved via `commit_id()` so a hex-named ref can't shadow it), launch tab never offered as closable.
+Last shipped: **2026-10** v1.39.0 — full file tree at a revision (#39), `--allowed-host` for reverse proxies (#45), split-view rows aligned under soft-wrap (#41), rename source in diff headers (#44), theme-following CodeMirror editors (#40), delta-based resize dividers (#43), dependency bumps (vitest 5, vite 8.3). Before that: v1.38.0 — split/unified toggle in FileHistoryPanel + FileComparePicker with `|` as the app-wide split-view key (#38), PR badges for non-`@me` same-repo PRs + "Open PR" on bookmark right-click (#36 GitHub half).
 
 ## Active
 
