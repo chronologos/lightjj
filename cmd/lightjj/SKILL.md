@@ -51,7 +51,7 @@ lightjj api GET '/tab/0/api/file-show?revision=@&path=docs/DESIGN.md'
 ```bash
 # What is the user looking at right now? Read this FIRST — it's the difference
 # between narrating a review and spraying comments past the user's cursor.
-# Returns {change_id, commit_id, active_view, doc_file_path, updated_at}.
+# Returns {change_id, commit_id, active_view, doc_file_path, revset, updated_at}.
 # Stale if updated_at is >60s old (browser closed or not focused) — the
 # frontend heartbeats every 20s while the tab is visible.
 lightjj api GET /tab/0/api/focus
@@ -102,20 +102,31 @@ lightjj api POST /tab/0/api/navigate '{"revset":"trunk()..@"}'
 # Show all mutable work, including alternate heads
 lightjj api POST /tab/0/api/navigate '{"revset":"mutable()"}'
 
-# Show the default jj-ish context used by the UI preset
-lightjj api POST /tab/0/api/navigate '{"revset":"present(@) | ancestors(immutable_heads().., 2) | present(trunk())"}'
+# Clear the filter back to the user's default view (their revsets.log)
+lightjj api POST /tab/0/api/navigate '{"revset":""}'
 
 # If selecting a commit that may be outside the current view, set revset and
 # change_id together. The frontend applies the revset first, then selects.
 lightjj api POST /tab/0/api/navigate '{"revset":"xyzabc | present(@) | trunk()","change_id":"xyzabc"}'
 ```
 
-After steering, verify the graph with the same revset. For combined navigation,
-use focus only to confirm the selected change; focus does not report the revset:
+The revset is applied exactly as if the user typed it: their multi-check
+selection is cleared, and a revset-only steer moves the cursor to `@`. `200`
+means the hint was *delivered*, not that it worked — the server doesn't
+validate revsets. An invalid revset (or an id that doesn't exist) shows jj's
+error in the user's message bar and nothing is selected; a valid revset that
+doesn't contain `change_id` keeps the new filter and shows a "not in current
+revset" toast. `409` = no browser is viewing that tab (ask the user to switch
+to it, then retry); while they're mid-rebase/squash/merge/doc-edit the steer
+is ignored with a toast.
+
+Confirm with focus — `revset` is the filter of the last graph that loaded
+successfully (`""` = default view), so it only matches yours once the steer
+landed. Reports are debounced ~0.5 s; check `updated_at` is newer than your
+POST:
 
 ```bash
-lightjj api GET '/tab/0/api/log?revset=trunk()..@'
-lightjj api GET /tab/0/api/focus
+lightjj api GET /tab/0/api/focus   # → {"revset":"trunk()..@","change_id":…,"updated_at":…}
 ```
 
 Prefer narrow revsets for user-facing cleanup work:

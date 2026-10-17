@@ -212,8 +212,8 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 | GET | `/api` | Discovery index pointing at docs + capabilities |
 | GET | `/api/agent` | Embedded agent API documentation (markdown) |
 | GET | `/api/capabilities` | API version + registered action list |
-| POST | `/api/navigate` | Broadcast navigation hint to connected UIs (via SSE); 409 when no browser views this tab |
-| GET | `/api/focus` | Last view reported by the frontend |
+| POST | `/api/navigate` | Broadcast navigation hint (change/file/comment and/or graph `revset`) to connected UIs (via SSE); 409 when no browser views this tab |
+| GET | `/api/focus` | Last view reported by the frontend (incl. applied `revset`) |
 | POST | `/api/focus` | Frontend reports its current view |
 
 **Events (SSE)**

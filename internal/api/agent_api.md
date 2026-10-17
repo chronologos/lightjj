@@ -300,7 +300,7 @@ is ambiguous there) they see a "not in current revset" toast instead, and a
 user mid-rebase/squash/merge/doc-mode gets an "ignored" toast. Confirm with
 `GET /api/focus` if it matters. Use this to walk the user through a review:
 post a batch of comments, then `navigate` to the first one. At least one of
-`change_id`, `file_path`, or `comment_id` is required; `line` is accepted but
+`change_id`, `file_path`, `comment_id`, or `revset` is required; `line` is accepted but
 currently ignored. `change_id` is matched against the user's **visible** log:
 the full id (`jj log -T change_id`) or any prefix that is unique among those
 rows works — prefer the full id; `navigate` does not widen the revset the way
@@ -331,6 +331,19 @@ with `change_id` reloads the graph and then selects that change:
 {"revset": "trunk()..@", "change_id": "wqnwkozp"}
 ```
 
+`revset` is applied exactly as if the user had typed it into the filter bar
+(any open multi-check selection is cleared; a revset-only steer puts the cursor
+on `@` when it is visible). `""` clears the filter back to the default view (the user's
+`revsets.log`); omit the field to leave the filter alone. Keep it scoped —
+`<id> | present(@) | trunk()`, `trunk()..@`, `mutable()` — never `all()`. Max
+4096 bytes (`400` beyond). The server does **not** validate it: `200` still
+only means delivered. An invalid revset shows jj's error in the user's message
+bar, stays in the filter input, and the `change_id` is not selected; a valid
+revset that doesn't contain `change_id` leaves the new filter applied with a
+"not in current revset" toast (no widening). Confirm what actually applied
+with `GET /api/focus` — its `revset` field reports the filter of the last
+graph that loaded successfully, never a rejected one.
+
 ### Link to a change (no live push needed)
 
 `navigate` needs a connected browser. To report a result the user can open
@@ -355,7 +368,8 @@ then stripped from the address bar. URL-encode revsets containing `&`/`+`/`#`.
 ```
 GET <base>/api/focus
 → 200 {"change_id":"wqnwkozp","commit_id":"abc123","active_view":"doc",
-       "doc_file_path":"docs/DESIGN.md","updated_at":1746543600000}
+       "doc_file_path":"docs/DESIGN.md","revset":"trunk()..@",
+       "updated_at":1746543600000}
 ```
 
 The complement to `navigate`: instead of pushing the user somewhere, ask where
@@ -370,6 +384,11 @@ or to skip a `navigate` if they're already there.
   endpoints (`doc-comments`, `file-show`) do their own validation.
 - `change_id` / `commit_id` — the revision the diff/doc panel is showing.
   Empty when nothing is selected.
+- `revset` — the filter of the last successfully loaded graph: `""` = the
+  default view, absent = not reported yet (or an older lightjj). Unsubmitted
+  or rejected text in the filter input never appears here, so a
+  `navigate {"revset": …}` has landed iff this matches (and `updated_at` is
+  newer than your POST — the report is debounced ~0.5 s).
 - `updated_at` — Unix epoch **milliseconds**, **server-stamped** on every
   frontend report (the client's clock is not trusted). `0` means the frontend
   has never reported.

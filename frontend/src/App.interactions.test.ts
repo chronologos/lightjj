@@ -365,6 +365,98 @@ describe('App.svelte interactions', () => {
     expect((qs('.revset-input') as HTMLInputElement | null)?.value).toBe('trunk()..@')
     expect(qs('.graph-row.checked')).toBeNull()
   })
+
+  // ── Agent revset steering (POST /api/navigate {revset}) ──
+  const navRevsetInput = () => (qs('.revset-input') as HTMLInputElement | null)?.value
+  const logArgs = () => calls.filter(c => c.method === 'log').map(c => c.args[0])
+  const lastFocus = () => [...calls].reverse().find(c => c.method === 'setFocus')?.args[0] as
+    { revset?: string; change_id?: string } | undefined
+
+  it('agent navigate revset-only replaces the filter, cursor falls back to @, focus reports it', async () => {
+    await mountApp()
+    await press('j')
+    await waitFor(() => selectedEntry() === '1')
+
+    triggerNavigate({ revset: 'mutable()' })
+
+    await waitFor(() => logArgs().includes('mutable()'))
+    await waitFor(() => selectedEntry() === '0') // resetSelection, like a typed revset
+    expect(navRevsetInput()).toBe('mutable()')
+    expect(qs('.message-bar')).toBeNull()
+    // Focus reports the APPLIED revset (500ms debounced heartbeat).
+    await waitFor(() => lastFocus()?.revset === 'mutable()', { timeout: 1500 })
+  })
+
+  it('agent navigate {revset:""} clears the filter back to the default log', async () => {
+    await mountApp()
+    triggerNavigate({ revset: 'mutable()' })
+    await waitFor(() => navRevsetInput() === 'mutable()')
+    await waitFor(() => logArgs().at(-1) === 'mutable()')
+
+    triggerNavigate({ revset: '' })
+
+    await waitFor(() => navRevsetInput() === '')
+    await waitFor(() => logArgs().length >= 3 && logArgs().at(-1) === undefined)
+    await waitFor(() => lastFocus()?.revset === '', { timeout: 1500 })
+  })
+
+  it('agent navigate with an invalid revset surfaces jj\'s error and does not select the change', async () => {
+    setLogHandler(async (revset) => {
+      if (revset === 'bad((') throw new Error('Failed to parse revset: bad((')
+      return defaultFixtures().revisions
+    })
+    await mountApp()
+
+    triggerNavigate({ revset: 'bad((', change_id: 'cmid' })
+
+    await waitFor(() => qs('.message-bar.kind-error')?.textContent?.includes('Failed to parse revset') === true)
+    // Same as a user-typed bad revset: the text stays in the filter bar so it
+    // can be fixed, and the log loader empties the graph (no keepValueOnError).
+    // No "not in current revset" follow-up — the steer stops at the error.
+    expect(navRevsetInput()).toBe('bad((')
+    expect(document.querySelectorAll('.graph-row.node-row')).toHaveLength(0)
+    expect(qs('.message-text')?.textContent ?? '').not.toContain('not in current revset')
+
+    // The failed steer's target must not select on a LATER load: the user
+    // fixes the revset themselves → cursor stays at the @ fallback.
+    const input = qs('.revset-input') as HTMLInputElement
+    input.value = 'mine()'
+    await fireEvent.input(input)
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => logArgs().at(-1) === 'mine()')
+    await new Promise(r => setTimeout(r, 40))
+    expect(selectedEntry()).toBe('0')
+    // Focus never claimed the rejected revset.
+    await waitFor(() => lastFocus()?.revset === 'mine()', { timeout: 1500 })
+    expect(calls.some(c => c.method === 'setFocus' && (c.args[0] as { revset?: string }).revset === 'bad((')).toBe(false)
+  })
+
+  it('agent navigate revset + change_id NOT in the new revset: filter applied, warns, cursor at @', async () => {
+    const f = defaultFixtures()
+    setLogHandler(async (revset) => revset === 'trunk()..@' ? [f.revisions[0]] : f.revisions)
+    await mountApp()
+
+    triggerNavigate({ revset: 'trunk()..@', change_id: 'ctrunk' })
+
+    await waitFor(() => qs('.message-text')?.textContent?.includes('ctrunk not in current revset') === true)
+    expect(navRevsetInput()).toBe('trunk()..@')
+    expect(document.querySelectorAll('.graph-row.node-row')).toHaveLength(1)
+    expect(selectedEntry()).toBe('0')
+  })
+
+  it('agent navigate with a revset is ignored during an inline mode (filter + log untouched)', async () => {
+    await mountApp()
+    await press('R')
+    await waitFor(() => qs('.statusbar.rebase-active') !== null)
+    const before = logArgs().length
+
+    triggerNavigate({ revset: 'mutable()', change_id: 'cmid' })
+
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Agent navigate ignored') === true)
+    expect(navRevsetInput()).toBe('')
+    expect(logArgs()).toHaveLength(before)
+    expect(qs('.statusbar.rebase-active')).not.toBeNull()
+  })
 })
 
 // ── Staleness model + identity-keyed cursor ─────────────────────────────────

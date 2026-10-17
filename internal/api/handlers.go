@@ -595,12 +595,20 @@ type navigateRequest struct {
 	Line     int    `json:"line,omitempty"`
 	// Revset, when present, asks the frontend to replace the graph filter
 	// before selecting ChangeID. An empty string intentionally clears the filter.
+	// Passed through unvalidated (like CommentID): the frontend applies it
+	// exactly as if the user had typed it, so jj's parse/eval error lands in the
+	// user's message bar, and the agent confirms what applied via GET
+	// /api/focus `revset`. Validating here would cost a jj run per steer and
+	// still race the browser's own load.
 	Revset *string `json:"revset,omitempty"`
 	// CommentID is passed through to the frontend untouched — the server has
 	// no view of the comment store's positions; the frontend resolves the id
 	// to a scroll target against its loaded annotation/doc-comment stores.
 	CommentID string `json:"comment_id,omitempty"`
 }
+
+// maxNavigateRevsetLen caps navigate's (and focus's) revset field.
+const maxNavigateRevsetLen = 4096
 
 // handleNavigate broadcasts a one-shot navigation hint to connected SSE
 // clients. The frontend's onNavigate handler scrolls the human's view there —
@@ -629,7 +637,7 @@ func (s *Server) handleNavigate(w http.ResponseWriter, r *http.Request) {
 	if req.Revset != nil {
 		revsetLen = len(*req.Revset)
 	}
-	if len(req.ChangeID) > 256 || len(req.FilePath) > 4096 || len(req.CommentID) > 256 || revsetLen > 4096 {
+	if len(req.ChangeID) > 256 || len(req.FilePath) > 4096 || len(req.CommentID) > 256 || revsetLen > maxNavigateRevsetLen {
 		s.writeError(w, http.StatusBadRequest, "field too long")
 		return
 	}

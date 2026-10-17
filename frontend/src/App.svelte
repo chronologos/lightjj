@@ -1302,13 +1302,18 @@
   // run (a newer loadLog started) from an errored one (still latest, log.error
   // set) — log.load() itself returns false for both.
   let logRunGen = 0
+  // The filter of the last APPLIED log load — what the graph actually shows,
+  // unlike revsetFilter (the input's live text, incl. unsubmitted/rejected
+  // revsets). null until the first load applies. Reported via /api/focus.
+  let appliedRevset = $state<string | null>(null)
   async function loadLog(): Promise<boolean> {
     const resetRequested = pendingResetSelection
     pendingResetSelection = false
     const run = ++logRunGen
 
-    const revset = revsetFilter || undefined
-    const ok = await log.load(revset)
+    const filter = revsetFilter
+    const ok = await log.load(filter || undefined)
+    if (ok) appliedRevset = filter
     blurActiveInput()
     if (!ok) {
       // Superseded or errored — don't post-process stale state. One exception:
@@ -3140,12 +3145,31 @@
       return
     }
     if (p.revset !== undefined) {
+      // Apply the revset exactly as a user submit would (same filter-bar value,
+      // same error surfacing: a bad revset stays in the input and jj's error
+      // lands in the message bar). The change_id rides the ?change= slot
+      // (PendingSelect, plain/no-widen — the agent chose the revset), so the
+      // load that applies selects the target directly: no @-flash, no second
+      // diff load. Replacing the slot also drops any stale URL intent, like
+      // userRevsetSubmit does for a typed revset.
       pendingNavScroll = null
       switchToLogView()
       revsetFilter = p.revset
-      const ok = await handleRevsetSubmit()
-      if (!ok) return
-      if (inlineMode || mutating || activeView === 'merge' || activeView === 'doc') return
+      const slot: PendingSelect | null = p.change_id ? { ref: p.change_id, widen: false } : null
+      pendingSelect = slot
+      const applied = await handleRevsetSubmit()
+      // Errored (bad revset) or superseded (a newer submit started): never
+      // let this slot select on some LATER load — a stale agent target must
+      // not move the cursor after the user fixed the revset themselves.
+      if (pendingSelect === slot) pendingSelect = null
+      if (!applied) return
+      // Re-gate after the await — the user could have entered a mode mid-load.
+      if (navigateBlocked()) return
+      // Revset-only steer: the reload's own reconciliation placed the cursor.
+      if (!p.change_id && !p.file_path && !p.comment_id) return
+      // Otherwise fall through: a hit is already selected (selectByRef below
+      // re-finds the same row and stamps any file scroll); a miss warns
+      // "not in current revset" with the cursor reset to @.
     }
     // comment_id → position resolution. Agents reference comments by id (the
     // only stable handle they have). Two stores, distinguished by the OTHER
@@ -3239,6 +3263,8 @@
       // them so an agent steering a review knows. Backend whitelists both.
       active_view: oplogOpen ? 'oplog' : evologOpen ? 'evolog' : activeView,
       doc_file_path: activeView === 'doc' ? (docFilePath ?? undefined) : undefined,
+      // '' = default log view; omitted until the first log load applies.
+      revset: appliedRevset ?? undefined,
     }
     // Debounced report on change + low-frequency heartbeat while visible.
     // The heartbeat is what makes `updated_at` a real liveness signal: a user

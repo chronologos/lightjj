@@ -4124,6 +4124,14 @@ func TestHandleNavigate_NoSubscriber409(t *testing.T) {
 	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"change_id":"abc"}`)))
 	require.Equal(t, http.StatusConflict, w.Code)
 	assert.Contains(t, w.Body.String(), "no browser is subscribed")
+
+	// Revset steers take the same path: revset-only and revset+change_id both
+	// 409 rather than silently claiming the filter changed.
+	for _, body := range []string{`{"revset":"trunk()..@"}`, `{"revset":""}`, `{"revset":"mutable()","change_id":"abc"}`} {
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(body)))
+		assert.Equal(t, http.StatusConflict, w.Code, body)
+	}
 }
 
 func TestHandleNavigate_ReMarshalsSSEInjection(t *testing.T) {
@@ -4273,6 +4281,33 @@ func TestHandleFocusRoundTrip(t *testing.T) {
 	assert.Equal(t, "abc123", got.CommitID)
 	assert.Equal(t, "doc", got.ActiveView)
 	assert.Equal(t, "docs/DESIGN.md", got.DocFilePath)
+	assert.Nil(t, got.Revset, "revset absent = not reported")
+}
+
+// Focus revset distinguishes "default view" ("") from "not reported" (nil),
+// so an agent can confirm a {"revset":""} navigate actually cleared the filter.
+func TestHandleFocusRevset(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+
+	for _, tc := range []struct{ body, want string }{
+		{`{"active_view":"log","revset":"trunk()..@"}`, "trunk()..@"},
+		{`{"active_view":"log","revset":""}`, ""},
+	} {
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/focus", []byte(tc.body)))
+		require.Equal(t, http.StatusOK, w.Code)
+
+		w = httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/focus", nil))
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Body.String(), `"revset":"`+strings.ReplaceAll(tc.want, `"`, `\"`)+`"`)
+		var got FocusState
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		require.NotNil(t, got.Revset, tc.body)
+		assert.Equal(t, tc.want, *got.Revset)
+	}
 }
 
 func TestHandleFocusValidation(t *testing.T) {
@@ -4309,6 +4344,7 @@ func TestHandleFocusValidation(t *testing.T) {
 			`{"change_id":"` + long + `"}`,
 			`{"commit_id":"` + long + `"}`,
 			`{"doc_file_path":"` + longPath + `"}`,
+			`{"revset":"` + longPath + `"}`,
 		} {
 			w := httptest.NewRecorder()
 			srv.Mux.ServeHTTP(w, jsonPost("/api/focus", []byte(body)))
@@ -4332,9 +4368,53 @@ func TestHandleNavigateFieldTooLong(t *testing.T) {
 		`{"change_id":"` + long + `"}`,
 		`{"file_path":"` + longPath + `"}`,
 		`{"comment_id":"` + long + `"}`,
+		`{"revset":"` + longPath + `"}`,
 	} {
 		w := httptest.NewRecorder()
 		srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(body)))
 		assert.Equal(t, http.StatusBadRequest, w.Code, body[:20])
+	}
+}
+
+// The revset cap is inclusive: exactly maxNavigateRevsetLen is accepted (no
+// subscriber here, so "accepted" = got past validation to the 409).
+func TestHandleNavigateRevsetAtCap(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+
+	w := httptest.NewRecorder()
+	body := `{"revset":"` + strings.Repeat("a", maxNavigateRevsetLen) + `"}`
+	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(body)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+// {"revset":""} is a real request ("clear the filter"), not an empty body:
+// the pointer survives decode → re-marshal, so the frontend sees revset:""
+// rather than an absent field.
+func TestHandleNavigateEmptyRevsetClears(t *testing.T) {
+	runner := testutil.NewMockRunner(t)
+	defer runner.Verify()
+	srv := newTestServer(runner)
+	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+
+	ch, unsub := srv.Watcher.subscribe()
+	defer unsub()
+
+	w := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"revset":""}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	select {
+	case msg := <-ch:
+		require.Equal(t, evNameNav, msg.name)
+		assert.Contains(t, msg.data, `"revset":""`)
+		var p navigateRequest
+		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NotNil(t, p.Revset)
+		assert.Equal(t, "", *p.Revset)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("navigate not broadcast")
 	}
 }

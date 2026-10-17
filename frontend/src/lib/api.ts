@@ -202,6 +202,9 @@ export interface FocusState {
   commit_id?: string
   active_view?: string
   doc_file_path?: string
+  // Filter of the last successfully loaded graph ('' = default view). Lets an
+  // agent confirm a revset navigate landed (a rejected revset never shows here).
+  revset?: string
   // ms epoch, server-stamped. Always present in responses (Go field has no
   // omitempty); optional here only so the same type covers POST request bodies.
   updated_at?: number

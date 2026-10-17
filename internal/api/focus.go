@@ -16,7 +16,12 @@ type FocusState struct {
 	CommitID    string `json:"commit_id,omitempty"`
 	ActiveView  string `json:"active_view,omitempty"`   // log | branches | merge | doc | oplog | evolog
 	DocFilePath string `json:"doc_file_path,omitempty"` // set when active_view == "doc"
-	UpdatedAt   int64  `json:"updated_at"`              // ms epoch, server-stamped on POST
+	// Revset is the filter of the last SUCCESSFULLY loaded graph — not the
+	// filter input's live text (an unsubmitted or rejected revset never shows
+	// up here). Pointer: "" = the default log view (revsets.log), nil = not
+	// yet reported. Lets an agent confirm a revset-only POST /api/navigate.
+	Revset    *string `json:"revset,omitempty"`
+	UpdatedAt int64   `json:"updated_at"` // ms epoch, server-stamped on POST
 }
 
 // validActiveViews is the closed set of frontend view names the focus endpoint
@@ -56,7 +61,8 @@ func (s *Server) handleFocusSet(w http.ResponseWriter, r *http.Request) {
 	// Same field caps as handleNavigate for consistency. Focus doesn't fan out
 	// to SSE subscribers (no amplification), but it IS stored and re-served on
 	// every GET — without a cap a 1MB POST becomes a 1MB-per-tab memory anchor.
-	if len(incoming.ChangeID) > 256 || len(incoming.CommitID) > 256 || len(incoming.DocFilePath) > 4096 {
+	if len(incoming.ChangeID) > 256 || len(incoming.CommitID) > 256 || len(incoming.DocFilePath) > 4096 ||
+		(incoming.Revset != nil && len(*incoming.Revset) > maxNavigateRevsetLen) {
 		s.writeError(w, http.StatusBadRequest, "field too long")
 		return
 	}
