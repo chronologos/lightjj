@@ -171,7 +171,7 @@
 
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
-  // navDebounceTimer + navRafId moved to revision-navigator — nav.cancel()
+  // navDebounceTimer + navRafId moved to revision-navigator — nav.cancelSchedule()
   // clears both. App keeps evologDebounceTimer (separate panel, separate timer).
   let evologDebounceTimer: number | undefined
   let evologOpen: boolean = $state(false)
@@ -213,11 +213,9 @@
   // counter. See loader.svelte.ts for semantics. Aliases below preserve existing
   // names for backward-compatible reads throughout the component + templates.
   const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
-  // The diff/files/description triple + their batch-fetch orchestration (incl.
-  // the revGen await-gap guard) live in revision-navigator.svelte.ts. Local
-  // aliases preserve the existing references across the component.
+  // The displayed diff/files/description live in revision-navigator.svelte.ts.
   const nav = createRevisionNavigator({ onError: showError })
-  const { diff, files, description, singleTarget } = nav
+  const { singleTarget } = nav
   const commentVis = createCommentVisibility()
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
   // Value carries the id it was fetched for: the panel renders and restores
@@ -304,7 +302,7 @@
     })
   })
 
-  // Abort predicate for nav.loadDiffAndFiles — re-checked after its await.
+  // Abort predicate for nav.navigateDeferred — checked when the debounce fires.
   // User checking a revision during the fetch means the multi-check $effect
   // below already fired; don't clobber it.
   // The panel lives in the log view; the graph badge is clickable from branches.
@@ -317,15 +315,15 @@
 
   let revisions = $derived(log.value)
   let loading = $derived(log.loading)
-  let diffContent = $derived(diff.value)
-  let diffLoading = $derived(diff.loading)
+  let diffContent = $derived(nav.diffText)
+  let diffLoading = $derived(nav.diffLoading)
   // What's LOADED, not what's selected. Passed to DiffPanel as diffTarget.
   // Set SYNCHRONOUSLY at navigate — leads the diff content (progressive render).
   let loadedTarget = $derived(nav.loadedTarget)
   let diffPending = $derived(nav.diffPending)
   let diffContentKey = $derived(nav.diffContentKey)
-  let changedFiles = $derived(files.value)
-  let fullDescription = $derived(description.value)
+  let changedFiles = $derived(nav.files)
+  let fullDescription = $derived(nav.description)
   let oplogEntries = $derived(oplog.value)
   let oplogLoading = $derived(oplog.loading)
   let evologRevision = $derived(revisions.find(r => effectiveId(r.commit) === evolog.value.id) ?? null)
@@ -816,7 +814,7 @@
       // $effect returns early on kind !== 'multi', so nothing else reloads
       // the single-rev diff — loadedTarget would stay on the multi target.
       if (checkedRevisions.size === 0 && selectedRevision) {
-        nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
+        nav.loadDiffAndFiles(selectedRevision.commit)
       }
     } else {
       checkedRevisions.add(changeId)
@@ -844,8 +842,9 @@
 
   function clearChecksAndReload() {
     clearChecks()
-    if (selectedRevision) nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
-    else { diff.reset(); files.reset() }
+    if (diffFrozen) return
+    if (selectedRevision) nav.loadDiffAndFiles(selectedRevision.commit)
+    else nav.reset()
   }
 
   // After mutations that re-render the DOM, focus can land on the revset input,
@@ -1360,6 +1359,8 @@
         const p = pendingSelect
         pendingSelect = null
         restorePreWidenRevset(p)
+      } else if (errored && revisions.length === 0 && !diffFrozen) {
+        nav.reset() // a rejected revset blanks the graph; don't keep its old diff
       }
       return false
     }
@@ -1404,13 +1405,18 @@
       }
     }
     lastCheckedIndex = -1
-    if (selectedIndex >= 0 && checkedRevisions.size === 0) {
+    if (diffFrozen) {
+      // Squash/split show their SOURCE while the cursor picks a destination;
+      // following the cursor here would swap the file list under the selection.
+    } else if (selectedIndex >= 0 && checkedRevisions.size === 0) {
       // Same revision after a refresh → navigator's isRefresh path + the
       // commit_id cache make this a no-op render-wise (no spinner, no fetch
       // unless the commit was actually rewritten). Different/fallback
       // revision → real load.
       const sel = revisions[selectedIndex]
-      nav.loadDiffAndFiles(sel.commit, hasChecked)
+      nav.loadDiffAndFiles(sel.commit)
+    } else if (selectedIndex < 0) {
+      nav.reset()
     }
     // Oplog/bookmarks panels are NOT chained here — their op-syncs notice the
     // same op-id change that triggered this load and refresh themselves (and
@@ -1577,9 +1583,7 @@
   function restorePreWidenRevset(p: PendingSelect) {
     if (!holdsOurLocator(p)) return
     revsetFilter = p.restoreRevset!
-    nav.cancel()
-    diff.reset()
-    files.reset()
+    nav.cancelSchedule()
     clearChecks()
     pendingResetSelection = true
     void logSync.refresh()
@@ -2057,7 +2061,7 @@
         // Only poke the loader if selection unchanged — otherwise we'd write
         // the old revision's draft into the new selection's description loader.
         // Mutation already succeeded; the log refresh below reloads either way.
-        if (cid && selectedRevision?.commit.commit_id === cid) description.set(draft)
+        if (cid) nav.setDescription(cid, draft)
         if (descEdit?.kind === 'describe' && descEdit.targetId === targetId) {
           // Keystrokes that landed during the save stay open as the new draft.
           if (descEdit.draft === draft) descEdit = null
@@ -2140,7 +2144,6 @@
         const result = await api.commit(draft)
         setMessage(mutationMessage('Committed working copy', result))
         if (descEdit?.targetId === targetId) descEdit = null
-        description.reset()
         await logSync.refresh()
       } catch (e) {
         showError(e)
@@ -2254,23 +2257,29 @@
   //
   // checkedRevisions guard is load-bearing: multi-check diff (what
   // enterSquashMode needs for fileSel.init) must not be clobbered by a
-  // single-revision reload. Returns true in that case — the loaded multi
-  // diff IS the state enter*Mode wants.
+  // single-revision reload — the loaded multi diff IS the state enter*Mode wants.
   function switchToLogView(): boolean {
     activeView = 'log'
-    // Cancel any queued navigate* schedule — the direct load below supersedes
-    // it. Otherwise context-menu → selectByChangeId → selectRevision schedules,
-    // then this fires another; revGen makes it correct but it's wasteful.
-    nav.cancel()
-    const sel = revisions[selectedIndex]
-    if (!sel || checkedRevisions.size > 0) return true
     const loaded = nav.loadedTarget
-    // diffPending = "loadedTarget set sync but content still fetching". Without
-    // this check, enterSquashMode during the ~440ms SSH meta wait would init
-    // fileSel from files.value=[] (reset at navigate) → executeSquash's
-    // empty-commit exception (total===0) → undefined file filter → squash ALL.
-    if (loaded?.kind === 'single' && loaded.commitId === sel.commit.commit_id && !nav.diffPending) return true
-    nav.loadDiffAndFiles(sel.commit, hasChecked)
+    if (checkedRevisions.size > 0) return loaded?.kind === 'multi' && nav.ready
+    const sel = revisions[selectedIndex]
+    if (!sel) return false
+    // nav.ready, not "not loading": a mode that snapshots the file list before it
+    // has landed sees zero files, which squash reads as "move everything".
+    const onSel = loaded?.kind === 'single' && loaded.commitId === sel.commit.commit_id
+    if (onSel && nav.ready) return true
+    if (!onSel || !nav.diffLoading) nav.loadDiffAndFiles(sel.commit)
+    return false
+  }
+
+  const STILL_LOADING = 'Still loading this revision — try again'
+  /** Entry gate for modes that snapshot the displayed file list. */
+  function filesReady(): boolean {
+    if (switchToLogView()) {
+      if (message?.text === STILL_LOADING) setMessage(null)
+      return true
+    }
+    setMessage({ kind: 'warning', text: STILL_LOADING })
     return false
   }
 
@@ -2456,12 +2465,9 @@
 
   function enterSquashMode() {
     const revs = effectiveRevisions
-    if (revs.length === 0 || files.loading) return
+    if (revs.length === 0) return
     cancelInlineModes()
-    // false = diff was stale, load just fired, changedFiles is still the
-    // OLD revision's file list. User retries once the load settles (visible
-    // in diff panel). Reachable via palette/context-menu from branches view.
-    if (!switchToLogView()) return
+    if (!filesReady()) return
     fileSel.init(changedFiles)
     squash.enter(revs)
     // Move cursor to parent of first source (default squash target)
@@ -2608,9 +2614,9 @@
   }
 
   function enterSplitMode(asReview = false) {
-    if (!selectedRevision || checkedRevisions.size > 0 || files.loading) return
+    if (!selectedRevision || checkedRevisions.size > 0) return
     cancelInlineModes()
-    if (!switchToLogView()) return
+    if (!filesReady()) return
     if (asReview) {
       // Seed all-accepted. parseDiffCached is already warm (DiffPanel parsed
       // this diff when the user navigated here). reviewParsedDiff isn't
@@ -2858,9 +2864,12 @@
    *  once the reload — including its cursor reconciliation / pendingSelect
    *  consumption — completes, so callers can await it. */
   function handleRevsetSubmit(): Promise<boolean> {
-    nav.cancel()
-    diff.reset()
-    files.reset()
+    if (diffFrozen) {
+      revsetFilter = appliedRevset ?? ''
+      setMessage({ kind: 'warning', text: 'Finish or Esc the current mode before changing the revset' })
+      return Promise.resolve(false)
+    }
+    nav.cancelSchedule()
     clearChecks()
     return userRefresh(true)
   }
@@ -3057,7 +3066,10 @@
     if (e.key === 'Enter') {
       if (activeInlineMode) executeInlineMode[activeInlineMode.kind]()
     } else {
+      const wasFrozen = diffFrozen
       cancelInlineModes()
+      // A frozen mode left the SOURCE's diff under a cursor that has moved on.
+      if (wasFrozen && activeView === 'log') switchToLogView()
     }
     return true
   }
@@ -3176,9 +3188,9 @@
         }
         break
       case 'Enter':
-        if (selectedRevision) {
+        if (selectedRevision && checkedRevisions.size === 0) {
           e.preventDefault()
-          nav.loadDiffAndFiles(selectedRevision.commit, hasChecked)
+          nav.loadDiffAndFiles(selectedRevision.commit)
         }
         break
       case 'r': e.preventDefault(); userRefresh(); break
@@ -3390,12 +3402,12 @@
   })
 
   // Raw setTimeout escapes {#key} remount — clear on tab-switch unmount so
-  // stale closures don't keep the old instance's signals alive. nav.cancel()
+  // stale closures don't keep the old instance's signals alive. cancelSchedule()
   // clears the navigator-owned rAF + debounce.
   onDestroy(() => {
     clearTimeout(messageClearTimer)
     clearTimeout(evologDebounceTimer)
-    nav.cancel()
+    nav.cancelSchedule()
   })
 
   // Initial loads — explicit refresh() calls. A never-fetched sync IS stale by

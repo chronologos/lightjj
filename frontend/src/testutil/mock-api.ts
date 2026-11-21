@@ -128,7 +128,12 @@ export function setLogHandler(h: LogHandler | null): void { _logHandler = h }
 const _mutationErrors = new Map<string, Error>()
 export function setMutationError(method: string, e: Error): void { _mutationErrors.set(method, e) }
 
+/** Delay one api method's response (reads included). Cleared by resetMockApi. */
+const _delays = new Map<string, number>()
+export function setApiDelay(method: string, ms: number): void { _delays.set(method, ms) }
+
 export function resetMockApi(): void {
+  _delays.clear()
   _mutationErrors.clear()
   _fixtures = defaultFixtures()
   calls.length = 0
@@ -170,7 +175,10 @@ export const mockApi = new Proxy({} as Record<string, (...args: unknown[]) => Pr
     if (method in namespacedClients) return namespacedClients[method]
     return (...args: unknown[]) => {
       calls.push({ method, args })
-      if (_mutationErrors.has(method)) return Promise.reject(_mutationErrors.get(method))
+      const delay = _delays.get(method)
+      return delay === undefined ? respond() : new Promise(r => setTimeout(r, delay)).then(respond)
+      function respond(): Promise<unknown> {
+      if (_mutationErrors.has(method as string)) return Promise.reject(_mutationErrors.get(method as string))
       const a0 = args[0] as string | undefined
       switch (method) {
         case 'log': return _logHandler ? _logHandler(a0) : Promise.resolve(_fixtures.revisions)
@@ -196,6 +204,7 @@ export const mockApi = new Proxy({} as Record<string, (...args: unknown[]) => Pr
         case 'evolog': return _evologHandler ? _evologHandler(a0!) : Promise.resolve([])
         case 'oplog': return Promise.resolve([])
         default: return Promise.resolve(okMutation)
+      }
       }
     }
   },

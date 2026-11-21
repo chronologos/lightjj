@@ -159,52 +159,28 @@ Not caches, but the mechanism that keeps async writes from clobbering state.
 |---|---|---|
 | `loader.generation` | `createLoader()` | result application — `set()` bumps so in-flight `load()` loses |
 | `derivation.generation` | `createDiffDerivation()` | per-file writes + memo-write; `update`/`clear`/`tryRestore` all bump |
-| `revGen` | `createRevisionNavigator()` | the await-before-load gap (below) |
 | `previewGen` | DiffPanel | barrier-gen — bumped once per identity-change to invalidate ALL in-flight per-file fetches; no single `.value`, so not a `createLoader` candidate |
 | `mergeGen` | App (merge mode) | `loadMergeFile`/`saveMergeResult` against rapid j/k in `ConflictQueue` |
 | `saveGen` | config.svelte.ts | `saveRemote`'s `onError` callback — overlapping flushes resolving out-of-order would let a stale 422 stomp a fresh ok's null-clear |
 
-### `diffContentKey` — content-matches-target invariant
+### Tagged content — content-matches-target invariant
 
-Not a counter — a **content-key marker**. `loadedTarget` (= `activeRevisionId`
-in DiffPanel) flips synchronously at navigate; `diff.value` lags the fetch.
-`diffContentKey` is set to `diffTargetKey(target)` only when `diff.value` is
-known to hold that target's content (post-`diff.load` resolve with
-`applied=true`, or sync via `applyCacheHit`/`loadMulti`). DiffPanel's
-derivation effect gates on `diffContentKey === activeRevisionId` — running in
-the gap would write `derivedCache[newKey]` with old files, then `tryRestore`
-the poisoned entry on the next fire. Three write sites, all in
-`createRevisionNavigator`: `loadDiffAndFiles`, `applyCacheHit`, `loadMulti`.
-**App must not call `diff.load()` directly** — that's the path that desyncs the
-triple. Tested: `describe('diffContentKey')` in
-revision-navigator.svelte.test.ts (producer) + DiffPanel.test.ts (consumer).
+`loadedTarget` flips synchronously at navigate; content lags the fetch. The
+navigator stores each loaded value together with the target it was loaded for
+(`Content`, `Meta` in revision-navigator.svelte.ts), so everything that used to be
+a separately maintained marker is a comparison:
 
-### The `revGen` await-gap race
+- `diffContentKey` = the key of the content's own target. DiffPanel's derivation
+  effect gates on `diffContentKey === activeRevisionId`; running in the gap would
+  write `derivedCache[newKey]` with old files and poison the memo.
+- `diffPending` = nothing presentable for this target, and it hasn't failed.
+  Same-change content IS presentable (stale-while-revalidate), which is the third
+  state a presence-in-map design can't express (see Rejected designs).
+- `ready` = content AND file list belong to exactly this target.
 
-`loadDiffAndFiles(commit)` awaits `api.revision()` *before* calling
-`diff.load()`. The loader's internal generation invalidates in-flight `load()`
-calls — but not calls that haven't fired yet. A suspended `loadDiffAndFiles(A)`
-would resume and call `diff.load(A)`, bumping `loader.generation` *past* any
-intervening `diff.set(B)`, and win.
-
-```
-loadDiffAndFiles(A)
-  gen = ++revGen           // revGen=1
-  await api.revision(A)    // ── suspended ──────────────────────────┐
-                                                                     │
-         selectRevision(B) cache-hit:                                │
-           revGen++                // revGen=2 ← invalidates A       │
-           diff.set(B)             // loader.generation++            │
-                                                                     │
-  // resumed ───────────────────────────────────────────────────────┘
-  if (gen !== revGen) return       // 1 !== 2 → bails ✓
-  diff.load(singleTarget(A))       // ← never reached
-```
-
-Two generation counters, one outer (`revGen`, guards the await gap) and one
-inner (`loader.generation`, guards in-flight results). Neither subsumes the
-other. Tested: `'applyCacheHit invalidates suspended loadDiffAndFiles'`
-(revision-navigator.svelte.test.ts).
+Files and description are fetched by one loader, started together with the diff,
+so there is no await between deciding to load and calling `load()` — the loader's
+own generation is the only race guard needed.
 
 ### `getCached` all-or-nothing
 

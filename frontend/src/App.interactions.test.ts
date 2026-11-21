@@ -28,7 +28,7 @@ vi.stubGlobal('fetch', async () => new Response(null, { status: 204 }))
 import App from './App.svelte'
 import {
   resetMockApi, calls, triggerNavigate, triggerStale,
-  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, setMutationError, mkFileChange,
+  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, setMutationError, setApiDelay, mkFileChange,
 } from './testutil/mock-api'
 import type { LogEntry } from './lib/api'
 import { waitFor } from './testutil/wait-for'
@@ -1009,5 +1009,110 @@ describe('App write targets', () => {
     expect(calls.find(c => c.method === 'split')!.args[3]).toEqual({ cmid: 'kmid' })
     expect(qs('.statusbar.split-active')).toBeNull()
     await waitFor(() => calls.filter(c => c.method === 'log').length > logsBefore)
+  })
+})
+
+// ── What's displayed vs what's loaded ───────────────────────────────────────
+describe('App diff readiness', () => {
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+  const row = (i: number) => qs(`.graph-row.node-row[data-entry="${i}"]`)!
+  const spinner = () => qs('.diff-panel .spinner')
+  const squashes = () => calls.filter(c => c.method === 'squash')
+  const twoFiles = () => {
+    const f = defaultFixtures()
+    setFixtures({ files: { ...f.files, kmid: [mkFileChange({ path: 'a.ts' }), mkFileChange({ path: 'b.ts' })] } })
+  }
+
+  it.each<[string, () => Promise<unknown>]>([
+    ['j', () => press('j')],
+    ['1', () => press('1')],
+    ['R', () => press('R')],
+  ])('Space then %s before the multi-diff lands does not strand the spinner', async (_, second) => {
+    await mountApp()
+    setApiDelay('diff', 120)
+    await press(' ')
+    await press('j'); await sleep(200) // settle, then check a second one
+    await press(' ')
+    await sleep(10)
+    await second()
+    await sleep(500)
+    expect(spinner()).toBeNull()
+  })
+
+  it('S before the file list lands is refused, not read as "squash everything"', async () => {
+    twoFiles()
+    await mountApp()
+    setApiDelay('files', 150)
+    await press('j')
+    await sleep(90) // diff landed, files pending
+    await press('S')
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Still loading') === true)
+    expect(qs('.statusbar.squash-active')).toBeNull()
+    await sleep(200)
+    await press('S')
+    await waitFor(() => qs('.statusbar.squash-active') !== null)
+    expect(document.querySelectorAll('.file-select-row')).toHaveLength(2)
+  })
+
+  it('a preset chip during squash is refused: source, files and cursor stay put', async () => {
+    twoFiles()
+    await mountApp()
+    await press('j')
+    await sleep(120)
+    await press('S')
+    await waitFor(() => qs('.statusbar.squash-active') !== null)
+    const cursor = selectedEntry()
+    const logs = calls.filter(c => c.method === 'log').length
+    await fireEvent.click(qs('.preset-chip')!)
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Finish or Esc') === true)
+    await sleep(60)
+    expect(selectedEntry()).toBe(cursor)
+    expect(calls.filter(c => c.method === 'log')).toHaveLength(logs)
+    expect((qs('.revset-input') as HTMLInputElement).value).toBe('')
+    expect(document.querySelectorAll('.file-select-row')).toHaveLength(2)
+    expect(squashes()).toEqual([])
+  })
+
+  it('Esc from squash brings the diff back to the cursor', async () => {
+    twoFiles()
+    await mountApp()
+    await press('j')
+    await sleep(120)
+    await press('S')
+    await waitFor(() => qs('.statusbar.squash-active') !== null)
+    const onDest = calls.filter(c => c.method === 'diff').length
+    await press('Escape')
+    await sleep(30)
+    expect(selectedEntry()).toBe('2') // cursor stays where destination-picking left it
+    expect(calls.filter(c => c.method === 'diff').slice(onDest).map(c => c.args[0])).toEqual(['ktrunk'])
+  })
+
+  it('changing the revset keeps the diff body mounted while the log loads', async () => {
+    const f = defaultFixtures()
+    setFixtures({ diffs: { ...f.diffs, kwc: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n' } })
+    await mountApp()
+    await waitFor(() => document.querySelectorAll('.diff-file').length === 1)
+    const body = qs('.diff-file')
+    let release!: () => void
+    setLogHandler(() => new Promise(r => { release = () => r(defaultFixtures().revisions) }))
+    await fireEvent.click(qs('.preset-chip')!)
+    await sleep(30)
+    expect(qs('.diff-file')).toBe(body) // blanking it unmounts open editors
+    release()
+    await sleep(50)
+    expect(qs('.diff-file')).toBe(body)
+  })
+
+  it('a revset that matches nothing clears the diff instead of keeping an orphan', async () => {
+    const f = defaultFixtures()
+    setFixtures({ diffs: { ...f.diffs, kwc: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n' } })
+    await mountApp()
+    await waitFor(() => document.querySelectorAll('.diff-file').length === 1)
+    setLogHandler(async () => [])
+    await fireEvent.click(qs('.preset-chip')!)
+    await waitFor(() => document.querySelectorAll('.graph-row.node-row').length === 0)
+    await sleep(30)
+    expect(qs('.diff-file')).toBeNull()
+    expect(spinner()).toBeNull()
   })
 })

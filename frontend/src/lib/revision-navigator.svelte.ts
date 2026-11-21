@@ -1,68 +1,65 @@
-// Fetch orchestration for the revision diff/files/description triple.
-// Extracted from App.svelte to make the revGen await-gap race testable
-// (docs/CACHING.md "Race-safety layer"). Owns the three content loaders;
-// App.svelte wires selectedIndex/checkedRevisions/debounce around it.
+// What the diff panel shows: one target, plus content and metadata that each
+// carry the target they belong to. App.svelte decides WHICH revision (cursor,
+// checks, debounce inputs); this module owns loading it.
+//
+// Every loaded value is tagged with its own target, so "does this content belong
+// to what's displayed?" is a comparison, never bookkeeping that each code path has
+// to keep in step. Everything else (spinner, content key, readiness) is derived.
 
-import { createLoader, type Loader } from './loader.svelte'
+import { createLoader } from './loader.svelte'
 import { api, effectiveId, diffTargetKey, fetchRevisionMeta, type LogEntry, type FileChange, type DiffTarget } from './api'
 
 type Commit = LogEntry['commit']
 type CacheHit = { diff: string; files: FileChange[]; description: string }
 
+// Classes, not object literals: $state proxies plain objects, which would give a
+// cache hit a new identity and re-run everything downstream.
+class Content {
+  constructor(readonly target: DiffTarget, readonly text: string) {}
+}
+class Meta {
+  constructor(readonly target: DiffTarget, readonly files: FileChange[], readonly description: string) {}
+}
+
+const NO_FILES: FileChange[] = []
+
+/** Same revision, possibly at a different commit (snapshot, describe): content for
+ *  `a` may stay on screen while `b` loads. Keyed on change_id, not commit_id — a
+ *  snapshot mints a new commit_id and a spinner there would unmount every
+ *  DiffFileView (scroll, previews, open editors). */
+function sameSubject(a: DiffTarget, b: DiffTarget): boolean {
+  if (a.kind === 'single' && b.kind === 'single') return a.changeId === b.changeId
+  return diffTargetKey(a) === diffTargetKey(b)
+}
+
 export interface RevisionNavigator {
-  readonly diff: Loader<string, [DiffTarget]>
-  readonly files: Loader<FileChange[], [string]>
-  readonly description: Loader<string, [string]>
-  /** What's rendered in DiffPanel. Decoupled from diff content for progressive
-   *  rendering: set SYNCHRONOUSLY at navigate-time, before any fetch resolves.
-   *  The diff loader holds content only — it lags loadedTarget during fetch. */
+  /** What's rendered in DiffPanel. Set SYNCHRONOUSLY at navigate-time; content
+   *  catches up (progressive rendering). */
   readonly loadedTarget: DiffTarget | undefined
-  /** True from navigate until diff.load() resolves. Explicit signal for the
-   *  spinner gate — diff.loading alone has a one-macrotask gap (setTimeout 0
-   *  defer in loader.svelte.ts, which is correct for cache-hit flicker). */
-  readonly diffPending: boolean
-  /** `diffTargetKey` of the target `diff.value` was last SET FOR. Trails
-   *  `loadedTarget` during a fetch (spinner or stale-while-revalidate). The
-   *  "content matches target" invariant is `diffContentKey === diffTargetKey(loadedTarget)`.
-   *  Covers snapshot-refresh: `diffPending` stays false on isRefresh but the
-   *  commit_id still churns under stale diff.value — this field reflects that
-   *  staleness where `diffPending` alone doesn't. */
+  /** Diff text on hand. May belong to an older target — see diffContentKey. */
+  readonly diffText: string
+  /** diffTargetKey of the target `diffText` belongs to ('' = none). "Content
+   *  matches target" is `diffContentKey === diffTargetKey(loadedTarget)`. */
   readonly diffContentKey: string
-  singleTarget(c: Commit): DiffTarget
-  /**
-   * Progressive load: sets loadedTarget + diffPending SYNC (header renders,
-   * spinner shows), fires diff.load eager (long pole), awaits meta (~20ms),
-   * then fires files/description (cache hits — file list renders). `shouldAbort`
-   * re-checked after the meta await — e.g. "user checked a revision while we
-   * were fetching, the multi-check effect already fired, don't clobber".
-   */
-  loadDiffAndFiles(commit: Commit, shouldAbort: () => boolean): Promise<void>
-  /**
-   * Multi-check entry — keeps `loadedTarget`/`diffContentKey`/`diff.value`
-   * advancing as a triple. Calling `diff.load()` directly from App leaves
-   * the first two frozen at the prior single key while content holds multi
-   * output, breaking DiffPanel's `contentMatchesTarget` invariant.
-   */
-  loadMulti(target: DiffTarget & { kind: 'multi' }): void
-  /**
-   * Synchronous cache-hit application. Bumps revGen so any suspended
-   * loadDiffAndFiles bails before firing its `files.load()` — without this,
-   * the resumed call's `files.load(stale)` would bump loader.generation PAST
-   * the `files.set()` here and win. diff races handled by loader.generation
-   * directly (diff.load fires eager, before the await). See docs/CACHING.md.
-   */
+  /** Show the spinner: nothing presentable for this target yet. False during a
+   *  same-change refresh (stale content stays up) and after a failed load. */
+  readonly diffPending: boolean
+  /** A diff fetch is in flight (deferred one macrotask; cache hits never flip it). */
+  readonly diffLoading: boolean
+  readonly files: FileChange[]
+  readonly description: string
+  /** `files` is exactly the displayed target's list and its diff has settled — the
+   *  only state from which a mode may snapshot the file list. */
+  readonly ready: boolean
+  singleTarget(c: Commit): Extract<DiffTarget, { kind: 'single' }>
+  /** Display one revision now. Supersedes any pending navigate* schedule. */
+  loadDiffAndFiles(commit: Commit): Promise<void>
+  /** Display a multi-revision diff now. */
+  loadMulti(target: DiffTarget & { kind: 'multi' }): Promise<void>
+  /** Display one revision from cache, synchronously. */
   applyCacheHit(commit: Commit, hit: CacheHit): void
   /**
-   * Invalidate any in-flight loadDiffAndFiles AND any pending navigate*
-   * schedule without changing loader values. For App-level "stop whatever's
-   * pending" cases (clear-checks, mode entry, switchToLogView).
-   */
-  cancel(): void
-  /**
-   * Schedule applyCacheHit past the next paint (double-rAF). Cancels any
-   * prior navigate* schedule. `abort()` re-checked at fire — guards against
-   * cursor moving via a path that doesn't call navigate* (loadLog's
-   * working-copy fallback, selectRevisionCursorOnly).
+   * applyCacheHit past the next paint (double-rAF). `abort()` is checked at fire.
    *
    * Double-rAF: rAF callbacks run BEFORE paint in the same frame (event →
    * microtasks → rAF → style → layout → paint). Outer rAF = frame N pre-paint;
@@ -72,38 +69,70 @@ export interface RevisionNavigator {
    */
   navigateCached(commit: Commit, hit: CacheHit, abort: () => boolean): void
   /**
-   * Schedule loadDiffAndFiles after a 50ms debounce. Cancels any prior
-   * navigate* schedule. `getCommit()` is re-read at fire — rapid uncached
-   * j/k coalesces to whatever the cursor points at WHEN the debounce expires,
-   * not what it pointed at when scheduled. Return null to abort.
+   * loadDiffAndFiles after a 50ms debounce. `getCommit()` is re-read at fire —
+   * rapid uncached j/k coalesces to wherever the cursor is WHEN it expires.
    */
   navigateDeferred(getCommit: () => Commit | null, abort: () => boolean): void
+  /** Drop a pending navigate* schedule. In-flight loads are left alone: they
+   *  belong to the displayed target. */
+  cancelSchedule(): void
+  /** Show nothing (empty log, nothing selected). */
+  reset(): void
+  /** Optimistic description for `commitId` after a describe. No-op if it isn't
+   *  what's displayed. */
+  setDescription(commitId: string, text: string): void
 }
 
 export function createRevisionNavigator(opts: {
   onError: (e: unknown) => void
 }): RevisionNavigator {
-  const diff = createLoader(
-    (t: DiffTarget) => api.diff(diffTargetKey(t)).then(r => r.diff),
-    '',
-    opts.onError,
+  let target = $state.raw<DiffTarget | undefined>(undefined)
+  // The target object whose diff load failed (identity: each load has its own).
+  let failed = $state.raw<DiffTarget | undefined>(undefined)
+
+  // keepValueOnError: a transient refresh failure must not blank the panel and
+  // unmount open editors. Content for a different target is hidden by diffText.
+  const diff = createLoader<Content | null, [DiffTarget]>(
+    async t => new Content(t, (await api.diff(diffTargetKey(t))).diff),
+    null, opts.onError, { keepValueOnError: true },
   )
-  const files = createLoader((id: string) => api.files(id), [] as FileChange[], opts.onError)
-  const description = createLoader((id: string) => api.description(id).then(r => r.description), '')
+  // Error-silent: a failing diff load already shows the toast.
+  const meta = createLoader<Meta | null, [DiffTarget]>(
+    async t => {
+      if (t.kind === 'multi') return new Meta(t, await api.files(t.revset), '')
+      await fetchRevisionMeta(t.commitId) // seeds both keys below in one request
+      const [files, { description }] = await Promise.all([api.files(t.commitId), api.description(t.commitId)])
+      return new Meta(t, files, description)
+    },
+    null, undefined, { keepValueOnError: true },
+  )
 
-  let loadedTarget: DiffTarget | undefined = $state(undefined)
-  let diffPending = $state(false)
-  // Tracks the target `diff.value` was LAST SET FOR. Empty until the first
-  // apply/load. Set atomically with the loader's value write on success
-  // (either sync via applyCacheHit or post-fetch via load's resolve path).
-  let diffContentKey = $state('')
+  const targetKey = $derived(target && diffTargetKey(target))
+  const contentShown = $derived(!!target && !!diff.value && sameSubject(diff.value.target, target))
+  const diffContentKey = $derived(diff.value ? diffTargetKey(diff.value.target) : '')
+  const diffFailed = $derived(!!target && failed === target)
 
-  // revGen guards the gap between the meta await and files/description.load().
-  // loader.generation alone isn't enough: it invalidates in-flight load()
-  // calls, but a suspended loadDiffAndFiles hasn't CALLED files.load() yet —
-  // when it resumes and calls it, that call bumps loader.generation past any
-  // intervening set()/load() and wins. revGen catches it before the call.
-  let revGen = 0
+  // Scheduling. While a schedule is pending, the displayed target is about to be
+  // replaced: if it was still loading, keep the spinner rather than mount a diff
+  // that will be thrown away (rapid j/k renders only the destination). Every way a
+  // schedule ends goes through endSchedule, so this can't outlive it.
+  let navRafId = 0
+  let navDebounceTimer: ReturnType<typeof setTimeout> | undefined
+  let holdSpinner = $state(false)
+
+  const diffPending = $derived(!!target && ((!contentShown && !diffFailed) || holdSpinner))
+
+  function endSchedule(): void {
+    cancelAnimationFrame(navRafId)
+    clearTimeout(navDebounceTimer)
+    holdSpinner = false
+  }
+
+  function beginSchedule(): void {
+    const pending = diffPending
+    endSchedule()
+    holdSpinner = pending
+  }
 
   function singleTarget(c: Commit): Extract<DiffTarget, { kind: 'single' }> {
     return {
@@ -116,139 +145,75 @@ export function createRevisionNavigator(opts: {
     }
   }
 
-  async function loadDiffAndFiles(commit: Commit, shouldAbort: () => boolean): Promise<void> {
-    const gen = ++revGen
-    const target = singleTarget(commit)
-    // Refresh (post-mutation/snapshot loadLog, SAME CHANGE): keep stale
-    // content visible — no spinner, no reset, scroll preserved via DiffFileView
-    // key stability. New change: spinner + reset so the wrong revision's data
-    // doesn't sit under the new changeId during the ~440ms SSH meta wait.
-    // Keyed on changeId (not commitId): a snapshot mints a new commit_id but
-    // DiffPanel's sameChange path expects the body to stay mounted; commitId
-    // here would set diffPending → spinner branch unmounts all DiffFileViews →
-    // preview/scroll lost before any DiffPanel-side fix can run.
-    const isRefresh = loadedTarget?.kind === 'single' && loadedTarget.changeId === target.changeId
-    loadedTarget = target
-    if (!isRefresh) {
-      diffPending = true
-      files.reset()
-      description.reset()
-    }
-    // Diff is the long pole (~200ms+ for large commits). Fire independently;
-    // template shows spinner until this resolves. `load()` returns whether
-    // the resolve was applied (false if superseded) — only then is value in
-    // sync with target and diffContentKey safe to advance.
-    diff.load(target).then(applied => {
-      // `applied` alone proves diff.value just became this target's content.
-      // The extra revGen check skips advancing when a navigate* schedule has
-      // already bumped revGen — content IS in sync, but it's about to be
-      // replaced in ≤2 frames, so don't pay for a derivation that gets
-      // discarded. Over-conservative by design (contentMatchesTarget reads
-      // false for ≤50ms on content that's technically in sync).
-      if (applied && gen === revGen) diffContentKey = diffTargetKey(target)
-    }).finally(() => {
-      if (gen === revGen) diffPending = false
-    })
-    // Meta (~20ms) resolves first → file list + description render while
-    // spinner covers the diff area. Error-silent: diff.load's error handling
-    // already surfaces the visible toast, and meta failing alone is rare.
-    try {
-      await fetchRevisionMeta(commit.commit_id)
-    } catch { return }
-    if (gen !== revGen || shouldAbort()) return
-    files.load(commit.commit_id)
-    description.load(commit.commit_id)
+  async function show(t: DiffTarget): Promise<void> {
+    endSchedule()
+    target = t
+    // Both fire now; the loaders drop superseded results. Meta usually lands first
+    // (header + file list render while the spinner covers the diff).
+    const [applied] = await Promise.all([diff.load(t), meta.load(t)])
+    // Not applied and still the displayed target = it failed (a newer load would
+    // have replaced `target`).
+    if (!applied && target === t) failed = t
   }
 
   function applyCacheHit(commit: Commit, hit: CacheHit): void {
-    revGen++
-    const target = singleTarget(commit)
-    loadedTarget = target
-    diffPending = false
-    diff.set(hit.diff)
-    diffContentKey = diffTargetKey(target)
-    files.set(hit.files)
-    description.set(hit.description)
-  }
-
-  // Multi-check entry point — keeps loadedTarget/diffContentKey/diff.value
-  // advancing as a triple. App's multi-check $effect previously called
-  // diff.load() directly, which left loadedTarget+diffContentKey frozen at
-  // the prior single key while diff.value held multi content: DiffPanel's
-  // contentMatchesTarget either evaluated stale==stale (poisoned memo under
-  // single key) or stale!=current (highlights skip for the whole session).
-  function loadMulti(target: DiffTarget & { kind: 'multi' }): void {
-    const gen = ++revGen
-    loadedTarget = target
-    diffPending = true
-    description.reset()
-    diff.load(target).then(applied => {
-      // `applied` alone proves diff.value just became this target's content.
-      // The extra revGen check skips advancing when a navigate* schedule has
-      // already bumped revGen — content IS in sync, but it's about to be
-      // replaced in ≤2 frames, so don't pay for a derivation that gets
-      // discarded. Over-conservative by design (contentMatchesTarget reads
-      // false for ≤50ms on content that's technically in sync).
-      if (applied && gen === revGen) diffContentKey = diffTargetKey(target)
-    }).finally(() => {
-      if (gen === revGen) diffPending = false
-    })
-    files.load(target.revset)
-  }
-
-  // Scheduling timers — previously App.svelte instance state (navRafId,
-  // navDebounceTimer). Owning them here means cancel() clears everything
-  // in one call, and the double-rAF timing is testable via fake timers.
-  let navRafId = 0
-  let navDebounceTimer: ReturnType<typeof setTimeout> | undefined
-
-  function clearSchedule(): void {
-    cancelAnimationFrame(navRafId)
-    clearTimeout(navDebounceTimer)
-  }
-
-  function navigateCached(commit: Commit, hit: CacheHit, abort: () => boolean): void {
-    clearSchedule()
-    // revGen bump NOW: a loadDiffAndFiles suspended at its meta await could
-    // resume after the rAF fires, call files.load(stale), clobbering
-    // applyCacheHit's files.set(). Bump here invalidates it before it races.
-    revGen++
-    navRafId = requestAnimationFrame(() => {
-      navRafId = requestAnimationFrame(() => {
-        if (abort()) return
-        applyCacheHit(commit, hit)
-      })
-    })
-  }
-
-  function navigateDeferred(getCommit: () => Commit | null, abort: () => boolean): void {
-    clearSchedule()
-    // Same entry-time bump as navigateCached: a suspended loadDiffAndFiles
-    // could otherwise resume during the 50ms window, pass its revGen check,
-    // and fire files.load(stale). Bumping here stops it before it fires.
-    revGen++
-    navDebounceTimer = setTimeout(() => {
-      const commit = getCommit()
-      if (!commit || abort()) return
-      loadDiffAndFiles(commit, abort)
-    }, 50)
-  }
-
-  function cancel(): void {
-    clearSchedule()
-    revGen++
-    // diffPending deliberately NOT cleared: switchToLogView uses it to detect
-    // "loadedTarget set but content still in flight" (returns false → caller
-    // retries after load settles). All cancel() callers follow with either
-    // unmount or a fresh loadDiffAndFiles, so spinner never actually sticks.
+    endSchedule()
+    const t = singleTarget(commit)
+    target = t
+    diff.set(new Content(t, hit.diff))
+    meta.set(new Meta(t, hit.files, hit.description))
   }
 
   return {
-    diff, files, description, singleTarget,
-    get loadedTarget() { return loadedTarget },
-    get diffPending() { return diffPending },
+    get loadedTarget() { return target },
+    get diffText() { return !diff.value || (diffFailed && !contentShown) ? '' : diff.value.text },
     get diffContentKey() { return diffContentKey },
-    loadDiffAndFiles, loadMulti, applyCacheHit, cancel,
-    navigateCached, navigateDeferred,
+    get diffPending() { return diffPending },
+    get diffLoading() { return diff.loading },
+    get files() {
+      if (!meta.value || !target) return NO_FILES
+      // Multi keeps the previous list until its own lands (no file-bar flicker on
+      // each check); `ready` is what gates acting on it.
+      return target.kind === 'multi' || sameSubject(meta.value.target, target) ? meta.value.files : NO_FILES
+    },
+    get description() {
+      return meta.value && target?.kind === 'single' && sameSubject(meta.value.target, target) ? meta.value.description : ''
+    },
+    get ready() {
+      return !!targetKey && !!meta.value && diffTargetKey(meta.value.target) === targetKey
+        && (diffContentKey === targetKey || diffFailed)
+    },
+    singleTarget,
+    loadDiffAndFiles: (commit) => show(singleTarget(commit)),
+    loadMulti: show,
+    applyCacheHit,
+    navigateCached(commit, hit, abort) {
+      beginSchedule()
+      navRafId = requestAnimationFrame(() => {
+        navRafId = requestAnimationFrame(() => {
+          endSchedule()
+          if (!abort()) applyCacheHit(commit, hit)
+        })
+      })
+    },
+    navigateDeferred(getCommit, abort) {
+      beginSchedule()
+      navDebounceTimer = setTimeout(() => {
+        endSchedule()
+        const commit = getCommit()
+        if (commit && !abort()) void show(singleTarget(commit))
+      }, 50)
+    },
+    cancelSchedule: endSchedule,
+    reset() {
+      endSchedule()
+      target = undefined
+      diff.reset()
+      meta.reset()
+    },
+    setDescription(commitId, text) {
+      const m = meta.value
+      if (m?.target.kind === 'single' && m.target.commitId === commitId) meta.set(new Meta(m.target, m.files, text))
+    },
   }
 }
