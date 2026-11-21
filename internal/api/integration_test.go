@@ -1882,3 +1882,119 @@ func TestIntegration_LogFlagsIgnoreUserGraphConfig(t *testing.T) {
 	assert.True(t, sawRoot)
 	assert.True(t, sawWC)
 }
+
+// Write preconditions against real jj (expect.go). The unit tests can't cover
+// these: the point is what jj does between the client's look and its write.
+func TestIntegration_FileWritePreconditions(t *testing.T) {
+	setup := func(t *testing.T) (*Server, string, func(...string) string, jj.RevIdentity) {
+		r, jjExec := jjTestRepo(t)
+		writeFile(t, r.RepoDir, "f.txt", "one\n")
+		jjExec("commit", "-m", "base")
+		writeFile(t, r.RepoDir, "f.txt", "two\n")
+		jjExec("util", "snapshot")
+		id, ok := jj.ParseIdentity(jjExec(jj.Identity("@")...))
+		require.True(t, ok)
+		return NewServer(r, ""), r.RepoDir, jjExec, id
+	}
+	read := func(t *testing.T, dir string) string {
+		b, err := os.ReadFile(filepath.Join(dir, "f.txt"))
+		require.NoError(t, err)
+		return string(b)
+	}
+	req := func(id jj.RevIdentity) fileWriteRequest {
+		return fileWriteRequest{Path: "f.txt", Content: "mine\n", ExpectChangeId: id.ChangeId, BaseCommitId: id.CommitId}
+	}
+	code := func(w *httptest.ResponseRecorder) string {
+		var m map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &m)
+		return m["code"]
+	}
+
+	t.Run("nothing moved: writes, and returns the base for the next write", func(t *testing.T) {
+		srv, dir, _, id := setup(t)
+		w := apiPost(t, srv, "/api/file-write", req(id))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, "mine\n", read(t, dir))
+
+		var m map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
+		next := req(id)
+		next.BaseCommitId, next.Content = m["commit_id"], "again\n"
+		assert.Equal(t, http.StatusOK, apiPost(t, srv, "/api/file-write", next).Code)
+		assert.Equal(t, "again\n", read(t, dir))
+	})
+	t.Run("edited on disk, not yet snapshotted: refused, bytes kept and recoverable", func(t *testing.T) {
+		srv, dir, jjExec, id := setup(t)
+		writeFile(t, dir, "f.txt", "agent\n")
+		w := apiPost(t, srv, "/api/file-write", req(id))
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Equal(t, codeContentChanged, code(w))
+		assert.Equal(t, "agent\n", read(t, dir))
+		assert.Equal(t, "agent\n", jjExec("file", "show", "-r", "@", "f.txt", "--ignore-working-copy"))
+	})
+	t.Run("another file changed: not a conflict", func(t *testing.T) {
+		srv, dir, _, id := setup(t)
+		writeFile(t, dir, "other.txt", "x\n")
+		assert.Equal(t, http.StatusOK, apiPost(t, srv, "/api/file-write", req(id)).Code)
+	})
+	t.Run("@ moved: refused even with a matching base", func(t *testing.T) {
+		srv, dir, jjExec, id := setup(t)
+		jjExec("new")
+		before := read(t, dir)
+		w := apiPost(t, srv, "/api/file-write", req(id))
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Equal(t, codeWCMoved, code(w))
+		assert.Equal(t, before, read(t, dir))
+	})
+	t.Run("new file: missing on both sides is fine", func(t *testing.T) {
+		srv, dir, _, id := setup(t)
+		r := req(id)
+		r.Path = "new.txt"
+		require.Equal(t, http.StatusOK, apiPost(t, srv, "/api/file-write", r).Code)
+		assert.FileExists(t, filepath.Join(dir, "new.txt"))
+	})
+	t.Run("revset syntax is not an id", func(t *testing.T) {
+		srv, _, _, id := setup(t)
+		r := req(id)
+		r.BaseCommitId = "all()"
+		assert.Equal(t, http.StatusBadRequest, apiPost(t, srv, "/api/file-write", r).Code)
+	})
+}
+
+func TestIntegration_ExpectHeader(t *testing.T) {
+	post := func(srv *Server, expect string, files ...string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(splitRequest{Revision: "@", Files: files})
+		r := httptest.NewRequest("POST", "/api/split", bytes.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set(expectHeader, expect)
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, r)
+		return w
+	}
+	r, jjExec := jjTestRepo(t)
+	writeFile(t, r.RepoDir, "a.txt", "a\n")
+	writeFile(t, r.RepoDir, "b.txt", "b\n")
+	jjExec("util", "snapshot")
+	srv := NewServer(r, "")
+	seen, ok := jj.ParseIdentity(jjExec(jj.Identity("@")...))
+	require.True(t, ok)
+	expect := seen.ChangeId + "=" + seen.CommitId
+
+	// The reviewer looked at `seen`; an edit lands before they press Enter.
+	writeFile(t, r.RepoDir, "unreviewed.txt", "x\n")
+	w := post(srv, expect, "a.txt")
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), codeRevisionChanged)
+	assert.NotEmpty(t, w.Header().Get("X-JJ-Op-Id"), "tells the client to reload")
+	now, _ := jj.ParseIdentity(jjExec(jj.Identity("@")...))
+	assert.Equal(t, seen.ChangeId, now.ChangeId, "nothing was split")
+
+	// The superseded commit id still resolves — as a hidden commit.
+	assert.Equal(t, http.StatusConflict, post(srv, seen.CommitId+"="+seen.CommitId, "a.txt").Code)
+	// Looked at what's there now → goes through.
+	assert.Equal(t, http.StatusOK, post(srv, now.ChangeId+"="+now.CommitId, "a.txt").Code)
+	// Malformed or revset-shaped → 400, nothing runs.
+	for _, bad := range []string{"@=" + now.CommitId, "all()=abc", "abc", strings.Repeat("a=b,", 40)} {
+		assert.Equal(t, http.StatusBadRequest, post(srv, bad, "a.txt").Code, bad)
+	}
+}

@@ -160,21 +160,21 @@ describe('save()', () => {
     await flush()
     const ok = await mc.save('fixed')
     expect(ok).toBe(true)
-    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'fixed')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'fixed', { expectChangeId: 'zzz' })
     expect(mockApi.mergeResolve).not.toHaveBeenCalled()
   })
 
-  it('non-@ branch (change_id mismatch) → mergeResolve with commit_id', async () => {
+  it('non-@ branch (change_id mismatch) → mergeResolve by change_id', async () => {
     // Replaces the old "warning, no write" — non-@ now resolves via
-    // jj resolve --tool cp. commit_id (not change_id) so divergent change_ids
-    // don't make `jj resolve -r` ambiguous.
+    // jj resolve --tool cp. change_id follows rewrites: the panel's own commit_id
+    // goes hidden on its first save.
     const mc = createMergeController(deps)
     mc.selectFile(item('a.go', 'aaa'))  // NOT wc's change_id
     await flush()
     const ok = await mc.save('fixed')
     expect(ok).toBe(true)
     expect(mockApi.fileWrite).not.toHaveBeenCalled()
-    expect(mockApi.mergeResolve).toHaveBeenCalledWith('c_a.go', 'a.go', 'fixed')
+    expect(mockApi.mergeResolve).toHaveBeenCalledWith('aaa', 'a.go', 'fixed')
   })
 
   it('non-@ SSH 501 → explicit jj-edit fallback: resolves, warns "working copy moved"', async () => {
@@ -190,8 +190,8 @@ describe('save()', () => {
     await flush()
     const ok = await mc.save('fixed')
     expect(ok).toBe(true)
-    expect(mockApi.edit).toHaveBeenCalledWith('c_a.go')
-    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'fixed')
+    expect(mockApi.edit).toHaveBeenCalledWith('aaa')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'fixed', { expectChangeId: 'aaa' })
     expect(onError).not.toHaveBeenCalled()
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('working copy moved'))
     expect(mc.resolved.has('c_a.go:a.go')).toBe(true)
@@ -237,7 +237,7 @@ describe('save()', () => {
 
     const savePromise = mc.save('fixed')
     await flush()  // mergeResolve 501s → isStale passes → edit runs → fileWrite pending
-    expect(mockApi.edit).toHaveBeenCalledWith('c_a.go')  // @ has already moved
+    expect(mockApi.edit).toHaveBeenCalledWith('aaa')  // @ has already moved
 
     mc.selectFile(item('b.go', 'bbb'))  // supersede AFTER the point of no return
     await flush()
@@ -308,7 +308,7 @@ describe('save()', () => {
       ] },
     ])
     expect(await mc.save('fixed-a')).toBe(true)
-    expect(mockApi.mergeResolve).toHaveBeenCalledWith('C0', 'a.go', 'fixed-a')
+    expect(mockApi.mergeResolve).toHaveBeenCalledWith('aaa', 'a.go', 'fixed-a')
     // Queue refreshed → b.go now carries C1. ConflictQueue derives flat from
     // this; the next click hands selectFile a C1 item, not stale C0.
     expect(mc.queue).toHaveLength(1)
@@ -317,6 +317,23 @@ describe('save()', () => {
     // current is NOT remapped — panel keeps showing the just-saved result;
     // remapping would re-key MergePanel against sides still loaded from C0.
     expect(mc.current?.commitId).toBe('C0')
+    // …so re-saving the same item must not operate on C0, now hidden.
+    expect(await mc.save('fixed-a again')).toBe(true)
+    expect(mockApi.mergeResolve).toHaveBeenLastCalledWith('aaa', 'a.go', 'fixed-a again')
+  })
+
+  it('a divergent change_id in the queue resolves by commit_id', async () => {
+    const mc = createMergeController(deps)
+    const files = [{ path: 'a.go', sides: 2 }]
+    mockApi.conflicts.mockResolvedValueOnce([
+      { commit_id: 'D1', change_id: 'ddd', description: '', files },
+      { commit_id: 'D2', change_id: 'ddd', description: '', files },
+    ])
+    await mc.enter()
+    mc.selectFile({ commitId: 'D2', changeId: 'ddd', path: 'a.go', sides: 2 })
+    await flush()
+    await mc.save('x')
+    expect(mockApi.mergeResolve).toHaveBeenCalledWith('D2', 'a.go', 'x')
   })
 
   it('issue #24: nav during post-save queue refresh → stale queue write bounces, queueLoading clears', async () => {

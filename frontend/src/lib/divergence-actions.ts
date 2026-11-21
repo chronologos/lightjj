@@ -6,7 +6,8 @@
 // These are the inner bodies that App.svelte's runDivergenceResolution wraps.
 // Zero App-state reads — just api calls and the plan they operate on. The
 // wrapper stays in App (it owns withMutation/setMessage/loadLog closures).
-import { api, type MutationResult } from './api'
+import { api as sharedApi, type MutationResult } from './api'
+import { bindTab } from './tab-scope'
 import type { KeepPlan } from './divergence'
 
 export interface DivergenceActionResult {
@@ -30,6 +31,7 @@ export interface DivergenceActionResult {
 // Accumulate warnings from each step — divergence rebase is MORE likely
 // than average to conflict (moving commits between stacks).
 export async function executeKeepPlan(plan: KeepPlan): Promise<DivergenceActionResult> {
+  const api = bindTab(sharedApi) // rebase → abandon → repoint must all hit one repo
   const results: MutationResult[] = []
   // Group by dest — one rebase per distinct target. Common case (tip-only
   // descendants) degenerates to one rebase; mid-stack branches get their own.
@@ -56,7 +58,7 @@ export async function executeKeepPlan(plan: KeepPlan): Promise<DivergenceActionR
 // resolution — no abandons, no bookmark repoint. The re-id'd commit's
 // descendants auto-rebase (metaedit is a rewrite).
 export async function splitIdentity(commitId: string): Promise<DivergenceActionResult> {
-  const result = await api.metaeditChangeId(commitId)
+  const result = await sharedApi.metaeditChangeId(commitId)
   return {
     text: `Split identity — ${commitId.slice(0, 8)} now has a new change_id`,
     results: [result],
@@ -68,7 +70,7 @@ export async function splitIdentity(commitId: string): Promise<DivergenceActionR
 // diff/merge flow. from-side is left emptied → abandoned automatically
 // (not --keep-emptied).
 export async function squashDivergent(from: string, into: string): Promise<DivergenceActionResult> {
-  const result = await api.squash([from], into)
+  const result = await sharedApi.squash([from], into)
   return {
     text: `Squashed ${from.slice(0, 8)} → ${into.slice(0, 8)}`,
     results: [result],
@@ -78,7 +80,7 @@ export async function squashDivergent(from: string, into: string): Promise<Diver
 // Immutable-sibling "accept trunk" — abandon the mutable copy.
 // --retain-bookmarks (baked into jj.Abandon) moves any bookmarks to parent.
 export async function abandonMutable(commitId: string): Promise<DivergenceActionResult> {
-  const result = await api.abandon([commitId])
+  const result = await sharedApi.abandon([commitId])
   return {
     text: `Abandoned mutable ${commitId.slice(0, 8)} — accepting trunk's version`,
     results: [result],

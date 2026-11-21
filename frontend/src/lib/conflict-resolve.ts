@@ -22,7 +22,7 @@
 
 export interface ResolveConflictApi {
   /** Write content into the working copy (snapshots @). SSH-compatible. */
-  fileWrite: (path: string, content: string) => Promise<unknown>
+  fileWrite: (path: string, content: string, guard?: { expectChangeId?: string }) => Promise<unknown>
   /** `jj resolve -r <revision> --tool` apply — resolves at any mutable
    *  revision WITHOUT moving @. Local-only: rejects with a "local mode"
    *  error (HTTP 501) in SSH mode. */
@@ -54,9 +54,15 @@ export interface ResolveConflictDeps {
 export interface ResolveTarget {
   /** change_id of the revision being resolved — the @-comparison key. */
   changeId: string
-  /** Revision argument for non-@ ops (`jj resolve -r` / `jj edit`). Pass the
-   *  commit_id when known — unambiguous on divergent change_ids. */
+  /** Revision argument for non-@ ops (`jj resolve -r` / `jj edit`): the change_id,
+   *  so it follows rewrites — a commit_id captured earlier may be hidden by now,
+   *  and resolving a hidden commit makes the change divergent (issue #24). Use
+   *  the commit_id only when the change_id is already divergent. */
   revision: string
+  /** Real change_id the working-copy write must land on (server-checked: the
+   *  @/non-@ decision above is made from a possibly stale view). Omit when only
+   *  a commit_id is known. */
+  expectChangeId?: string
 }
 
 export type ResolveOutcome =
@@ -97,11 +103,12 @@ export async function resolveConflictFile(
   content: string,
 ): Promise<ResolveOutcome> {
   const isWorkingCopy = target.changeId === deps.getWorkingCopyChangeId()
+  const guard = { expectChangeId: target.expectChangeId }
   try {
     if (isWorkingCopy) {
       // @ → plain working-copy write. SSH-compatible, handles empty content
       // natively (no "\n" normalization needed).
-      await deps.api.fileWrite(path, content)
+      await deps.api.fileWrite(path, content, guard)
       return { ok: true, movedWorkingCopy: false }
     }
 
@@ -118,7 +125,7 @@ export async function resolveConflictFile(
       if (deps.isStale?.()) return { ok: false, reason: 'stale' }
       await deps.api.edit(target.revision)
       try {
-        await deps.api.fileWrite(path, content)
+        await deps.api.fileWrite(path, content, guard)
       } catch (writeErr) {
         // @ has already moved. A failed write here is the worst state
         // (relocated working copy + still-conflicted file) — report BOTH

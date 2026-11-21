@@ -39,6 +39,7 @@ internal/
     commit.go              — Commit model (ChangePrefix/CommitPrefix, Immutable, Divergent, WorkingCopies, …)
     bookmark.go            — Bookmark model + output parsers
     alias.go               — jj config alias parser
+    identity.go            — Identity(rev): what a revision resolves to now
     file_change.go         — FileChange model, FilesTemplate, ParseFilesTemplate
     file_list.go           — TreeFile model + FileListJSON/FileList(pre-json fallback)/ResolveCommitId builders + parsers (full tree at a revision)
     divergence.go          — DivergenceEntry, Divergence() template builder, ParseDivergence
@@ -69,6 +70,7 @@ internal/
     open_unix.go           — detachProcess via Setsid (!windows)
     open_windows.go        — detachProcess no-op (windows)
     gzip.go                — Gzip response middleware (Flush passthrough for SSE)
+    expect.go              — Write preconditions: X-JJ-Expect header + file-write guards → 409 {code}
     hostgate.go            — HostPolicy: Host-header gate middleware + originAllowed() Origin gate, one allow-list (loopback + --allowed-host)
   parser/                  — Graph log parser
     graph.go               — Parses jj log graph output with _PREFIX: markers into GraphRow[] (Hidden = self.hidden() marker OR `◌` glyph)
@@ -82,6 +84,8 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
   src/AppShell.svelte      — Tab-switch host ({#key activeTabId} remount + state snapshot); owns per-repo workspace info + the tab/workspace ContextMenu
   src/App.svelte           — Main app shell: layout, keyboard routing, state, revset filter bar
   src/lib/
+    tab-scope.ts           — Active tab base + bindTab(): pin a client to its tab
+    api-error.ts           — ApiError{status, code}
     api.ts                 — Typed API client, op-id tracking, commit_id-keyed LRU cache, SSE auto-refresh
     RevisionGraph.svelte   — Revision list + graph gutter; always windowed via createWindower
     virtual.svelte.ts      — createWindower() fixed-row virtualization + holdViewport()
@@ -253,6 +257,7 @@ frontend/                  — Svelte 5 SPA (Vite + TypeScript + pnpm)
   - Prose: `.prose` — rendered-markdown typography (heading scale + h1/h2 underlines, leading, code/pre/blockquote, table stripes). MarkdownPreview + DocView both use it; don't redefine per-component.
   - Misc: `.close-btn` (borderless ×), `.placeholder-text` (dimmed "(no description)"), `.nav-hint` (kbd badge)
 - **Keyboard-navigable lists use `createListCursor`** (`list-cursor.svelte.ts`) — one factory for cursor + hovered state, j/k/Arrow routing with the filter-input guard, Enter/Escape/`/` hooks, delegated `[data-idx]` hover (the no-:hover rule), bounds clamping, and data-idx scroll-into-view. Don't hand-roll the skeleton; layer domain keys behind `if (cursor.handleKey(e)) return`. Works for both self-focused lists (element onkeydown) and delegated-key lists (exported handleKeydown the App router calls).
+- **Writes are bound to what the user was looking at.** Capture the target when a surface OPENS, never re-derive it from the cursor, "whatever @ is" or the active tab at submit. `api.fileWrite` takes a guard whenever the content came from an earlier read; `split`/`splitHunks`/`rebase` take `expect` (rev → commit_id, 409 `revision_changed`); multi-request flows use `bindTab(api)`. Mutation operands are `effectiveId`, never a captured commit_id (a hidden operand makes the change divergent). Branch on `apiErrorCode(e)`, not message text.
 - **Cache by `commit_id`, not `change_id`.** Per-revision data (diff, files, description) is keyed by `commit_id` — a content hash of tree + parents + message. If the commit_id hasn't changed, the cached data is provably valid. No op-id suffix, no clear-on-mutation. `jj new` / `jj abandon` (leaf) / `jj undo` leave existing commit_ids unchanged → **zero** cache invalidation. Only rewrites (describe, rebase, squash) change commit_ids, and then only for the rewritten commit and its descendants. Pass `commit.commit_id` to `api.diff()`/`files()`/`description()`/`revision()`/`fileShow()`; use `effectiveId()` (change_id) only for mutations and UI-state that should survive rewrites — never as a cached-read key (a change_id-keyed `fileShow` served pre-save content to the second Edit click, issue #16). **Selection is identity-keyed too**: the cursor is `selectedId` (effectiveId) in App.svelte with `selectedIndex` derived from it, so a refresh that shifts row positions can't re-bind the cursor (or the diff panel) to a different revision. Repo-scoped staleness is likewise derived, per resource: every repo-scoped loader (log, workspaces, PRs, aliases, remotes, stale-immutable, oplog/bookmarks panels) pairs with a `createOpSync` that compares the op-id its value reflects against the latest reported op-id (see docs/CACHING.md "Staleness model" and op-sync.svelte.ts) — never an event that can be dropped. **A new server-state mirror is one `createLoader` + one `createOpSync` declaration**, not a `$state` + load function + a line in some refresh effect. The evolog is the deliberate exception: selection-scoped (per-revision) data gets explicit loads, not an op-sync — see CACHING.md.
 - **pnpm, not npm** — the project uses pnpm for package management.
 - **Graph rendering uses flattened lines.** Each graph line (node or connector) is its own DOM row at identical height. Node lines show commit content; description lines show the description; connector lines are just gutter characters. This ensures pixel-perfect continuous graph pipes. **Graph rows use a fixed `height: 18px`** to guarantee identical sizing across all modes (normal, rebase, squash, split). This prevents inline badges, buttons, or text from influencing row height. All inline elements (badges, `@` indicator, action buttons) must fit within 18px. Content is clipped by `overflow: hidden`. Never change this to `min-height` or remove the fixed height — it's the only way to prevent sub-pixel height differences between modes that break graph pipe continuity.

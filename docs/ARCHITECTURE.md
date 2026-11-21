@@ -81,7 +81,7 @@ flowchart TD
 | GET | `/api/file-tree` | One directory's children in a revision's FULL tree (dirs first; per-commit cached `jj file list` index) |
 | GET | `/api/file-tree/search` | Ranked fuzzy path search over a revision's full tree (same cached index) |
 | POST | `/api/index-paths` | Build jj's changed-path index (streamed output) |
-| POST | `/api/file-write` | Write file to working copy (inline editor save; path-validated) |
+| POST | `/api/file-write` | Write file to working copy (path-validated). Optional `expect_change_id` / `base_commit_id` preconditions → 409 `wc_moved` / `content_changed`; returns the resulting `commit_id` |
 | POST | `/api/open-file` | Open file in the user's editor (`{file}`/`{line}` substitution) |
 
 **Mutations**
@@ -290,7 +290,7 @@ Svelte 5 SPA using runes (`$state`, `$derived`). Built with Vite, output goes to
 
 `src/lib/api.ts` is a typed client that mirrors the Go API endpoints 1:1. It tracks the `X-JJ-Op-Id` header from responses and fires stale callbacks when the operation ID changes, triggering automatic cache invalidation and log refresh.
 
-**Tab switching** is `{#key activeTabId}<App/>` in `AppShell.svelte` — a full remount. `setActiveTab()` sets the module-level `basePath` and clears per-repo memos (`_remotes`/`_aliases`/`_info`) + `lastOpId` before `activeTabId` changes, so the remounted App's top-level fetches hit the new prefix. The commit_id cache is **not** cleared: `commit_id` is a SHA-256 content hash (tree + parents + message), collision across repos is cryptographically negligible, so switching back to a tab serves cached diffs instantly. The highlight/word-diff `derivedCache` in `DiffPanel` is also commit_id-keyed and survives for the same reason.
+**Tab switching** is `{#key activeTabId}<App/>` in `AppShell.svelte` — a full remount. `setActiveTab()` sets the active base (`tab-scope.ts`) and clears per-repo memos (`_remotes`/`_aliases`/`_info`) + `lastOpId` before `activeTabId` changes, so the remounted App's top-level fetches hit the new prefix. The commit_id cache is **not** cleared: `commit_id` is a SHA-256 content hash (tree + parents + message), collision across repos is cryptographically negligible, so switching back to a tab serves cached diffs instantly. The highlight/word-diff `derivedCache` in `DiffPanel` is also commit_id-keyed and survives for the same reason.
 
 ## Data Flow
 

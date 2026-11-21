@@ -34,9 +34,15 @@ describe('resolveConflictFile — strategy table', () => {
     wcChangeId = 'qqqqqqqq'
     const r = await resolveConflictFile(deps(), target, 'a.go', 'fixed')
     expect(r).toEqual({ ok: true, movedWorkingCopy: false })
-    expect(fileWrite).toHaveBeenCalledWith('a.go', 'fixed')
+    expect(fileWrite).toHaveBeenCalledWith('a.go', 'fixed', { expectChangeId: undefined })
     expect(mergeResolve).not.toHaveBeenCalled()
     expect(edit).not.toHaveBeenCalled()
+  })
+
+  it('passes expectChangeId so the server re-checks a stale @ decision', async () => {
+    wcChangeId = 'qqqqqqqq'
+    await resolveConflictFile(deps(), { ...target, expectChangeId: 'qqqqqqqq' }, 'a.go', 'fixed')
+    expect(fileWrite).toHaveBeenCalledWith('a.go', 'fixed', { expectChangeId: 'qqqqqqqq' })
   })
 
   it('@ comparison is by change_id — a stale/different commit_id does not break it', async () => {
@@ -67,7 +73,7 @@ describe('resolveConflictFile — strategy table', () => {
     const r = await resolveConflictFile(deps(), target, 'a.go', 'fixed')
     expect(r).toEqual({ ok: true, movedWorkingCopy: true })
     expect(edit).toHaveBeenCalledWith('cafe1234')
-    expect(fileWrite).toHaveBeenCalledWith('a.go', 'fixed')
+    expect(fileWrite).toHaveBeenCalledWith('a.go', 'fixed', { expectChangeId: undefined })
     // Order matters: edit BEFORE write (the write lands in @ = the target).
     expect(edit.mock.invocationCallOrder[0]).toBeLessThan(fileWrite.mock.invocationCallOrder[0])
   })

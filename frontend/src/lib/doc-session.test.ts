@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { DocComment } from './api'
+import { ApiError } from './api-error'
 
 // In-memory backend stub. Declared inside the factory so vi.mock hoisting
 // doesn't reference uninitialized module-scope vars.
@@ -9,7 +10,7 @@ vi.mock('./api', () => {
   return {
     api: {
       fileShow: vi.fn(async () => ({ content })),
-      fileWrite: vi.fn(async () => ({ ok: true })),
+      fileWrite: vi.fn(async () => ({ output: '', commit_id: 'cid2' })),
       docComments: {
         list: vi.fn(async () => [...stored]),
         upsert: vi.fn(async (c: DocComment) => {
@@ -275,9 +276,13 @@ describe('createDocSession', () => {
     applyEdit(s, tr => tr.insertText('X', 1, 1))
     expect(s.dirty).toBe(true)
     expect(await s.commitBack()).toBe('ok')
-    expect(api.fileWrite).toHaveBeenCalledWith('a.md', s.serialize())
+    expect(api.fileWrite).toHaveBeenCalledWith('a.md', s.serialize(), { baseCommitId: 'cid' })
     expect(s.dirty).toBe(false)
     expect(s.normalizationDiff).toBeNull()
+    // The write's own commit is the base of the next one.
+    applyEdit(s, tr => tr.insertText('Y', 1, 1))
+    expect(await s.commitBack()).toBe('ok')
+    expect(api.fileWrite).toHaveBeenLastCalledWith('a.md', s.serialize(), { baseCommitId: 'cid2' })
   })
 
   it('commitBack: stale when file changed externally; overwrite forces write', async () => {
@@ -285,12 +290,11 @@ describe('createDocSession', () => {
     const s = createDocSession('a.md', () => 'cid')
     await s.import_()
     applyEdit(s, tr => tr.insertText('X', 1, 1))
-    mockApi.__setContent('# H\n\nchanged on disk\n')
+    vi.mocked(api.fileWrite).mockRejectedValueOnce(new ApiError('changed', 409, 'content_changed'))
     expect(await s.commitBack()).toBe('stale')
-    expect(api.fileWrite).not.toHaveBeenCalled()
     expect(s.dirty).toBe(true)
     await s.overwrite()
-    expect(api.fileWrite).toHaveBeenCalledWith('a.md', s.serialize())
+    expect(api.fileWrite).toHaveBeenLastCalledWith('a.md', s.serialize(), undefined)
     expect(s.dirty).toBe(false)
   })
 

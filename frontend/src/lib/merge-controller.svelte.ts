@@ -4,7 +4,8 @@
 // bughunter). Follows the revision-navigator pattern: shared gen wraps
 // multiple async ops so each invalidates the others.
 
-import { api, type ConflictEntry } from './api'
+import { api as sharedApi, type ConflictEntry } from './api'
+import { bindTab } from './tab-scope'
 import { reconstructSides, type MergeSides } from './conflict-extract'
 import { resolveConflictFile } from './conflict-resolve'
 
@@ -62,6 +63,7 @@ export interface MergeControllerDeps {
 }
 
 export function createMergeController(deps: MergeControllerDeps): MergeController {
+  const api = bindTab(sharedApi) // multi-request writes stay in the tab they started in
   let queue = $state<ConflictEntry[]>([])
   let queueLoading = $state(false)
   let current = $state<MergeQueueItem | null>(null)
@@ -153,9 +155,14 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
             // await means the SSH fallback must NOT move @ for a stale target.
             isStale: () => g !== gen,
           },
-          // cur.commitId for non-@ ops — `jj resolve -r`/`jj edit` accept
-          // commit_id and won't be ambiguous on divergent change_ids.
-          { changeId: cur.changeId, revision: cur.commitId },
+          // change_id for non-@ ops: `current` keeps its pre-save commit_id (see
+          // below), so re-saving the same item by commit_id would resolve a
+          // hidden commit. Divergent change_ids are ambiguous → commit_id.
+          {
+            changeId: cur.changeId,
+            revision: queue.filter(e => e.change_id === cur.changeId).length > 1 ? cur.commitId : cur.changeId,
+            expectChangeId: cur.changeId,
+          },
           cur.path, content,
         )
         // A relocated working copy MUST be reported BEFORE any early return —
@@ -177,8 +184,7 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
         resolved = new Set([...resolved, `${cur.commitId}:${cur.path}`])
         // issue #24: the resolve REWROTE cur's commit (and possibly auto-
         // resolved descendants). The queue still holds pre-rewrite commit_ids;
-        // a second save in the same commit would `jj resolve -r <stale id>` →
-        // divergence. Refetch so the next selectFile gets the rewritten id.
+        // selectFile would read the pre-rewrite tree. Refetch so it gets the new id.
         // `current` is NOT remapped — it keeps the pre-rewrite id so the
         // {#key} block (and the user's just-saved result panel) stay put;
         // remapping would re-key against `sides` still loaded from C0.

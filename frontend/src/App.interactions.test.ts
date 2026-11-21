@@ -28,10 +28,11 @@ vi.stubGlobal('fetch', async () => new Response(null, { status: 204 }))
 import App from './App.svelte'
 import {
   resetMockApi, calls, triggerNavigate, triggerStale,
-  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, mkFileChange,
+  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, setMutationError, mkFileChange,
 } from './testutil/mock-api'
 import type { LogEntry } from './lib/api'
 import { waitFor } from './testutil/wait-for'
+import { ApiError } from './lib/api-error'
 
 // Dispatch on body, not window: event.target must be an HTMLElement for
 // App's isInInput(t) (calls t.closest). The event bubbles to window so
@@ -151,7 +152,7 @@ describe('App.svelte interactions', () => {
     // api.rebase(revisions, destinations, '-r', '-d') — destinations is an array
     // containing the full new parent set (kmid + ktrunk).
     expect(call.args[0]).toEqual(['cwc'])
-    expect(new Set(call.args[1] as string[])).toEqual(new Set(['kmid', 'ktrunk']))
+    expect(new Set(call.args[1] as string[])).toEqual(new Set(['cmid', 'ctrunk']))
     // Mode exits after execute.
     await waitFor(() => qs('.statusbar.megamerge-active') === null)
   })
@@ -989,5 +990,24 @@ describe('App write targets', () => {
     await press('Enter')
     await waitFor(() => writes().length === 1)
     expect(writes()[0].args[2]).toMatchObject({ files: ['old.ts', 'new.ts'] })
+  })
+
+  it('split sends the commit it was opened on; revision_changed cancels the mode and refreshes', async () => {
+    const f = defaultFixtures()
+    setFixtures({ files: { ...f.files, kmid: [mkFileChange({ path: 'a.ts' }), mkFileChange({ path: 'b.ts' })] } })
+    setMutationError('split', new ApiError('cmid changed since you opened it', 409, 'revision_changed'))
+    await mountApp()
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    await sleep(120)
+    await press('s')
+    await waitFor(() => qs('.statusbar.split-active') !== null)
+    await fireEvent.click(document.querySelectorAll('.file-select-row')[0])
+    const logsBefore = calls.filter(c => c.method === 'log').length
+    await press('Enter')
+    await waitFor(() => qs('.message-text')?.textContent?.includes('revision changed underneath') === true)
+    expect(calls.find(c => c.method === 'split')!.args[3]).toEqual({ cmid: 'kmid' })
+    expect(qs('.statusbar.split-active')).toBeNull()
+    await waitFor(() => calls.filter(c => c.method === 'log').length > logsBefore)
   })
 })

@@ -3767,6 +3767,7 @@ func TestHandleFileWrite(t *testing.T) {
 		runner.WriteDir = dir
 		// Snapshot fires after successful write so the X-JJ-Op-Id header is fresh.
 		runner.Allow(jj.DebugSnapshot()).SetOutput([]byte(""))
+		runner.Allow(jj.Identity("@")).SetOutput([]byte(`{"commit_id":"c1","change_id":"z1","hidden":false}`))
 		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
 		return NewServer(runner, dir)
 	}
@@ -3917,6 +3918,7 @@ func TestUnifiedSuccessEnvelope(t *testing.T) {
 		runner := testutil.NewMockRunner(t)
 		runner.WriteDir = dir
 		runner.Allow(jj.DebugSnapshot()).SetOutput([]byte(""))
+		runner.Allow(jj.Identity("@")).SetOutput([]byte(`{"commit_id":"c1","change_id":"z1","hidden":false}`))
 		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
 		srv := NewServer(runner, dir)
 

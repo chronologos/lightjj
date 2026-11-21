@@ -124,7 +124,12 @@ let _evologHandler: EvologHandler | null = null
 export function setEvologHandler(h: EvologHandler | null): void { _evologHandler = h }
 export function setLogHandler(h: LogHandler | null): void { _logHandler = h }
 
+/** Make one mutation reject. Cleared by resetMockApi. */
+const _mutationErrors = new Map<string, Error>()
+export function setMutationError(method: string, e: Error): void { _mutationErrors.set(method, e) }
+
 export function resetMockApi(): void {
+  _mutationErrors.clear()
   _fixtures = defaultFixtures()
   calls.length = 0
   _seq = 0
@@ -165,6 +170,7 @@ export const mockApi = new Proxy({} as Record<string, (...args: unknown[]) => Pr
     if (method in namespacedClients) return namespacedClients[method]
     return (...args: unknown[]) => {
       calls.push({ method, args })
+      if (_mutationErrors.has(method)) return Promise.reject(_mutationErrors.get(method))
       const a0 = args[0] as string | undefined
       switch (method) {
         case 'log': return _logHandler ? _logHandler(a0) : Promise.resolve(_fixtures.revisions)

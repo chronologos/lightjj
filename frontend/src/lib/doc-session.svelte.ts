@@ -19,7 +19,9 @@ import { captureAnchor, refind } from './reanchor'
 import { createLoader } from './loader.svelte'
 import { createReviewMutations } from './review-mutations.svelte'
 import { fromDocComment, type PlacedReview } from './review'
-import { api, type DocComment } from './api'
+import { apiErrorCode } from './api-error'
+import { api as sharedApi, type DocComment, type FileWriteGuard } from './api'
+import { bindTab } from './tab-scope'
 
 /** Session-local placement for one comment id (not persisted). */
 type Placement = { from?: number; to?: number; orphaned: boolean }
@@ -78,17 +80,13 @@ function anchorEq(a: DocComment['anchor'], b: DocComment['anchor']): boolean {
   return a.selection === b.selection && a.contextBefore === b.contextBefore && a.contextAfter === b.contextAfter
 }
 
-async function sha256Hex(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
-  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('')
-}
-
 export type DocSession = ReturnType<typeof createDocSession>
 
 export function createDocSession(
   filePath: string,
   getWorkingCopyCommitId: () => string | undefined,
 ) {
+  const api = bindTab(sharedApi) // multi-request writes stay in the tab they started in
   // The PM Node, not EditorState — DocView owns EditorState (plugins, history)
   // and notifies us via onTransaction. Keeping state here would mean two
   // EditorState instances applying the same tr → reconfigure-on-every-keystroke
@@ -100,8 +98,8 @@ export function createDocSession(
   // PM positions per comment id. Always REASSIGNED (never .set() in place) so
   // the `comments` $derived sees the change — plain Maps aren't deeply reactive.
   let placement = $state<Map<string, Placement>>(new Map())
+  // Commit the buffer was last equal to — the write precondition.
   let baseCommitId = $state('')
-  let baseContentHash = $state('')
   let version = $state(0)
   let committedVersion = $state(0)
   let saving = $state(false)
@@ -148,7 +146,6 @@ export function createDocSession(
     stored = wire
     placement = placed
     baseCommitId = commitId
-    baseContentHash = await sha256Hex(content)
     version = 0
     committedVersion = 0
     const rt = serializeMarkdown(doc)
@@ -210,34 +207,29 @@ export function createDocSession(
     return doc ? serializeMarkdown(doc) : ''
   }
 
-  async function writeAndAdvance(md: string, atVersion: number, commitId: string): Promise<void> {
-    await api.fileWrite(filePath, md)
+  async function writeAndAdvance(md: string, atVersion: number, guard?: FileWriteGuard): Promise<void> {
+    const { commit_id } = await api.fileWrite(filePath, md, guard)
     // atVersion was captured alongside md at serialize() time — reading live
     // `version` here would mark a keystroke that landed during the await as
     // committed, silently dropping it on close.
     committedVersion = atVersion
-    baseContentHash = await sha256Hex(md)
-    // Best-effort: the watcher will snapshot post-write and bump @'s commit_id;
-    // we record the pre-write id since we can't observe the new one synchronously.
-    // The hash is the real OCC token — baseCommitId is only for fileShow(base)
-    // in a future merge-style display, which Phase 2 doesn't have.
-    baseCommitId = commitId
+    if (commit_id) baseCommitId = commit_id
     normalizationDiff = null
   }
 
-  // Best-effort staleness check (not CAS — there's a window between read and
-  // write). Caller wraps in withMutation; on 'stale' shows [Reload | Overwrite].
+  // The server compares the file on disk with baseCommitId (after snapshotting)
+  // and refuses the write if they differ. Caller wraps in withMutation; on
+  // 'stale' shows [Reload | Overwrite].
   async function commitBack(): Promise<'ok' | 'stale' | 'noop'> {
     if (!doc || version === committedVersion) return 'noop'
-    const commitId = getWorkingCopyCommitId()
-    if (!commitId) throw new Error('working copy unavailable')
     saving = true
     try {
-      const { content } = await api.fileShow(commitId, filePath)
-      if ((await sha256Hex(content)) !== baseContentHash) return 'stale'
       const atVersion = version
-      await writeAndAdvance(serialize(), atVersion, commitId)
+      await writeAndAdvance(serialize(), atVersion, { baseCommitId })
       return 'ok'
+    } catch (e) {
+      if (apiErrorCode(e) === 'content_changed') return 'stale'
+      throw e
     } finally {
       saving = false
     }
@@ -245,12 +237,10 @@ export function createDocSession(
 
   async function overwrite(): Promise<void> {
     if (!doc) return
-    const commitId = getWorkingCopyCommitId()
-    if (!commitId) throw new Error('working copy unavailable')
     saving = true
     try {
       const atVersion = version
-      await writeAndAdvance(serialize(), atVersion, commitId)
+      await writeAndAdvance(serialize(), atVersion) // no guard: the user chose to overwrite
     } finally {
       saving = false
     }
@@ -340,7 +330,6 @@ export function createDocSession(
     get error() { return importLoader.error || mutations.error },
     get busy() { return importLoader.loading },
     get baseCommitId() { return baseCommitId },
-    get baseContentHash() { return baseContentHash },
     get normalizationDiff() { return normalizationDiff },
     import_,
     refreshComments,

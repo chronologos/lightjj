@@ -1,3 +1,6 @@
+import { ApiError } from './api-error'
+import { getActiveBase, setActiveBase, requestBase } from './tab-scope'
+
 // API client for lightjj backend
 
 export interface GraphLine {
@@ -315,8 +318,8 @@ export function clearAllCaches(): void {
 }
 
 // --- Multi-tab routing ---
-// Each tab is a full Server mounted at /tab/{id}/ on the backend. basePath
-// is prepended to every api.* request. The commit_id-keyed cache above is
+// Each tab is a full Server mounted at /tab/{id}/ on the backend. The base
+// (tab-scope.ts; multi-request flows pin it with bindTab) is prepended to every api.* request. The commit_id-keyed cache above is
 // GLOBAL — commit_id is a SHA-256 content hash, collision across repos is
 // cryptographically negligible, so switching back to a tab serves cached
 // diffs instantly. Only the per-repo session memos (remotes/aliases/info)
@@ -326,14 +329,13 @@ export function clearAllCaches(): void {
 // This must be set before any module-level fetch fires (config.svelte.ts
 // is exempt — it uses raw fetch('/api/config') which TabManager routes
 // at the top level, no prefix needed).
-let basePath = '/tab/0'
 
 // Absolute base URL for the active tab's API — what an external agent should
 // hit. window.location.origin is correct in production (frontend is served
 // from the API port) and in dev (Vite proxies /tab/* through). For a forwarded
 // port the user copies what they see, which is the forwarded address.
 export function agentBaseURL(): string {
-  return window.location.origin + basePath
+  return window.location.origin + getActiveBase()
 }
 
 export interface TabInfo {
@@ -351,14 +353,12 @@ export interface TabInfo {
 }
 
 export function setActiveTab(id: string): void {
-  basePath = '/tab/' + id
+  setActiveBase('/tab/' + id)
   // The commit_id cache is NOT cleared (globally safe, see above); only
   // per-repo memos. lastOpId reset: tab B's first response sets it cleanly
   // (changed=false when prior is null). Without this, B's op-id ≠ A's
-  // lastOpId → spurious onStale. One wrinkle: an in-flight request from A
-  // can arrive after this reset and seed A's op-id — B's next response then
-  // fires one redundant loadLog. Bounded, guarded by App.svelte's !loading
-  // check; not worth basePath-capture-at-request-entry.
+  // lastOpId → spurious onStale. Late responses from A can't reseed it:
+  // op-ids are only ingested from the active tab (request()).
   clearSessionMemos()
   lastOpId = null
 }
@@ -370,7 +370,7 @@ export function setActiveTab(id: string): void {
 // pass through here get prefixed, which also works (Server.Mux has the route
 // too). The prefix check is for /tabs, not /api/config.
 function tabScoped(url: string): string {
-  return url.startsWith('/api/') ? basePath + url : url
+  return url.startsWith('/api/') ? requestBase() + url : url
 }
 
 // Tab-management calls hit /tabs (no basePath — they're host-level).
@@ -389,9 +389,7 @@ export const closeTab = (id: string) =>
 // icon) and must run add/recover against the repo the menu was opened on, not
 // wherever basePath currently points. The `/tab/{id}/api/…` URL doesn't start
 // with `/api/`, so tabScoped() leaves it as-is instead of prepending the active
-// tab's basePath. (These still go through request() → trackOpId; a background
-// mutation's op-id can fire one redundant onStale on the active tab — bounded,
-// guarded by App's !loading check, same as the setActiveTab race note above.)
+// tab's base. Their op-ids are ignored unless that tab is the active one.
 const tabURL = (id: string, apiPath: string) => '/tab/' + id + apiPath
 export const workspacesForTab = (id: string) =>
   request<WorkspacesResponse>(tabURL(id, '/api/workspaces'))
@@ -438,6 +436,10 @@ function notifyOpId(opId: string) {
     })
   }
 }
+
+/** Was `fullUrl` sent to the tab the user is looking at? Another tab's op-id
+ *  belongs to another repo and must not mark this one stale. */
+const fromActiveTab = (fullUrl: string) => fullUrl.startsWith(getActiveBase() + '/')
 
 function trackOpId(res: Response) {
   // Track op-id even on error responses — a failed mutation may still advance the op-id
@@ -591,12 +593,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   try {
     const res = await fetch(full, signal ? { ...init, signal } : init)
     if (timeoutId !== undefined) clearTimeout(timeoutId) // disarm after headers arrive
-    trackOpId(res)
+    if (fromActiveTab(full)) trackOpId(res)
     if (!res.ok) {
       // Parse error body defensively — non-JSON bodies (Go panic, proxy error)
       // should surface the HTTP status, not a JSON parse error.
-      const data = await res.json().catch(() => null) as { error?: string } | null
-      throw new Error(data?.error || `HTTP ${res.status}: ${res.statusText}`)
+      const data = await res.json().catch(() => null) as { error?: string; code?: string } | null
+      throw new ApiError(data?.error || `HTTP ${res.status}: ${res.statusText}`, res.status, data?.code)
     }
     // DELETE handlers may return 200 with empty body (e.g., /api/annotations).
     // res.json() on a 0-byte body throws SyntaxError → every request<void>()
@@ -620,10 +622,20 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
 }
 
-function post<T>(url: string, body: unknown): Promise<T> {
+export interface FileWriteGuard { expectChangeId?: string; baseCommitId?: string }
+
+/** "These revisions must still be these commits": rev → commit_id. The server
+ *  snapshots, checks, and 409s (code revision_changed) before mutating. */
+export type Expect = Record<string, string>
+
+function post<T>(url: string, body: unknown, expect?: Expect): Promise<T> {
+  const pairs = Object.entries(expect ?? {}).map(([rev, commitId]) => `${rev}=${commitId}`)
   return request<T>(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(pairs.length > 0 ? { 'X-JJ-Expect': pairs.join(',') } : {}),
+    },
     body: JSON.stringify(body),
   })
 }
@@ -637,7 +649,8 @@ async function streamPost(
   body: unknown,
   onLine: (line: string) => void,
 ): Promise<MutationResult> {
-  const res = await fetch(tabScoped(url), {
+  const full = tabScoped(url)
+  const res = await fetch(full, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -666,7 +679,7 @@ async function streamPost(
           // In-band op-id (header slot was already flushed) — restores SSE
           // dedup parity with runMutation so the watcher's broadcast doesn't
           // fire a redundant loadLog().
-          if (msg.op_id) notifyOpId(msg.op_id)
+          if (msg.op_id && fromActiveTab(full)) notifyOpId(msg.op_id)
           if (msg.error) throw new Error(msg.error)
           return { output: msg.output ?? '', warnings: msg.warnings }
         }
@@ -1207,8 +1220,15 @@ export const api = {
     return request<FileTreeSearchResponse>(`/api/file-tree/search?${params}`)
   },
 
-  fileWrite: (path: string, content: string) =>
-    post<MutationResult>('/api/file-write', { path, content }),
+  /** Write a working-copy file. Without a guard it overwrites whatever is there —
+   *  pass one whenever `content` was derived from something read earlier.
+   *  expectChangeId: @ must still be this change (409 wc_moved).
+   *  baseCommitId: the file must still equal its content there (409
+   *  content_changed). Returns the resulting @ commit_id — the next write's base. */
+  fileWrite: (path: string, content: string, guard?: FileWriteGuard) =>
+    post<MutationResult & { commit_id?: string }>('/api/file-write', {
+      path, content, expect_change_id: guard?.expectChangeId, base_commit_id: guard?.baseCommitId,
+    }),
 
   /** Commit MergePanel's resolved content at any mutable revision via
    *  `jj resolve --tool` (cp). Local-only — 501 in SSH; caller should fall
@@ -1315,7 +1335,7 @@ export const api = {
   // edit-parents → one repeated -d per entry). The backend accepts exactly one
   // of `destination` / `destinations`; we pick the wire field by array-ness.
   rebase: (revisions: string[], destination: string | string[], sourceMode?: string, targetMode?: string, opts?: {
-    skipEmptied?: boolean, ignoreImmutable?: boolean, simplifyParents?: boolean
+    skipEmptied?: boolean, ignoreImmutable?: boolean, simplifyParents?: boolean, expect?: Expect
   }) =>
     post<MutationResult>('/api/rebase', {
       revisions,
@@ -1323,18 +1343,18 @@ export const api = {
       source_mode: sourceMode, target_mode: targetMode,
       skip_emptied: opts?.skipEmptied, ignore_immutable: opts?.ignoreImmutable,
       simplify_parents: opts?.simplifyParents,
-    }),
+    }, opts?.expect),
 
-  split: (revision: string, files: string[], parallel?: boolean) =>
-    post<MutationResult>('/api/split', { revision, files, parallel }),
+  split: (revision: string, files: string[], parallel?: boolean, expect?: Expect) =>
+    post<MutationResult>('/api/split', { revision, files, parallel }, expect),
 
   // Spec is the output of hunk-apply.ts:resolvePlan — handler is an opaque
   // courier (json.RawMessage), schema is frontend↔apply_hunks.go. 501 in
   // SSH mode; caller shows the error and user can file-toggle instead.
   // Description: `jj split -m` sets the FIRST (accepted) commit's message;
   // without it we'd wipe the description from the half that matters.
-  splitHunks: (revision: string, spec: import('./hunk-apply').HunkSpec, description: string) =>
-    post<MutationResult>('/api/split-hunks', { revision, spec, description }),
+  splitHunks: (revision: string, spec: import('./hunk-apply').HunkSpec, description: string, expect?: Expect) =>
+    post<MutationResult>('/api/split-hunks', { revision, spec, description }, expect),
 
   squash: (revisions: string[], destination: string, opts?: {
     files?: string[], keepEmptied?: boolean, ignoreImmutable?: boolean,
@@ -1483,6 +1503,6 @@ export const _testInternals = {
   get refreshQueued() { return refreshQueued },
   set refreshQueued(v: boolean) { refreshQueued = v },
   resetSessionCaches: clearSessionMemos,
-  get basePath() { return basePath },
-  set basePath(v: string) { basePath = v },
+  get basePath() { return getActiveBase() },
+  set basePath(v: string) { setActiveBase(v) },
 }

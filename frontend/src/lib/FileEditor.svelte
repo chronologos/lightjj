@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
   import { EditorState, Compartment } from '@codemirror/state'
   import { defaultKeymap, indentWithTab } from '@codemirror/commands'
@@ -58,9 +59,11 @@
     return folds
   }
 
-  // Create editor once on mount; don't re-create on prop changes to preserve in-progress edits
-  $effect(() => {
-    if (!containerEl || view) return
+  // onMount, NOT $effect: the body reads content/changedRanges, and changedRanges is
+  // a new array on every diff refresh. As an effect this re-ran on each snapshot
+  // (any file, any agent edit), destroying the view and the user's unsaved text.
+  onMount(() => {
+    if (!containerEl) return
 
     // Detect whether the file uses tabs or spaces for indentation, and what
     // the indent width is. This keeps new lines aligned with existing ones.

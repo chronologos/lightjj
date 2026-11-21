@@ -4,7 +4,7 @@
 // an unrelated row must not swap with it. At merge/fork points jj arrange has
 // separate fold/unfold actions; we punt with a reason string.
 
-import type { LogEntry } from './api'
+import { effectiveId, type LogEntry } from './api'
 
 export type SlideDir = 'down' | 'up'
 type Commit = LogEntry['commit']
@@ -16,6 +16,8 @@ export type Slide =
 const no = (reason: string): Slide => ({ ok: false, reason })
 
 /** Compute the rebase target for sliding `entries[idx]` one step in `dir`.
+ *  `dest` is an effectiveId: jj snapshots a dirty @ before resolving operands, so
+ *  a commit_id can already be hidden by the time it is used.
  *  `down` = toward root = swap with parent = `--insert-before <parent>`.
  *  `up`   = toward tip  = swap with child  = `--insert-after <child>`.
  *  Children are derived from parent_ids edges within `entries` — a child
@@ -39,7 +41,7 @@ export function computeSlide(entries: LogEntry[], idx: number, dir: SlideDir): S
     // becomes the merge) — that's jj arrange's "fold", not a swap. Symmetric
     // with the child-is-merge check below.
     if ((parent.parent_ids ?? []).length > 1) return no('Parent is a merge — use Rebase')
-    return { ok: true, dest: parent.commit_id, targetMode: '--insert-before' }
+    return { ok: true, dest: effectiveId(parent), targetMode: '--insert-before' }
   }
 
   // dir === 'up': scan for children of src within the visible set.
@@ -54,5 +56,5 @@ export function computeSlide(entries: LogEntry[], idx: number, dir: SlideDir): S
   // Child being a merge means src is one of N parents; --insert-after would
   // collapse the merge's other-parent edge onto src's old parent. Punt.
   if ((child.parent_ids ?? []).length > 1) return no('Child is a merge — use Rebase')
-  return { ok: true, dest: child.commit_id, targetMode: '--insert-after' }
+  return { ok: true, dest: effectiveId(child), targetMode: '--insert-after' }
 }

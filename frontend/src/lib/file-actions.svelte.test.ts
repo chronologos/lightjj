@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createFileActions, type FileActionsDeps, type JJMutationLock } from './file-actions.svelte'
+import { ApiError } from './api-error'
 import { api, type DiffTarget } from './api'
 
 // Mock api before importing — the factory captures api.* at module eval time.
@@ -370,18 +371,18 @@ describe('quickResolve — conflict resolution strategy', () => {
     await fa.quickResolve('a.go', 'theirs')
 
     expect(mockApi.edit).not.toHaveBeenCalled()
-    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'THEIRS')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'THEIRS', { expectChangeId: 'ch-A' })
     expect(onFileSaved).toHaveBeenCalled()
   })
 
-  it('non-@ target → mergeResolve with commit_id, @ does NOT move', async () => {
+  it('non-@ target → mergeResolve by change_id, @ does NOT move', async () => {
     onFileSaved = vi.fn()
     const fa = createFileActions(deps)
     await fa.quickResolve('a.go', 'ours')
 
     expect(mockApi.edit).not.toHaveBeenCalled()
     expect(mockApi.fileWrite).not.toHaveBeenCalled()
-    expect(mockApi.mergeResolve).toHaveBeenCalledWith('co-A', 'a.go', 'OURS')
+    expect(mockApi.mergeResolve).toHaveBeenCalledWith('ch-A', 'a.go', 'OURS')
     expect(onFileSaved).toHaveBeenCalled()
   })
 
@@ -391,8 +392,8 @@ describe('quickResolve — conflict resolution strategy', () => {
     const fa = createFileActions(deps)
     await fa.quickResolve('a.go', 'ours')
 
-    expect(mockApi.edit).toHaveBeenCalledWith('co-A')
-    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'OURS')
+    expect(mockApi.edit).toHaveBeenCalledWith('ch-A')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'OURS', { expectChangeId: 'ch-A' })
     expect(fa.editError).toContain('working copy moved')
     expect(onFileSaved).toHaveBeenCalled()
   })
@@ -489,7 +490,7 @@ describe('startMerge / saveMerge', () => {
     await fa.startMerge('a.go')
 
     await fa.saveMerge('resolved content')
-    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'resolved content')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'resolved content', { expectChangeId: 'ch-A' })
     expect(fa.mergingPath).toBeNull()
     expect(fa.mergeSides).toBeNull()
     expect(onFileSaved).toHaveBeenCalled()
@@ -515,9 +516,61 @@ describe('saveFile', () => {
     await fa.startEdit('a.go')
 
     await fa.saveFile('a.go', 'new content')
-    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'new content')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'new content', { expectChangeId: 'ch-A', baseCommitId: 'co-A' })
     expect(fa.editingFiles.has('a.go')).toBe(false)
     expect(onFileSaved).toHaveBeenCalled()
+  })
+
+  it('base is the commit the editor was opened on, not the one a snapshot has since minted', async () => {
+    liveTarget = target('co-A', 'ch-A', { isWorkingCopy: true })
+    const fa = createFileActions(deps)
+    await fa.startEdit('a.go')
+    liveTarget = target('co-A2', 'ch-A', { isWorkingCopy: true }) // same change, new snapshot
+    await fa.saveFile('a.go', 'x')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'x', { expectChangeId: 'ch-A', baseCommitId: 'co-A' })
+  })
+
+  it('a divergent target has no usable change_id precondition', async () => {
+    liveTarget = target('co-A', 'co-A', { isWorkingCopy: true })
+    const fa = createFileActions(deps)
+    await fa.startEdit('a.go')
+    await fa.saveFile('a.go', 'x')
+    expect(mockApi.fileWrite).toHaveBeenCalledWith('a.go', 'x', { expectChangeId: undefined, baseCommitId: 'co-A' })
+  })
+
+  it('content_changed → editor kept; a second Save overwrites, still bound to the change', async () => {
+    liveTarget = target('co-A', 'ch-A', { isWorkingCopy: true })
+    const fa = createFileActions(deps)
+    await fa.startEdit('a.go')
+    mockApi.fileWrite.mockRejectedValueOnce(new ApiError('a.go changed since you opened it', 409, 'content_changed'))
+    await fa.saveFile('a.go', 'mine')
+    expect(fa.editingFiles.has('a.go')).toBe(true)
+    expect(fa.editError).toContain('Save again to overwrite')
+    await fa.saveFile('a.go', 'mine')
+    expect(mockApi.fileWrite).toHaveBeenLastCalledWith('a.go', 'mine', { expectChangeId: 'ch-A', baseCommitId: undefined })
+    expect(fa.editingFiles.has('a.go')).toBe(false)
+  })
+
+  it('wc_moved → refused every time, never armed for overwrite', async () => {
+    liveTarget = target('co-A', 'ch-A', { isWorkingCopy: true })
+    const fa = createFileActions(deps)
+    await fa.startEdit('a.go')
+    for (let i = 0; i < 2; i++) {
+      mockApi.fileWrite.mockRejectedValueOnce(new ApiError('the working copy is no longer at ch-A', 409, 'wc_moved'))
+      await fa.saveFile('a.go', 'mine')
+      expect(mockApi.fileWrite).toHaveBeenLastCalledWith('a.go', 'mine', { expectChangeId: 'ch-A', baseCommitId: 'co-A' })
+    }
+    expect(fa.editingFiles.has('a.go')).toBe(true)
+    expect(fa.editError).toContain('no longer at')
+  })
+
+  it('blocked by another mutation → nothing written, editor kept', async () => {
+    liveTarget = target('co-A', 'ch-A', { isWorkingCopy: true })
+    const fa = createFileActions({ ...deps, getMutationLock: () => async () => undefined })
+    await fa.startEdit('a.go')
+    await fa.saveFile('a.go', 'mine')
+    expect(mockApi.fileWrite).not.toHaveBeenCalled()
+    expect(fa.editingFiles.has('a.go')).toBe(true)
   })
 
   it('navigation during fileWrite await → edit state NOT cleared, no refresh', async () => {

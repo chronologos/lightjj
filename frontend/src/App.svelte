@@ -69,7 +69,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, prLabel, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload, type TabInfo } from './lib/api'
+  import { api, effectiveId, prLabel, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload, type TabInfo, type Expect } from './lib/api'
   import { groupTabs } from './lib/tab-groups'
   import { changeLink, findRevisionIndexByRef, isRevisionIdLike, locatorRevset } from './lib/url-intent'
   import { setDetectedJJVersion, missingJJFeatures } from './lib/jj-features.svelte'
@@ -77,6 +77,7 @@
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { withRenameSources } from './lib/diff-parser'
+  import { apiErrorCode } from './lib/api-error'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -508,7 +509,7 @@
 
   async function handleDocCommit() {
     if (!docSession) return
-    const result = await withMutation(() => docSession!.commitBack())
+    const result = await withMutation(() => docSession!.commitBack()).catch(showError)
     if (result === 'stale') docStale = true
     else if (result === 'ok') {
       setMessage({ kind: 'success', text: `Saved ${docFilePath}` })
@@ -521,7 +522,10 @@
 
   async function handleDocOverwrite() {
     if (!docSession) return
-    await withMutation(() => docSession!.overwrite())
+    // undefined = blocked by another mutation (already reported) or failed: the
+    // file was NOT written, so keep the banner.
+    const ok = await withMutation(async () => { await docSession!.overwrite(); return true }).catch(showError)
+    if (!ok) return
     docStale = false
     setMessage({ kind: 'success', text: `Saved ${docFilePath} (overwrote external change)` })
     void logSync.refresh()
@@ -2358,6 +2362,20 @@
   // Enter: run ONE `jj rebase -r <target> -d p1 -d p2 …`. Requires ≥1 parent;
   // an unchanged parent set is a no-op that just exits. commit_ids are fine as
   // rebase destinations.
+  // parent_ids are commit_ids captured earlier; a rewrite since then leaves them
+  // hidden, and rebasing onto a hidden commit resurrects it (divergence). Rows in
+  // view go by change_id; off-screen parents are checked by the server.
+  function parentOperands(commitIds: string[]): { ids: string[]; expect: Expect } {
+    const expect: Expect = {}
+    const ids = commitIds.map(cid => {
+      const row = revisions.find(r => r.commit.commit_id === cid)
+      if (row) return effectiveId(row.commit)
+      expect[cid] = cid
+      return cid
+    })
+    return { ids, expect }
+  }
+
   async function executeMegamerge() {
     const target = megamerge.target
     if (!target) return
@@ -2372,10 +2390,11 @@
     const unchanged = parents.length === initial.length
       && new Set(parents).size === new Set([...parents, ...initial]).size
     if (unchanged) { megamerge.cancel(); return }
+    const { ids, expect } = parentOperands(parents)
     megamerge.cancel()
     return withMutation(async () => {
       try {
-        const result = await api.rebase([target], parents, '-r', '-d')
+        const result = await api.rebase([target], ids, '-r', '-d', { expect })
         const noun = parents.length === 1 ? 'parent' : 'parents'
         setMessage(mutationMessage(`Set ${parents.length} ${noun} on ${target.slice(0, 8)}`, result))
         clearChecks()
@@ -2403,7 +2422,8 @@
     }
     return withMutation(async () => {
       try {
-        const result = await api.rebase([effectiveId(wc.commit)], next, '-r', '-d')
+        const { ids, expect } = parentOperands(next)
+        const result = await api.rebase([effectiveId(wc.commit)], ids, '-r', '-d', { expect })
         const verb = op === 'add' ? 'Added' : 'Removed'
         setMessage(mutationMessage(`${verb} parent ${xCommitId.slice(0, 8)} ${op === 'add' ? 'to' : 'from'} @`, result))
         clearChecks()
@@ -2575,6 +2595,18 @@
     }
   })
 
+  // Commit the split/review was opened on. Refresh is gated for the whole mode, so
+  // the server checks it: it refuses rather than apply a spec for content the
+  // user never saw.
+  let splitExpect: Expect = {}
+
+  function showSplitError(e: unknown) {
+    if (apiErrorCode(e) !== 'revision_changed') return showError(e)
+    cancelInlineModes()
+    setMessage({ kind: 'warning', text: 'Cancelled — the revision changed underneath. Review it again.' })
+    void logSync.refresh()
+  }
+
   function enterSplitMode(asReview = false) {
     if (!selectedRevision || checkedRevisions.size > 0 || files.loading) return
     cancelInlineModes()
@@ -2590,6 +2622,7 @@
     } else {
       fileSel.init(changedFiles)
     }
+    splitExpect = { [effectiveId(selectedRevision.commit)]: selectedRevision.commit.commit_id }
     split.enter(effectiveId(selectedRevision.commit), asReview)
   }
   const enterReviewMode = () => enterSplitMode(true)
@@ -2612,13 +2645,13 @@
         const kept = fileSel.set.size
         const files = withRenameSources([...fileSel.set], parseDiffCached(diffContent))
         const revision = split.revision
-        const result = await api.split(revision, files, split.parallel || undefined)
+        const result = await api.split(revision, files, split.parallel || undefined, splitExpect)
         cancelInlineModes()
         setMessage(mutationMessage(`Split ${revision.slice(0, 8)} (${kept} files stay)`, result))
         clearChecks()
         await logSync.refresh()
       } catch (e) {
-        showError(e)
+        showSplitError(e)
       }
     })
   }
@@ -2655,12 +2688,12 @@
         .map(f => f.filePath)
       return withMutation(async () => {
         try {
-          const result = await api.split(revision, withRenameSources(acceptedPaths, reviewParsedDiff))
+          const result = await api.split(revision, withRenameSources(acceptedPaths, reviewParsedDiff), undefined, splitExpect)
           cancelInlineModes()
           setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${accepted}/${total} hunks)`, result))
           clearChecks()
           await logSync.refresh()
-        } catch (e) { showError(e) }
+        } catch (e) { showSplitError(e) }
       })
     }
 
@@ -2699,7 +2732,7 @@
         // description; the second keeps the original. `-m ""` would wipe the
         // accepted commit's description → user loses their message on the
         // half that matters. Pass what we already have loaded.
-        const result = await api.splitHunks(revision, spec, sourceDesc)
+        const result = await api.splitHunks(revision, spec, sourceDesc, splitExpect)
         cancelInlineModes()
         setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${accepted}/${total} hunks)`, result))
         clearChecks()
@@ -2707,7 +2740,7 @@
       } catch (e) {
         // 501 in SSH lands here with a clear backend message. User can
         // a/n to whole-file granularity and Enter again.
-        showError(e)
+        showSplitError(e)
       }
     })
   }

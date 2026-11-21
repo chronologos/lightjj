@@ -1092,7 +1092,7 @@ describe('DiffPanel', () => {
 
       expect(mockEdit).not.toHaveBeenCalled()                 // @ untouched
       expect(mockFileWrite).not.toHaveBeenCalled()
-      expect(mockMergeResolve).toHaveBeenCalledWith('co-A', 'a.go', 'OURS')  // commit_id
+      expect(mockMergeResolve).toHaveBeenCalledWith('ch-A', 'a.go', 'OURS')  // follows rewrites
       expect(onfilesaved).toHaveBeenCalled()
     })
 
@@ -1109,8 +1109,8 @@ describe('DiffPanel', () => {
       await fireEvent.click(quickBtn(container, '◀ Ours')!)
       await settle()
 
-      expect(mockEdit).toHaveBeenCalledWith('co-A')            // fallback moves @ ...
-      expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'OURS')
+      expect(mockEdit).toHaveBeenCalledWith('ch-A')            // fallback moves @ ...
+      expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'OURS', { expectChangeId: 'ch-A' })
       expect(onfilesaved).toHaveBeenCalled()
       // ... and surfaces it — never silent.
       expect(container.querySelector('.edit-error-banner')?.textContent).toContain('working copy moved')
@@ -1128,7 +1128,7 @@ describe('DiffPanel', () => {
       await settle()
 
       expect(mockEdit).not.toHaveBeenCalled()                // already @
-      expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'THEIRS')
+      expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'THEIRS', { expectChangeId: 'ch-A' })
     })
 
     it('hides resolve buttons while the file is open in the editor (bug_001 — no stale-buffer Save)', async () => {
@@ -1233,7 +1233,7 @@ describe('DiffPanel', () => {
       // The surviving (non-deleted) side still resolves one-click on the same conflict.
       await fireEvent.click(quickBtn(container, '◀ Ours')!)
       await settle()
-      expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'OURS')
+      expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'OURS', { expectChangeId: 'ch-A' })
     })
 
     it('toggleSplitView is exported and confirms — the Cmd+K palette path, not just the toolbar', async () => {

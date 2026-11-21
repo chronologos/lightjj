@@ -2047,6 +2047,10 @@ func (s *Server) handleGitHubRepo(w http.ResponseWriter, r *http.Request) {
 type fileWriteRequest struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	// Preconditions (expect.go), both optional. ExpectChangeId: @ must still be
+	// this change. BaseCommitId: the file must still equal its content there.
+	ExpectChangeId string `json:"expect_change_id,omitempty"`
+	BaseCommitId   string `json:"base_commit_id,omitempty"`
 }
 
 // validateRepoRelativePath applies lexical security checks to a user-supplied
@@ -2094,8 +2098,18 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, id := range []string{req.ExpectChangeId, req.BaseCommitId} {
+		if id != "" && !expectIdRe.MatchString(id) {
+			s.writeError(w, http.StatusBadRequest, "invalid precondition id")
+			return
+		}
+	}
+
 	ctx, cancel := mutationContext(r)
 	defer cancel()
+	if !s.checkFileWrite(ctx, w, req, filepath.ToSlash(cleaned)) {
+		return
+	}
 	if err := s.Runner.WriteFile(ctx, cleaned, []byte(req.Content)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to write %s: %v", cleaned, err))
 		return
@@ -2107,8 +2121,16 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 	// is ~440ms). The watcher watches op_heads/ not the WC — it won't fire
 	// until SOMETHING snapshots. Error swallowed: the write succeeded, which
 	// is the primary contract; a failed snapshot just means the UI lags.
-	_, _ = s.trySnapshot(ctx)
+	resp := map[string]string{"output": ""}
+	// Not trySnapshot: the returned commit_id must include this write.
+	_, _ = s.Runner.Run(ctx, jj.DebugSnapshot())
 	s.refreshOpId()
-	// Standard MutationResult envelope (empty output) — see handleNavigate.
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
+	// The commit this write produced = the base for the client's next one.
+	if out, err := s.Runner.Run(ctx, jj.Identity("@")); err == nil {
+		if id, ok := jj.ParseIdentity(string(out)); ok {
+			resp["commit_id"] = id.CommitId
+		}
+	}
+	// Standard MutationResult envelope — see handleNavigate.
+	s.writeJSON(w, r, http.StatusOK, resp)
 }

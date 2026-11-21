@@ -379,6 +379,17 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSONError(w, status, msg)
 }
 
+// writeConflict is a 409 with a code the client branches on (expect.go). It sets
+// X-JJ-Op-Id, which writeError doesn't, so the client reloads what it's stale on.
+func (s *Server) writeConflict(w http.ResponseWriter, code, msg string) {
+	if op := s.getOpId(); op != "" {
+		w.Header().Set("X-JJ-Op-Id", op)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
+}
+
 // refreshOpId fetches the current op-id, caches it, and returns it.
 // The return value lets callers (e.g., the SSE watcher's fire() closure) use the
 // fresh value directly instead of a separate getOpId() read — eliminating a
@@ -496,6 +507,9 @@ func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, ar
 	defer resume()
 	ctx, cancel := mutationContext(r)
 	defer cancel()
+	if !s.checkExpect(ctx, w, r) {
+		return false
+	}
 	stdout, stderr, err := s.Runner.RunForMutation(ctx, args, stdin)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())

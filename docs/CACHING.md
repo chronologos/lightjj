@@ -216,9 +216,9 @@ self-healing, costs one redundant HTTP round-trip. Rare at current LRU size.
 ### Tab-switch op-id reset
 
 `setActiveTab(B)` sets `lastOpId = null` so tab B's first response seeds it
-cleanly. Known bounded race: an in-flight request from tab A can arrive after
-the reset and seed A's op-id → B's next response fires one redundant
-`loadLog`. Bounded to one extra refresh; App's gates prevent stacking. The
+cleanly. `request()` ingests an op-id only when the response came from the
+active tab, so an in-flight request from tab A (or a background-tab fetch)
+can't seed another repo's op-id. The
 **cache write** from that in-flight request is always correct — commit_id-keyed
 data is valid regardless of which tab fetched it.
 

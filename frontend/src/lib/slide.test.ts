@@ -26,9 +26,9 @@ const linear = () => [
 ]
 
 describe('computeSlide — down (toward root, --insert-before parent)', () => {
-  it('mid-stack: targets parent commit_id', () => {
+  it('mid-stack: targets the parent by change_id', () => {
     expect(computeSlide(linear(), 0, 'down'))
-      .toEqual({ ok: true, dest: 'bbb', targetMode: '--insert-before' })
+      .toEqual({ ok: true, dest: 'zbbb', targetMode: '--insert-before' })
   })
 
   it('blocked: parent is immutable', () => {
@@ -71,7 +71,7 @@ describe('computeSlide — down (toward root, --insert-before parent)', () => {
 describe('computeSlide — up (toward tip, --insert-after child)', () => {
   it('mid-stack: targets sole child commit_id', () => {
     expect(computeSlide(linear(), 1, 'up'))
-      .toEqual({ ok: true, dest: 'ccc', targetMode: '--insert-after' })
+      .toEqual({ ok: true, dest: 'zccc', targetMode: '--insert-after' })
   })
 
   it('blocked: at tip (no children in view)', () => {
@@ -121,12 +121,12 @@ describe('computeSlide — graph-edge not display-row', () => {
 
   it('down follows parent_ids, ignores display adjacency', () => {
     expect(computeSlide(interleaved, 1, 'down'))
-      .toEqual({ ok: true, dest: 'b1', targetMode: '--insert-before' })
+      .toEqual({ ok: true, dest: 'zb1', targetMode: '--insert-before' })
   })
 
   it('up finds child by reverse edge, ignores display adjacency', () => {
     expect(computeSlide(interleaved, 2, 'up'))
-      .toEqual({ ok: true, dest: 'c1', targetMode: '--insert-after' })
+      .toEqual({ ok: true, dest: 'zc1', targetMode: '--insert-after' })
   })
 
   it('fork at aaa blocks up (d2 and b1 both children)', () => {

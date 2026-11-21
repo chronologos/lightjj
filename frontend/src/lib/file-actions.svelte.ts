@@ -24,7 +24,9 @@
 
 import { tick, untrack } from 'svelte'
 import { SvelteSet } from 'svelte/reactivity'
-import { api, IMAGE_RE, type DiffTarget } from './api'
+import { apiErrorCode } from './api-error'
+import { api as sharedApi, IMAGE_RE, type DiffTarget } from './api'
+import { bindTab } from './tab-scope'
 import { reconstructSides, type MergeSides } from './conflict-extract'
 import { resolveConflictFile } from './conflict-resolve'
 
@@ -115,9 +117,13 @@ export interface FileActions {
 }
 
 export function createFileActions(deps: FileActionsDeps): FileActions {
+  const api = bindTab(sharedApi) // multi-request writes stay in the tab they started in
   // --- Inline editing state ---
   const editingFiles = new SvelteSet<string>()
   let editFileContents = $state(new Map<string, string>())
+  // What each open editor's buffer was derived from — the write precondition for
+  // its Save. `overwrite` is armed after the user has been told the file changed.
+  const editBases = new Map<string, { changeId?: string; commitId: string; overwrite?: boolean }>()
   const editBusy = new SvelteSet<string>() // concurrency guard + loading indicator
   let editError = $state('') // last error message (shown in the edit-error banner)
 
@@ -140,6 +146,10 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
    *  changeId was captured before the await? Reads the LIVE target — exactly
    *  `diffTarget?.kind !== 'single' || diffTarget.changeId !== revId` from the
    *  pre-extraction inline code, inverted. */
+  /** effectiveId falls back to commit_id on divergent/hidden revisions; only a
+   *  real change_id can be a write precondition. */
+  const realChangeId = (t: { changeId: string; commitId: string }) => t.changeId === t.commitId ? undefined : t.changeId
+
   function stillOn(revId: string): boolean {
     const t = deps.getDiffTarget()
     return t?.kind === 'single' && t.changeId === revId
@@ -321,8 +331,8 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
           // j/k nav during the await → the SSH fallback must not move @.
           isStale: () => !stillOn(revId),
         },
-        // commitId for non-@ ops — unambiguous on divergent change_ids.
-        { changeId: target.changeId, revision: target.commitId },
+        // effectiveId for non-@ ops: follows rewrites, commit_id when divergent.
+        { changeId: target.changeId, revision: target.changeId, expectChangeId: realChangeId(target) },
         path, content,
       )
       // jj mutations (resolve/edit) go through App's mutation lock, same as
@@ -371,6 +381,8 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     if (previewContents.has(path)) closePreview(path)
     deps.revealFile(path)
     editFileContents = new Map(editFileContents).set(path, content)
+    const target = deps.getDiffTarget()
+    if (target?.kind === 'single') editBases.set(path, { changeId: realChangeId(target), commitId: target.commitId })
     editingFiles.add(path)
   }
 
@@ -484,6 +496,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
 
   function clearEditState(path: string): void {
     editingFiles.delete(path)
+    editBases.delete(path)
     const next = new Map(editFileContents)
     next.delete(path)
     editFileContents = next
@@ -493,10 +506,17 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     const target = deps.getDiffTarget()
     if (editBusy.has(path) || target?.kind !== 'single') return
     const revId = target.changeId
+    const base = editBases.get(path)
     editBusy.add(path)
     editError = ''
     try {
-      await api.fileWrite(path, content)
+      const write = () => api.fileWrite(path, content, {
+        expectChangeId: base?.changeId,
+        baseCommitId: base?.overwrite ? undefined : base?.commitId,
+      })
+      const lock = deps.getMutationLock()
+      const result = lock ? await lock(write) : await write()
+      if (result === undefined && lock) return
       // Guard: display target may have changed during the await (navigation)
       if (!stillOn(revId)) return
       clearEditState(path)
@@ -506,7 +526,18 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       // maintains DiffFileView component instances across the swap.
       await deps.getOnFileSaved()?.()
     } catch (e) {
-      editError = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+      const msg = e instanceof Error ? e.message : String(e)
+      switch (apiErrorCode(e)) {
+        case 'content_changed':
+          if (base) base.overwrite = true
+          editError = `Not saved — ${msg}. Save again to overwrite it (the other version stays in jj evolog).`
+          break
+        case 'wc_moved':
+          editError = `Not saved — ${msg}. Your text is still here; jj edit back to it to save.`
+          break
+        default:
+          editError = `Save failed: ${msg}`
+      }
     } finally {
       editBusy.delete(path)
     }
@@ -536,6 +567,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     // inequality, not count).
     previewGen++
     editingFiles.clear()
+    editBases.clear()
     editFileContents = new Map()
     editBusy.clear()
     editError = ''
