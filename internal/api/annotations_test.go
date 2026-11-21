@@ -313,21 +313,21 @@ func TestAnnotationsPath_CharsetBoundary(t *testing.T) {
 	}
 }
 
-func TestAnnotations_CorruptFileRecovers(t *testing.T) {
+// A corrupt file holds human review comments: GET must not claim "none", and the
+// next write must keep the bytes recoverable instead of replacing them.
+func TestAnnotations_CorruptFileIsMovedAsideNotOverwritten(t *testing.T) {
 	srv := newAnnotationsServer(t)
 	path, _ := annotationsPath("abc")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(`{not json`), 0o644))
 
-	// GET returns empty (not an error)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/annotations?changeId=abc", nil))
-	assert.Equal(t, http.StatusOK, w.Code)
-	var anns []Annotation
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &anns))
-	assert.Empty(t, anns)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.FileExists(t, path, "a read never moves the file")
 
-	// POST replaces the corrupt file
+	// POST proceeds, with the corrupt bytes preserved next to it
+	var anns []Annotation
 	ann := Annotation{ID: "a1", ChangeId: "abc", FilePath: "foo.go", LineNum: 1, Comment: "x"}
 	body, _ := json.Marshal(ann)
 	w = httptest.NewRecorder()
@@ -338,4 +338,11 @@ func TestAnnotations_CorruptFileRecovers(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &anns))
 	assert.Len(t, anns, 1)
+
+	backups, err := filepath.Glob(path + ".corrupt-*")
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	saved, err := os.ReadFile(backups[0])
+	require.NoError(t, err)
+	assert.Equal(t, `{not json`, string(saved))
 }

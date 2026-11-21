@@ -3,11 +3,14 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 )
 
 // jsonstore.go — generic keyed flat-file JSON-array store shared by
@@ -83,14 +86,14 @@ func (c *jsonCollection[T]) path(key string) (string, error) {
 }
 
 // List returns the items stored under key — an empty (non-nil) slice when the
-// file is missing or unparseable.
+// file is missing or zero-byte. An unreadable or unparseable file is an error,
+// so the UI can't present "no comments" for a file that holds some.
 func (c *jsonCollection[T]) List(key string) ([]T, error) {
 	path, err := c.path(key)
 	if err != nil {
 		return nil, err
 	}
-	items, _ := readJSONStore[T](path)
-	return items, nil
+	return readJSONStore[T](path)
 }
 
 // Upsert merges item into the collection under key and returns the stored
@@ -121,7 +124,10 @@ func (c *jsonCollection[T]) upsertLocked(key string, incoming []T) ([]T, error) 
 	if err != nil {
 		return nil, err
 	}
-	items, _ := readJSONStore[T](path)
+	items, err := readForWrite[T](path)
+	if err != nil {
+		return nil, err
+	}
 	stored := make([]T, len(incoming))
 	for i, item := range incoming {
 		items, stored[i] = c.mergeOne(items, item)
@@ -163,7 +169,10 @@ func (c *jsonCollection[T]) Delete(key, id string) error {
 	if match == nil {
 		match = func(item T, id string) bool { return item.GetID() == id }
 	}
-	items, _ := readJSONStore[T](path)
+	items, err := readForWrite[T](path)
+	if err != nil {
+		return err
+	}
 	items = slices.DeleteFunc(items, func(item T) bool { return match(item, id) })
 	if len(items) == 0 {
 		return removeStoreFile(path)
@@ -193,22 +202,46 @@ func removeStoreFile(path string) error {
 	return nil
 }
 
-// readJSONStore returns the slice stored at path, or an empty (non-nil) slice
-// if the file is missing or unparseable. The next write will overwrite a
-// corrupt file, so surfacing the parse error would only block recovery.
+// errCorruptStore marks a file that was read but doesn't parse — the one read
+// failure readForWrite can recover from.
+var errCorruptStore = errors.New("store file is not valid JSON")
+
+// readJSONStore returns the slice stored at path: an empty (non-nil) slice when
+// the file is missing or zero-byte (a truncated write is "fresh"), an error
+// otherwise. These files hold human review comments, so "couldn't read it" must
+// never be treated as "it was empty" — the next write would replace the file.
 func readJSONStore[T any](path string) ([]T, error) {
 	data, err := os.ReadFile(path)
-	if err != nil {
+	if os.IsNotExist(err) || (err == nil && len(data) == 0) {
 		return []T{}, nil
+	}
+	if err != nil {
+		return nil, &storeError{http.StatusInternalServerError, "read failed: " + err.Error()}
 	}
 	var items []T
 	if err := json.Unmarshal(data, &items); err != nil {
-		return []T{}, nil
+		return nil, fmt.Errorf("%w: %s: %v", errCorruptStore, filepath.Base(path), err)
 	}
 	if items == nil {
 		items = []T{}
 	}
 	return items, nil
+}
+
+// readForWrite is readJSONStore for read-modify-write callers. A corrupt file is
+// moved aside rather than overwritten: the write proceeds (the store isn't wedged
+// until someone hand-edits it) and the old records stay recoverable on disk.
+func readForWrite[T any](path string) ([]T, error) {
+	items, err := readJSONStore[T](path)
+	if !errors.Is(err, errCorruptStore) {
+		return items, err
+	}
+	backup := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
+	if rerr := os.Rename(path, backup); rerr != nil {
+		return nil, &storeError{http.StatusInternalServerError, "backup failed: " + rerr.Error()}
+	}
+	log.Printf("%v — moved to %s", err, backup)
+	return []T{}, nil
 }
 
 // atomicWriteJSON writes v to path via temp-file + rename so a crash mid-write

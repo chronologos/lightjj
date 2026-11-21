@@ -260,7 +260,7 @@ POST body — upserted by `id` (re-POST same `id` to edit; new `id` to add):
   "id": "a1b2c3",                    // your UUID — pick once, reuse to update
   "changeId": "wqnwkozp",
   "filePath": "src/handlers.go",
-  "lineNum": 42,                     // 1-based; 0 = whole-file
+  "lineNum": 42,                     // 1-based, in createdAtCommitId's file; 0 = whole-file
   "side": "new",                     // "new" (default) | "old" — comment on a deleted line
   "lineContent": "func main() {",    // snapshot — used for re-anchor after rewrite
   "comment": "missing error check",

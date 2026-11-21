@@ -565,11 +565,11 @@
   // Export helpers for command palette (bound via bind:this in App)
   export function exportAnnotationsMarkdown(): string {
     if (diffTarget?.kind !== 'single') return ''
-    return exportMarkdown(annotations.list, diffTarget.changeId)
+    return exportMarkdown(annotations.effective, diffTarget.changeId)
   }
   export function exportAnnotationsJSON(): string {
     if (diffTarget?.kind !== 'single') return ''
-    return exportJSON(annotations.list, diffTarget.changeId, diffTarget.commitId)
+    return exportJSON(annotations.effective, diffTarget.changeId, diffTarget.commitId)
   }
   export function clearAnnotations() { return annotations.clear() }
   export function hasAnnotations(): boolean {

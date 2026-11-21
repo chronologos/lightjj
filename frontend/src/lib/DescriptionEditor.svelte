@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import type { LogEntry } from './api'
 
   interface Props {
@@ -8,15 +9,23 @@
     oncancel: () => void
     ondraftchange: (value: string) => void
     commitMode?: boolean
+    /** Take focus when mounted. Opening the editor also moves the selection, and
+     *  the header remounts when that revision's diff lands — without this the
+     *  remount drops focus to <body> and the message is typed into hotkeys. */
+    focusOnMount?: boolean
   }
 
-  let { revision, draft, onsave, oncancel, ondraftchange, commitMode = false }: Props = $props()
+  let { revision, draft, onsave, oncancel, ondraftchange, commitMode = false, focusOnMount = false }: Props = $props()
+
+  let textareaEl: HTMLTextAreaElement | undefined = $state()
+  onMount(() => { if (focusOnMount) textareaEl?.focus() })
 </script>
 
 <div class="desc-editor">
   <label class="desc-label" for="desc-textarea">{commitMode ? 'Commit' : 'Description for'} {revision.commit.change_id.slice(0, 12)}</label>
   <textarea
     id="desc-textarea"
+    bind:this={textareaEl}
     value={draft}
     oninput={(e: Event) => ondraftchange((e.target as HTMLTextAreaElement).value)}
     rows="4"

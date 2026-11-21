@@ -257,7 +257,7 @@ func (s *Server) routes() {
 	reg("POST /api/resolve", mutation(s, resolveRequest.validate, resolveRequest.build))
 	reg("POST /api/merge-resolve", s.handleMergeResolve) // tempfile setup, local-only
 	reg("POST /api/undo", mutation(s, nil, undoRequest.build))
-	reg("POST /api/op/undo", s.opMutation(jj.OpUndo))
+	reg("POST /api/op/undo", s.opMutation(jj.OpRevert))
 	reg("POST /api/op/restore", s.opMutation(jj.OpRestore))
 	reg("POST /api/restore-from", mutation(s, restoreFromRequest.validate, restoreFromRequest.build))
 	reg("POST /api/snapshot", s.handleSnapshot)          // snapshot-pause check + clearStale
@@ -456,15 +456,31 @@ func (s *Server) trySnapshot(ctx context.Context) (ran bool, err error) {
 	return true, err
 }
 
+// mutationTimeout bounds a detached mutation (see mutationContext). Far above
+// any healthy checkout; it exists so a wedged subprocess can't leak forever.
+const mutationTimeout = 10 * time.Minute
+
+// mutationContext detaches a working-copy-writing command from the HTTP request.
+// exec.CommandContext SIGKILLs on cancel, and r.Context() is cancelled by a page
+// reload, a tab close, or the frontend's own 60s abort — killing jj mid-checkout
+// leaves a half-updated working copy on an already-committed operation. Reads
+// keep r.Context() (abandoned reads should die); streamMutation does too, where
+// disconnect-cancels is the documented behaviour.
+func mutationContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), mutationTimeout)
+}
+
 // runMutation executes a jj command, synchronously refreshes the op-id, and
 // writes the output as JSON. This is the standard pattern for all mutation handlers.
+// Reports whether the command succeeded; on failure the error response has
+// already been written, so callers only use it to gate post-mutation state.
 //
 // The refresh MUST be synchronous so the X-JJ-Op-Id header reflects the
 // post-mutation state. With SSE auto-refresh, a stale header would mean:
 // client sees old op-id → SSE arrives with new op-id → dedup fails → redundant
 // loadLog() fire. The ~15ms cost of one `jj op log --limit 1` call is acceptable.
-func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []string) {
-	s.runMutationWithInput(w, r, args, "")
+func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []string) bool {
+	return s.runMutationWithInput(w, r, args, "")
 }
 
 // runMutationWithInput is runMutation for commands that need stdin (describe).
@@ -475,13 +491,15 @@ func (s *Server) runMutation(w http.ResponseWriter, r *http.Request, args []stri
 // warnings are prefixed "Warning:" (with follow-up "Hint:" lines). Only stderr
 // containing a "Warning:" line is returned as "warnings"; otherwise it's merged
 // into "output" so the MessageBar shows success but details are still expandable.
-func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, args []string, stdin string) {
+func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, args []string, stdin string) bool {
 	resume := s.pauseSnapshot()
 	defer resume()
-	stdout, stderr, err := s.Runner.RunForMutation(r.Context(), args, stdin)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	stdout, stderr, err := s.Runner.RunForMutation(ctx, args, stdin)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return false
 	}
 	s.refreshOpId()
 	out := strings.TrimSpace(string(stdout))
@@ -494,6 +512,7 @@ func (s *Server) runMutationWithInput(w http.ResponseWriter, r *http.Request, ar
 		resp["output"] = strings.TrimSpace(out + "\n" + errOut)
 	}
 	s.writeJSON(w, r, http.StatusOK, resp)
+	return true
 }
 
 func hasWarningLine(s string) bool {

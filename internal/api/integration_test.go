@@ -1856,3 +1856,29 @@ func TestJourneyDivergenceResolution(t *testing.T) {
 	// The diff should contain file.txt changes
 	assert.NotEmpty(t, diffResult["diff"])
 }
+
+// A user's graph styling must not reach the parsed log: with the ascii style jj
+// renders immutable as "+", which used to make every commit look mutable.
+func TestIntegration_LogFlagsIgnoreUserGraphConfig(t *testing.T) {
+	r, jjExec := jjTestRepo(t)
+	writeFile(t, r.RepoDir, "f.txt", "x\n")
+	jjExec("commit", "-m", "first")
+	jjExec("config", "set", "--repo", "ui.graph.style", "ascii")
+	jjExec("config", "set", "--repo", "templates.log_node", `"*"`)
+	srv := NewServer(r, "")
+
+	var sawRoot, sawWC bool
+	for _, row := range getLogRows(t, srv, "revset=all()") {
+		if row.Commit.IsWorkingCopy {
+			sawWC = true
+			assert.False(t, row.Commit.Immutable)
+		}
+		if len(row.Commit.ParentIds) == 0 {
+			sawRoot = true
+			assert.True(t, row.Commit.Immutable, "root() is immutable whatever glyph it has")
+		}
+		assert.True(t, row.GraphLines[0].IsNode)
+	}
+	assert.True(t, sawRoot)
+	assert.True(t, sawWC)
+}

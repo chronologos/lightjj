@@ -1,10 +1,12 @@
 package jj
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogGraph(t *testing.T) {
@@ -269,8 +271,8 @@ func TestUndo(t *testing.T) {
 	assert.Equal(t, []string{"undo"}, Undo())
 }
 
-func TestOpUndo(t *testing.T) {
-	assert.Equal(t, []string{"op", "undo", "abc123"}, OpUndo("abc123"))
+func TestOpRevert(t *testing.T) {
+	assert.Equal(t, []string{"op", "revert", "abc123"}, OpRevert("abc123"))
 }
 
 func TestOpRestore(t *testing.T) {
@@ -865,10 +867,21 @@ func TestFileLog(t *testing.T) {
 	})
 
 	t.Run("full=true drops mutable scope", func(t *testing.T) {
-		joined := strings.Join(FileLog("src/main.go", 50, true), " ")
-		assert.NotContains(t, joined, "mutable()")
-		assert.Contains(t, joined, `files(root-file:"src/main.go")`)
+		// Exact -r value: the template text itself contains self.immutable().
+		args := FileLog("src/main.go", 50, true)
+		i := slices.Index(args, "-r")
+		require.GreaterOrEqual(t, i, 0)
+		assert.Equal(t, `files(root-file:"src/main.go")`, args[i+1])
 	})
+}
+
+func TestLogGraph_IgnoresUserGraphConfig(t *testing.T) {
+	joined := strings.Join(LogGraph("", 0), " ")
+	assert.Contains(t, joined, "--config ui.graph.style=curved")
+	assert.Contains(t, joined, "--config templates.log_node=builtin_log_node")
+	for _, flag := range []string{"self.immutable()", "self.conflict()", "self.current_working_copy()"} {
+		assert.Contains(t, joined, flag)
+	}
 }
 
 func TestFileLog_EscapesQuotes(t *testing.T) {

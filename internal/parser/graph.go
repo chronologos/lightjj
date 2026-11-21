@@ -232,7 +232,9 @@ func parseNodeLine(line string) GraphRow {
 		}
 	}
 
-	// Detect working copy, hidden, immutable, and conflicted from graph characters.
+	// Working copy, immutable and conflicted come from explicit template fields
+	// (parsed below); the node glyph is only a fallback for fixtures that predate
+	// them, because the glyph set is user-configurable in jj.
 	// Hidden OR-s the `◌` glyph with the self.hidden() marker parsed above — the
 	// glyph catches the ordinary abandoned-commit case, the marker catches
 	// revset-resurrected hidden commits that render with a normal `○` glyph.
@@ -240,6 +242,11 @@ func parseNodeLine(line string) GraphRow {
 	row.Commit.Hidden = row.Commit.Hidden || strings.ContainsRune(gutter, '◌')
 	row.Commit.Immutable = strings.ContainsRune(gutter, '◆')
 	row.Commit.Conflicted = strings.ContainsRune(gutter, '×')
+	if len(prefixParts) >= 12 {
+		row.Commit.Immutable, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[9]))
+		row.Commit.Conflicted, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[10]))
+		row.Commit.IsWorkingCopy, _ = strconv.ParseBool(strings.TrimSpace(prefixParts[11]))
+	}
 
 	// Build the graph line for this node
 	row.GraphLines = []GraphLine{{

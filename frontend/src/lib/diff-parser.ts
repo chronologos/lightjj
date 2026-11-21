@@ -212,3 +212,16 @@ export function newSideAddedLines(hunks: readonly DiffHunk[]): Set<number> {
   }
   return s
 }
+
+/** Add the source path of every renamed file in `paths`. jj filesets match ONE
+ *  path, so moving/splitting only a rename's destination tears it: the add moves,
+ *  the delete of the source stays behind. Sources that are themselves a file in
+ *  the diff keep their own selection state. */
+export function withRenameSources(paths: readonly string[], files: readonly DiffFile[]): string[] {
+  const own = new Set(files.map(f => f.filePath))
+  const byPath = new Map(files.map(f => [f.filePath, f.sourcePath]))
+  return paths.flatMap(p => {
+    const src = byPath.get(p)
+    return src && src !== p && !own.has(src) ? [src, p] : [p]
+  })
+}

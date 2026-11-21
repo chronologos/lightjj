@@ -184,16 +184,8 @@ func (r *LocalRunner) runSeparate(ctx context.Context, args []string, stdin stri
 }
 
 func (r *LocalRunner) run(ctx context.Context, args []string, stdin string) ([]byte, error) {
-	stdout, stderr, err := r.runSeparate(ctx, args, stdin)
-	if err != nil {
-		return nil, err
-	}
-	// Success path: if stdout is empty but stderr has content (advisory
-	// warnings), return stderr as the output so the user sees it.
-	if len(stdout) == 0 && len(stderr) > 0 {
-		return stderr, nil
-	}
-	return stdout, nil
+	stdout, _, err := r.runSeparate(ctx, args, stdin)
+	return stdout, err
 }
 
 func (r *LocalRunner) RunForMutation(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {

@@ -12,6 +12,11 @@
 // lineNum. (2) If the adjusted line's content doesn't match the snapshot,
 // scan ±N lines for an exact match (handles block moves). If both fail,
 // mark orphaned — likely means the agent addressed the feedback.
+//
+// The result is SESSION state (`placement`), never written back: lineNum is only
+// meaningful relative to createdAtCommitId, so persisting a moved line against an
+// unmoved baseline re-applies the same delta on every load. Same stored/placement
+// split as doc-session.svelte.ts.
 
 import { api, FILE_LEVEL, type Annotation, type AnnotationSeverity, type DiffSide } from './api'
 import { parseDiffContent, expandTabs } from './diff-parser'
@@ -131,7 +136,8 @@ export function reanchor(
 
 // Markdown for text-prompt agents. Groups by file, skips resolved.
 export function exportMarkdown(anns: Annotation[], changeId: string): string {
-  const open = anns.filter(a => (a.status === 'open' || a.status === 'orphaned') && !isReviewedMarker(a))
+  // !== 'resolved', not === 'open': agent-posted records may omit status.
+  const open = anns.filter(a => a.status !== 'resolved' && !isReviewedMarker(a))
   if (open.length === 0) return `No open annotations for ${changeId}.`
 
   const byFile = new Map<string, Annotation[]>()
@@ -175,9 +181,13 @@ export function exportJSON(anns: Annotation[], changeId: string, commitId: strin
 // --- Reactive store ---
 
 interface AnnotationStore {
-  /** Annotations for the currently-loaded changeId (wire-shape, for export +
-   *  mutation). Render paths read `placed` instead. */
+  /** Annotations for the currently-loaded changeId, exactly as stored (lineNum
+   *  is relative to createdAtCommitId). For mutation; never render positions
+   *  from it — use `placed`, or `effective` for wire-shape consumers. */
   readonly list: Annotation[]
+  /** `list` with this session's placement overlaid — current line and orphan
+   *  status. For export; do NOT save these back. */
+  readonly effective: Annotation[]
   /** Read-model projection of `list` (see review.ts). */
   readonly placed: PlacedReview[]
   /** changeId of the currently-loaded set (for stale-check). */
@@ -213,7 +223,8 @@ interface AnnotationStore {
     severity: AnnotationSeverity
     createdAtCommitId: string
   }): Promise<void>
-  /** Update comment/severity/status. Re-anchored lineNum is set via load(). */
+  /** Update comment/severity/status. Pass a `list`/`byId` object (stored
+   *  coordinates), never an `effective` one. */
   update(ann: Annotation): Promise<void>
   /** Resolve by id — writes both legacy `status:'resolved'` and the new
    *  `resolution` so older readers and the unified model agree. */
@@ -226,13 +237,24 @@ export function createAnnotationStore(): AnnotationStore {
   let list = $state<Annotation[]>([])
   let loadedChangeId = $state<string | null>(null)
 
-  // Read-model projection. PlacedReview.line/orphaned mirror the persisted
-  // post-reanchor lineNum/status (load() persists reanchor results).
-  let placed = $derived(list.map((a): PlacedReview => ({
-    ...fromAnnotation(a),
-    orphaned: a.status === 'orphaned',
-    line: a.lineNum,
-  })))
+  // Re-anchor results by annotation id. Items with no entry (just added,
+  // file-level, old-side, resolved) sit at their stored line.
+  let placement = $state.raw<ReadonlyMap<string, { line: number; orphaned: boolean }>>(new Map())
+
+  // Read-model projection of stored list + placement.
+  let placed = $derived(list.map((a): PlacedReview => {
+    const p = placement.get(a.id)
+    return {
+      ...fromAnnotation(a),
+      orphaned: p?.orphaned ?? a.status === 'orphaned',
+      line: p?.line ?? a.lineNum,
+    }
+  }))
+
+  let effective = $derived(list.map((a): Annotation => {
+    const p = placement.get(a.id)
+    return p ? { ...a, lineNum: p.line, status: p.orphaned ? 'orphaned' : 'open' } : a
+  }))
 
   // Cache: (filePath + side + lineNum) → PlacedReview[]. Rebuilt on every
   // list change. forLine() is called per-diff-line during render; O(1) lookup
@@ -271,25 +293,43 @@ export function createAnnotationStore(): AnnotationStore {
   // (other tabs, the agent CLI), so a "known empty" memo would make those
   // comments permanently invisible here. One cheap GET per revisit of an
   // annotation-free revision is the price of correctness.
+  // Load-vs-load ordering for the placement write. Separate from `mutations`'
+  // gen: placement is keyed by id, so an add/resolve landing mid-re-anchor must
+  // not discard it (that would leave every other comment unadjusted).
+  let loadGen = 0
+
   async function load(changeId: string, commitId: string) {
     const gen = mutations.bump()
+    const thisLoad = ++loadGen
     return mutations.track(async () => {
-      const raw = await api.annotations.list(changeId)
-      if (!mutations.current(gen)) return
-      loadedChangeId = changeId
-      if (raw.length === 0) {
-        list = []
-        return
+      let raw: Annotation[]
+      try {
+        raw = await api.annotations.list(changeId)
+      } catch (e) {
+        // Never leave another change's comments on screen under this one.
+        if (mutations.current(gen) && loadedChangeId !== changeId) {
+          list = []
+          placement = new Map()
+          loadedChangeId = null
+        }
+        throw e
       }
+      if (!mutations.current(gen)) return
+      // Same change → keep the previous placement until the new one is ready, so
+      // a snapshot doesn't flash comments back to their stored lines.
+      if (loadedChangeId !== changeId) placement = new Map()
+      loadedChangeId = changeId
+      list = raw
+      if (raw.length === 0) return
 
       // Re-anchor pass: for annotations whose createdAtCommitId ≠ current,
       // fetch inter-diff and adjust. Group by createdAtCommitId to batch
       // diffRange calls (N annotations from one iteration → 1 fetch).
       const needsReanchor = new Map<string, Annotation[]>()
+      const next = new Map<string, { line: number; orphaned: boolean }>()
       for (const a of raw) {
         if (a.lineNum === FILE_LEVEL) continue
         if (a.status === 'resolved') continue
-        if (a.createdAtCommitId === commitId) continue
         // Old-side annotations index into the change's PARENT, not the change
         // itself. The diffRange(createdAtCommitId, current) inter-diff doesn't
         // tell us how the parent moved (that needs diffRange between the two
@@ -297,45 +337,40 @@ export function createAnnotationStore(): AnnotationStore {
         // → old-side line numbers stable. Skip reanchor; stale on rebase is the
         // documented limitation.
         if (a.side === 'old') continue
+        // No baseline (agents may omit it) → nothing to diff from; the stored
+        // line is the best available position.
+        if (!a.createdAtCommitId || a.createdAtCommitId === commitId) {
+          next.set(a.id, { line: a.lineNum, orphaned: false })
+          continue
+        }
         if (!needsReanchor.has(a.createdAtCommitId)) needsReanchor.set(a.createdAtCommitId, [])
         needsReanchor.get(a.createdAtCommitId)!.push(a)
       }
 
-      const updates: Annotation[] = []
       for (const [fromCommit, anns] of needsReanchor) {
         // One diffRange per createdAt snapshot, scoped to affected files.
         const files = [...new Set(anns.map(a => a.filePath))]
         let hunksByFile: Map<string, ReturnType<typeof parseDiffContent>[number]['hunks']>
         try {
           const { diff } = await api.diffRange(fromCommit, commitId, files)
-          if (!mutations.current(gen)) return
+          if (thisLoad !== loadGen) return
           const parsed = parseDiffContent(diff)
           hunksByFile = new Map(parsed.map(f => [f.filePath, f.hunks]))
         } catch {
           // diffRange can fail if the createdAt commit was abandoned
-          // (agent's jj undo). Mark all as orphaned rather than block load.
-          for (const a of anns) updates.push({ ...a, status: 'orphaned' })
+          // (agent's jj undo). Mark all as orphaned rather than block load —
+          // for this session only: a timeout must not orphan them for good.
+          if (thisLoad !== loadGen) return
+          for (const a of anns) next.set(a.id, { line: a.lineNum, orphaned: true })
           continue
         }
         for (const a of anns) {
           const hunks = hunksByFile.get(a.filePath) ?? []
           const { lineNum, status } = reanchor(a, hunks)
-          if (lineNum !== a.lineNum || status !== a.status) {
-            updates.push({ ...a, lineNum, status })
-          }
+          next.set(a.id, { line: lineNum, orphaned: status === 'orphaned' })
         }
       }
-
-      // Persist re-anchor results so the next load is a no-op (and so a
-      // workspace tab opened later sees the anchored positions).
-      for (const u of updates) {
-        await api.annotations.save(u)
-        if (!mutations.current(gen)) return
-      }
-
-      // Apply updates in-memory (saves returned the same objects).
-      const byId = new Map(updates.map(u => [u.id, u]))
-      list = raw.map(a => byId.get(a.id) ?? a)
+      placement = next
     })
   }
 
@@ -451,6 +486,7 @@ export function createAnnotationStore(): AnnotationStore {
 
   return {
     get list() { return list },
+    get effective() { return effective },
     get placed() { return placed },
     get loadedChangeId() { return loadedChangeId },
     get busy() { return mutations.busy },

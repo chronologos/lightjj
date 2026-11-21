@@ -45,15 +45,14 @@ func TestLocalRunner_Run_GrandchildHoldsPipe_WaitDelaySwallowed(t *testing.T) {
 	assert.Less(t, time.Since(start), 5*time.Second)
 }
 
-func TestLocalRunner_Run_SuccessWithStderrOnly(t *testing.T) {
-	// jj mutations (new, abandon, rebase, etc) write confirmation to stderr
-	// with empty stdout. `jj git push` with no tracked bookmarks writes the
-	// "Nothing changed" warning to stderr and exits 0. Without returning
-	// stderr on the empty-stdout path, all mutation output was silently lost.
+func TestLocalRunner_Run_StderrIsNeverData(t *testing.T) {
+	// Run's callers parse stdout. An empty description/diff plus a stderr
+	// warning (jj config warning, remote-shell locale noise) must stay empty:
+	// composeSquashMessage feeds this straight into `jj squash -m`.
 	r := shRunner()
-	out, err := r.Run(context.Background(), []string{"-c", "echo 'Working copy now at: xyz' >&2"})
+	out, err := r.Run(context.Background(), []string{"-c", "echo 'Warning: noise' >&2"})
 	require.NoError(t, err)
-	assert.Equal(t, "Working copy now at: xyz", string(out))
+	assert.Empty(t, string(out))
 }
 
 func TestLocalRunner_Run_SuccessStdoutWinsOverStderr(t *testing.T) {

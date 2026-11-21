@@ -51,11 +51,13 @@ export interface GateHandlers {
 //   - globalOverrides (Cmd+K/F) BEFORE inInput: work inside text fields.
 //   - inlineCommit BEFORE inInput: FileSelectionPanel holds focus during
 //     squash/split; Enter still executes. (cm-editor sub-filter inside.)
+//     But never behind a modal/overlay: Enter there means "open this item",
+//     and must not run the rebase the user left pending underneath.
 //   - hasModifier AFTER globalOverrides: Cmd+C etc. pass through to browser.
 //   - inlineNav swallows EVERYTHING: no normal-mode keys leak into modes.
 export function routeKeydown(c: GateCtx, h: GateHandlers): void {
   if (h.globalOverrides()) return
-  if (h.inlineCommit()) return
+  if (!c.anyModalOpen && h.inlineCommit()) return
   if (c.inInput) return
   if (h.diffScroll()) return
   if (c.hasModifier) return

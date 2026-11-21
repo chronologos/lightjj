@@ -908,7 +908,64 @@ func TestHandler_ClearsStale(t *testing.T) {
 				t.Fatal("expected fresh-wc broadcast")
 			}
 		})
+		t.Run(tc.name+"/failure keeps it stale", func(t *testing.T) {
+			runner := testutil.NewMockRunner(t)
+			runner.Expect(tc.args).SetError(errors.New("The working copy is stale"))
+			defer runner.Verify()
+
+			srv := newTestServer(runner)
+			srv.Watcher = newWatcher(srv)
+			srv.Watcher.stale.Store(true)
+			ch, unsub := srv.Watcher.subscribe()
+			defer unsub()
+
+			w := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(w, jsonPost(tc.path, []byte("{}")))
+
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+			assert.True(t, srv.Watcher.stale.Load())
+			assert.Empty(t, ch, "no fresh-wc broadcast")
+		})
 	}
+}
+
+// ctxRecorder captures the context handed to a mutation.
+type ctxRecorder struct {
+	*testutil.MockRunner
+	ctx    context.Context
+	onCall func(context.Context)
+}
+
+func (c *ctxRecorder) RunForMutation(ctx context.Context, args []string, stdin string) ([]byte, []byte, error) {
+	c.ctx = ctx
+	if c.onCall != nil {
+		c.onCall(ctx)
+	}
+	return c.MockRunner.RunForMutation(ctx, args, stdin)
+}
+
+// A reload or tab close cancels r.Context(). exec.CommandContext would SIGKILL
+// jj mid-checkout, so mutations must not inherit that cancellation.
+func TestMutation_SurvivesClientDisconnect(t *testing.T) {
+	runner := &ctxRecorder{MockRunner: testutil.NewMockRunner(t)}
+	runner.Expect(jj.Undo()).SetOutput([]byte(""))
+	defer runner.Verify()
+	srv := newTestServer(runner.MockRunner)
+	srv.Runner = runner
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := jsonPost("/api/undo", []byte("{}")).WithContext(reqCtx)
+	w := httptest.NewRecorder()
+	// The handler's own cancel fires on return, so observe liveness inside.
+	observed := error(nil)
+	runner.onCall = func(ctx context.Context) { observed = ctx.Err() }
+	srv.Mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, observed)
+	_, bounded := runner.ctx.Deadline()
+	assert.True(t, bounded, "detached, but still time-bounded")
 }
 
 func TestHandleBookmarkSet(t *testing.T) {
@@ -3899,7 +3956,7 @@ func TestUnifiedSuccessEnvelope(t *testing.T) {
 
 func TestHandleOpUndo(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.OpUndo("abc123def456")).SetOutput([]byte(""))
+	runner.Expect(jj.OpRevert("abc123def456")).SetOutput([]byte(""))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)

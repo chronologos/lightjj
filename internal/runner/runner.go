@@ -14,6 +14,10 @@ type CommandRunner interface {
 	// Run executes a jj command synchronously and returns its output.
 	// Trailing newlines are stripped — output is display-oriented text.
 	// For byte-exact content (file bodies), use ReadBytes.
+	// Stdout ONLY, even when it is empty: callers parse this as data, and an
+	// empty description/diff is a legitimate result that a stray stderr warning
+	// must never stand in for. Callers that want stderr use RunForMutation or
+	// StreamCombined.
 	Run(ctx context.Context, args []string) ([]byte, error)
 
 	// ReadBytes executes a jj command and returns stdout byte-exact, no
@@ -29,7 +33,7 @@ type CommandRunner interface {
 	// RunForMutation is RunWithInput but returns stdout and stderr separately.
 	// Only server.runMutation uses this — `jj rebase` prints rebased commits
 	// to stdout AND "Warning: conflicts created" to stderr on exit-0. Run()
-	// drops stderr when stdout is non-empty; mutations need both.
+	// drops stderr; mutations need both.
 	RunForMutation(ctx context.Context, args []string, stdin string) (stdout, stderr []byte, err error)
 
 	// StreamCombined executes a jj command and returns a streaming reader for

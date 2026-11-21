@@ -332,10 +332,66 @@ describe('createAnnotationStore', () => {
     await store.load('xyz', 'def')
 
     expect(mockDiffRange).toHaveBeenCalledWith('abc', 'def', ['foo.go'])
-    expect(store.list[0].lineNum).toBe(13)
-    expect(store.list[0].status).toBe('open')
-    // Re-anchored result persisted
-    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ id: 'a1', lineNum: 13 }))
+    expect(store.placed[0].line).toBe(13)
+    expect(store.placed[0].orphaned).toBe(false)
+    expect(store.effective[0]).toMatchObject({ lineNum: 13, status: 'open' })
+    expect(store.forLine('foo.go', 13)).toHaveLength(1)
+    // The stored record keeps its own coordinates, and nothing is written back.
+    expect(store.list[0].lineNum).toBe(10)
+    expect(mockSave).not.toHaveBeenCalled()
+  })
+
+  it('re-anchoring is idempotent — revisiting never moves the comment again', async () => {
+    // Regression: the moved line was persisted against an unmoved baseline, so
+    // every revisit re-applied the same delta (10 → 13 → 16 → 19 …). Server
+    // model: save() overwrites what list() returns.
+    let stored = mkStoreAnn('a1', { createdAtCommitId: 'abc', lineNum: 10 })
+    mockAnnotations.mockImplementation(async () => [{ ...stored }])
+    mockSave.mockImplementation(async (a: Annotation) => { stored = { ...a }; return a })
+    mockDiffRange.mockResolvedValue({
+      diff: 'diff --git a/foo.go b/foo.go\n--- a/foo.go\n+++ b/foo.go\n@@ -1,1 +1,4 @@\n+new1\n+new2\n+new3\n line1\n',
+    })
+    const store = createAnnotationStore()
+    for (let i = 0; i < 4; i++) {
+      await store.load('xyz', 'def')
+      expect(store.placed[0].line).toBe(13)
+    }
+    // Editing a placed comment must not bake the placement in either.
+    await store.update({ ...store.byId('a1')!, comment: 'edited' })
+    await store.load('xyz', 'def')
+    expect(store.placed[0].line).toBe(13)
+  })
+
+  it('a comment added mid-re-anchor does not discard the placement of the others', async () => {
+    mockAnnotations.mockResolvedValue([mkStoreAnn('a1', { createdAtCommitId: 'abc', lineNum: 10 })])
+    let resolveDiff!: (v: { diff: string }) => void
+    mockDiffRange.mockImplementation(() => new Promise(r => { resolveDiff = r }))
+    const store = createAnnotationStore()
+    const p = store.load('xyz', 'def')
+    await vi.waitFor(() => expect(mockDiffRange).toHaveBeenCalled())
+    await store.add({ changeId: 'xyz', filePath: 'foo.go', lineNum: 1, lineContent: 'l', comment: 'n', severity: 'nitpick', createdAtCommitId: 'def' })
+    resolveDiff({ diff: 'diff --git a/foo.go b/foo.go\n--- a/foo.go\n+++ b/foo.go\n@@ -1,1 +1,4 @@\n+new1\n+new2\n+new3\n line1\n' })
+    await p
+    expect(store.placed.map(r => r.line)).toEqual([13, 1])
+  })
+
+  it('agent record without createdAtCommitId/status: placed at its line, not orphaned, exported', async () => {
+    mockAnnotations.mockResolvedValue([mkStoreAnn('a1', { createdAtCommitId: '', status: undefined as never })])
+    const store = createAnnotationStore()
+    await store.load('xyz', 'def')
+    expect(mockDiffRange).not.toHaveBeenCalled()
+    expect(store.placed[0]).toMatchObject({ line: 10, orphaned: false })
+    expect(exportMarkdown(store.effective, 'xyz')).toContain('foo.go:10')
+  })
+
+  it('a failed list() clears another change\'s comments instead of leaving them on screen', async () => {
+    mockAnnotations.mockResolvedValueOnce([mkStoreAnn('a1')])
+    const store = createAnnotationStore()
+    await store.load('xyz', 'abc')
+    mockAnnotations.mockRejectedValueOnce(new Error('read failed'))
+    await expect(store.load('other', 'abc')).rejects.toThrow('read failed')
+    expect(store.list).toEqual([])
+    expect(store.loadedChangeId).toBeNull()
   })
 
   it('load() batches diffRange by createdAtCommitId', async () => {
@@ -385,8 +441,8 @@ describe('createAnnotationStore', () => {
     const store = createAnnotationStore()
     await store.load('xyz', 'def')
 
-    expect(store.list.every(a => a.status === 'orphaned')).toBe(true)
-    expect(mockSave).toHaveBeenCalledTimes(2) // orphan state persisted
+    expect(store.placed.every(r => r.orphaned)).toBe(true)
+    expect(mockSave).not.toHaveBeenCalled() // a timeout must not orphan them for good
   })
 
   it('load() handles partial diffRange failure (one snapshot gone)', async () => {
@@ -403,8 +459,8 @@ describe('createAnnotationStore', () => {
     const store = createAnnotationStore()
     await store.load('xyz', 'def')
 
-    expect(store.list.find(a => a.id === 'a1')!.status).toBe('orphaned')
-    expect(store.list.find(a => a.id === 'a2')!.status).toBe('open')
+    expect(store.placed.find(r => r.id === 'a1')!.orphaned).toBe(true)
+    expect(store.placed.find(r => r.id === 'a2')!.orphaned).toBe(false)
   })
 
   it('forLine() is O(1) Map lookup — returns [] for non-annotated lines', async () => {

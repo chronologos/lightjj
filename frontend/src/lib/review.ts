@@ -75,7 +75,8 @@ export function fromAnnotation(a: Annotation): Review {
     kind: 'note',
     // Prefer the new optional field; fall back to legacy status mapping.
     resolution: a.resolution ?? (a.status === 'resolved' ? 'addressed' : undefined),
-    // status:'orphaned' is dropped — recomputed into PlacedReview.orphaned.
+    // status:'orphaned' (written by older versions) is dropped — recomputed into
+    // PlacedReview.orphaned on load.
   }
 }
 

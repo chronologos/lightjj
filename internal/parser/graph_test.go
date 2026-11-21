@@ -405,3 +405,20 @@ func TestParseGraphLog_UnsyncedBookmark(t *testing.T) {
 		{Name: "main"},
 	}, rows[0].Bookmarks)
 }
+
+// Immutable/Conflicted/IsWorkingCopy gate mutations in the UI, so they come from
+// the template fields even when the node glyph says otherwise (jj lets users
+// restyle the glyphs).
+func TestParseGraphLog_FlagsComeFromTemplateNotGlyph(t *testing.T) {
+	line := func(glyph, immutable, conflict, wc string) string {
+		return glyph + "  _PREFIX:a_PREFIX:1_PREFIX:false_PREFIX:false_PREFIX:true_PREFIX:me@x.com_PREFIX:2026-01-01_PREFIX:false_PREFIX:" +
+			immutable + "_PREFIX:" + conflict + "_PREFIX:" + wc + "\x1faaaaaaaa\x1f11111111\x1fd\x1f\x1f\x1f\n"
+	}
+	rows := ParseGraphLog(line("*", "true", "true", "true") + line("@", "false", "false", "false"))
+	assert.Len(t, rows, 2)
+	assert.True(t, rows[0].Commit.Immutable)
+	assert.True(t, rows[0].Commit.Conflicted)
+	assert.True(t, rows[0].Commit.IsWorkingCopy)
+	assert.False(t, rows[1].Commit.IsWorkingCopy)
+	assert.False(t, rows[1].Commit.Immutable)
+}

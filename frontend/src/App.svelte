@@ -76,6 +76,7 @@
   import { canCreatePR, bookmarkCreatePREligibility, prCompareUrl } from './lib/bookmark-sync'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
+  import { withRenameSources } from './lib/diff-parser'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -159,9 +160,13 @@
   let updateInfo: UpdateInfo | null = $state(null)
   checkForUpdate().then(info => { updateInfo = info })
 
-  let descriptionEditing: boolean = $state(false)
-  let descriptionDraft: string = $state('')
-  let commitMode: boolean = $state(false) // when true, description editor saves via commit instead of describe
+  // The description/commit editor. The TARGET is part of the state: saves go to
+  // targetId, and the editor is visible only while that revision is selected — so
+  // no refresh, filter or agent navigate can re-bind a draft to another revision.
+  // A dirty draft survives navigation (it reappears when you come back).
+  interface DescEdit { kind: 'describe' | 'commit'; targetId: string; prefill: string; draft: string; focus: boolean; hiddenNoted?: boolean }
+  let descEdit = $state<DescEdit | null>(null)
+  const descEditDirty = () => descEdit !== null && descEdit.draft !== descEdit.prefill
 
   let checkedRevisions = new SvelteSet<string>()
   let lastCheckedIndex: number = $state(-1)
@@ -214,7 +219,11 @@
   const { diff, files, description, singleTarget } = nav
   const commentVis = createCommentVisibility()
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
-  const evolog = createLoader((id: string) => api.evolog(id), [] as EvologEntry[], showError)
+  // Value carries the id it was fetched for: the panel renders and restores
+  // against what's LOADED, never the cursor (which is ahead during the fetch).
+  const evolog = createLoader(
+    async (id: string) => ({ id, entries: await api.evolog(id) }),
+    { id: '', entries: [] as EvologEntry[] }, showError)
   const bookmarksPanel = createLoader(() => api.bookmarks(), [] as Bookmark[])
 
   // config.remoteVisibility is keyed by repo_path so tab A's toggles don't
@@ -297,6 +306,12 @@
   // Abort predicate for nav.loadDiffAndFiles — re-checked after its await.
   // User checking a revision during the fetch means the multi-check $effect
   // below already fired; don't clobber it.
+  // The panel lives in the log view; the graph badge is clickable from branches.
+  function openDivergence(changeId: string) {
+    if (activeView !== 'log') switchToLogView()
+    divergence.enter(changeId)
+  }
+
   const hasChecked = () => checkedRevisions.size > 0
 
   let revisions = $derived(log.value)
@@ -312,7 +327,7 @@
   let fullDescription = $derived(description.value)
   let oplogEntries = $derived(oplog.value)
   let oplogLoading = $derived(oplog.loading)
-  let evologEntries = $derived(evolog.value)
+  let evologRevision = $derived(revisions.find(r => effectiveId(r.commit) === evolog.value.id) ?? null)
   let evologLoading = $derived(evolog.loading)
 
   // --- Draggable dividers (revision panel width + evolog panel height) ---
@@ -366,6 +381,7 @@
   let bookmarkModalOpen: boolean = $state(false)
   let bookmarkModalFilter: string = $state('')
   let bookmarkInputOpen: boolean = $state(false)
+  let bookmarkInputTarget: string | null = null
   // `/` in rebase/squash mode → type a destination (off-revset bookmark or
   // change_id) instead of j/k cursor. Submit calls executeRebase/Squash
   // directly with the typed value; no state survives close.
@@ -518,7 +534,6 @@
   }
 
   async function switchToDocView(path: string) {
-    descriptionEditing = false
     cancelInlineModes()
     docFilePath = path
     activeView = 'doc'
@@ -589,7 +604,10 @@
       : config.editorArgs.length > 0
   )
 
-  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || configModalOpen || !!contextMenu || divergence.active || welcomeOpen || !!fileHistoryPath || !!fileTree)
+  // The panel renders only in the log view; counting it as open elsewhere gates
+  // the keyboard and op-sync behind something the user can't see or close.
+  let divergenceOpen = $derived(divergence.active && activeView === 'log')
+  let anyModalOpen = $derived(paletteOpen || bookmarkModalOpen || bookmarkInputOpen || gitModalOpen || configModalOpen || !!contextMenu || divergenceOpen || welcomeOpen || !!fileHistoryPath || !!fileTree)
   let inlineMode = $derived(rebase.active || squash.active || split.active || megamerge.active)
   // Which mode (if any). `inlineMode` answers "is ANY mode active?" for
   // toolbar gates; `activeInlineMode.diffFollows` answers the per-mode
@@ -727,6 +745,14 @@
     selectedIndex >= 0 && selectedIndex < revisions.length
       ? revisions[selectedIndex]
       : null
+  )
+
+  // The editor as rendered: only over its own target, only where its header slot
+  // exists (log view, single-revision diff).
+  let descEditVisible = $derived(
+    descEdit && activeView === 'log' && checkedRevisions.size === 0
+      && selectedRevision && effectiveId(selectedRevision.commit) === descEdit.targetId
+      ? descEdit : null
   )
 
   let effectiveRevisions = $derived.by(() => {
@@ -1352,6 +1378,17 @@
     if (resetSelection || !stillExists) {
       selectedId = workingCopyEntry ? effectiveId(workingCopyEntry.commit) : null
     }
+    // Draft whose revision left the view (abandoned, divergent, filtered out):
+    // say so once, with the text — it's hidden, not lost.
+    if (descEdit) {
+      const present = revisions.some(r => effectiveId(r.commit) === descEdit!.targetId)
+      if (present) descEdit.hiddenNoted = false
+      else if (!descEditDirty()) descEdit = null
+      else if (!descEdit.hiddenNoted) {
+        descEdit.hiddenNoted = true
+        setMessage({ kind: 'warning', text: `Description draft for ${descEdit.targetId.slice(0, 8)} is hidden — its revision is not in view`, details: descEdit.draft })
+      }
+    }
     // `?path=`: scroll the finally-selected revision's diff to the file, via the
     // agent-navigate pendingNavScroll machinery (waits for that diff to be the
     // loadedTarget; identity-checked, so a j/k away drops it).
@@ -1416,7 +1453,11 @@
     if (!entry) return
     const id = effectiveId(entry.commit)
     selectedId = id
-    descriptionEditing = false
+    // An untouched editor closes on navigation; a dirty draft is kept (hidden).
+    if (descEdit && descEdit.targetId !== id) {
+      if (descEditDirty()) descEdit.focus = false // j/k back onto it must stay j/k
+      else descEdit = null
+    }
 
     // Clicking away from the divergent change closes the panel (intent =
     // "done looking at this"). Clicking the SAME change is a no-op — panel
@@ -1756,7 +1797,7 @@
     if (entry?.commit.divergent) {
       items.push(
         { separator: true },
-        { label: 'Resolve divergence...', action: () => divergence.enter(entry.commit.change_id) },
+        { label: 'Resolve divergence...', action: () => openDivergence(entry.commit.change_id) },
       )
     }
     items.push(
@@ -1892,7 +1933,7 @@
   const staleWCMessage: Message = {
     kind: 'warning',
     text: 'Working copy is stale — another workspace rewrote shared history',
-    details: 'Set jj config `snapshot.auto-update-stale = true` (default) to recover automatically.',
+    details: 'Set jj config `snapshot.auto-update-stale = true` to recover automatically.',
     action: { label: 'Update stale', onClick: handleUpdateStale },
   }
   // issue #21: Clean up runs `jj abandon --ignore-immutable`, which rebases
@@ -1978,8 +2019,8 @@
     runMutation(() => api.opRestore(id), `Restored to operation ${id.slice(0, 8)}`)
 
   function handleRestoreVersion(fromCommitId: string) {
-    if (!selectedRevision) return
-    const to = effectiveId(selectedRevision.commit)
+    const to = evolog.value.id
+    if (!to) return
     runMutation(() => api.restoreFrom(fromCommitId, to), `Restored version ${fromCommitId.slice(0, 8)}`)
   }
 
@@ -2002,19 +2043,21 @@
   }
 
   async function handleDescribe() {
-    if (!selectedRevision) return
-    const eid = effectiveId(selectedRevision.commit)
-    const cid = selectedRevision.commit.commit_id
+    if (!descEdit) return
+    const { targetId, draft } = descEdit
+    const cid = selectedRevision?.commit.commit_id
     return withMutation(async () => {
       try {
-        const result = await api.describe(eid, descriptionDraft)
-        setMessage(mutationMessage(`Updated description for ${eid.slice(0, 8)}`, result))
+        const result = await api.describe(targetId, draft)
+        setMessage(mutationMessage(`Updated description for ${targetId.slice(0, 8)}`, result))
         // Only poke the loader if selection unchanged — otherwise we'd write
         // the old revision's draft into the new selection's description loader.
         // Mutation already succeeded; the log refresh below reloads either way.
-        if (selectedRevision?.commit.commit_id === cid) {
-          description.set(descriptionDraft)
-          descriptionEditing = false
+        if (cid && selectedRevision?.commit.commit_id === cid) description.set(draft)
+        if (descEdit?.kind === 'describe' && descEdit.targetId === targetId) {
+          // Keystrokes that landed during the save stay open as the new draft.
+          if (descEdit.draft === draft) descEdit = null
+          else descEdit.prefill = draft
         }
         await logSync.refresh()
       } catch (e) {
@@ -2028,13 +2071,32 @@
   // Don't read fullDescription here: context-menu Describe calls this
   // synchronously after selectByChangeId, before the loader's deferred rAF
   // fires, so fullDescription still holds the PREVIOUS revision's text.
-  async function fetchPrefillDescription(): Promise<string> {
-    if (!selectedRevision) return ''
+  async function fetchPrefillDescription(row: LogEntry): Promise<string> {
     try {
-      return (await api.description(selectedRevision.commit.commit_id)).description
+      return (await api.description(row.commit.commit_id)).description
     } catch {
-      return selectedRevision.description
+      return row.description
     }
+  }
+
+  // Opens the editor for the SELECTED revision. Reopening the same target with a
+  // dirty draft keeps the draft.
+  async function openDescEditor(kind: DescEdit['kind']) {
+    const row = selectedRevision
+    if (!row) return
+    const targetId = effectiveId(row.commit)
+    if (descEdit?.kind === kind && descEdit.targetId === targetId && descEditDirty()) {
+      focusDescEditor()
+      return
+    }
+    const prefill = await fetchPrefillDescription(row)
+    // j/k during fetch → bail.
+    if (!selectedRevision || effectiveId(selectedRevision.commit) !== targetId) return
+    if (descEdit && descEdit.targetId !== targetId && descEditDirty()) {
+      setMessage({ kind: 'warning', text: `Discarded unsaved description draft for ${descEdit.targetId.slice(0, 8)}`, details: descEdit.draft })
+    }
+    descEdit = { kind, targetId, prefill, draft: prefill, focus: true }
+    focusDescEditor()
   }
 
   function focusDescEditor() {
@@ -2043,27 +2105,37 @@
     })
   }
 
+  // `jj commit` always acts on @, so the editor always opens on @ — wherever the
+  // cursor was (`c` is a global key).
   async function handleCommit() {
-    if (!selectedRevision) return
-    const cid = selectedRevision.commit.commit_id
-    const prefill = await fetchPrefillDescription()
-    // j/k during fetch → bail. commitMode is set AFTER the guard so a
-    // nav-during-await doesn't leak it to the next describe operation
-    // (next `e` press would call executeCommit instead of handleDescribe).
-    if (selectedRevision?.commit.commit_id !== cid) return
-    commitMode = true
-    descriptionDraft = prefill
-    descriptionEditing = true
-    focusDescEditor()
+    if (!workingCopyEntry) {
+      setMessage({ kind: 'warning', text: 'Working copy is not in the current revset' })
+      return
+    }
+    if (checkedRevisions.size > 0) {
+      setMessage({ kind: 'warning', text: 'Clear checked revisions before committing' })
+      return
+    }
+    if (activeView !== 'log') switchToLogView()
+    const wcId = effectiveId(workingCopyEntry.commit)
+    if (selectedId !== wcId) selectByChangeId(wcId)
+    await openDescEditor('commit')
   }
 
   async function executeCommit() {
+    if (!descEdit) return
+    const { targetId, draft } = descEdit
+    // @ moved while the editor was open (CLI `jj edit`, agent): committing now
+    // would commit a different change with this message.
+    if (!workingCopyEntry || effectiveId(workingCopyEntry.commit) !== targetId) {
+      setMessage({ kind: 'warning', text: `Not committed — the working copy moved off ${targetId.slice(0, 8)}. Your draft is kept.` })
+      return
+    }
     return withMutation(async () => {
       try {
-        const result = await api.commit(descriptionDraft)
+        const result = await api.commit(draft)
         setMessage(mutationMessage('Committed working copy', result))
-        descriptionEditing = false
-        commitMode = false
+        if (descEdit?.targetId === targetId) descEdit = null
         description.reset()
         await logSync.refresh()
       } catch (e) {
@@ -2109,9 +2181,10 @@
   }
 
   function handleBookmarkSet(name: string) {
-    if (!selectedRevision) return
+    const target = bookmarkInputTarget
+    if (!target) return
     runMutation(
-      () => api.bookmarkSet(effectiveId(selectedRevision!.commit), name),
+      () => api.bookmarkSet(target, name),
       `Set bookmark ${name}`,
       { before: () => { bookmarkInputOpen = false } },
     )
@@ -2197,13 +2270,9 @@
     return false
   }
 
-  // Mirror of switchToLogView — the descriptionEditing clear is the payload.
-  // DiffPanel (and the editor in its header slot) unmount in branches view,
-  // but descriptionEditing/descriptionDraft are App-level state; without the
-  // clear they survive a branches-view excursion and reattach over whatever
-  // revision the cursor landed on.
+  // (The description editor's header slot unmounts in branches view; its state
+  // needs no clearing — descEdit is bound to its target, not to the cursor.)
   function switchToBranchesView() {
-    descriptionEditing = false
     // Explicit refresh on entry (not re-entry): bypasses the op-sync gate so the
     // panel never shows a false "No bookmarks" while the log/a mutation is in
     // flight. The sync still owns op-id staleness while the view stays open.
@@ -2212,7 +2281,6 @@
   }
 
   async function switchToMergeView() {
-    descriptionEditing = false
     activeView = 'merge'
     const ok = await merge.enter()
     // bug_013: only bounce if user is STILL in merge (didn't nav away mid-await)
@@ -2403,7 +2471,7 @@
       try {
         // W3: compare against snapshotted total, not live changedFiles
         const files = fileSel.set.size < fileSel.total
-          ? [...fileSel.set]
+          ? withRenameSources([...fileSel.set], parseDiffCached(diffContent))
           : undefined
         const { sources, keepEmptied, ignoreImmutable, descMode } = squash
         // Order sources by graph position so multi-source "combine" composes a
@@ -2541,11 +2609,12 @@
     }
     return withMutation(async () => {
       try {
-        const files = [...fileSel.set]
+        const kept = fileSel.set.size
+        const files = withRenameSources([...fileSel.set], parseDiffCached(diffContent))
         const revision = split.revision
         const result = await api.split(revision, files, split.parallel || undefined)
         cancelInlineModes()
-        setMessage(mutationMessage(`Split ${revision.slice(0, 8)} (${files.length} files stay)`, result))
+        setMessage(mutationMessage(`Split ${revision.slice(0, 8)} (${kept} files stay)`, result))
         clearChecks()
         await logSync.refresh()
       } catch (e) {
@@ -2586,7 +2655,7 @@
         .map(f => f.filePath)
       return withMutation(async () => {
         try {
-          const result = await api.split(revision, acceptedPaths)
+          const result = await api.split(revision, withRenameSources(acceptedPaths, reviewParsedDiff))
           cancelInlineModes()
           setMessage(mutationMessage(`Reviewed ${revision.slice(0, 8)} (${accepted}/${total} hunks)`, result))
           clearChecks()
@@ -2705,7 +2774,11 @@
     switch (name) {
       case 'git': gitModalOpen = true; break
       case 'bookmark': bookmarkModalOpen = true; break
-      case 'bookmarkInput': bookmarkInputOpen = true; break
+      case 'bookmarkInput':
+        // Captured now: a log load already in flight may still move the cursor.
+        bookmarkInputTarget = selectedRevision ? effectiveId(selectedRevision.commit) : null
+        bookmarkInputOpen = true
+        break
     }
   }
 
@@ -2729,13 +2802,8 @@
   }
 
   async function startDescriptionEdit() {
-    if (!selectedRevision) return
-    const cid = selectedRevision.commit.commit_id
-    const prefill = await fetchPrefillDescription()
-    if (selectedRevision?.commit.commit_id !== cid) return
-    descriptionDraft = prefill
-    descriptionEditing = true
-    focusDescEditor()
+    if (activeView !== 'log') switchToLogView() // the editor lives in the diff header
+    await openDescEditor('describe')
   }
 
   // User-intent refresh — dismisses any stale error/warning. Background
@@ -3015,7 +3083,7 @@
   // inline modes (handled in handleInlineCommit) > description editor >
   // checked revisions > message-expand > message > nothing.
   function handleEscapeStack(): void {
-    if (descriptionEditing) { descriptionEditing = false; commitMode = false }
+    if (descEditVisible) descEdit = null
     // Oplog/Evolog are bottom DRAWERS opened by 4/5 (or O/E). Their own panels
     // close on Escape only while focused; opening via the shortcut leaves focus
     // on the graph, so an App-level Escape fallback is needed — otherwise a
@@ -3133,15 +3201,16 @@
 
   // Agent-driven navigate (POST /api/navigate → SSE). Gated so an agent can't
   // yank the user out of half-complete rebase/squash, an unsaved 3-pane
-  // resolution, or unsaved doc-mode edits.
+  // resolution, unsaved doc-mode edits, an open modal (they act on the cursor
+  // at submit), or a description being typed.
   let pendingNavScroll: { changeId: string; path: string } | null = $state(null)
   // Function, not inline expression: the post-await re-gates below would
   // otherwise inherit TS's pre-await narrowing of `activeView` and fail to
   // type-check ("no overlap"). A call reads the live value with its full type.
-  const navigateBlocked = () => inlineMode || mutating || activeView === 'merge' || activeView === 'doc'
+  const navigateBlocked = () => inlineMode || mutating || anyModalOpen || !!descEditVisible || activeView === 'merge' || activeView === 'doc'
   $effect(() => onNavigate(async (p: NavigatePayload) => {
     if (navigateBlocked()) {
-      setMessage({ kind: 'warning', text: 'Agent navigate ignored — finish or Esc current mode' })
+      setMessage({ kind: 'warning', text: 'Agent navigate ignored — finish or Esc what you have open' })
       return
     }
     if (p.revset !== undefined) {
@@ -3571,7 +3640,7 @@
             ontogglecheck={toggleCheck}
             onrangecheck={rangeCheck}
             oncontextmenu={openRevisionContextMenu}
-            onresolvedivergence={(cid) => divergence.enter(cid)}
+            onresolvedivergence={openDivergence}
             onnewfromchecked={handleNewFromChecked}
             onabandonchecked={handleAbandonChecked}
             onclearchecks={clearChecksAndReload}
@@ -3828,14 +3897,12 @@
               <RevisionHeader
                 revision={selectedRevision}
                 {fullDescription}
-                {descriptionEditing}
-                {descriptionDraft}
-                {commitMode}
+                descEdit={descEditVisible}
                 {prByBookmark}
                 onstartdescribe={startDescriptionEdit}
-                ondescribe={commitMode ? executeCommit : handleDescribe}
-                oncanceldescribe={() => { descriptionEditing = false; commitMode = false }}
-                ondraftchange={(v) => { descriptionDraft = v }}
+                ondescribe={descEdit?.kind === 'commit' ? executeCommit : handleDescribe}
+                oncanceldescribe={() => { descEdit = null }}
+                ondraftchange={(v) => { if (descEdit) descEdit.draft = v }}
                 onbookmarkclick={openBookmarkModal}
                 onresolveDivergence={() => { if (selectedRevision) divergence.enter(selectedRevision.commit.change_id) }}
                 oneditparents={() => enterMegamergeMode()}
@@ -3855,11 +3922,11 @@
           class:dragging={draggingEvologDivider}
           onmousedown={startEvologDividerDrag}
         ></div>
-        {#key selectedRevision?.commit.change_id}
+        {#key evolog.value.id}
           <EvologPanel
-            entries={evologEntries}
+            entries={evolog.value.entries}
             loading={evologLoading}
-            {selectedRevision}
+            selectedRevision={evologRevision}
             height={config.evologPanelHeight}
             onrefresh={() => { if (selectedRevision) void evolog.load(effectiveId(selectedRevision.commit)) }}
             onclose={() => { evologOpen = false }}

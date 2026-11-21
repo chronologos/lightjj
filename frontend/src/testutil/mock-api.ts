@@ -11,7 +11,7 @@
 
 import type {
   LogEntry, FileChange, InfoResponse, WorkspacesResponse, Alias, PullRequest,
-  Bookmark, GraphLine, MutationResult, NavigatePayload,
+  Bookmark, GraphLine, MutationResult, NavigatePayload, EvologEntry,
 } from '../lib/api'
 
 export interface Fixtures {
@@ -118,6 +118,10 @@ export function setFixtures(f: Partial<Fixtures>): void {
  *  script supersede/error sequences. null → the static `fixtures.revisions`. */
 export type LogHandler = (revset: string | undefined) => Promise<LogEntry[]>
 let _logHandler: LogHandler | null = null
+/** Controllable `api.evolog` override (per-revision id). null → []. */
+export type EvologHandler = (id: string) => Promise<EvologEntry[]>
+let _evologHandler: EvologHandler | null = null
+export function setEvologHandler(h: EvologHandler | null): void { _evologHandler = h }
 export function setLogHandler(h: LogHandler | null): void { _logHandler = h }
 
 export function resetMockApi(): void {
@@ -127,6 +131,7 @@ export function resetMockApi(): void {
   _navCb = null
   _staleCb = null
   _logHandler = null
+  _evologHandler = null
 }
 
 const okMutation: MutationResult = { output: '' }
@@ -182,7 +187,7 @@ export const mockApi = new Proxy({} as Record<string, (...args: unknown[]) => Pr
         case 'conflicts': return Promise.resolve([])
         case 'divergence': return Promise.resolve([])
         case 'staleImmutable': return Promise.resolve([])
-        case 'evolog': return Promise.resolve([])
+        case 'evolog': return _evologHandler ? _evologHandler(a0!) : Promise.resolve([])
         case 'oplog': return Promise.resolve([])
         default: return Promise.resolve(okMutation)
       }

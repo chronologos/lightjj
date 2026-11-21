@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDiffContent, filePathFromHeader, newSideAddedLines, expandTabs, hunkIndexForLine, oldCount } from './diff-parser'
+import { parseDiffContent, filePathFromHeader, newSideAddedLines, expandTabs, hunkIndexForLine, oldCount, withRenameSources } from './diff-parser'
 
 describe('expandTabs', () => {
   it('passes through tab-free strings unchanged', () => {
@@ -653,5 +653,23 @@ describe('hunkIndexForLine', () => {
   })
   it('empty hunks → -1', () => {
     expect(hunkIndexForLine([], 1)).toBe(-1)
+  })
+})
+
+describe('withRenameSources', () => {
+  const files = parseDiffContent([
+    'diff --git a/old.ts b/new.ts', 'rename from old.ts', 'rename to new.ts',
+    'diff --git a/c.ts b/c.ts', '--- a/c.ts', '+++ b/c.ts', '@@ -1 +1 @@', '-a', '+b',
+  ].join('\n'))
+
+  it('adds the source path of a selected rename so both halves move together', () => {
+    expect(withRenameSources(['new.ts'], files)).toEqual(['old.ts', 'new.ts'])
+  })
+  it('leaves ordinary and unknown paths alone', () => {
+    expect(withRenameSources(['c.ts', 'nope.ts'], files)).toEqual(['c.ts', 'nope.ts'])
+  })
+  it('does not pull in a source that is its own entry in the diff', () => {
+    const both = [...files, { ...files[1], filePath: 'old.ts', sourcePath: undefined }]
+    expect(withRenameSources(['new.ts'], both)).toEqual(['new.ts'])
   })
 })

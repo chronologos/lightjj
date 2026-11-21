@@ -253,3 +253,42 @@ func TestJSONCollection_ConcurrentUpserts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, items, n, "no upsert may be lost to a concurrent write")
 }
+
+// "Couldn't read it" must never become "it was empty": the next write would
+// replace every stored comment with the one being posted.
+func TestJSONCollection_UnreadableFileIsNeverOverwritten(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores file modes")
+	}
+	col, dir := newTestCollection(t)
+	_, err := col.Upsert("k", storeItem{ID: "a", Body: "keep"})
+	require.NoError(t, err)
+	path := filepath.Join(dir, "k.json")
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	_, err = col.List("k")
+	assert.Error(t, err)
+	_, err = col.Upsert("k", storeItem{ID: "b"})
+	assert.Equal(t, http.StatusInternalServerError, storeErrStatus(err))
+	assert.Error(t, col.Delete("k", "a"))
+
+	require.NoError(t, os.Chmod(path, 0o644))
+	items, err := col.List("k")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "keep", items[0].Body)
+}
+
+func TestJSONCollection_ZeroByteFileIsFresh(t *testing.T) {
+	col, dir := newTestCollection(t)
+	path := filepath.Join(dir, "k.json")
+	require.NoError(t, os.WriteFile(path, nil, 0o644))
+	items, err := col.List("k")
+	require.NoError(t, err)
+	assert.Equal(t, []storeItem{}, items)
+	_, err = col.Upsert("k", storeItem{ID: "a"})
+	require.NoError(t, err)
+	backups, _ := filepath.Glob(path + ".corrupt-*")
+	assert.Empty(t, backups)
+}

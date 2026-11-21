@@ -61,7 +61,10 @@ describe('routeKeydown — gate priority', () => {
   it.each<[string, Partial<GateCtx>, string[]]>([
     ['j in input → swallowed', { inInput: true }, PRE_INPUT],
     ['Cmd+j → swallowed (modifier passthrough)', { hasModifier: true }, PRE_MOD],
-    ['j behind modal → swallowed', { anyModalOpen: true }, PRE_MOD],
+    ['j behind modal → swallowed', { anyModalOpen: true }, ['globalOverrides', 'diffScroll']],
+    // Enter on a Files-overlay row must not run the rebase pending behind it.
+    ['Enter behind modal in inline mode → never commits', { key: 'Enter', anyModalOpen: true, inlineMode: true }, ['globalOverrides', 'diffScroll']],
+    ['Escape behind modal in inline mode → never cancels the mode', { key: 'Escape', anyModalOpen: true, inlineMode: true }, ['globalOverrides', 'diffScroll']],
     ['j in branches with defaultPrevented → swallowed', { activeView: 'branches', defaultPrevented: true }, PRE_MOD],
     ['j in merge with defaultPrevented → swallowed', { activeView: 'merge', defaultPrevented: true }, PRE_MOD],
   ])('%s', (_, over, expected) => {
@@ -125,7 +128,7 @@ describe('routeKeydown — gate priority', () => {
     it('fileHistory delegate falls through to modal swallow on non-handled key', () => {
       const { h, calls } = harness({ delegateFileHistory: false })
       routeKeydown(ctx({ fileHistoryOpen: true, anyModalOpen: true }), h)
-      expect(calls).toEqual([...PRE_MOD, 'delegateFileHistory'])  // then swallowed
+      expect(calls).toEqual(['globalOverrides', 'diffScroll', 'delegateFileHistory'])  // then swallowed
     })
 
     it('merge Escape BEFORE conflictQueue delegate — Escape always exits', () => {

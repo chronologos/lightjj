@@ -1,0 +1,74 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # release.yml calls this as a gate: nothing is built or signed on a red suite.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor and newest supported jj. The integration suite runs every command
+        # builder against the real binary, so a subcommand jj removed fails here
+        # instead of in the UI. Bump the second entry (version + digest together).
+        include:
+          - jj: v0.40.0
+            sha256: 5c8979f46873e052f59bdd9535636dca6e6f9f70571b73f6d63c3b92acfaa037
+          - jj: v0.47.1
+            sha256: d4b657f622ee50929c8916466dfa3d6a6c17a0a32b50e7b2c793707ec9ebcad7
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Release assets are mutable: verify the pinned digest before executing.
+      - name: Install jj
+        env:
+          JJ: ${{ matrix.jj }}
+          SHA256: ${{ matrix.sha256 }}
+        run: |
+          f="jj-${JJ}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSLO "https://github.com/jj-vcs/jj/releases/download/${JJ}/${f}"
+          echo "${SHA256}  ${f}" | sha256sum -c -
+          sudo tar xzf "$f" -C /usr/local/bin ./jj
+          jj --version
+
+      - run: go vet ./...
+      - run: go vet -tags integration ./...
+      - run: go test ./...
+      - run: go test -tags integration ./internal/...
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test

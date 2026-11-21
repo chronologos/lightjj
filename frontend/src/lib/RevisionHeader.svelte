@@ -5,9 +5,8 @@
   interface Props {
     revision: LogEntry
     fullDescription: string
-    descriptionEditing: boolean
-    descriptionDraft: string
-    commitMode: boolean
+    /** Open editor for THIS revision, or null (App binds it to its target). */
+    descEdit: { kind: 'describe' | 'commit'; draft: string; focus: boolean } | null
     prByBookmark: Map<string, PullRequest>
     onstartdescribe: () => void
     ondescribe: () => void
@@ -21,8 +20,7 @@
   }
 
   let {
-    revision, fullDescription, descriptionEditing, descriptionDraft,
-    commitMode, prByBookmark, onstartdescribe, ondescribe, oncanceldescribe,
+    revision, fullDescription, descEdit, prByBookmark, onstartdescribe, ondescribe, oncanceldescribe,
     ondraftchange, onbookmarkclick, onresolveDivergence, oneditparents, onbrowsefiles,
   }: Props = $props()
 
@@ -91,14 +89,15 @@
     </div>
   {/if}
 </div>
-{#if descriptionEditing}
+{#if descEdit}
   <DescriptionEditor
     {revision}
-    draft={descriptionDraft}
+    draft={descEdit.draft}
     onsave={ondescribe}
     oncancel={oncanceldescribe}
     {ondraftchange}
-    {commitMode}
+    commitMode={descEdit.kind === 'commit'}
+    focusOnMount={descEdit.focus}
   />
 {/if}
 

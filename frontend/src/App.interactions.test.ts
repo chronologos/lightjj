@@ -28,7 +28,7 @@ vi.stubGlobal('fetch', async () => new Response(null, { status: 204 }))
 import App from './App.svelte'
 import {
   resetMockApi, calls, triggerNavigate, triggerStale,
-  setFixtures, defaultFixtures, mkRevision, setLogHandler,
+  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, mkFileChange,
 } from './testutil/mock-api'
 import type { LogEntry } from './lib/api'
 import { waitFor } from './testutil/wait-for'
@@ -789,5 +789,205 @@ describe('App routable-URL initial selection', () => {
     await waitFor(() => qs('.message-bar.kind-warning') !== null)
     expect(qs('.message-bar.kind-warning')?.textContent).toContain('?revset=')
     expect(logCalls()).toHaveLength(1)
+  })
+})
+
+// ── Write targets are bound when a surface opens ────────────────────────────
+// Each of these used to resolve its target from the live cursor at SUBMIT time,
+// so a click, refresh, or agent navigate in between redirected the write.
+describe('App write targets', () => {
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+  const row = (i: number) => qs(`.graph-row.node-row[data-entry="${i}"]`)!
+  const editor = () => qs('.desc-editor textarea') as HTMLTextAreaElement | null
+  const label = () => qs('.desc-label')?.textContent?.trim()
+  const writes = () => calls.filter(c => ['describe', 'commit', 'bookmarkSet', 'rebase', 'squash', 'split', 'restoreFrom'].includes(c.method))
+  const save = () => fireEvent.keyDown(editor()!, { key: 'Enter', metaKey: true })
+  async function type(text: string) {
+    editor()!.value = text
+    await fireEvent.input(editor()!)
+  }
+  /** Open the describe editor on cmid (row 1) with a dirty draft. */
+  async function draftOnCmid() {
+    await mountApp()
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    await press('e')
+    await waitFor(() => editor() !== null)
+    await type('DRAFT')
+  }
+
+  it('commit editor never leaks into a later describe', async () => {
+    await mountApp()
+    await press('c')
+    await waitFor(() => label()?.startsWith('Commit cwc') === true)
+    await fireEvent.click(row(1))
+    await waitFor(() => editor() === null)
+    await press('e')
+    await waitFor(() => label()?.startsWith('Description for cmid') === true)
+    await type('new text')
+    await save()
+    await waitFor(() => writes().length === 1)
+    expect(writes()[0]).toEqual({ method: 'describe', args: ['cmid', 'new text'] })
+  })
+
+  it("'c' off @ opens the commit editor on @, with @'s own description", async () => {
+    await mountApp()
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    await press('c')
+    await waitFor(() => editor() !== null)
+    expect(label()).toBe('Commit cwc')
+    expect(editor()!.value).toBe('')
+    expect(selectedEntry()).toBe('0')
+    // The header remounts when the newly selected diff lands; focus must survive
+    // it, or the commit message is typed into global hotkeys.
+    await sleep(150)
+    expect(document.activeElement).toBe(editor())
+  })
+
+  it('refuses to commit when @ moved while the editor was open', async () => {
+    await mountApp()
+    await press('c')
+    await waitFor(() => editor() !== null)
+    await type('msg')
+    const [wc, mid, trunk] = defaultFixtures().revisions
+    setFixtures({ revisions: [
+      { ...wc, commit: { ...wc.commit, is_working_copy: false } },
+      { ...mid, commit: { ...mid.commit, is_working_copy: true } }, trunk,
+    ] })
+    triggerStale('op-moved')
+    await waitFor(() => calls.filter(c => c.method === 'log').length > 1)
+    await sleep(30)
+    await save()
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Not committed') === true)
+    expect(writes()).toEqual([])
+    expect(editor()!.value).toBe('msg')
+  })
+
+  it.each<[string, () => void]>([
+    ['abandoned externally', () => {
+      const f = defaultFixtures()
+      setFixtures({ revisions: [f.revisions[0], f.revisions[2]] })
+    }],
+    ['became divergent', () => {
+      const f = defaultFixtures()
+      setFixtures({ revisions: [f.revisions[0],
+        mkRevision({ change_id: 'cmid', commit_id: 'kmid2', divergent: true }),
+        mkRevision({ change_id: 'cmid', commit_id: 'kmid3', divergent: true }), f.revisions[2]] })
+    }],
+  ])('a draft whose revision was %s is hidden, never re-bound to @', async (_, change) => {
+    await draftOnCmid()
+    change()
+    triggerStale('op-gone')
+    await waitFor(() => selectedEntry() === '0')
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Description draft for cmid is hidden') === true)
+    expect(editor()).toBeNull()
+    expect(writes()).toEqual([])
+  })
+
+  it('a dirty draft survives navigation and still saves to its own revision', async () => {
+    await draftOnCmid()
+    await fireEvent.click(row(0))
+    await waitFor(() => editor() === null)
+    await fireEvent.click(row(1))
+    await waitFor(() => editor()?.value === 'DRAFT')
+    expect(document.activeElement).not.toBe(editor()) // j/k onto it stays j/k
+    await save()
+    await waitFor(() => writes().length === 1)
+    expect(writes()[0]).toEqual({ method: 'describe', args: ['cmid', 'DRAFT'] })
+  })
+
+  it('agent navigate is refused while a description is being edited', async () => {
+    await draftOnCmid()
+    triggerNavigate({ revset: 'all()' })
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Agent navigate ignored') === true)
+    expect(selectedEntry()).toBe('1')
+    expect(editor()!.value).toBe('DRAFT')
+  })
+
+  it('agent navigate is refused behind the bookmark input; the name lands on the original revision', async () => {
+    await mountApp()
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    await press('B')
+    await waitFor(() => qs('.bm-set-input') !== null)
+    triggerNavigate({ change_id: 'cwc' })
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Agent navigate ignored') === true)
+    const input = qs('.bm-set-input') as HTMLInputElement
+    input.value = 'bm'
+    await fireEvent.input(input)
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => writes().length === 1)
+    expect(writes()[0]).toEqual({ method: 'bookmarkSet', args: ['cmid', 'bm'] })
+  })
+
+  it('Enter in the Files overlay does not execute the rebase pending behind it', async () => {
+    await mountApp()
+    await press('R')
+    await waitFor(() => qs('.statusbar.rebase-active') !== null)
+    await press('j') // a real destination: rebasing onto the source is refused anyway
+    await waitFor(() => selectedEntry() === '1')
+    await fireEvent.click(qs('.browse-files-btn')!)
+    await waitFor(() => qs('.ft-root') !== null)
+    await fireEvent.keyDown(qs('.ft-root')!, { key: 'Enter' })
+    await sleep(20)
+    expect(writes()).toEqual([])
+    expect(qs('.statusbar.rebase-active')).not.toBeNull()
+  })
+
+  it('a divergent badge clicked in the branches view opens the panel instead of trapping the keyboard', async () => {
+    const f = defaultFixtures()
+    setFixtures({ revisions: [f.revisions[0],
+      mkRevision({ change_id: 'cmid', commit_id: 'kmid2', divergent: true }),
+      mkRevision({ change_id: 'cmid', commit_id: 'kmid3', divergent: true }), f.revisions[2]] })
+    render(App)
+    await waitFor(() => document.querySelectorAll('.graph-row.node-row').length === 4)
+    await press('2')
+    await waitFor(() => qs('.bp-root') !== null)
+    await fireEvent.click(row(1).querySelector('.alert-badge-click')!)
+    await waitFor(() => qs('.divergence-panel') !== null)
+    expect(qs('.bp-root')).toBeNull()
+  })
+
+  it('evolog restore targets the revision whose entries are shown, not the cursor', async () => {
+    const entry = (id: string) => ({ commit_id: id, time: '2026-01-01T00:00:00', operation: 'snapshot', predecessor_ids: ['p'], diff: '' })
+    setEvologHandler(id => id === 'cmid'
+      ? Promise.resolve([entry('kmid'), entry('kmidold')])
+      : new Promise(() => {})) // any other revision never finishes loading
+    await mountApp()
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    await press('5')
+    await waitFor(() => document.querySelectorAll('.evolog-entry').length === 2)
+    await fireEvent.click(row(2))
+    await waitFor(() => selectedEntry() === '2')
+    await fireEvent.contextMenu(document.querySelectorAll('.evolog-entry')[1])
+    const item = await vi.waitFor(() => {
+      const el = [...document.querySelectorAll('.ctx-item')].find(b => b.textContent?.includes('Restore this version'))
+      expect(el).toBeTruthy()
+      return el!
+    })
+    await fireEvent.click(item)
+    await waitFor(() => writes().length === 1)
+    expect(writes()[0]).toEqual({ method: 'restoreFrom', args: ['kmidold', 'cmid'] })
+  })
+
+  it('squashing part of a commit with a rename moves both halves of the rename', async () => {
+    const f = defaultFixtures()
+    setFixtures({
+      files: { ...f.files, kmid: [mkFileChange({ path: 'new.ts', type: 'R' }), mkFileChange({ path: 'c.ts' })] },
+      diffs: { ...f.diffs, kmid: 'diff --git a/old.ts b/new.ts\nrename from old.ts\nrename to new.ts\ndiff --git a/c.ts b/c.ts\n--- a/c.ts\n+++ b/c.ts\n@@ -1 +1 @@\n-a\n+b\n' },
+    })
+    await mountApp()
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    await sleep(120)
+    await press('S')
+    await waitFor(() => qs('.statusbar.squash-active') !== null)
+    const rows = [...document.querySelectorAll('.file-select-row')]
+    await fireEvent.click(rows.find(r => r.textContent?.includes('c.ts'))!)
+    await press('Enter')
+    await waitFor(() => writes().length === 1)
+    expect(writes()[0].args[2]).toMatchObject({ files: ['old.ts', 'new.ts'] })
   })
 })

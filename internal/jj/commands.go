@@ -63,14 +63,18 @@ func escapeFiles(files []string) []string {
 // with the snapshot loop. With it: ~33ms. Worst case: an external file edit
 // seen ≤5s late before SSE corrects — same contract as every other read.
 func LogGraph(revset string, limit int) CommandArgs {
-	args := []string{"log", "--color", "never", "--quiet", "--ignore-working-copy"}
+	// graph.style/log_node are pinned: the parser and GraphSvg read the gutter
+	// glyphs (│ ○ ├─╮), so a user's ascii style or custom node template must not
+	// reach this output.
+	args := []string{"log", "--color", "never", "--quiet", "--ignore-working-copy",
+		"--config", "ui.graph.style=curved", "--config", "templates.log_node=builtin_log_node"}
 	if revset != "" {
 		args = append(args, "-r", revset)
 	}
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
-	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent_PREFIX:empty_PREFIX:mine_PREFIX:author.email_PREFIX:committer.timestamp_PREFIX:hidden \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F parent_ids \x1F bookmarks
+	// Template outputs: _PREFIX:shortestChangeId_PREFIX:shortestCommitId_PREFIX:divergent_PREFIX:empty_PREFIX:mine_PREFIX:author.email_PREFIX:committer.timestamp_PREFIX:hidden_PREFIX:immutable_PREFIX:conflict_PREFIX:current_working_copy \x1F fullShortChangeId \x1F fullShortCommitId \x1F description \x1F working_copies \x1F parent_ids \x1F bookmarks
 	// Uses ASCII unit separator (\x1F) instead of tab to avoid breakage if descriptions contain tabs.
 	// Parent IDs are comma-joined (commit IDs are hex, commas can't appear).
 	// Bookmarks are joined with \x1F and MUST be the last field — the parser's SplitN leaves the tail unsplit.
@@ -84,13 +88,17 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// @ CAN appear in git-created branch names, which jj imports and RefSymbol-quotes.
 	// .name() quote-wraps names containing revset-special chars; the parser strips
 	// those quotes and filters the @git colocation synthetic remote.
-	// mine + author.email() + committer.timestamp() + self.hidden() appended via
+	// mine + author.email() + committer.timestamp() + self.hidden() + the immutable/
+	// conflict/current_working_copy flags appended via
 	// EXPLICIT '++ _PREFIX: ++' — NOT inside separate(). separate() skips empty args
 	// (see bookmarkListTemplate comment below); a root commit or malformed-import
 	// author.email() would shift field positions. Explicit concat guarantees the
 	// _PREFIX markers are always present even if the value is empty. Parser's
-	// len(prefixParts)>=6/>=7/>=8/>=9 checks still keep old test fixtures
+	// len(prefixParts)>=6/>=7/>=8/>=9/>=12 checks still keep old test fixtures
 	// backward-compatible.
+	//
+	// The three trailing flags gate mutations in the UI (immutable) and the @
+	// fallback, so they come from the template, never from the node glyph.
 	//
 	// self.hidden() (jj ≥ 0.30 template method — well below the 0.39 test baseline,
 	// so no version gate) is REQUIRED for correctness, not just enrichment: a
@@ -101,8 +109,8 @@ func LogGraph(revset string, limit int) CommandArgs {
 	// change_id yet both report divergent=false && hidden=false → identical
 	// effectiveId() → duplicate Svelte each-keys → crashed reactive flush.
 	tmpl := fmt.Sprintf(
-		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ '%s' ++ stringify(mine) ++ '%s' ++ author.email() ++ '%s' ++ committer.timestamp() ++ '%s' ++ stringify(self.hidden()) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name() ++ "\x1D" ++ stringify(b.conflict()) ++ "\x1D" ++ stringify(b.synced())).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
-		JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix)
+		`stringify('%s' ++ separate('%s', change_id.shortest(), commit_id.shortest(), divergent, empty)) ++ '%s' ++ stringify(mine) ++ '%s' ++ author.email() ++ '%s' ++ committer.timestamp() ++ '%s' ++ stringify(self.hidden()) ++ '%s' ++ stringify(self.immutable()) ++ '%s' ++ stringify(self.conflict()) ++ '%s' ++ stringify(self.current_working_copy()) ++ "\x1F" ++ change_id.short() ++ "\x1F" ++ commit_id.short() ++ "\x1F" ++ description.first_line() ++ "\x1F" ++ working_copies ++ "\x1F" ++ parents.map(|p| p.commit_id().short()).join(",") ++ "\x1F" ++ local_bookmarks.map(|b| b.name() ++ "\x1D" ++ stringify(b.conflict()) ++ "\x1D" ++ stringify(b.synced())).join("\x1F") ++ "\x1F" ++ remote_bookmarks.map(|b| b.name() ++ "\x1E" ++ b.remote()).join("\x1F") ++ "\n"`,
+		JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix, JJUIPrefix)
 	args = append(args, "-T", tmpl)
 	return args
 }
@@ -205,10 +213,11 @@ func Undo() CommandArgs {
 	return []string{"undo"}
 }
 
-// OpUndo reverts a specific operation by id. Unlike Undo() (latest-op
+// OpRevert applies the inverse of a specific operation. Unlike Undo() (latest-op
 // shorthand), this targets an arbitrary op — the oplog right-click flow.
-func OpUndo(id string) CommandArgs {
-	return []string{"op", "undo", id}
+// (`jj op undo` was the same command; jj 0.39 removed it.)
+func OpRevert(id string) CommandArgs {
+	return []string{"op", "revert", id}
 }
 
 // OpRestore resets the repo state to what it was at the given operation.

@@ -1124,7 +1124,7 @@ func mutation[Req any](s *Server, validate func(Req) error, build func(Req) (jj.
 // The factories below are thin adapters over mutation() for families of
 // routes that share one request shape but differ only in the command builder
 // (op undo/restore, the bookmark operations). They keep route lines compact:
-// reg("POST /api/op/undo", s.opMutation(jj.OpUndo)).
+// reg("POST /api/op/undo", s.opMutation(jj.OpRevert)).
 
 type opIdRequest struct {
 	ID string `json:"id"`
@@ -1204,7 +1204,9 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 		return
 	}
-	s.runMutation(w, r, jj.DebugSnapshot())
+	if !s.runMutation(w, r, jj.DebugSnapshot()) {
+		return // a FAILED snapshot proves nothing (often it failed BECAUSE it's stale)
+	}
 	// Successful snapshot proves not-stale (jj auto-update-stale would have
 	// either cleared it or errored). Same reasoning as handleWorkspaceUpdateStale
 	// below — without this, CLI-fixed staleness + tab-focus snapshot leaves
@@ -1370,12 +1372,11 @@ func (s *Server) handleWorkspaceUpdateStale(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.runMutation(w, r, jj.WorkspaceUpdateStale())
+	if !s.runMutation(w, r, jj.WorkspaceUpdateStale()) {
+		return
+	}
 	// Clear + broadcast immediately so OTHER SSE clients (2nd browser window)
 	// unstick. The clicking tab is covered by the frontend's `after` callback.
-	// Runs even on error: runMutation early-returns internally but Go doesn't
-	// propagate that to us. Self-heals — if update-stale FAILED, the next
-	// snapshot re-detects within 5s. Brief false-clear, bounded by one tick.
 	s.clearStale()
 }
 
@@ -1414,7 +1415,9 @@ func (s *Server) handleWorkspaceUpdateStaleOther(w http.ResponseWriter, r *http.
 		s.writeError(w, http.StatusUnprocessableEntity, "workspace path unknown (predates jj's workspace_store index)")
 		return
 	}
-	if _, err := s.Runner.RunRaw(r.Context(), append([]string{"jj"}, jj.WorkspaceUpdateStaleAt(path)...)); err != nil {
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	if _, err := s.Runner.RunRaw(ctx, append([]string{"jj"}, jj.WorkspaceUpdateStaleAt(path)...)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -2091,7 +2094,9 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Runner.WriteFile(r.Context(), cleaned, []byte(req.Content)); err != nil {
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	if err := s.Runner.WriteFile(ctx, cleaned, []byte(req.Content)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to write %s: %v", cleaned, err))
 		return
 	}
@@ -2102,7 +2107,7 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 	// is ~440ms). The watcher watches op_heads/ not the WC — it won't fire
 	// until SOMETHING snapshots. Error swallowed: the write succeeded, which
 	// is the primary contract; a failed snapshot just means the UI lags.
-	_, _ = s.trySnapshot(r.Context())
+	_, _ = s.trySnapshot(ctx)
 	s.refreshOpId()
 	// Standard MutationResult envelope (empty output) — see handleNavigate.
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})

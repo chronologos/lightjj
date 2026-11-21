@@ -33,8 +33,13 @@ jobs:
             echo "should_release=true" >> $GITHUB_OUTPUT
           fi
 
-  build:
+  test:
     needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: [check-version, test]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:

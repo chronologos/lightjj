@@ -35,7 +35,7 @@ Annotations are keyed by `change_id` — they survive iterations. `createdAtComm
 │      │                                                      │
 │      ├─► reanchor(ann, hunks) → {lineNum, status}           │
 │      │                                                      │
-│      └─► POST /api/annotations (persist re-anchored state)  │
+│      └─► placement (session-only; never written back)       │
 │                                                             │
 │  Agent iterates → fsnotify → SSE → onStale → loadLog()      │
 │      → diffTarget.commitId changes → effect fires → reload  │
@@ -45,6 +45,8 @@ Annotations are keyed by `change_id` — they survive iterations. `createdAtComm
 
 ## Re-anchoring (`annotations.svelte.ts:reanchor`)
 
+The stored `lineNum` is relative to `createdAtCommitId` and never changes; the current line and orphan status are recomputed on every load into a session-only `placement`. (Writing the moved line back against the unmoved baseline re-applied the same delta on every visit.) Exports read `store.effective`.
+
 Two stages, composed:
 
 ### Stage 1: diff-delta adjustment
@@ -53,7 +55,7 @@ For each hunk in `diffRange(createdAtCommitId, currentCommitId)` that ends **abo
 ### Stage 2: content verification
 If the hunk **spans** the annotation's line, search its new-side lines for `ann.lineContent` (exact match). Handles moves/rewrites within a hunk.
 
-If delta-adjusted line's content doesn't match the snapshot and no spanning hunk found it, scan ±5 lines (fuzzy window). If still no match → `status: 'orphaned'`.
+If delta-adjusted line's content doesn't match the snapshot and no spanning hunk found it, scan ±5 lines (fuzzy window). If still no match → orphaned (for this session).
 
 **Orphaned ≈ addressed.** The agent deleted or rewrote the line — likely fixed what the comment asked for. Surfaced in a "possibly addressed" panel for one-click resolve.
 
@@ -87,8 +89,8 @@ If delta-adjusted line's content doesn't match the snapshot and no spanning hunk
 
 | Method | Endpoint | |
 |---|---|---|
-| `GET` | `/api/annotations?changeId=X` | → `Annotation[]` (empty if missing/corrupt) |
-| `POST` | `/api/annotations` | Upsert by `id` within `changeId` file |
+| `GET` | `/api/annotations?changeId=X` | → `Annotation[]` (empty if missing; 500 if unreadable or corrupt) |
+| `POST` | `/api/annotations` | Upsert by `id` within `changeId` file. A corrupt file is moved to `<file>.corrupt-<ts>` first, never overwritten |
 | `DELETE` | `/api/annotations?changeId=X&id=Y` | Remove by id; file deleted if last |
 | `DELETE` | `/api/annotations?changeId=X` | Clear all (remove file) |
 
