@@ -58,14 +58,16 @@ func TestPersistedTabs_State(t *testing.T) {
 		assert.Empty(t, ReadPersistedTabs())
 	})
 
-	t.Run("round trip", func(t *testing.T) {
+	t.Run("add, remove, no duplicates", func(t *testing.T) {
 		withStateDir(t)
-		want := []PersistedTab{
-			{Path: "/repo/a", Mode: "local"},
-			{Path: "/repo/b", Mode: "local"},
+		a, b := PersistedTab{Path: "/repo/a", Mode: "local"}, PersistedTab{Path: "/repo/b", Mode: "local"}
+		for _, pt := range []PersistedTab{a, b, a} {
+			require.NoError(t, AddOpenTab(pt))
 		}
-		require.NoError(t, SetOpenTabs("local", "", want))
-		assert.Equal(t, want, ReadPersistedTabs())
+		assert.Equal(t, []PersistedTab{a, b}, ReadPersistedTabs())
+		require.NoError(t, RemoveOpenTab(a))
+		require.NoError(t, RemoveOpenTab(a))
+		assert.Equal(t, []PersistedTab{b}, ReadPersistedTabs())
 	})
 
 	t.Run("write preserves recentActions section", func(t *testing.T) {
@@ -76,38 +78,42 @@ func TestPersistedTabs_State(t *testing.T) {
 		require.NoError(t, SetRecentActions(map[string]map[string]int64{
 			"bookmark-modal": {"main": 123},
 		}))
-		require.NoError(t, SetOpenTabs("local", "", []PersistedTab{{Path: "/x", Mode: "local"}}))
+		require.NoError(t, AddOpenTab(PersistedTab{Path: "/x", Mode: "local"}))
 
 		assert.Equal(t, []PersistedTab{{Path: "/x", Mode: "local"}}, ReadPersistedTabs())
 		assert.Equal(t, int64(123), readRecentActions()["bookmark-modal"]["main"])
 	})
 
-	t.Run("filter-merge preserves other sessions", func(t *testing.T) {
-		// The multi-host scenario: session A (hostA) has a tab, session B
-		// (hostB) opens/closes a tab. A whole-array overwrite would erase
-		// A's entry. The filter-merge only touches (mode,host)-matching
-		// entries — A's entry must survive B's write.
+	t.Run("other sessions' entries are theirs", func(t *testing.T) {
 		withStateDir(t)
-
-		a := []PersistedTab{{Path: "/work", Mode: "ssh", Host: "u@hostA"}}
-		require.NoError(t, SetOpenTabs("ssh", "u@hostA", a))
-
-		b := []PersistedTab{{Path: "/proj", Mode: "ssh", Host: "u@hostB"}}
-		require.NoError(t, SetOpenTabs("ssh", "u@hostB", b))
-
-		got := ReadPersistedTabs()
-		require.Len(t, got, 2)
-		// Order: A's kept entry first (filter preserves order), B's appended.
-		assert.Equal(t, "u@hostA", got[0].Host)
-		assert.Equal(t, "u@hostB", got[1].Host)
-
-		// Session A closes its last tab → writes empty slice for its session.
-		require.NoError(t, SetOpenTabs("ssh", "u@hostA", nil))
-
-		got = ReadPersistedTabs()
-		require.Len(t, got, 1)
-		assert.Equal(t, "u@hostB", got[0].Host) // B untouched
+		// Same path on two hosts, and locally: three different tabs.
+		a := PersistedTab{Path: "/work", Mode: "ssh", Host: "u@hostA"}
+		b := PersistedTab{Path: "/work", Mode: "ssh", Host: "u@hostB"}
+		l := PersistedTab{Path: "/work", Mode: "local"}
+		for _, pt := range []PersistedTab{a, b, l} {
+			require.NoError(t, AddOpenTab(pt))
+		}
+		require.NoError(t, RemoveOpenTab(a))
+		assert.Equal(t, []PersistedTab{b, l}, ReadPersistedTabs())
 	})
+
+	t.Run("restore failures are counted, then end", func(t *testing.T) {
+		withStateDir(t)
+		gone := PersistedTab{Path: "/unmounted", Mode: "local"}
+		require.NoError(t, AddOpenTab(gone))
+		for i := 1; i < maxRestoreFailures; i++ {
+			require.NoError(t, RecordRestore(map[PersistedTab]string{ReadPersistedTabs()[0]: ""}))
+			require.Equal(t, i, ReadPersistedTabs()[0].Failures)
+		}
+		// One success resets the count, and canonicalizes the path.
+		require.NoError(t, RecordRestore(map[PersistedTab]string{ReadPersistedTabs()[0]: "/real"}))
+		assert.Equal(t, []PersistedTab{{Path: "/real", Mode: "local"}}, ReadPersistedTabs())
+		for range maxRestoreFailures {
+			require.NoError(t, RecordRestore(map[PersistedTab]string{ReadPersistedTabs()[0]: ""}))
+		}
+		assert.Empty(t, ReadPersistedTabs())
+	})
+
 }
 
 func TestRecentActions_State(t *testing.T) {
@@ -317,7 +323,7 @@ func TestMigrateStateIfNeeded(t *testing.T) {
 		// the stale legacy keys an old binary re-added to config.json.
 		statePath := withStateDir(t)
 		configFile := filepath.Join(filepath.Dir(statePath), "config.json")
-		require.NoError(t, SetOpenTabs("local", "", []PersistedTab{{Path: "/fresh", Mode: "local"}}))
+		require.NoError(t, AddOpenTab(PersistedTab{Path: "/fresh", Mode: "local"}))
 		seedConfig(t, configFile, `{"openTabs":[{"path":"/stale","mode":"local"}]}`)
 
 		MigrateStateIfNeeded()
@@ -354,7 +360,7 @@ func TestMigrateStateIfNeeded(t *testing.T) {
 // not expected (machines write it, humans read config.json).
 func TestStateStore_PlainJSONNotJSONC(t *testing.T) {
 	path := withStateDir(t)
-	require.NoError(t, SetOpenTabs("local", "", []PersistedTab{{Path: "/x", Mode: "local"}}))
+	require.NoError(t, AddOpenTab(PersistedTab{Path: "/x", Mode: "local"}))
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	var st map[string]any

@@ -109,11 +109,19 @@ func (r *SSHRunner) WriteFile(ctx context.Context, relPath string, content []byt
 // is user input). -R lets jj do the upward .jj search, same as the local
 // `cmd.Dir = dir` approach.
 func (r *SSHRunner) ResolveWorkspaceRoot(ctx context.Context, path string) (string, error) {
-	out, err := r.local.Run(ctx, r.sshArgv(fmt.Sprintf("jj -R %s workspace root", quoteRemotePath(path))))
+	out, err := r.local.Run(ctx, r.sshArgv(resolveRootCmd(path)))
 	if err != nil {
-		return "", fmt.Errorf("not a jj repository on %s: %s", r.Host, path)
+		return "", fmt.Errorf("not a usable jj workspace on %s: %s", r.Host, path)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// resolveRootCmd prints the workspace root, after the same probe as local's
+// probeWorkspace: `workspace root` succeeds in a forgotten workspace, resolving @
+// doesn't. Plain `&&` — the remote login shell need not be POSIX.
+func resolveRootCmd(path string) string {
+	p := quoteRemotePath(path)
+	return fmt.Sprintf(`jj -R %s log -r @ --no-graph --ignore-working-copy --color never -T '""' && jj -R %s workspace root`, p, p)
 }
 
 // quoteRemotePath quotes a user-supplied remote path for safe shell use,

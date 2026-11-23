@@ -83,7 +83,7 @@ type TabManager struct {
 
 	// OnTabsChange, if non-nil, is called after a tab is opened or closed via
 	// the HTTP handlers (outside m.mu, after the response body is written but before the handler returns — same
-	// placement as persistTabs). It carries no snapshot on purpose: two
+	// placement as persistTab). It carries no snapshot on purpose: two
 	// concurrent creates would otherwise race to deliver stale snapshots in
 	// either order; listeners call TabRefs() under their own lock instead.
 	// Startup AddTab calls do NOT fire it — main.go takes its initial snapshot
@@ -343,14 +343,14 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	t := m.addLocked(srv, root)
 	m.mu.Unlock()
 	m.writeTab(w, t)
-	m.tabsChanged()
+	m.tabsChanged(t, AddOpenTab)
 }
 
 // tabsChanged runs the post-open/close side effects: persist to state.json,
 // then notify the out-of-package listener (session file). Both call sites
 // invoke it AFTER writing their HTTP response and outside m.mu.
-func (m *TabManager) tabsChanged() {
-	m.persistTabs()
+func (m *TabManager) tabsChanged(t *Tab, persist func(PersistedTab) error) {
+	m.persistTab(t, persist)
 	if m.OnTabsChange != nil {
 		m.OnTabsChange()
 	}
@@ -369,30 +369,44 @@ func (m *TabManager) TabRefs() []TabRef {
 	return out
 }
 
-// persistTabs snapshots the current non-startup tabs to state.json (the
+// persistTab records one tab change in state.json (the
 // machine-state store — see state.go; NOT config.json, so tab churn never
 // touches the user's commented config). Tab 0 (the -R flag tab) is excluded:
 // it's implicit from CLI flags, persisting it would conflict when the user
 // launches with a different -R path. Best-effort: logs on failure, never
 // blocks the HTTP response (callers invoke this AFTER writing their
 // response). Mode=="" (tests) → skip entirely.
-func (m *TabManager) persistTabs() {
-	if m.Mode == "" {
+func (m *TabManager) persistTab(t *Tab, write func(PersistedTab) error) {
+	if m.Mode == "" || t.ID == "0" {
 		return
 	}
-	m.mu.RLock()
-	tabs := m.sortedTabs()
-	m.mu.RUnlock()
-	// Skip tab 0 (the -R CLI flag, implicit on every launch). sortedTabs
-	// returns in ID order so tab 0 is always first if present.
-	if len(tabs) > 0 && tabs[0].ID == "0" {
-		tabs = tabs[1:]
+	if err := write(PersistedTab{Path: t.Path, Mode: m.Mode, Host: m.Host}); err != nil {
+		log.Printf("failed to persist tabs: %v", err)
 	}
-	out := make([]PersistedTab, len(tabs))
-	for i, t := range tabs {
-		out[i] = PersistedTab{Path: t.Path, Mode: m.Mode, Host: m.Host}
+}
+
+// RestoreTabs reopens the tabs persisted by earlier sessions with this Mode+Host,
+// skipping ones already open. Best-effort: a tab that doesn't resolve is logged,
+// skipped, and kept for the next launch. Runs before serving.
+func (m *TabManager) RestoreTabs() {
+	resolved := map[PersistedTab]string{}
+	for _, pt := range ReadPersistedTabs() {
+		if pt.Mode != m.Mode || pt.Host != m.Host {
+			continue
+		}
+		root, err := m.resolve(pt.Path)
+		if err != nil {
+			log.Printf("skipping persisted tab %s: %v", pt.Path, err)
+			resolved[pt] = ""
+			continue
+		}
+		resolved[pt] = root
+		if m.FindByPath(root) != nil {
+			continue // already open (is the -R startup tab)
+		}
+		m.AddTab(m.newTab(root), root)
 	}
-	if err := SetOpenTabs(m.Mode, m.Host, out); err != nil {
+	if err := RecordRestore(resolved); err != nil {
 		log.Printf("failed to persist tabs: %v", err)
 	}
 }
@@ -436,7 +450,7 @@ func (m *TabManager) writeTab(w http.ResponseWriter, t *Tab) {
 func (m *TabManager) handleClose(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Tab 0 is the -R startup tab — always present, never closeable.
-	// persistTabs() excludes it from config; closing it would break the
+	// persistTab() excludes it from state; closing it would break the
 	// "startup anchor" invariant and leave restored tabs with no primary.
 	if id == "0" {
 		writeJSONError(w, http.StatusBadRequest, "cannot close the startup tab")
@@ -461,7 +475,7 @@ func (m *TabManager) handleClose(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 	// Persist after response written — state I/O shouldn't delay the UI,
-	// and holding m.mu across SetOpenTabs would nest it with stateMu
+	// and holding m.mu across RemoveOpenTab would nest it with stateMu
 	// (harmless today but a lock-ordering smell).
-	m.tabsChanged()
+	m.tabsChanged(t, RemoveOpenTab)
 }

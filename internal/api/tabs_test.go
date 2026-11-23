@@ -527,8 +527,8 @@ func TestTabManager_ConfigAtTopLevel(t *testing.T) {
 }
 
 // TestTabPersistence exercises the create → state.json → close cycle.
-// persistTabs() skips tab 0 (it's the CLI -R flag, implicit on every launch)
-// and writes through SetOpenTabs (state.go) — config.json is never touched.
+// persistTab() skips tab 0 (it's the CLI -R flag, implicit on every launch)
+// and writes through AddOpenTab/RemoveOpenTab (state.go) — config.json is never touched.
 func TestTabPersistence(t *testing.T) {
 	withConfigDir(t)
 
@@ -539,7 +539,7 @@ func TestTabPersistence(t *testing.T) {
 	}
 	resolve := func(p string) (string, error) { return p, nil }
 	tm := NewTabManager(newTab, resolve)
-	tm.Mode = "local" // empty → persistTabs no-ops
+	tm.Mode = "local" // empty → persistTab no-ops
 	r := testutil.NewMockRunner(t)
 	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
 	tm.AddTab(NewServer(r, ""), "/startup-repo") // tab 0
@@ -572,8 +572,57 @@ func TestTabPersistence(t *testing.T) {
 	assert.Equal(t, "/repo-b", got[0].Path)
 }
 
+// A tab that can't be restored this time (unmounted drive, host down) is still there
+// after other tabs are opened and closed.
+func TestRestoreTabs_FailedTabSurvives(t *testing.T) {
+	withConfigDir(t)
+	newTab := func(string) *Server {
+		r := testutil.NewMockRunner(t)
+		r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
+		return NewServer(r, "")
+	}
+	mounted := false
+	resolve := func(p string) (string, error) {
+		if p == "/mnt/repo" && !mounted {
+			return "", errors.New("not a jj repository")
+		}
+		return p, nil
+	}
+	launch := func() *TabManager {
+		tm := NewTabManager(newTab, resolve)
+		tm.Mode = "local"
+		tm.AddTab(newTab(""), "/startup-repo")
+		tm.RestoreTabs()
+		return tm
+	}
+	paths := func(tm *TabManager) (out []string) {
+		for _, r := range tm.TabRefs() {
+			out = append(out, r.Path)
+		}
+		return out
+	}
+	do := func(tm *TabManager, req *http.Request) {
+		w := httptest.NewRecorder()
+		tm.Mux.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	}
+	for _, p := range []string{"/mnt/repo", "/other", "/startup-repo"} {
+		require.NoError(t, AddOpenTab(PersistedTab{Path: p, Mode: "local"}))
+	}
+	require.NoError(t, AddOpenTab(PersistedTab{Path: "/theirs", Mode: "ssh", Host: "h"}))
+
+	tm := launch()
+	assert.Equal(t, []string{"/startup-repo", "/other"}, paths(tm))
+	do(tm, jsonPost("/tabs", []byte(`{"path":"/new"}`)))
+	do(tm, httptest.NewRequest("DELETE", "/tabs/1", nil)) // /other
+
+	mounted = true
+	assert.Equal(t, []string{"/startup-repo", "/mnt/repo", "/new"}, paths(launch()))
+	assert.Zero(t, ReadPersistedTabs()[0].Failures)
+}
+
 func TestTabPersistence_ModeEmptySkips(t *testing.T) {
-	// Tests leave Mode="" — persistTabs should no-op. Otherwise every existing
+	// Tests leave Mode="" — persistTab should no-op. Otherwise every existing
 	// tabs_test.go case would suddenly require a withConfigDir(t) call.
 	configFile := withConfigDir(t)
 	stateFile := filepath.Join(filepath.Dir(configFile), "state.json")
@@ -593,7 +642,7 @@ func TestTabPersistence_ModeEmptySkips(t *testing.T) {
 	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/x"}`)))
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// State file should not exist — persistTabs() returned early.
+	// State file should not exist — persistTab() returned early.
 	_, err := os.Stat(stateFile)
 	assert.True(t, os.IsNotExist(err), "Mode=\"\" should skip state write, got file at %s", stateFile)
 }
@@ -621,7 +670,7 @@ func TestTabPersistence_NeverTouchesConfig(t *testing.T) {
 	r.Allow(jj.CurrentOpId()).SetOutput([]byte("op"))
 	tm.AddTab(NewServer(r, ""), "/startup-repo")
 
-	// Open then close a tab — both persistTabs() call sites fire.
+	// Open then close a tab — both persistTab() call sites fire.
 	w := httptest.NewRecorder()
 	tm.Mux.ServeHTTP(w, jsonPost("/tabs", []byte(`{"path":"/repo-a"}`)))
 	require.Equal(t, http.StatusOK, w.Code)

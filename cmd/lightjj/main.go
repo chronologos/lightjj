@@ -251,7 +251,7 @@ func main() {
 	//      comment template (values preserved via patchConfigKeys).
 	//   2. Legacy machine-state keys (openTabs, recentActions) move out of
 	//      config.json into state.json. Must run BEFORE ReadPersistedTabs
-	//      below or existing users' tabs wouldn't restore on first launch
+	//      (RestoreTabs, below) or existing users' tabs wouldn't restore on first launch
 	//      after the upgrade.
 	api.MigrateConfigIfNeeded()
 	api.MigrateStateIfNeeded()
@@ -276,20 +276,7 @@ func main() {
 	// paths, and an ssh session on hostA doesn't try to open hostB's paths
 	// (both would either fail or, worse, silently open the wrong repo if
 	// the path happens to exist).
-	for _, pt := range api.ReadPersistedTabs() {
-		if pt.Mode != tm.Mode || pt.Host != tm.Host {
-			continue
-		}
-		root, err := resolve(pt.Path)
-		if err != nil {
-			log.Printf("skipping persisted tab %s: %v", pt.Path, err)
-			continue
-		}
-		if tm.FindByPath(root) != nil {
-			continue // already open (is the -R startup tab)
-		}
-		tm.AddTab(newTab(root), root)
-	}
+	tm.RestoreTabs()
 
 	// Serve frontend assets. The handler is build-tag-selected:
 	//   `go build -tags embed` → embeds frontend-dist (release path)

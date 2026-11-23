@@ -242,7 +242,7 @@ func readOrTemplate(path string) ([]byte, error) {
 
 // Tab persistence (openTabs) and recency timestamps (recentActions) used to
 // live in config.json; they are machine-written state and now live in
-// state.json — see state.go (PersistedTab, SetOpenTabs, ReadPersistedTabs,
+// state.json — see state.go (PersistedTab, AddOpenTab, ReadPersistedTabs,
 // SetRecentActions). MigrateStateIfNeeded moves legacy keys over on startup.
 
 // handleConfigGetRaw returns the config file bytes verbatim as text/plain.

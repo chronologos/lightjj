@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -31,10 +32,8 @@ import (
 // stateMu serializes read-modify-write cycles on state.json within this
 // process. atomicWriteFile prevents torn writes but NOT lost updates (two
 // concurrent writers both read v1, each merges its delta, last rename wins) —
-// the mutex prevents those, same rule as configMu/annMu. Cross-PROCESS races
-// (two lightjj instances) are not serialized; the per-section setters confine
-// the damage to one section, and SetOpenTabs additionally filter-merges by
-// session so another process's tabs survive.
+// the mutex prevents those, same rule as configMu/annMu. updateState also takes a
+// file lock, so concurrent lightjj processes don't lose each other's updates.
 var stateMu sync.Mutex
 
 func statePath() (string, error) {
@@ -54,6 +53,8 @@ type PersistedTab struct {
 	Path string `json:"path"`
 	Mode string `json:"mode"`           // "local" | "ssh"
 	Host string `json:"host,omitempty"` // full user@host for ssh; empty for local
+	// Failures counts launches in a row that couldn't restore it (RecordRestore).
+	Failures int `json:"failures,omitempty"`
 }
 
 // recentActionsState maps namespace → key → last-used Unix-millis timestamp.
@@ -111,25 +112,76 @@ func writeStateLocked(st appState) error {
 	return atomicWriteFile(path, data)
 }
 
-// SetOpenTabs replaces this session's openTabs entries in state.json WITHOUT
-// stomping other sessions' entries. A filter-merge: entries matching
-// (mode, host) are replaced with `tabs`; entries for other sessions pass
-// through untouched. Two `lightjj --remote` processes on hostA/hostB share
-// one state.json — a whole-array overwrite would lose the other's state on
-// every tab open.
-func SetOpenTabs(mode, host string, tabs []PersistedTab) error {
+// updateState is the read-modify-write of state.json.
+func updateState(fn func(st *appState)) error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
-	st := readStateLocked()
-	kept := st.OpenTabs[:0]
-	for _, pt := range st.OpenTabs {
-		if pt.Mode == mode && pt.Host == host {
-			continue
-		}
-		kept = append(kept, pt)
+	path, err := statePath()
+	if err != nil {
+		return err
 	}
-	st.OpenTabs = append(kept, tabs...)
+	unlock, err := lockFile(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	st := readStateLocked()
+	fn(&st)
 	return writeStateLocked(st)
+}
+
+// same reports whether two entries name the same tab. Mode and Host are part of the
+// identity: sessions on different hosts share this file.
+func (pt PersistedTab) same(o PersistedTab) bool {
+	return pt.Path == o.Path && pt.Mode == o.Mode && pt.Host == o.Host
+}
+
+// AddOpenTab / RemoveOpenTab record one tab being opened or closed. Deltas, not the
+// session's whole list: an entry that failed to restore, or that another local
+// instance has open, is not ours to drop.
+func AddOpenTab(pt PersistedTab) error {
+	return updateState(func(st *appState) {
+		if !slices.ContainsFunc(st.OpenTabs, pt.same) {
+			st.OpenTabs = append(st.OpenTabs, pt)
+		}
+	})
+}
+
+func RemoveOpenTab(pt PersistedTab) error {
+	return updateState(func(st *appState) { st.OpenTabs = slices.DeleteFunc(st.OpenTabs, pt.same) })
+}
+
+// maxRestoreFailures: launches in a row a tab may fail to restore before it is
+// forgotten. A failed tab has no close button, so something must end it; an unmounted
+// drive or an unreachable host must not.
+const maxRestoreFailures = 10
+
+// RecordRestore stores the outcome of a launch's restore attempts. resolved maps each
+// attempted entry to its canonical path, "" = failed.
+func RecordRestore(resolved map[PersistedTab]string) error {
+	if len(resolved) == 0 {
+		return nil
+	}
+	return updateState(func(st *appState) {
+		kept := make([]PersistedTab, 0, len(st.OpenTabs))
+		for _, pt := range st.OpenTabs {
+			root, tried := resolved[pt]
+			switch {
+			case !tried:
+			case root != "":
+				pt.Path, pt.Failures = root, 0
+			default:
+				if pt.Failures++; pt.Failures >= maxRestoreFailures {
+					log.Printf("forgetting tab %s: not restorable for %d launches", pt.Path, pt.Failures)
+					continue
+				}
+			}
+			if !slices.ContainsFunc(kept, pt.same) {
+				kept = append(kept, pt)
+			}
+		}
+		st.OpenTabs = kept
+	})
 }
 
 // ReadPersistedTabs returns the openTabs array from state.json, or an empty
@@ -146,11 +198,7 @@ func ReadPersistedTabs() []PersistedTab {
 // section replace is the intended semantic — last writer wins, acceptable for
 // recency data.
 func SetRecentActions(ra map[string]map[string]int64) error {
-	stateMu.Lock()
-	defer stateMu.Unlock()
-	st := readStateLocked()
-	st.RecentActions = ra
-	return writeStateLocked(st)
+	return updateState(func(st *appState) { st.RecentActions = ra })
 }
 
 // readRecentActions returns the recentActions section, never nil (JSON
@@ -223,16 +271,14 @@ func MigrateStateIfNeeded() {
 	}
 
 	// Import into state.json. Existing state sections win (see docstring).
-	stateMu.Lock()
-	st := readStateLocked()
-	if len(st.OpenTabs) == 0 {
-		st.OpenTabs = tabs
-	}
-	if len(st.RecentActions) == 0 {
-		st.RecentActions = ra
-	}
-	writeErr := writeStateLocked(st)
-	stateMu.Unlock()
+	writeErr := updateState(func(st *appState) {
+		if len(st.OpenTabs) == 0 {
+			st.OpenTabs = tabs
+		}
+		if len(st.RecentActions) == 0 {
+			st.RecentActions = ra
+		}
+	})
 	if writeErr != nil {
 		log.Printf("warning: cannot write state file during migration: %v", writeErr)
 		return // keep the keys in config.json so the data isn't lost

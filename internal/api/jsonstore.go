@@ -34,7 +34,8 @@ type hasID interface {
 // mutex would not prevent their lost updates. atomicWriteJSON prevents torn
 // writes but not lost updates; the mutex prevents lost updates. Per-collection
 // mutexes (rather than one shared global) keep the two stores' contention
-// independent; either would do for flat-file CRUD.
+// independent; either would do for flat-file CRUD. Other lightjj PROCESSES share the
+// files too: lock() also takes a file lock per store directory.
 type jsonCollection[T hasID] struct {
 	mu sync.Mutex
 
@@ -85,6 +86,25 @@ func (c *jsonCollection[T]) path(key string) (string, error) {
 	return p, nil
 }
 
+// storeLockName is the lock file in each store directory. One per directory, not per
+// key: keys come and go with the files they name.
+const storeLockName = ".lock"
+
+// lock resolves key's path and serializes a read-modify-write of it against this
+// process (mu) and others (file lock). Reads don't need it: writes are atomic renames.
+func (c *jsonCollection[T]) lock(key string) (path string, unlock func(), err error) {
+	if path, err = c.path(key); err != nil {
+		return "", nil, err
+	}
+	c.mu.Lock()
+	release, err := lockFile(filepath.Join(filepath.Dir(path), storeLockName))
+	if err != nil {
+		c.mu.Unlock()
+		return "", nil, &storeError{http.StatusInternalServerError, "lock failed: " + err.Error()}
+	}
+	return path, func() { release(); c.mu.Unlock() }, nil
+}
+
 // List returns the items stored under key — an empty (non-nil) slice when the
 // file is missing or zero-byte. An unreadable or unparseable file is an error,
 // so the UI can't present "no comments" for a file that holds some.
@@ -100,9 +120,7 @@ func (c *jsonCollection[T]) List(key string) ([]T, error) {
 // item (post-merge, post-stamp) so the HTTP response reflects what was
 // actually written.
 func (c *jsonCollection[T]) Upsert(key string, item T) (T, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	stored, err := c.upsertLocked(key, []T{item})
+	stored, err := c.UpsertBatch(key, []T{item})
 	if err != nil {
 		return item, err
 	}
@@ -113,17 +131,12 @@ func (c *jsonCollection[T]) Upsert(key string, item T) (T, error) {
 // concurrent single-item Upsert can't interleave between the read and the
 // write. All-or-nothing: nothing is written if the key is invalid or the
 // write fails. Callers validate item contents before calling.
-func (c *jsonCollection[T]) UpsertBatch(key string, items []T) ([]T, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.upsertLocked(key, items)
-}
-
-func (c *jsonCollection[T]) upsertLocked(key string, incoming []T) ([]T, error) {
-	path, err := c.path(key)
+func (c *jsonCollection[T]) UpsertBatch(key string, incoming []T) ([]T, error) {
+	path, unlock, err := c.lock(key)
 	if err != nil {
 		return nil, err
 	}
+	defer unlock()
 	items, err := readForWrite[T](path)
 	if err != nil {
 		return nil, err
@@ -159,12 +172,11 @@ func (c *jsonCollection[T]) mergeOne(items []T, item T) ([]T, T) {
 // the last item is removed, the file is deleted rather than left as an empty
 // array.
 func (c *jsonCollection[T]) Delete(key, id string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	path, err := c.path(key)
+	path, unlock, err := c.lock(key)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	match := c.deleteMatch
 	if match == nil {
 		match = func(item T, id string) bool { return item.GetID() == id }
@@ -186,12 +198,11 @@ func (c *jsonCollection[T]) Delete(key, id string) error {
 // DeleteAll removes the whole file for key (clear all). A missing file is
 // success — best-effort semantics.
 func (c *jsonCollection[T]) DeleteAll(key string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	path, err := c.path(key)
+	path, unlock, err := c.lock(key)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	return removeStoreFile(path)
 }
 

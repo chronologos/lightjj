@@ -106,3 +106,10 @@ func TestQuoteRemotePath(t *testing.T) {
 	// to shellQuote — jj will error with a clear message, which is fine.
 	assert.Equal(t, `'~alice/repo'`, quoteRemotePath("~alice/repo"))
 }
+
+func TestResolveRootCmd(t *testing.T) {
+	// The @ probe comes first: `workspace root` alone succeeds in a forgotten workspace.
+	assert.Equal(t,
+		`jj -R "$HOME"/'re po' log -r @ --no-graph --ignore-working-copy --color never -T '""' && jj -R "$HOME"/'re po' workspace root`,
+		resolveRootCmd("~/re po"))
+}
