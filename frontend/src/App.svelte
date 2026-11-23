@@ -413,6 +413,7 @@
   let destInputOpen: boolean = $state(false)
   let gitModalOpen: boolean = $state(false)
   let configModalOpen: boolean = $state(false)
+  let configModalRef: ReturnType<typeof ConfigModal> | undefined = $state()
   const rebase = createRebaseMode()
   const squash = createSquashMode()
   const split = createSplitMode()
@@ -973,14 +974,7 @@
 
     // View (non-dynamic)
     { label: 'Edit config (JSON)…', category: 'View', hint: 'theme, fonts, editorArgs', action: () => { closeAllModals(); configModalOpen = true } },
-    // Route through DiffPanel's toggleSplitView when it's mounted — its confirm
-    // guards an open FileEditor's buffer (unified unmounts the editor); a direct
-    // config.splitView write would bypass that and silently discard edits. No
-    // DiffPanel (branches/merge view) → nothing can be editing → plain toggle.
-    { label: 'Toggle split/unified diff', shortcut: '|', category: 'View', action: () => {
-      if (diffPanelRef) diffPanelRef.toggleSplitView()
-      else config.splitView = !config.splitView
-    }, when: () => !fileHistoryPath },
+    { label: 'Toggle split/unified diff', shortcut: '|', category: 'View', action: () => { config.splitView = !config.splitView }, when: () => !fileHistoryPath },
     { label: 'Browse files at revision', shortcut: 'F', category: 'View', hint: 'full tree, not just changed files', action: openFileTree, when: () => loadedTarget?.kind === 'single' },
     { label: 'Toggle operation log', shortcut: 'O', category: 'View', action: toggleOplog },
     { label: 'Toggle evolution log', shortcut: 'E', category: 'View', action: toggleEvolog, when: () => !!selectedRevision },
@@ -2810,6 +2804,12 @@
       : null
   })
 
+  function openPalette() {
+    if (configModalOpen && !configModalRef?.requestClose()) return
+    closeModals()
+    paletteOpen = true
+  }
+
   function closeModals() {
     fileHistoryPath = null
     fileTree = null
@@ -3045,8 +3045,7 @@
       e.preventDefault()
       // closeModals not closeAllModals — Cmd+K during rebase opens the palette
       // WITHOUT cancelling the rebase; closing it returns you to rebase mode.
-      closeModals()
-      paletteOpen = true
+      openPalette()
       return true
     }
     // Gate preventDefault on diffPanelRef + !overlay — otherwise branches view
@@ -3249,9 +3248,9 @@
       case '}': e.preventDefault(); if (diffPanelRef?.stepAnnotation(1) === false) setMessage({ kind: 'warning', text: 'No annotations on this revision' }); break
       case '{': e.preventDefault(); if (diffPanelRef?.stepAnnotation(-1) === false) setMessage({ kind: 'warning', text: 'No annotations on this revision' }); break
       case 'C': e.preventDefault(); diffPanelRef?.cycleVisibility(); break
-      // '|' = split/unified everywhere (here via DiffPanel's editor-buffer
-      // guard; FileHistoryPanel/FileComparePicker handle it locally).
-      case '|': e.preventDefault(); diffPanelRef?.toggleSplitView(); break
+      // '|' = split/unified everywhere (FileHistoryPanel/FileComparePicker handle it
+      // locally).
+      case '|': e.preventDefault(); if (diffPanelRef) config.splitView = !config.splitView; break
       case 'm': e.preventDefault(); diffPanelRef?.togglePreviewActive(); break
       case 'E': e.preventDefault(); if (goLog()) toggleEvolog(); break
       case 'O': e.preventDefault(); if (goLog()) toggleOplog(); break
@@ -3623,7 +3622,7 @@
           title="Evolution log — how this change evolved (5)"
         >◐ Evolog <kbd class="nav-hint">5</kbd></button>
         <span class="toolbar-divider"></span>
-        <button class="toolbar-search" onclick={() => { closeModals(); paletteOpen = true }} title="Command palette ({cmdKey}K)">
+        <button class="toolbar-search" onclick={openPalette} title="Command palette ({cmdKey}K)">
           <span class="toolbar-search-text">Search…</span>
           <kbd class="toolbar-search-kbd">{cmdKey}K</kbd>
         </button>
@@ -4108,6 +4107,7 @@
   {/if}
 
   <ConfigModal
+    bind:this={configModalRef}
     open={configModalOpen}
     onclose={() => configModalOpen = false}
     onerror={(e) => setMessage(errorMessage(e))}

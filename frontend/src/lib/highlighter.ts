@@ -1,5 +1,6 @@
 import { highlightCode, classHighlighter } from '@lezer/highlight'
 import { PARSERS } from './languages'
+import type { WordSpan } from './word-diff'
 
 // tok-* classes that name an identifier-ish token. Spans matching any of these
 // get a presence-only `data-sym` marker so DiffFileView's delegated pointermove
@@ -51,6 +52,32 @@ export function highlightLines(lines: string[], lang: string): string[] {
   // but a length mismatch would render literal "undefined" via {@html}, so
   // assert cheaply.
   return out.length === lines.length ? out : lines.map(escapeHtml)
+}
+
+/** Overlay word-diff spans on highlightLines() HTML: changed text gets a
+ *  `word-change` span, opened and closed inside each syntax span so tags nest.
+ *  `skip` = leading characters of `html` the spans don't cover (the +/- prefix). */
+export function markChanged(html: string, spans: readonly WordSpan[], skip: number): string {
+  let out = '', i = 0, next = 0, left = skip, changed = false, open = false
+  while (i < html.length) {
+    if (html[i] === '<') {
+      if (open) { out += '</span>'; open = false }
+      const end = html.indexOf('>', i) + 1
+      out += html.slice(i, end)
+      i = end
+      continue
+    }
+    while (left === 0) {
+      changed = spans[next]?.changed ?? false
+      left = spans[next++]?.text.length ?? Infinity
+    }
+    if (changed !== open) { out += changed ? '<span class="word-change">' : '</span>'; open = changed }
+    const ch = html[i] === '&' ? html.slice(i, html.indexOf(';', i) + 1) : html[i] // an entity is one character
+    out += ch
+    i += ch.length
+    left--
+  }
+  return open ? out + '</span>' : out
 }
 
 export function escapeHtml(s: string): string {

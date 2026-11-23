@@ -45,6 +45,19 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('DiffFileView', () => {
+  it.each([false, true])('a syntax-highlighted line still shows its word diff (split=%s)', (splitView) => {
+    const file = makeFile('w.go', [{ type: 'remove', content: '-return a' }, { type: 'add', content: '+return b' }])
+    const spans = (w: string): WordSpan[] => [{ text: 'return ', changed: false }, { text: w, changed: true }]
+    const hl = (p: string, w: string) => `<span class="diff-prefix">${p}</span><span class="tok-keyword">return</span> <span class="tok-variableName" data-sym>${w}</span>`
+    const { container } = render(DiffFileView, { props: defaultProps({
+      file, splitView,
+      highlightedLines: new Map([['w.go:0:0', hl('-', 'a')], ['w.go:0:1', hl('+', 'b')]]),
+      wordDiffs: new Map([['0', new Map([[0, spans('a')], [1, spans('b')]])]]),
+    }) })
+    expect([...container.querySelectorAll('.word-change')].map(e => e.textContent)).toEqual(['a', 'b'])
+    expect(container.querySelectorAll('.tok-keyword')).toHaveLength(2)
+  })
+
   describe('conflict indicator', () => {
     it('shows conflict count when file has conflict', () => {
       const file = makeFile('conflict.go', [

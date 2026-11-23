@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { highlightLines } from './highlighter'
+import { highlightLines, markChanged, escapeHtml } from './highlighter'
+import { computeWordDiffs } from './word-diff'
+import fc from 'fast-check'
 import { detectLanguage, ensureLegacyParsers } from './languages'
 
 describe('detectLanguage', () => {
@@ -216,3 +218,39 @@ describe('highlightLines', () => {
     expect(Array.isArray(result)).toBe(true)
   })
 })
+
+describe('markChanged', () => {
+  const text = (html: string) => { const d = document.createElement('div'); d.innerHTML = html; return d }
+  const marked = (html: string) => [...text(html).querySelectorAll('.word-change')].map(e => e.textContent).join('')
+
+  it('marks inside syntax spans, keeping tags nested', () => {
+    expect(markChanged('<b>+</b><i class="k">return</i> <i class="n">abc</i>', [
+      { text: 'ret', changed: false }, { text: 'urn a', changed: true }, { text: 'bc', changed: false },
+    ], 1)).toBe('<b>+</b><i class="k">ret<span class="word-change">urn</span></i><span class="word-change"> </span><i class="n"><span class="word-change">a</span>bc</i>')
+  })
+
+  it('counts an entity as one character', () => {
+    expect(markChanged('a&lt;b&amp;c', [{ text: 'a<', changed: false }, { text: 'b&', changed: true }, { text: 'c', changed: false }], 0))
+      .toBe('a&lt;<span class="word-change">b&amp;</span>c')
+  })
+
+  it('real lines: text unchanged, exactly the changed words marked, symbols intact', () => {
+    const word = fc.constantFrom('const', 'x', '=', '<div>', '"a&b"', 'foo()', '// c', '  ', '日本', '😀')
+    const line = fc.array(word, { maxLength: 8 }).map(w => w.join(' '))
+    fc.assert(fc.property(line, line, (a, b) => {
+      const lines = [{ type: 'remove' as const, content: '-' + a }, { type: 'add' as const, content: '+' + b }]
+      const spans = computeWordDiffs({ header: '', oldStart: 1, newStart: 1, newCount: 1, lines })
+      const hl = highlightLines([a, b], 'typescript')
+      ;[a, b].forEach((src, i) => {
+        const html = `<span class="diff-prefix">${lines[i].content[0]}</span>${hl[i]}`
+        const out = markChanged(html, spans.get(i)!, 1)
+        expect(text(out).textContent).toBe(lines[i].content)
+        expect(marked(out)).toBe(spans.get(i)!.filter(s => s.changed).map(s => s.text).join(''))
+        const syms = (h: string) => [...text(h).querySelectorAll('[data-sym]')].map(e => e.textContent)
+        expect(syms(out)).toEqual(syms(html))
+        expect(out.replace(/<span class="word-change">/g, '').length).toBeGreaterThanOrEqual(escapeHtml(src).length)
+      })
+    }))
+  })
+})
+

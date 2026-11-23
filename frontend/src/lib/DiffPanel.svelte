@@ -250,7 +250,6 @@
     getMutationLock: () => onjjmutation,
     getOnFileSaved: () => onfilesaved,
     revealFile: (path) => revealFile(path),
-    ensureSplitView: () => { if (!splitView) splitView = true },
     setScrollTop: (v) => { if (panelContentEl) panelContentEl.scrollTop = v },
   })
 
@@ -547,14 +546,11 @@
     }
     return m
   })
-  // Intersect with current diff so a file marked-reviewed-then-removed
-  // doesn't push N > M (annotations persist per changeId across rewrites).
-  let reviewedCount = $derived(parsedDiff.filter(f => annotations.isReviewed(f.filePath)).length)
 
   function scrollToReview(r: PlacedReview) {
     if (r.anchor.kind !== 'diff') return
     vis.overrides.set(r.id, true)
-    const file = parsedDiff.find(f => f.filePath === r.anchor.filePath)
+    const file = renderFiles.find(f => f.filePath === r.anchor.filePath)
     const hi = file ? hunkIndexForLine(file.hunks, r.line ?? 0, r.anchor.side) : -1
     if (hi >= 0) scrollToHunk(r.anchor.filePath, hi)
     else scrollToFile(r.anchor.filePath)
@@ -588,7 +584,7 @@
   // parsedDiff (annotations persist per changeId across rewrites — files that
   // left the diff would otherwise sort to end and dead-step `}`).
   let navAnnotations = $derived.by(() => {
-    const fileOrder = new Map(parsedDiff.map((f, i) => [f.filePath, i]))
+    const fileOrder = new Map(renderFiles.map((f, i) => [f.filePath, i]))
     return annotations.placed
       .filter(r => r.anchor.kind === 'diff' && !r.resolution && !r.orphaned
         && r.anchor.line !== FILE_LEVEL && !isReviewedReview(r)
@@ -693,19 +689,7 @@
   // restore on immutable; hide, don't invite the error).
   let canMutateFiles = $derived(diffTarget?.kind === 'single' && !diffTarget.immutable)
 
-  /** Toggle split/unified. Switching to unified unmounts the inline FileEditor
-   *  (it only renders in the split branch), destroying CodeMirror's live buffer
-   *  — and editFileContents holds only the pre-edit original, NOT in-progress
-   *  edits, so they're lost, not recovered on toggle-back. Confirm first when
-   *  editing, mirroring startMerge's discard guard. (Conflict files became
-   *  editable via quickResolve/startMerge's N-way fallback, which newly exposes
-   *  this; non-conflict edits had it latently too.)
-   *  Exported: App's Cmd+K "Toggle split/unified diff" must route through this
-   *  same confirm — a direct config.splitView write reaches the $bindable and
-   *  silently discards the buffer (the palette is reachable while focus is in
-   *  the editor, since Cmd+K is gated before isInInput). */
-  export function toggleSplitView() {
-    if (unsaved && !unsaved.confirmDiscard('selection')) return
+  function toggleSplitView() {
     splitView = !splitView
   }
 
@@ -779,7 +763,13 @@
     },
     new Map<string, DiffFile>(),
   )
-  let conflictFileDiffs = $derived(conflictFetch.value)
+  let conflictFiles = $derived(conflictOnlyFiles.flatMap(f => conflictFetch.value.get(f.path) ?? []))
+  const isConflictOnly = (path: string) => conflictFiles.some(f => f.filePath === path)
+  // Everything that renders, in order. Same array as parsedDiff in the common case.
+  let renderFiles = $derived(conflictFiles.length > 0 ? [...parsedDiff, ...conflictFiles] : parsedDiff)
+  // Intersect with current diff so a file marked-reviewed-then-removed
+  // doesn't push N > M (annotations persist per changeId across rewrites).
+  let reviewedCount = $derived(renderFiles.filter(f => annotations.isReviewed(f.filePath)).length)
 
   // Dedup key — prevents refetch when loadLog → diff.set writes a fresh
   // diffTarget object with the same commitId inside. NOT a validity key
@@ -1264,6 +1254,7 @@
   // stronger than the old pinned-at-collapse-time defense).
   function autoCollapsed(file: DiffFile): boolean {
     if (fileActions.previewContents.has(file.filePath) || fileActions.editingFiles.has(file.filePath)) return false
+    if (isConflictOnly(file.filePath)) return false
     if (fileLineCount(file) > AUTO_COLLAPSE_LINE_LIMIT || isOversize(file)) return true
     return totalDiffLines > AUTO_COLLAPSE_TOTAL_LINES
   }
@@ -1277,11 +1268,6 @@
     if (pinnedExpanded.has(file.filePath)) return false
     return autoCollapsed(file)
   }
-  // Conflict-only files (not in parsedDiff) are never auto-collapsed —
-  // explicit intent only. Mirrors the pre-derived behavior.
-  function isConflictFileCollapsed(path: string): boolean {
-    return userExpanded.has(path) ? false : userCollapsed.has(path)
-  }
 
   // Bodies of files past this many cumulative diff lines from the top mount
   // lazily: they render an estimated-height placeholder until the observer
@@ -1294,7 +1280,7 @@
   let eagerMountPaths = $derived.by(() => {
     const out = new Set<string>()
     let lines = 0
-    for (const f of parsedDiff) {
+    for (const f of renderFiles) {
       out.add(f.filePath)
       lines += fileLineCount(f)
       if (lines >= EAGER_MOUNT_LINES && out.size >= 2) break
@@ -1360,7 +1346,7 @@
     // what CREATES placeholders for previously-collapsed files — without
     // these deps the observer from nav time, built when every file was
     // collapsed and no placeholder existed, never sees them).
-    void parsedDiff
+    void renderFiles
     void mountedFiles.size
     void eagerMountPaths
     void userExpanded.size
@@ -1449,9 +1435,9 @@
 
   // --- Collapse helpers ---
   function toggleFile(path: string) {
-    const file = parsedDiff.find(f => f.filePath === path)
-    const collapsed = file ? isFileCollapsed(file) : isConflictFileCollapsed(path)
-    if (collapsed) {
+    const file = renderFiles.find(f => f.filePath === path)
+    if (!file) return
+    if (isFileCollapsed(file)) {
       userCollapsed.delete(path)
       userExpanded.add(path)
       mountedFiles.add(path) // user asked to see it — mount immediately
@@ -1466,14 +1452,12 @@
     // Skip files with an open inline editor — collapsing unmounts FileEditor
     // and silently discards the unsaved CM6 buffer (same loss toggleSplitView
     // and startMerge confirm against).
-    for (const f of parsedDiff) { if (!fileActions.editingFiles.has(f.filePath)) userCollapsed.add(f.filePath) }
-    for (const cf of conflictOnlyFiles) { if (!fileActions.editingFiles.has(cf.path)) userCollapsed.add(cf.path) }
+    for (const f of renderFiles) { if (!fileActions.editingFiles.has(f.filePath)) userCollapsed.add(f.filePath) }
   }
 
   function expandAll() {
     userCollapsed.clear()
-    for (const f of parsedDiff) userExpanded.add(f.filePath)
-    for (const cf of conflictOnlyFiles) userExpanded.add(cf.path)
+    for (const f of renderFiles) userExpanded.add(f.filePath)
     // Bodies still mount lazily (placeholder + observer) — expand-all stays
     // O(visible), not O(total diff size).
   }
@@ -1582,12 +1566,7 @@
     const query = searchQuery.toLowerCase()
     const matches: SearchMatch[] = []
     for (const file of effectiveFiles) findMatchesInFile(file, query, matches)
-    // Include conflict-only files (not in parsedDiff)
-    for (const file of conflictFileDiffs.values()) {
-      if (!effectiveFiles.some(f => f.filePath === file.filePath)) {
-        findMatchesInFile(file, query, matches)
-      }
-    }
+    for (const file of conflictFiles) findMatchesInFile(file, query, matches)
     return matches
   })
 
@@ -1686,8 +1665,7 @@
   // Defers DOM query with rAF so Svelte can flush new elements first.
   $effect(() => {
     const container = panelContentEl
-    const diff = parsedDiff // track dependency
-    void conflictFileDiffs // track — async-loaded headers need observing too
+    const diff = renderFiles // track dependency
     if (!container || diff.length === 0) { activeFilePath = null; return }
 
     let observer: IntersectionObserver | null = null
@@ -1777,7 +1755,7 @@
   {/if}
   {#if diffTarget?.kind === 'single' && (severityCounts.size > 0 || orphanedReviews.length > 0 || reviewedCount > 0 || vis.hiddenAuthors.size > 0)}
     <div class="annotations-bar">
-      {#if reviewedCount > 0}<span class="reviewed-progress" title="{reviewedCount} of {parsedDiff.length} files reviewed">✓ {reviewedCount}/{parsedDiff.length}</span>{/if}
+      {#if reviewedCount > 0}<span class="reviewed-progress" title="{reviewedCount} of {renderFiles.length} files reviewed">✓ {reviewedCount}/{renderFiles.length}</span>{/if}
       {#if navAnnotations.length > 0}
         <!-- issue #25: discoverable surface for the existing `{`/`}` step nav.
              Counter toggles the ReviewJumpList dropdown (SearchResults sibling). -->
@@ -1832,8 +1810,7 @@
          sets can hold stale paths (sameChange rewrite drops a file; cache
          restore after a rebase) which must not stick the button on
          "Expand all" while every visible file is already expanded. -->
-    {@const anyCollapsed = parsedDiff.some(f => isFileCollapsed(f))
-      || conflictOnlyFiles.some(cf => isConflictFileCollapsed(cf.path))}
+    {@const anyCollapsed = renderFiles.some(f => isFileCollapsed(f))}
     <div class="diff-toolbar">
       <div class="diff-toolbar-left">
         <button
@@ -1936,8 +1913,11 @@
         </div>
       {/if}
       <div class="diff-content">
-        {#each parsedDiff as file (file.filePath)}
+        {#each renderFiles as file (file.filePath)}
           {@const filePath = file.filePath}
+          <!-- Not in the diff: no context to expand, nothing to restore, no real hunks to
+               review. Opens the editor only through the resolve fallback. -->
+          {@const conflictOnly = isConflictOnly(filePath)}
           {@const expanded = expandedByPath.get(filePath)}
           {@const effectiveFile = expanded?.file ?? file}
           <!-- N hunks → N+1 gaps; `file` = parsedDiff original (pre-merge) -->
@@ -1947,10 +1927,10 @@
             fileStats={fileStatsMap.get(filePath)}
             isCollapsed={isFileCollapsed(file)}
             bodyDeferred={isBodyDeferred(filePath)}
-            isExpanded={allRevealed}
+            isExpanded={conflictOnly || allRevealed}
             gapMap={expanded?.gapMap}
             splitView={hunkReview ? false : splitView}
-            {hunkReview}
+            hunkReview={conflictOnly ? null : hunkReview}
             {symbolHover}
             highlightedLines={highlights.byFile.get(filePath) ?? EMPTY_HL}
             wordDiffs={wordDiffs.byFile.get(filePath) ?? EMPTY_WD}
@@ -1961,7 +1941,7 @@
             editing={fileActions.editingFiles.has(filePath)}
             editContent={fileActions.editFileContents.get(filePath)}
             editBusy={fileActions.editBusy.has(filePath)}
-            onedit={canMutateFiles ? fileActions.startEdit : undefined}
+            onedit={canMutateFiles && !conflictOnly ? fileActions.startEdit : undefined}
             onpreview={previewCommitId && !hunkReview ? fileActions.togglePreview : undefined}
             previewContent={fileActions.previewContents.get(filePath)}
             previewRevision={diffTarget?.kind === 'single' ? diffTarget.changeId : previewCommitId}
@@ -1970,7 +1950,7 @@
             imageBaseNote={imageBase.note}
             onmerge={canMutateFiles ? fileActions.startMerge : undefined}
             onresolveconflict={canMutateFiles ? fileActions.quickResolve : undefined}
-            ondiscard={canMutateFiles ? fileActions.discardFile : undefined}
+            ondiscard={canMutateFiles && !conflictOnly ? fileActions.discardFile : undefined}
             onsavefile={fileActions.saveFile}
             oncanceledit={fileActions.cancelEdit}
             onlinecontext={openDiffLineContextMenu}
@@ -1999,48 +1979,14 @@
             />
           {/if}
         {/each}
-        {#each conflictOnlyFiles as cf (cf.path)}
-          {@const conflictFile = conflictFileDiffs.get(cf.path)}
-          {#if conflictFile}
-            <!-- editing props (editBusy/editing/editContent/onsavefile/oncanceledit)
-                 mirror the main branch so the resolve/merge null-sides fallback
-                 (openFileEditor for N-way/git-style conflicts) actually renders here
-                 instead of dead-ending, and the quick-resolve buttons get editBusy
-                 feedback. onedit is intentionally omitted — conflict-only files open
-                 the editor only via that fallback, never a free Edit button. -->
-            <DiffFileView
-              file={conflictFile}
-              fileStats={cf}
-              isCollapsed={isConflictFileCollapsed(cf.path)}
-              isExpanded={false}
-              {splitView}
-              {symbolHover}
-              highlightedLines={EMPTY_HL}
-              wordDiffs={EMPTY_WD}
-              ontoggle={toggleFile}
-              onexpand={expandGap}
-              onmerge={canMutateFiles ? fileActions.startMerge : undefined}
-              onresolveconflict={canMutateFiles ? fileActions.quickResolve : undefined}
-              editBusy={fileActions.editBusy.has(cf.path)}
-              editing={fileActions.editingFiles.has(cf.path)}
-              editContent={fileActions.editFileContents.get(cf.path)}
-              onsavefile={fileActions.saveFile}
-              oncanceledit={fileActions.cancelEdit}
-              searchMatches={matchesByFile.get(cf.path) ?? EMPTY_MATCHES}
-              {currentMatchIdx}
-              onlinecontext={openDiffLineContextMenu}
-              {oncontextmenu}
-              {onopenfile}
-            />
-          {:else}
-            <div class="diff-file" data-file-path={cf.path}>
-              <div class="conflict-file-header">
-                <span class="file-type-badge badge-C">C</span>
-                <span class="diff-file-path">{cf.path}</span>
-                <span class="conflict-loading">Loading...</span>
-              </div>
+        {#each conflictOnlyFiles.filter(f => !isConflictOnly(f.path)) as cf (cf.path)}
+          <div class="diff-file" data-file-path={cf.path}>
+            <div class="conflict-file-header">
+              <span class="file-type-badge badge-C">C</span>
+              <span class="diff-file-path">{cf.path}</span>
+              <span class="conflict-loading">Loading...</span>
             </div>
-          {/if}
+          </div>
         {/each}
         {#if diffTarget?.kind === 'single' && orphanedReviews.length > 0}
           <div class="orphan-row">

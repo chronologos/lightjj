@@ -84,7 +84,10 @@ lightjj api GET '/tab/0/api/annotations?changeId=xyzabc'
 
 # Post a diff-line review comment. Same store the user's Alt+click writes to.
 # severity: must-fix | suggestion | question | nitpick | reviewed
+# createdAtCommitId: the commit_id you read lineNum from — the comment follows its
+# line from there. Without it the line number is taken as-is.
 lightjj api POST /tab/0/api/annotations '{"id":"a1","changeId":"xyzabc",
+  "createdAtCommitId":"0123456789ab",
   "filePath":"src/main.go","lineNum":42,"lineContent":"func main() {",
   "comment":"missing error check","severity":"suggestion","author":"agent-name"}'
 ```

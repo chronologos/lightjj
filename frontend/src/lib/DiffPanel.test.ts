@@ -527,6 +527,32 @@ describe('DiffPanel', () => {
       expect(bodyText).not.toContain('A content')
     })
 
+    it('renders like any file, minus what needs a diff', async () => {
+      mockFileShow.mockResolvedValue({ content: 'one needle\ntwo\n' })
+      const { container, component } = render(DiffPanel, { props: props({
+        diffTarget: target('co-A', 'ch-X', { isWorkingCopy: true }),
+        diffContent: tinyDiff('a.go'),
+        changedFiles: [mkFile('a.go'), mkFile('conflict.go', { conflict: true, conflict_sides: 2 })],
+        hunkReview: { selected: new Set(), cursor: null, toggle: () => {} },
+      }) })
+      await settle()
+      const el = container.querySelector('[data-file-path="conflict.go"]')!
+      expect(el.textContent).toContain('one needle')
+      expect(el.querySelector('.hunk-check')).toBeNull()   // no fake hunk to accept
+      expect(el.querySelector('.expand-btn')).toBeNull()   // nothing behind it
+      const labels = [...el.querySelectorAll('button')].map(b => b.textContent?.trim())
+      expect(labels).not.toContain('Edit')
+      expect(labels).not.toContain('Discard')
+      expect(labels).toContain('◀ Ours')
+      component.openSearch()
+      await settle()
+      const input = container.querySelector('input') as HTMLInputElement
+      input.value = 'needle'
+      await fireEvent.input(input)
+      await settle()
+      expect(container.querySelector('[data-file-path="conflict.go"] [data-search-match-current]')).not.toBeNull()
+    })
+
     it('partial failure — allSettled keeps successful entries', async () => {
       mockFileShow
         .mockResolvedValueOnce({ content: 'good file' })
@@ -1168,9 +1194,8 @@ describe('DiffPanel', () => {
 
     it('conflict-ONLY file: N-way fallback opens the inline editor, not a dead-end (bug_003)', async () => {
       // conflicted.go is conflicted but absent from the diff (a.go is the diff) →
-      // renders in the thinner conflictOnlyFiles branch. Pre-fix, that branch
-      // omitted editing/editContent, so openFileEditor (the N-way fallback) set
-      // editingFiles but NO editor rendered — split flips, nothing appears.
+      // must render the editor too, or openFileEditor (the N-way fallback) sets
+      // editingFiles and nothing appears.
       mockEdit.mockResolvedValue(undefined)
       // Git-style markers → reconstructSides null → fallback. Serves both the
       // conflictFetch display-load and quickResolve's re-fetch.
@@ -1196,9 +1221,8 @@ describe('DiffPanel', () => {
 
       // Fallback: no blind write, and the actual EDITING SURFACE renders — not
       // just the Save button. Asserting `.split-editor` (the editor column) is
-      // the real check: conflicted files force unified view (effectiveSplit =
-      // splitView && !isConflict), so before the effectiveSplit-includes-editing
-      // fix the editor column never mounted → editorRef undefined → Save
+      // the real check: conflicted files force unified view, so if that won over
+      // editing the editor column would never mount → editorRef undefined → Save
       // permanently disabled. (The Save button alone gates on `editing`, so it
       // appeared even when the surface was a dead-end — the false-confidence trap.)
       expect(mockFileWrite).not.toHaveBeenCalled()
@@ -1238,65 +1262,28 @@ describe('DiffPanel', () => {
       expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'OURS', { expectChangeId: 'ch-A' })
     })
 
-    // The prompt is for unsaved TEXT, so the editor must actually be edited.
-    async function openEditedEditor() {
+    it.each([true, false])('an open editor survives every view change, unasked (split=%s)', async (start) => {
       mockFileShow.mockResolvedValue({ content: 'line1\nline2\n' })
-      const r = render(DiffPanel, {
-        props: props({ diffTarget: target('co-A', 'ch-A', { isWorkingCopy: true }) }),
-        context: new Map([[UNSAVED_KEY, createUnsaved()]]),
-      })
+      const p = (over = {}) => props({ diffTarget: target('co-A', 'ch-A', { isWorkingCopy: true }), diffContent: tinyDiff('a.go') + tinyDiff('b.go'), changedFiles: [mkFile('a.go'), mkFile('b.go')], splitView: start, ...over })
+      const { container, rerender } = render(DiffPanel, { props: p(), context: new Map([[UNSAVED_KEY, createUnsaved()]]) })
       await settle()
-      await fireEvent.click(editBtn(r.container)!)          // open editor (splitView → true)
+      await fireEvent.click(editBtn(container)!)
       await settle()
-      const edit = () => EditorView.findFromDOM(r.container.querySelector('.cm-editor') as HTMLElement)!.dispatch({ changes: { from: 0, insert: 'X' } })
-      return { ...r, edit }
-    }
-
-    it('toggleSplitView is exported and confirms — the Cmd+K palette path, not just the toolbar', async () => {
-      // App's "Toggle split/unified diff" palette command calls this export;
-      // writing config.splitView directly would reach the $bindable, unmount the
-      // FileEditor, and silently discard its buffer with no confirm.
-      const { container, component, edit } = await openEditedEditor()
-      edit()
-      expect(container.querySelector('.split-editor')).toBeTruthy()
-
+      const el = container.querySelector('.cm-editor') as HTMLElement
+      EditorView.findFromDOM(el)!.dispatch({ changes: { from: 0, insert: 'MINE' } })
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      component.toggleSplitView()
-      await settle()
-      expect(confirmSpy).toHaveBeenCalled()
-      expect(container.querySelector('.split-editor')).toBeTruthy()  // declined → editor survives
-      confirmSpy.mockRestore()
-    })
-
-    it('split/unified toggle confirms before discarding in-progress edits (round-3 data-loss)', async () => {
-      // The editor mounts only in the split branch; toggling to unified unmounts
-      // it and destroys CodeMirror's live buffer (editFileContents holds only the
-      // pre-edit original). Guard mirrors startMerge's confirm-before-discard.
-      const { container, edit } = await openEditedEditor()
-      edit()
-      expect(container.querySelector('.split-editor')).toBeTruthy()
-
-      // Decline the confirm → no toggle, editor (and its buffer) survive.
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      const toggle = container.querySelector('[aria-label="Switch to unified view"]') as HTMLButtonElement
-      await fireEvent.click(toggle)
-      await settle()
-      expect(confirmSpy).toHaveBeenCalled()
-      expect(container.querySelector('.split-editor')).toBeTruthy()  // NOT unmounted
-
-      // Accept → toggle proceeds, editor unmounts (edits intentionally discarded).
-      confirmSpy.mockReturnValue(true)
-      await fireEvent.click(toggle)
-      await settle()
-      expect(container.querySelector('.split-editor')).toBeFalsy()
-      confirmSpy.mockRestore()
-    })
-
-    it('an untouched editor does not prompt', async () => {
-      const { component } = await openEditedEditor()
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      component.toggleSplitView()
-      await settle()
+      const kept = () => {
+        expect(container.querySelector('.cm-editor')).toBe(el)
+        expect(EditorView.findFromDOM(el)!.state.doc.toString()).toContain('MINE')
+      }
+      await fireEvent.click(container.querySelector('[aria-label^="Switch to "]')!) // this window's toggle
+      await settle(); kept()
+      await rerender(p({ splitView: !start }))                                       // another window's setting
+      await settle(); kept()
+      const other = container.querySelector('[data-file-path="b.go"]')!
+      expect(other.querySelector('.split-left') !== null).toBe(!start) // other files still follow it
+      await rerender(p({ splitView: start, hunkReview: { selected: new Set(), cursor: null, toggle: () => {} } }))
+      await settle(); kept()
       expect(confirmSpy).not.toHaveBeenCalled()
       confirmSpy.mockRestore()
     })

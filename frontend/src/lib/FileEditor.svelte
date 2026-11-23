@@ -5,7 +5,7 @@
   import { defaultKeymap, indentWithTab } from '@codemirror/commands'
   import { foldGutter, foldEffect, unfoldAll, bracketMatching, indentUnit } from '@codemirror/language'
   import { detectIndent, getCmLanguage, cmTheme, cmHighlight } from './cm-shared'
-  import { registerUnsaved } from './unsaved'
+  import { registerUnsaved, type Leave } from './unsaved'
   import { detectEol, withEol } from './eol'
 
   interface Props {
@@ -14,9 +14,11 @@
     changedRanges: { fromLine: number; toLine: number }[]
     onsave: (content: string) => void
     oncancel: () => void
+    /** Weakest action that unmounts this editor (unsaved.ts). */
+    lostOn?: Leave
   }
 
-  let { content, filePath, changedRanges, onsave, oncancel }: Props = $props()
+  let { content, filePath, changedRanges, onsave, oncancel, lostOn = 'selection' }: Props = $props()
 
   let containerEl: HTMLDivElement | undefined = $state(undefined)
   let view: EditorView | undefined
@@ -34,12 +36,13 @@
   }
 
   const isDirty = () => !!view && !!initialDoc && !view.state.doc.eq(initialDoc)
-  const unsaved = registerUnsaved({ label: () => filePath, lostOn: 'selection', dirty: isDirty })
+  const unsaved = registerUnsaved({ label: () => filePath, get lostOn() { return lostOn }, dirty: isDirty })
 
-  /** Cancel, asking first when there is something to lose. */
-  export function requestCancel(): void {
-    if (isDirty() && !confirm(`Discard unsaved changes to ${filePath}?`)) return
+  /** Cancel, asking first when there is something to lose. False = kept. */
+  export function requestCancel(): boolean {
+    if (isDirty() && !confirm(`Discard unsaved changes to ${filePath}?`)) return false
     oncancel()
+    return true
   }
 
   function computeFoldRanges(doc: EditorState['doc'], ranges: Props['changedRanges']): { from: number; to: number }[] {

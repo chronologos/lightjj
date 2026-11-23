@@ -47,7 +47,6 @@ let liveTarget: DiffTarget | undefined
 let lock: JJMutationLock | undefined
 let onFileSaved: (() => Promise<void> | void) | undefined
 const revealFile = vi.fn()
-const ensureSplitView = vi.fn()
 const setScrollTop = vi.fn()
 
 const deps: FileActionsDeps = {
@@ -55,7 +54,6 @@ const deps: FileActionsDeps = {
   getMutationLock: () => lock,
   getOnFileSaved: () => onFileSaved,
   revealFile,
-  ensureSplitView,
   setScrollTop,
 }
 
@@ -64,7 +62,6 @@ beforeEach(() => {
   lock = undefined
   onFileSaved = undefined
   revealFile.mockClear()
-  ensureSplitView.mockClear()
   setScrollTop.mockClear()
   mockApi.edit.mockReset().mockResolvedValue({ output: '' })
   mockApi.fileShow.mockReset().mockResolvedValue({ content: 'body' })
@@ -116,13 +113,12 @@ describe('startEdit — post-await identity guards', () => {
     expect(fa.editFileContents.has('a.go')).toBe(false)
   })
 
-  it('happy path: opens editor (split view, reveal, contents)', async () => {
+  it('happy path: opens editor (reveal, contents)', async () => {
     const fa = createFileActions(deps)
     await fa.startEdit('a.go')
 
     expect(fa.editingFiles.has('a.go')).toBe(true)
     expect(fa.editFileContents.get('a.go')).toBe('body')
-    expect(ensureSplitView).toHaveBeenCalled()
     expect(revealFile).toHaveBeenCalledWith('a.go')
   })
 

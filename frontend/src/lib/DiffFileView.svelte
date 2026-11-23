@@ -11,7 +11,7 @@
   import type { ContextMenuItem, ContextMenuHandler } from './ContextMenu.svelte'
   // import type: erased at build — keeps editorRef typed without bundling CM6.
   import type FileEditor from './FileEditor.svelte'
-  import { escapeHtml } from './highlighter'
+  import { escapeHtml, markChanged } from './highlighter'
   import { detectLanguage } from './languages'
   import { symbolTarget, type SymbolHover } from './symbol-hover.svelte'
   import ImageDiff from './ImageDiff.svelte'
@@ -326,14 +326,11 @@
     })
   }
 
-  // Conflicted files force unified view — split view makes no sense when all
-  // lines are additions. EXCEPT while editing: the FileEditor only mounts in
-  // the split branch (its bind:this is the sole editorRef binding), so a
-  // conflicted file opened for editing — the N-way/git-style fallback from
-  // quickResolve/startMerge, AND a plain Edit click — would otherwise render
-  // Save/Cancel with NO editing surface and a permanently-disabled Save
-  // (editorRef stays undefined). Allowing split when editing mounts the editor.
-  let effectiveSplit = $derived(splitView && (!isConflict || editing))
+  // The FileEditor lives in the split branch, so an open editor IS split: no view
+  // setting — this window's, another window's, review mode — can unmount it.
+  // Otherwise conflicted files force unified: split makes no sense when all lines
+  // are additions.
+  let effectiveSplit = $derived(editing || (splitView && !isConflict))
 
   // Split-grid selection latch (issue #41). Pair-order DOM interleaves the
   // two sides, so a native drag-select would sweep both; mousedown records
@@ -681,7 +678,7 @@
       class:conflict-inner-remove={innerType === 'remove'}
       onclick={(e) => handleAltClick(e, annOld, annNew, rawContent)}
       oncontextmenu={(e) => handleLineContextMenu(e, line, annOld, annNew)}
-    >{@render gutter(lineNumbers, rawContent, annOld, annNew)}{@html highlightedLines.get(hlKey)}</div>
+    >{@render gutter(lineNumbers, rawContent, annOld, annNew)}{@html spans ? markChanged(highlightedLines.get(hlKey)!, spans, 1) : highlightedLines.get(hlKey)}</div>
   {:else if spans}
     <div
       class="diff-line {cellClass}"
@@ -1571,13 +1568,14 @@
     opacity: 0.7;
   }
 
-  .word-change {
+  /* :global — also emitted as HTML by markChanged(). */
+  .diff-line :global(.word-change) {
     border-radius: 2px;
   }
-  .diff-add .word-change {
+  .diff-add :global(.word-change) {
     background: var(--diff-add-word);
   }
-  .diff-remove .word-change {
+  .diff-remove :global(.word-change) {
     background: var(--diff-remove-word);
   }
 

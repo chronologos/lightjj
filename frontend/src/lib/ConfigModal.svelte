@@ -30,6 +30,13 @@
       .finally(() => { loading = false })
   })
 
+  /** Close, asking first when the text was changed. False = stayed open. */
+  export function requestClose(): boolean {
+    if (editorRef) return editorRef.requestCancel()
+    onclose()
+    return true
+  }
+
   async function save(text: string) {
     // Lazy-load jsonc-parser only when the user actually saves. Keeps main
     // bundle free of the ~30KB dep.
@@ -65,7 +72,7 @@
 </script>
 
 {#if open}
-  <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+  <div class="modal-backdrop" onclick={requestClose} role="presentation"></div>
   <div class="modal config-modal" role="dialog" aria-label="Edit config">
     <div class="modal-header">
       <span>Config <span class="path">~/.config/lightjj/config.json</span></span>
@@ -83,6 +90,7 @@
             changedRanges={[]}
             onsave={save}
             oncancel={onclose}
+            lostOn="tab"
           />
         {/await}
       </div>
@@ -93,7 +101,7 @@
     <div class="footer">
       <a class="docs-link" href="https://github.com/chronologos/lightjj/blob/main/docs/CONFIG.md" target="_blank" rel="noreferrer">Field reference ↗</a>
       <div class="actions">
-        <button class="btn" onclick={onclose}>Cancel</button>
+        <button class="btn" onclick={requestClose}>Cancel</button>
         <button class="btn btn-primary" onclick={() => save(editorRef?.getContent() ?? content)}>Save</button>
       </div>
     </div>

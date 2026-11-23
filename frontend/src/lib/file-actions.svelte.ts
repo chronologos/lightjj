@@ -53,9 +53,6 @@ export interface FileActionsDeps {
   /** DiffPanel's revealFile(): force-mount + session-expand a file so the
    *  editor/preview about to open has body DOM to land in. */
   revealFile: (path: string) => void
-  /** Flip DiffPanel's splitView bindable to true — FileEditor renders only in
-   *  the split view's right column. */
-  ensureSplitView: () => void
   /** Ask before an action that unmounts every open editor. False = keep them. */
   confirmDiscard?: () => boolean
   /** Restore the diff panel's scrollTop (refreshPreviews' post-write restore). */
@@ -382,8 +379,6 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   }
 
   function openFileEditor(path: string, content: string): void {
-    // Editor lives in the right split column — switch if coming from unified.
-    deps.ensureSplitView()
     // Edit wins over preview — DiffFileView's {#if previewContent} branch
     // precedes the FileEditor branch; a stale preview would hide the editor.
     if (previewContents.has(path)) closePreview(path)
