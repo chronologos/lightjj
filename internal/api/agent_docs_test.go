@@ -23,9 +23,10 @@ func TestAgentDocRoutesRegistered(t *testing.T) {
 	defer runner.Verify()
 	// The probe loop below issues a bare GET per discovered path. Most routes
 	// 400/405 before touching jj (missing required params or wrong method), but
-	// /api/log has no required params — the doc's `lightjj api GET /tab/0/api/log`
-	// example pulls it into the probe set, so allow the resulting jj call.
+	// these have no required params, so allow the resulting jj calls.
 	runner.Allow(jj.LogGraph("", 500)).SetOutput([]byte(""))
+	runner.Allow(jj.GitRemoteList()).SetOutput([]byte(""))
+	runner.Allow(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte(""))
 	srv := newTestServer(runner)
 
 	w := httptest.NewRecorder()

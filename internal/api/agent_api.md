@@ -238,7 +238,10 @@ Success-response shapes by endpoint family:
 
 Errors are `{"error": "..."}` with a 4xx/5xx status everywhere.
 `GET <base>/api/capabilities` reports `api_version`, which bumps when an
-existing shape changes incompatibly.
+existing shape changes incompatibly. Currently 3: `/api/remotes` returns
+`{remotes, github_repo}` (was a list), `/api/info` has `jj_too_old` and
+`min_jj_version` instead of `features`, and some batch routes are gone
+(`actions` lists what exists).
 
 ## Diff annotations
 
