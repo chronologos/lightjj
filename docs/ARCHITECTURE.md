@@ -190,7 +190,7 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 | GET | `/api/state/recent-actions` | Recency timestamps (namespace → key → ms) for recency-sorted UI |
 | POST | `/api/state/recent-actions` | Replace the recency-timestamp map |
 
-`openTabs` also lives in state.json but has no HTTP surface — it is written by the tab manager (`SetOpenTabs`) and read at startup (`ReadPersistedTabs`).
+`openTabs` also lives in state.json but has no HTTP surface — it is written by the tab manager (`AddOpenTab`/`RemoveOpenTab`, one entry at a time) and read at startup (`ReadPersistedTabs`).
 
 **Metadata & integrations**
 
@@ -217,7 +217,7 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/events` | SSE stream: `state` (op-id, stale working copy, poll error) and `nav` hints |
+| GET | `/api/events` | SSE stream: `state` (op-id, stale working copy, poll error, revision of `GET /tabs`) and `nav` hints |
 
 ## Layer Responsibilities
 

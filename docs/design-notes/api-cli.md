@@ -295,7 +295,7 @@ ignorant of session files (a `cmd/lightjj` concern): `TabManager` exposes
 `TabRefs() []TabRef` (id + canonical path, id order, RLock snapshot) and an
 `OnTabsChange func()` field fired from `tabsChanged()` — the one helper both
 `handleCreate` and `handleClose` call after writing their response, right
-where `persistTabs` (state.json) already ran. Startup `AddTab` calls don't
+where `persistTab` (state.json) already ran. Startup `AddTab` calls don't
 fire it; `main.go` takes the initial snapshot after the restore loop, then
 sets `tm.OnTabsChange = session.Update`. The callback carries **no snapshot**
 on purpose: two concurrent creates would race to deliver stale snapshots in
