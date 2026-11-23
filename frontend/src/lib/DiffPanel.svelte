@@ -17,6 +17,7 @@
   import { createDiffDerivation } from './diff-derivation.svelte'
   import { createLoader } from './loader.svelte'
   import { createFileActions } from './file-actions.svelte'
+  import { useUnsaved } from './unsaved'
   import DiffFileView, { type DiffLineInfo } from './DiffFileView.svelte'
   import SearchResults from './SearchResults.svelte'
   import SplitToggle from './SplitToggle.svelte'
@@ -242,7 +243,9 @@
   // effects below call its lifecycle hooks (bumpPreviewGen/clearPreviews/
   // refreshPreviews/reset). Deps are getter-closures so the factory's
   // post-await guards always read the LIVE props.
+  const unsaved = useUnsaved()
   const fileActions = createFileActions({
+    confirmDiscard: () => unsaved?.confirmDiscard('selection') ?? true,
     getDiffTarget: () => diffTarget,
     getMutationLock: () => onjjmutation,
     getOnFileSaved: () => onfilesaved,
@@ -702,11 +705,7 @@
    *  silently discards the buffer (the palette is reachable while focus is in
    *  the editor, since Cmd+K is gated before isInInput). */
   export function toggleSplitView() {
-    const editing = fileActions.editingFiles
-    if (editing.size > 0) {
-      const names = editing.size === 1 ? [...editing][0] : `${editing.size} files`
-      if (!confirm(`Switch view and discard unsaved edits in ${names}?`)) return
-    }
+    if (unsaved && !unsaved.confirmDiscard('selection')) return
     splitView = !splitView
   }
 

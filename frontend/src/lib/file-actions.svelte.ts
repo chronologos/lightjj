@@ -55,6 +55,8 @@ export interface FileActionsDeps {
   /** Flip DiffPanel's splitView bindable to true — FileEditor renders only in
    *  the split view's right column. */
   ensureSplitView: () => void
+  /** Ask before an action that unmounts every open editor. False = keep them. */
+  confirmDiscard?: () => boolean
   /** Restore the diff panel's scrollTop (refreshPreviews' post-write restore). */
   setScrollTop: (v: number) => void
 }
@@ -92,7 +94,7 @@ export interface FileActions {
   /** One-click whole-file resolve to ours/theirs (no 3-pane editor). */
   quickResolve(path: string, side: 'ours' | 'theirs'): Promise<void>
   /** Save the 3-pane merge result via the shared resolution strategy. */
-  saveMerge(content: string): Promise<void>
+  saveMerge(content: string): Promise<boolean>
   /** Save an inline FileEditor buffer to the working copy. */
   saveFile(path: string, content: string): Promise<void>
   cancelEdit(path: string): void
@@ -419,15 +421,9 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   }
 
   async function startMerge(path: string) {
-    // MergePanel takes over .panel-content → all FileEditors unmount → CM6
-    // state destroyed → unsaved edits lost. Editing the SAME file is fine (user
-    // is switching edit modes); OTHER files might have unsaved work. Confirm
+    // MergePanel takes over .panel-content → all FileEditors unmount. Confirm
     // before any await — no post-await identity-guard complexity for this.
-    const otherEdits = [...editingFiles].filter(p => p !== path)
-    if (otherEdits.length > 0) {
-      const names = otherEdits.length === 1 ? otherEdits[0] : `${otherEdits.length} files`
-      if (!confirm(`Discard unsaved edits in ${names}?`)) return
-    }
+    if (!(deps.confirmDiscard?.() ?? true)) return
     // Pure read — opening the 3-pane editor no longer moves @; the eventual
     // save goes through writeResolution (conflict-resolve.ts strategy).
     const content = await fetchFileForEdit(path, 'Merge', false)
@@ -441,7 +437,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       return
     }
     // Entering merge clears ALL in-progress file editors — MergePanel takes
-    // over .panel-content entirely. User was warned via confirm() above.
+    // over .panel-content entirely. The user agreed above.
     editingFiles.clear()
     editFileContents = new Map()
     mergeSides = sides
@@ -486,12 +482,13 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     await deps.getOnFileSaved()?.()
   }
 
-  async function saveMerge(content: string) {
+  async function saveMerge(content: string): Promise<boolean> {
     const path = mergingPath
-    if (!path) return
-    if (!await writeResolution(path, content, 'Save')) return
+    if (!path) return false
+    if (!await writeResolution(path, content, 'Save')) return false
     closeMerge()
     await deps.getOnFileSaved()?.()
+    return true
   }
 
   function clearEditState(path: string): void {

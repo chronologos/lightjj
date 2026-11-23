@@ -57,13 +57,15 @@
   import { blocksToLineSets } from './merge-diff'
   import { initialTrackPos } from './merge-surgery'
   import type { MergeSides } from './conflict-extract'
+  import { registerUnsaved } from './unsaved'
 
   interface Props {
     sides: MergeSides
     filePath: string
     busy?: boolean     // save in progress — disable buttons
     error?: string     // saveMerge error — shown in toolbar (bug_027: not visible behind {#if mergeSides})
-    onsave: (content: string) => void
+    /** Resolves true when the content was written. */
+    onsave: (content: string) => Promise<boolean>
     oncancel: () => void
   }
   let { sides, filePath, busy = false, error = '', onsave, oncancel }: Props = $props()
@@ -79,6 +81,7 @@
   let hiddenFlank: 'ours' | 'theirs' | null = $state(null)
   // Tracks USER edits for Escape confirm. Save is always enabled (see below).
   let dirty = $state(false)
+  const unsaved = registerUnsaved({ label: () => `${filePath} (merge)`, lostOn: 'selection', dirty: () => dirty })
 
   // Per-block arrow state — mirrors the blockTracker StateField but in Svelte
   // $state so the gutter arrows can react. Updated on every center transaction
@@ -222,6 +225,7 @@
             // gutter DOM diff on every keystroke.
             if (!u.docChanged && !u.transactions.some(t => t.effects.some(isTrackerEffect))) return
             dirty = true
+            unsaved.touch()
             refreshArrows()
           }),
           keymap.of([
@@ -357,13 +361,17 @@
     takeBlock(idx, 'both')
   }
 
-  function save() {
-    if (centerView && !busy) onsave(centerView.state.doc.toString())
+  async function save() {
+    if (!centerView || busy) return
+    const doc = centerView.state.doc
+    // Only what was written is clean — keystrokes during the save aren't.
+    if (await onsave(doc.toString()) && centerView?.state.doc.eq(doc)) dirty = false
   }
 
   function tryCancel() {
     if (busy) return
     if (dirty && !confirm('Discard merge edits?')) return
+    dirty = false // agreed to; the view switch that follows must not ask again
     oncancel()
   }
 

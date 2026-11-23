@@ -78,6 +78,7 @@
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { withRenameSources } from './lib/diff-parser'
   import { apiErrorCode } from './lib/api-error'
+  import { createUnsaved, provideUnsaved } from './lib/unsaved'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
   import StatusBar from './lib/StatusBar.svelte'
@@ -128,7 +129,14 @@
   // never silently re-binds to a different one. All selection writes go
   // through selectRevision/selectRevisionCursorOnly/loadLog reconciliation.
   let selectedId: string | null = $state(init?.selectedId ?? null)
+  // revsetFilter is what was SUBMITTED (every log load uses it); revsetDraft is the
+  // input's text. A background refresh must not submit a half-typed expression.
   let revsetFilter: string = $state(init?.revsetFilter ?? '')
+  let revsetDraft: string = $state(init?.revsetFilter ?? '')
+  function setRevset(revset: string) {
+    revsetFilter = revset
+    revsetDraft = revset
+  }
   // 0 = nothing to restore: a fresh mount's diff panel is already at the top,
   // and a forced late setScrollTop(0) would clobber a selectPath file scroll.
   let pendingScrollRestore: number | null = init?.diffScrollTop || null
@@ -215,6 +223,24 @@
   const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
   // The displayed diff/files/description live in revision-navigator.svelte.ts.
   const nav = createRevisionNavigator({ onError: showError })
+  // True while loadLog left the diff on a revision that is no longer in the graph
+  // because its editors hold unsaved text; released when the last one closes.
+  let heldByEdits = false
+  let destroyed = false
+  const unsaved = createUnsaved({ onRelease: () => {
+    if (!heldByEdits || unsaved.any('selection')) return
+    heldByEdits = false
+    queueMicrotask(() => { if (!destroyed && activeView === 'log') void logSync.refresh() })
+  } })
+  provideUnsaved(unsaved)
+  unsaved.register({ label: () => 'the description', lostOn: 'tab', dirty: () => descEditDirty() })
+  unsaved.register({ label: () => docFilePath ?? 'the document', lostOn: 'view', dirty: () => docSession?.dirty ?? false })
+  $effect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => { if (unsaved.any('tab')) e.preventDefault() }
+    addEventListener('beforeunload', onUnload)
+    return () => removeEventListener('beforeunload', onUnload)
+  })
+  export const confirmLeaveTab = () => unsaved.confirmDiscard('tab')
   const { singleTarget } = nav
   const commentVis = createCommentVisibility()
   const oplog = createLoader(() => api.oplog(50), [] as OpEntry[])
@@ -298,19 +324,19 @@
     untrack(() => {
       const { nextPrev, apply } = syncVisibility(vr, prevVisibilityRevset, revsetFilter)
       prevVisibilityRevset = nextPrev
-      if (apply !== null) { revsetFilter = apply; handleRevsetSubmit() }
+      if (apply !== null) { setRevset(apply); handleRevsetSubmit() }
     })
   })
 
-  // Abort predicate for nav.navigateDeferred — checked when the debounce fires.
-  // User checking a revision during the fetch means the multi-check $effect
-  // below already fired; don't clobber it.
   // The panel lives in the log view; the graph badge is clickable from branches.
   function openDivergence(changeId: string) {
     if (activeView !== 'log') switchToLogView()
     divergence.enter(changeId)
   }
 
+  // Abort predicate for nav.navigateDeferred — checked when the debounce fires.
+  // User checking a revision during the fetch means the multi-check $effect
+  // below already fired; don't clobber it.
   const hasChecked = () => checkedRevisions.size > 0
 
   let revisions = $derived(log.value)
@@ -536,6 +562,7 @@
   }
 
   async function switchToDocView(path: string) {
+    if (!leaveView()) return
     cancelInlineModes()
     docFilePath = path
     activeView = 'doc'
@@ -552,14 +579,22 @@
     void docSession.import_().catch(e => setMessage(errorMessage(e)))
   }
 
-  function closeDocView() {
+  /** Every view change goes through here: asks, then tears down what it leaves. */
+  function leaveView(): boolean {
+    if (!unsaved.confirmDiscard('view')) return false
+    if (activeView === 'doc') closeDocSession()
+    return true
+  }
+
+  const closeDocView = () => void switchToLogView()
+
+  function closeDocSession() {
     docFilePath = null
     docSession = null
     docStale = false
     docAgentPopover = false
     docFocusedComment = null
     docCommentDraft = null
-    switchToLogView()
   }
 
   // Server-state mirrors, each a loader + (further down) an op-sync that owns its
@@ -808,6 +843,7 @@
 
   // --- Check management ---
   function toggleCheck(changeId: string, index: number) {
+    if (checkedRevisions.size === 0 && !unsaved.confirmDiscard('selection')) return
     if (checkedRevisions.has(changeId)) {
       checkedRevisions.delete(changeId)
       // Unchecking the last one: multi→single transition. The multi-check
@@ -824,6 +860,7 @@
   }
 
   function rangeCheck(fromIndex: number, toIndex: number) {
+    if (checkedRevisions.size === 0 && !unsaved.confirmDiscard('selection')) return
     const lo = Math.min(fromIndex, toIndex)
     const hi = Math.max(fromIndex, toIndex)
     for (let i = lo; i <= hi; i++) {
@@ -1341,9 +1378,12 @@
     const run = ++logRunGen
 
     const filter = revsetFilter
+    const focusedBefore = document.activeElement
     const ok = await log.load(filter || undefined)
     if (ok) appliedRevset = filter
-    blurActiveInput()
+    // Only focus that LANDED on an input during the reload. Blurring one the user
+    // was already in (an empty commit message) turns their typing into hotkeys.
+    if (document.activeElement !== focusedBefore) blurActiveInput()
     if (!ok) {
       // Superseded or errored — don't post-process stale state. One exception:
       // the ERRORED widen reload of a `?change=` locate (an ambiguous short
@@ -1359,12 +1399,20 @@
         const p = pendingSelect
         pendingSelect = null
         restorePreWidenRevset(p)
-      } else if (errored && revisions.length === 0 && !diffFrozen) {
+      } else if (errored && revisions.length === 0 && !diffFrozen && !unsaved.any('selection')) {
         nav.reset() // a rejected revset blanks the graph; don't keep its old diff
       }
       return false
     }
     let resetSelection = resetRequested
+    // The edited revision left the graph (abandoned, made divergent, filtered out by
+    // something other than the user). There is nobody to ask, so keep its editors.
+    const edited = loadedTarget?.kind === 'single' && unsaved.any('selection') ? loadedTarget.changeId : undefined
+    const hold = edited !== undefined && !revisions.some(r => effectiveId(r.commit) === edited)
+    if (hold && !heldByEdits) {
+      setMessage({ kind: 'warning', text: `${edited!.slice(0, 8)} is no longer in view — your unsaved edits are kept. Save or cancel them to continue.` })
+    }
+    heldByEdits = hold
 
     // Deferred selection (jumpToBookmark, `?change=` URL intent). Applied
     // loads only → race-free vs supersedes. A hit suppresses resetSelection
@@ -1380,7 +1428,7 @@
     // reset was requested — fall back to the working copy.
     const stillExists = selectedId !== null &&
       revisions.some(r => effectiveId(r.commit) === selectedId)
-    if (resetSelection || !stillExists) {
+    if (!hold && (resetSelection || !stillExists)) {
       selectedId = workingCopyEntry ? effectiveId(workingCopyEntry.commit) : null
     }
     // Draft whose revision left the view (abandoned, divergent, filtered out):
@@ -1405,7 +1453,7 @@
       }
     }
     lastCheckedIndex = -1
-    if (diffFrozen) {
+    if (diffFrozen || hold) {
       // Squash/split show their SOURCE while the cursor picks a destination;
       // following the cursor here would swap the file list under the selection.
     } else if (selectedIndex >= 0 && checkedRevisions.size === 0) {
@@ -1452,16 +1500,23 @@
 
   let prevSelectedIndex = -1
 
-  function selectRevision(index: number) {
-    const moved = index !== prevSelectedIndex
-    const direction = index > prevSelectedIndex ? 1 : -1
-    prevSelectedIndex = index
+  /** May the diff move on to revision `id`? Asks when open editors would be lost. */
+  function mayLeaveDiff(id: string | undefined): boolean {
+    const staying = loadedTarget?.kind === 'single' && loadedTarget.changeId === id
+    return staying || unsaved.confirmDiscard('selection')
+  }
 
+  /** False = not selected (no such row, or the user kept their unsaved edits). */
+  function selectRevision(index: number): boolean {
     const entry = revisions[index]
     // Callers bounds-check (navKey, '@', jumpToBookmark, RevisionGraph rows),
     // so a missing entry only means an empty list — leave selection unchanged.
-    if (!entry) return
+    if (!entry) return false
     const id = effectiveId(entry.commit)
+    if (!mayLeaveDiff(id)) return false
+    const moved = index !== prevSelectedIndex
+    const direction = index > prevSelectedIndex ? 1 : -1
+    prevSelectedIndex = index
     selectedId = id
     // An untouched editor closes on navigation; a dirty draft is kept (hidden).
     if (descEdit && descEdit.targetId !== id) {
@@ -1515,12 +1570,12 @@
       // newly-visible revisions.
       prefetchFilesWindow()
     }
+    return true
   }
 
   function selectByChangeId(changeId: string): boolean {
     const idx = revisions.findIndex(r => effectiveId(r.commit) === changeId)
-    if (idx >= 0) selectRevision(idx)
-    return idx >= 0
+    return idx >= 0 && selectRevision(idx)
   }
 
   /** Select by a user/agent-supplied REF (unique prefix or full-length id —
@@ -1582,6 +1637,8 @@
    *  setMessage(null) — the caller's warning / jj's error must stay visible. */
   function restorePreWidenRevset(p: PendingSelect) {
     if (!holdsOurLocator(p)) return
+    // Leave text the user has started typing over our locator.
+    if (revsetDraft === revsetFilter) revsetDraft = p.restoreRevset!
     revsetFilter = p.restoreRevset!
     nav.cancelSchedule()
     clearChecks()
@@ -1613,7 +1670,7 @@
       // Spend the one widen: keep the slot, swap in the locator, reload. The
       // reload's own (applied) reconciliation lands in the `spent` branch.
       pendingSelect = { ...p, widen: false, restoreRevset: revsetFilter }
-      revsetFilter = locatorRevset(p.ref)
+      setRevset(locatorRevset(p.ref))
       void handleRevsetSubmit()
       return { status: 'resubmitted' }
     }
@@ -1740,12 +1797,13 @@
     const select = activeView === 'branches' ? selectRevisionCursorOnly : selectRevision
     const idx = revisions.findIndex(r => r.commit.commit_id === commitId)
     if (idx >= 0) { select(idx); return }
+    if (!unsaved.confirmDiscard('selection')) return
     // Not loaded: reload with a context-preserving revset. | @ keeps the
     // working copy visible for @-jump-back. commit_id is hex-safe unquoted;
     // bookmark names can contain revset operators (@ in git refs) → revsetQuote.
     pendingSelect = { ref: commitId, widen: false }
     const target = (bm.local && !overrideCommitId) ? revsetQuote(bm.name) : commitId
-    revsetFilter = `ancestors(${target}, 20) | @`
+    setRevset(`ancestors(${target}, 20) | @`)
     handleRevsetSubmit()
   }
 
@@ -1763,16 +1821,16 @@
     const items: ContextMenuItem[] = [
       { label: 'Edit working copy', disabled: inlineMode, action: () => handleEdit(changeId) },
       { label: 'New revision', shortcut: 'n', disabled: inlineMode, action: () => handleNew(changeId) },
-      { label: 'Describe', shortcut: 'e', disabled: inlineMode, action: () => { selectByChangeId(changeId); startDescriptionEdit() } },
+      { label: 'Describe', shortcut: 'e', disabled: inlineMode, action: () => { if (selectByChangeId(changeId)) startDescriptionEdit() } },
       { separator: true },
-      { label: 'Rebase...', shortcut: 'R', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterRebaseMode() } },
-      { label: 'Squash...', shortcut: 'S', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSquashMode() } },
-      { label: 'Split...', shortcut: 's', disabled: inlineMode, action: () => { selectByChangeId(changeId); enterSplitMode() } },
-      { label: 'Edit parents…', shortcut: 'M', disabled: inlineMode || !!entry?.commit.immutable, action: () => { selectByChangeId(changeId); enterMegamergeMode(changeId) } },
-      { label: 'Slide up', shortcut: '⇧K', disabled: inlineMode || !slideUp.ok, action: () => { selectByChangeId(changeId); handleSlide('up') } },
-      { label: 'Slide down', shortcut: '⇧J', disabled: inlineMode || !slideDown.ok, action: () => { selectByChangeId(changeId); handleSlide('down') } },
+      { label: 'Rebase...', shortcut: 'R', disabled: inlineMode, action: () => { if (selectByChangeId(changeId)) enterRebaseMode() } },
+      { label: 'Squash...', shortcut: 'S', disabled: inlineMode, action: () => { if (selectByChangeId(changeId)) enterSquashMode() } },
+      { label: 'Split...', shortcut: 's', disabled: inlineMode, action: () => { if (selectByChangeId(changeId)) enterSplitMode() } },
+      { label: 'Edit parents…', shortcut: 'M', disabled: inlineMode || !!entry?.commit.immutable, action: () => { if (selectByChangeId(changeId)) enterMegamergeMode(changeId) } },
+      { label: 'Slide up', shortcut: '⇧K', disabled: inlineMode || !slideUp.ok, action: () => { if (selectByChangeId(changeId)) handleSlide('up') } },
+      { label: 'Slide down', shortcut: '⇧J', disabled: inlineMode || !slideDown.ok, action: () => { if (selectByChangeId(changeId)) handleSlide('down') } },
       { separator: true },
-      { label: 'Set bookmark...', shortcut: 'B', disabled: inlineMode, action: () => { selectByChangeId(changeId); openModal('bookmarkInput') } },
+      { label: 'Set bookmark...', shortcut: 'B', disabled: inlineMode, action: () => { if (selectByChangeId(changeId)) openModal('bookmarkInput') } },
       { separator: true },
       // Add-here passes the change_id as the new workspace's parent revision
       // (`-r` → `jj new` semantics). Local-fs only (handleWorkspaceAdd derives a
@@ -2126,7 +2184,7 @@
     }
     if (activeView !== 'log') switchToLogView()
     const wcId = effectiveId(workingCopyEntry.commit)
-    if (selectedId !== wcId) selectByChangeId(wcId)
+    if (selectedId !== wcId && !selectByChangeId(wcId)) return
     await openDescEditor('commit')
   }
 
@@ -2259,6 +2317,7 @@
   // enterSquashMode needs for fileSel.init) must not be clobbered by a
   // single-revision reload — the loaded multi diff IS the state enter*Mode wants.
   function switchToLogView(): boolean {
+    if (activeView !== 'log' && !leaveView()) return false
     activeView = 'log'
     const loaded = nav.loadedTarget
     if (checkedRevisions.size > 0) return loaded?.kind === 'multi' && nav.ready
@@ -2271,6 +2330,9 @@
     if (!onSel || !nav.diffLoading) nav.loadDiffAndFiles(sel.commit)
     return false
   }
+
+  /** Switch to the log view; false when the user kept unsaved work elsewhere. */
+  const goLog = () => { switchToLogView(); return activeView === 'log' }
 
   const STILL_LOADING = 'Still loading this revision — try again'
   /** Entry gate for modes that snapshot the displayed file list. */
@@ -2286,6 +2348,7 @@
   // (The description editor's header slot unmounts in branches view; its state
   // needs no clearing — descEdit is bound to its target, not to the cursor.)
   function switchToBranchesView() {
+    if (activeView !== 'branches' && !leaveView()) return
     // Explicit refresh on entry (not re-entry): bypasses the op-sync gate so the
     // panel never shows a false "No bookmarks" while the log/a mutation is in
     // flight. The sync still owns op-id staleness while the view stays open.
@@ -2294,6 +2357,7 @@
   }
 
   async function switchToMergeView() {
+    if (!leaveView()) return
     activeView = 'merge'
     const ok = await merge.enter()
     // bug_013: only bounce if user is STILL in merge (didn't nav away mid-await)
@@ -2860,13 +2924,14 @@
     return logSync.refresh()
   }
 
+  const FINISH_MODE_FIRST = 'Finish or Esc the current mode before changing the revset'
   /** Apply the current `revsetFilter`. Resolves (with loadLog's applied flag)
    *  once the reload — including its cursor reconciliation / pendingSelect
    *  consumption — completes, so callers can await it. */
   function handleRevsetSubmit(): Promise<boolean> {
     if (diffFrozen) {
-      revsetFilter = appliedRevset ?? ''
-      setMessage({ kind: 'warning', text: 'Finish or Esc the current mode before changing the revset' })
+      setRevset(appliedRevset ?? '')
+      setMessage({ kind: 'warning', text: FINISH_MODE_FIRST })
       return Promise.resolve(false)
     }
     nav.cancelSchedule()
@@ -2878,7 +2943,14 @@
    *  preset/example): drops any pending `?change=` intent first — see the
    *  PendingSelect state machine. Programmatic writers (visibility sync,
    *  jumpToBookmark, the widen itself) call handleRevsetSubmit directly. */
-  function userRevsetSubmit(): Promise<boolean> {
+  function userRevsetSubmit(revset: string): Promise<boolean> {
+    if (diffFrozen) {
+      setMessage({ kind: 'warning', text: FINISH_MODE_FIRST })
+      return Promise.resolve(false)
+    }
+    // The reload puts the cursor on @.
+    if (!mayLeaveDiff(workingCopyEntry && effectiveId(workingCopyEntry.commit))) return Promise.resolve(false)
+    setRevset(revset)
     // Armed → plain (a hit in the user's own view still selects — harmless
     // and helpful; a miss ends silently, never widens over their revset).
     // Spent → dropped (they replaced our locator; nothing to restore or warn).
@@ -2889,8 +2961,7 @@
   }
 
   function clearRevsetFilter() {
-    revsetFilter = ''
-    userRevsetSubmit()
+    userRevsetSubmit('')
   }
 
   // --- Revset help popover ---
@@ -2899,8 +2970,7 @@
 
   function applyRevsetExample(revset: string) {
     revsetHelpOpen = false
-    revsetFilter = revset
-    userRevsetSubmit()
+    userRevsetSubmit(revset)
   }
 
   // Click-outside + Escape close for the help popover.
@@ -3161,8 +3231,8 @@
       // renders (evolog/oplog are gated on activeView==='log' — they'd steal
       // vertical space from the bookmarks panel otherwise).
       case '3': e.preventDefault(); switchToMergeView(); return true
-      case '4': e.preventDefault(); switchToLogView(); toggleOplog(); return true
-      case '5': e.preventDefault(); switchToLogView(); toggleEvolog(); return true
+      case '4': e.preventDefault(); if (goLog()) toggleOplog(); return true
+      case '5': e.preventDefault(); if (goLog()) toggleEvolog(); return true
     }
     return false
   }
@@ -3205,8 +3275,8 @@
       // guard; FileHistoryPanel/FileComparePicker handle it locally).
       case '|': e.preventDefault(); diffPanelRef?.toggleSplitView(); break
       case 'm': e.preventDefault(); diffPanelRef?.togglePreviewActive(); break
-      case 'E': e.preventDefault(); switchToLogView(); toggleEvolog(); break
-      case 'O': e.preventDefault(); switchToLogView(); toggleOplog(); break
+      case 'E': e.preventDefault(); if (goLog()) toggleEvolog(); break
+      case 'O': e.preventDefault(); if (goLog()) toggleOplog(); break
       case '@': e.preventDefault(); if (workingCopyIndex >= 0) selectRevision(workingCopyIndex); break
       case 'n':
         e.preventDefault()
@@ -3246,13 +3316,13 @@
 
   // Agent-driven navigate (POST /api/navigate → SSE). Gated so an agent can't
   // yank the user out of half-complete rebase/squash, an unsaved 3-pane
-  // resolution, unsaved doc-mode edits, an open modal (they act on the cursor
+  // resolution, unsaved editor or doc-mode edits, an open modal (they act on the cursor
   // at submit), or a description being typed.
   let pendingNavScroll: { changeId: string; path: string } | null = $state(null)
   // Function, not inline expression: the post-await re-gates below would
   // otherwise inherit TS's pre-await narrowing of `activeView` and fail to
   // type-check ("no overlap"). A call reads the live value with its full type.
-  const navigateBlocked = () => inlineMode || mutating || anyModalOpen || !!descEditVisible || activeView === 'merge' || activeView === 'doc'
+  const navigateBlocked = () => inlineMode || mutating || anyModalOpen || !!descEditVisible || unsaved.any('view') || activeView === 'merge' || activeView === 'doc'
   $effect(() => onNavigate(async (p: NavigatePayload) => {
     if (navigateBlocked()) {
       setMessage({ kind: 'warning', text: 'Agent navigate ignored — finish or Esc what you have open' })
@@ -3268,7 +3338,7 @@
       // userRevsetSubmit does for a typed revset.
       pendingNavScroll = null
       switchToLogView()
-      revsetFilter = p.revset
+      setRevset(p.revset)
       const slot: PendingSelect | null = p.change_id ? { ref: p.change_id, widen: false } : null
       pendingSelect = slot
       const applied = await handleRevsetSubmit()
@@ -3405,6 +3475,7 @@
   // stale closures don't keep the old instance's signals alive. cancelSchedule()
   // clears the navigator-owned rAF + debounce.
   onDestroy(() => {
+    destroyed = true
     clearTimeout(messageClearTimer)
     clearTimeout(evologDebounceTimer)
     nav.cancelSchedule()
@@ -3560,7 +3631,7 @@
         <button
           class="toolbar-nav-btn"
           class:toolbar-nav-active={oplogOpen}
-          onclick={() => { if (!inlineMode) { switchToLogView(); toggleOplog() } }}
+          onclick={() => { if (!inlineMode) { if (goLog()) toggleOplog() } }}
           disabled={inlineMode}
           title="Operation log — undo/restore any op (4)"
         >⟲ Oplog <kbd class="nav-hint">4</kbd></button>
@@ -3570,7 +3641,7 @@
         <button
           class="toolbar-nav-btn"
           class:toolbar-nav-active={evologOpen}
-          onclick={() => { if (!inlineMode) { switchToLogView(); toggleEvolog() } }}
+          onclick={() => { if (!inlineMode) { if (goLog()) toggleEvolog() } }}
           disabled={inlineMode}
           title="Evolution log — how this change evolved (5)"
         >◐ Evolog <kbd class="nav-hint">5</kbd></button>
@@ -3608,15 +3679,15 @@
             <span class="revset-icon">$</span>
             <input
               bind:this={revsetInputEl}
-              value={revsetFilter}
-              oninput={(e: Event) => { revsetFilter = (e.target as HTMLInputElement).value }}
+              value={revsetDraft}
+              oninput={(e: Event) => { revsetDraft = (e.target as HTMLInputElement).value }}
               class="revset-input"
               type="text"
               placeholder={configuredLogRevset || "revset filter (press / to focus)"}
               onkeydown={(e: KeyboardEvent) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  userRevsetSubmit()
+                  userRevsetSubmit(revsetDraft)
                   revsetInputEl?.blur()
                 } else if (e.key === 'Escape') {
                   e.preventDefault()
@@ -3625,7 +3696,7 @@
                 }
               }}
             />
-            {#if revsetFilter}
+            {#if revsetDraft || revsetFilter}
               <button class="revset-clear" onclick={clearRevsetFilter} title="Clear filter (Escape)">x</button>
             {/if}
             <button class="revset-help" onclick={() => revsetHelpOpen = !revsetHelpOpen} title="Revset help">?</button>
@@ -3746,7 +3817,11 @@
               loading={merge.queueLoading}
               resolved={merge.resolved}
               current={merge.current}
-              onselect={merge.selectFile}
+              onselect={(item) => {
+                const cur = merge.current
+                if (cur?.commitId === item.commitId && cur.path === item.path) return
+                if (unsaved.confirmDiscard('selection')) merge.selectFile(item)
+              }}
               oncontextmenu={showContextMenu}
               onopenfile={editorConfigured ? handleOpenFile : undefined}
             />

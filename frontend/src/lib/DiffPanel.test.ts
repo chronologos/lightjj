@@ -29,6 +29,8 @@ vi.mock('./api', async (importOriginal) => {
 })
 
 import DiffPanel from './DiffPanel.svelte'
+import { EditorView } from '@codemirror/view'
+import { createUnsaved, UNSAVED_KEY } from './unsaved'
 import { api, diffTargetKey, type DiffTarget, type FileChange } from './api'
 import { clearDiffCaches, derivedCache } from './diff-cache'
 import { createCommentVisibility } from './comment-visibility.svelte'
@@ -1236,17 +1238,26 @@ describe('DiffPanel', () => {
       expect(mockFileWrite).toHaveBeenCalledWith('a.go', 'OURS', { expectChangeId: 'ch-A' })
     })
 
+    // The prompt is for unsaved TEXT, so the editor must actually be edited.
+    async function openEditedEditor() {
+      mockFileShow.mockResolvedValue({ content: 'line1\nline2\n' })
+      const r = render(DiffPanel, {
+        props: props({ diffTarget: target('co-A', 'ch-A', { isWorkingCopy: true }) }),
+        context: new Map([[UNSAVED_KEY, createUnsaved()]]),
+      })
+      await settle()
+      await fireEvent.click(editBtn(r.container)!)          // open editor (splitView → true)
+      await settle()
+      const edit = () => EditorView.findFromDOM(r.container.querySelector('.cm-editor') as HTMLElement)!.dispatch({ changes: { from: 0, insert: 'X' } })
+      return { ...r, edit }
+    }
+
     it('toggleSplitView is exported and confirms — the Cmd+K palette path, not just the toolbar', async () => {
       // App's "Toggle split/unified diff" palette command calls this export;
       // writing config.splitView directly would reach the $bindable, unmount the
       // FileEditor, and silently discard its buffer with no confirm.
-      mockFileShow.mockResolvedValue({ content: 'line1\nline2\n' })
-      const { container, component } = render(DiffPanel, {
-        props: props({ diffTarget: target('co-A', 'ch-A', { isWorkingCopy: true }) }),
-      })
-      await settle()
-      await fireEvent.click(editBtn(container)!)            // open editor (splitView → true)
-      await settle()
+      const { container, component, edit } = await openEditedEditor()
+      edit()
       expect(container.querySelector('.split-editor')).toBeTruthy()
 
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
@@ -1261,13 +1272,8 @@ describe('DiffPanel', () => {
       // The editor mounts only in the split branch; toggling to unified unmounts
       // it and destroys CodeMirror's live buffer (editFileContents holds only the
       // pre-edit original). Guard mirrors startMerge's confirm-before-discard.
-      mockFileShow.mockResolvedValue({ content: 'line1\nline2\n' })
-      const { container } = render(DiffPanel, {
-        props: props({ diffTarget: target('co-A', 'ch-A', { isWorkingCopy: true }) }),
-      })
-      await settle()
-      await fireEvent.click(editBtn(container)!)            // open editor (splitView → true)
-      await settle()
+      const { container, edit } = await openEditedEditor()
+      edit()
       expect(container.querySelector('.split-editor')).toBeTruthy()
 
       // Decline the confirm → no toggle, editor (and its buffer) survive.
@@ -1283,6 +1289,15 @@ describe('DiffPanel', () => {
       await fireEvent.click(toggle)
       await settle()
       expect(container.querySelector('.split-editor')).toBeFalsy()
+      confirmSpy.mockRestore()
+    })
+
+    it('an untouched editor does not prompt', async () => {
+      const { component } = await openEditedEditor()
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      component.toggleSplitView()
+      await settle()
+      expect(confirmSpy).not.toHaveBeenCalled()
       confirmSpy.mockRestore()
     })
   })

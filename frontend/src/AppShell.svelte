@@ -206,7 +206,10 @@
     for (const t of group.tabs.filter(isClosableTab)) await handleClose(t.id)
   }
 
-  function switchTab(id: string) {
+  /** False = the user kept their unsaved work and stayed. */
+  function switchTab(id: string): boolean {
+    // The remount destroys every buffer in the outgoing App.
+    if (id !== activeTabId && appRef && !appRef.confirmLeaveTab()) return false
     // Snapshot the outgoing App's state before remount destroys it. appRef is
     // undefined on first paint (no App mounted yet) — that's the only skip.
     if (appRef) tabState.set(activeTabId, appRef.getState())
@@ -214,6 +217,7 @@
     // App's mount-time refreshes (logSync/workspacesSync/... .refresh()).
     setActiveTab(id)
     activeTabId = id
+    return true
   }
 
   const showShellError = (e: unknown) => shellMessage = errorMessage(e)
@@ -244,7 +248,7 @@
     // closes the EventSource) before the backend tears down that tab's Server.
     if (id === activeTabId) {
       const other = tabs.find(t => t.id !== id)
-      if (other) switchTab(other.id)
+      if (other && !switchTab(other.id)) return
     }
     try {
       await closeTab(id)

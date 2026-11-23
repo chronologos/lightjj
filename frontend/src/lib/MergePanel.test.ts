@@ -5,6 +5,7 @@ import { EditorState, type Transaction, type TransactionSpec, type StateField } 
 import { EditorView } from '@codemirror/view'
 import { undo, redo, undoDepth, redoDepth, isolateHistory } from '@codemirror/commands'
 import MergePanel from './MergePanel.svelte'
+import { createUnsaved, UNSAVED_KEY } from './unsaved'
 import { blockTracker, trackerHistory, takeSpec, takeAllSpec, type CenterBlock } from './merge-tracker'
 import type { MergeSides } from './conflict-extract'
 import { diffBlocks, type ChangeBlock } from './merge-diff'
@@ -494,6 +495,45 @@ describe('MergePanel — toolbar', () => {
     await fireEvent.click(container.querySelector('.btn-success')!)
     // Center seeds with theirs → save should emit theirs content.
     expect(onsave).toHaveBeenCalledWith('A\nTHEIRS\nC')
+  })
+
+  // "Unsaved" drives every discard prompt, so it must track what was WRITTEN.
+  describe('unsaved state', () => {
+    async function edited(onsave: () => Promise<boolean>) {
+      const u = createUnsaved()
+      const { container, unmount } = render(MergePanel, { props: props({ onsave }), context: new Map([[UNSAVED_KEY, u]]) })
+      const center = EditorView.findFromDOM(container.querySelectorAll('.cm-editor')[1] as HTMLElement)!
+      center.dispatch({ changes: { from: 0, insert: 'X' } })
+      const save = async () => { await fireEvent.click(container.querySelector('.btn-success')!); await new Promise(r => setTimeout(r, 0)) }
+      return { u, center, save, unmount }
+    }
+
+    it('clean after a successful save, dirty again on the next edit, gone on unmount', async () => {
+      const { u, center, save, unmount } = await edited(async () => true)
+      expect(u.any('selection')).toBe(true)
+      await save()
+      expect(u.any('tab')).toBe(false)
+      center.dispatch({ changes: { from: 0, insert: 'Y' } })
+      expect(u.any('selection')).toBe(true)
+      unmount()
+      expect(u.any('tab')).toBe(false)
+    })
+
+    it('still dirty after a failed save', async () => {
+      const { u, save } = await edited(async () => false)
+      await save()
+      expect(u.any('selection')).toBe(true)
+    })
+
+    it('keystrokes during the save stay dirty', async () => {
+      let done!: (ok: boolean) => void
+      const { u, center, save } = await edited(() => new Promise(r => { done = r }))
+      await save()
+      center.dispatch({ changes: { from: 0, insert: 'Z' } })
+      done(true)
+      await new Promise(r => setTimeout(r, 0))
+      expect(u.any('selection')).toBe(true)
+    })
   })
 
   it('Save does NOT fire when busy', async () => {

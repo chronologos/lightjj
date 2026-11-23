@@ -6,7 +6,7 @@
 // Covers the keyboard-gate.ts ORDER invariants from the App side, not just
 // the routeKeydown unit. Bombadil stays for SSE/tab-remount/real-jj e2e.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent, cleanup } from '@testing-library/svelte'
 
 // Partial mock: pure helpers (effectiveId, diffTargetKey, multiRevset, etc.)
@@ -32,6 +32,7 @@ import {
 } from './testutil/mock-api'
 import type { LogEntry } from './lib/api'
 import { waitFor } from './testutil/wait-for'
+import { EditorView } from '@codemirror/view'
 import { ApiError } from './lib/api-error'
 
 // Dispatch on body, not window: event.target must be an HTMLElement for
@@ -1114,5 +1115,175 @@ describe('App diff readiness', () => {
     await sleep(30)
     expect(qs('.diff-file')).toBeNull()
     expect(spinner()).toBeNull()
+  })
+})
+
+// ── Unsaved work ────────────────────────────────────────────────────────────
+describe('App unsaved edits', () => {
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+  const row = (i: number) => qs(`.graph-row.node-row[data-entry="${i}"]`)!
+  const cm = () => qs('.cm-editor') as HTMLElement | null
+  const text = () => EditorView.findFromDOM(cm()!)!.state.doc.toString()
+  const DIFF = 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-a\n+b\n'
+  let confirmSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false) as never })
+  afterEach(() => confirmSpy.mockRestore())
+
+  /** Editor open on the working copy's x.ts. */
+  async function openEditor(dirty = true) {
+    const f = defaultFixtures()
+    setFixtures({ diffs: { ...f.diffs, kwc: DIFF }, files: { ...f.files, kwc: [mkFileChange({ path: 'x.ts' })] } })
+    const r = await mountApp()
+    await waitFor(() => qs('.diff-file') !== null)
+    await waitFor(() => [...document.querySelectorAll('.diff-file button')].some(b => b.textContent?.trim() === 'Edit'))
+    await fireEvent.click([...document.querySelectorAll('.diff-file button')].find(b => b.textContent?.trim() === 'Edit')!)
+    await waitFor(() => cm() !== null)
+    if (dirty) EditorView.findFromDOM(cm()!)!.dispatch({ changes: { from: 0, insert: 'MINE' } })
+    return r
+  }
+
+  const exits: [string, () => Promise<unknown>][] = [
+    ['row click', () => fireEvent.click(row(1))],
+    ['j', () => press('j')],
+    ['Space (check)', () => press(' ')],
+    ['2 (branches)', () => press('2')],
+    ['3 (merge)', () => press('3')],
+    ['row context menu → Rebase', async () => {
+      await fireEvent.contextMenu(row(1))
+      await waitFor(() => qs('.ctx-item') !== null)
+      await fireEvent.click([...document.querySelectorAll('.ctx-item')].find(b => b.textContent?.includes('Rebase'))!)
+    }],
+  ]
+
+  it.each(exits)('%s: declining keeps the editor, its text and the selection', async (_, exit) => {
+    await openEditor()
+    const el = cm()
+    await exit()
+    await sleep(150)
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes to x.ts?')
+    expect(cm()).toBe(el)
+    expect(text()).toBe('MINE')
+    expect(selectedEntry()).toBe('0')
+    expect(qs('.statusbar.rebase-active')).toBeNull() // and never acts on the row it didn't select
+  })
+
+  it.each(exits)('%s: an untouched editor never prompts', async (_, exit) => {
+    await openEditor(false)
+    await exit()
+    await sleep(60)
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+
+  it('a chip that would move off the edited revision asks; one that stays on @ does not', async () => {
+    await openEditor() // editing @, and the revset reset lands on @
+    const el = cm()
+    await fireEvent.click(qs('.preset-chip')!)
+    await sleep(100)
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(cm()).toBe(el)
+  })
+
+  it('accepting discards, moves on, and asks once', async () => {
+    confirmSpy.mockReturnValue(true as never)
+    await openEditor()
+    await fireEvent.click(row(1))
+    await waitFor(() => cm() === null)
+    expect(selectedEntry()).toBe('1')
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('agent navigate is refused, without a prompt', async () => {
+    await openEditor()
+    triggerNavigate({ change_id: 'cmid' })
+    await waitFor(() => qs('.message-text')?.textContent?.includes('Agent navigate ignored') === true)
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(text()).toBe('MINE')
+  })
+
+  it('tab switch and page unload are guarded; a description draft counts there but not for row clicks', async () => {
+    const { component } = await mountApp()
+    const unload = () => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented }
+    expect(unload()).toBe(false)
+    expect(component.confirmLeaveTab()).toBe(true)
+    await press('e')
+    await waitFor(() => qs('.desc-editor textarea') !== null)
+    const ta = qs('.desc-editor textarea') as HTMLTextAreaElement
+    ta.value = 'draft'
+    await fireEvent.input(ta)
+    await fireEvent.click(row(1))
+    await sleep(60)
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(selectedEntry()).toBe('1')
+    expect(unload()).toBe(true)
+    expect(component.confirmLeaveTab()).toBe(false)
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes to the description?')
+  })
+
+  it('the edited revision vanishing externally keeps the editor; cancelling it releases the panel', async () => {
+    await openEditor()
+    const el = cm()
+    const f = defaultFixtures()
+    setFixtures({ revisions: [mkRevision({ change_id: 'cnew', commit_id: 'knew', is_working_copy: true }), f.revisions[1], f.revisions[2]] })
+    triggerStale('op-vanish')
+    await waitFor(() => qs('.message-text')?.textContent?.includes('your unsaved edits are kept') === true)
+    expect(cm()).toBe(el)
+    expect(text()).toBe('MINE')
+    expect(confirmSpy).not.toHaveBeenCalled() // nobody asked for this; nothing to agree to
+
+    confirmSpy.mockReturnValue(true as never)
+    await fireEvent.click([...document.querySelectorAll('.diff-file button')].find(b => b.textContent?.trim() === 'Cancel')!)
+    await waitFor(() => selectedEntry() === '0')
+    expect(cm()).toBeNull()
+  })
+
+  it('Cancel on a dirty editor asks', async () => {
+    await openEditor()
+    await fireEvent.click([...document.querySelectorAll('.diff-file button')].find(b => b.textContent?.trim() === 'Cancel')!)
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(text()).toBe('MINE')
+  })
+
+  it('a saved editor does not prompt afterwards', async () => {
+    await openEditor()
+    await fireEvent.click([...document.querySelectorAll('.diff-file button')].find(b => b.textContent?.trim() === 'Save')!)
+    await waitFor(() => cm() === null)
+    await fireEvent.click(row(1))
+    await waitFor(() => selectedEntry() === '1')
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('App revset input', () => {
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+  const input = () => qs('.revset-input') as HTMLInputElement
+  const logArgs = () => calls.filter(c => c.method === 'log').map(c => c.args[0])
+
+  it('a background refresh never submits a half-typed revset', async () => {
+    await mountApp()
+    input().focus()
+    input().value = 'mine() &'
+    await fireEvent.input(input())
+    triggerStale('op-bg')
+    await waitFor(() => logArgs().length === 2)
+    await sleep(30)
+    expect(logArgs()).toEqual([undefined, undefined])
+    expect(input().value).toBe('mine() &')
+    await fireEvent.keyDown(input(), { key: 'Enter' })
+    await waitFor(() => logArgs().length === 3)
+    expect(logArgs()[2]).toBe('mine() &')
+  })
+
+  it('a background refresh does not take focus from an empty commit message', async () => {
+    await mountApp()
+    await press('c')
+    await waitFor(() => qs('.desc-editor textarea') !== null)
+    await sleep(50)
+    const ta = qs('.desc-editor textarea')
+    expect(document.activeElement).toBe(ta)
+    triggerStale('op-bg2')
+    await waitFor(() => logArgs().length === 2)
+    await sleep(30)
+    expect(document.activeElement).toBe(ta)
   })
 })

@@ -456,18 +456,14 @@ describe('startMerge / saveMerge', () => {
     expect(fa.mergeSides?.theirs).toBe('THEIRS')
   })
 
-  it('other files being edited → confirm; declined = no-op', async () => {
+  it('unsaved edits: declined = no-op', async () => {
     liveTarget = target('co-A', 'ch-A', { isWorkingCopy: true })
-    const fa = createFileActions(deps)
+    const fa = createFileActions({ ...deps, confirmDiscard: () => false })
     mockApi.fileShow.mockResolvedValueOnce({ content: 'plain' })
     await fa.startEdit('other.go')
-
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     await fa.startMerge('a.go')
-    expect(confirmSpy).toHaveBeenCalled()
     expect(fa.mergingPath).toBeNull()
     expect(fa.editingFiles.has('other.go')).toBe(true) // edits survive
-    confirmSpy.mockRestore()
   })
 
   it('confirm accepted → all editors cleared, merge opens', async () => {

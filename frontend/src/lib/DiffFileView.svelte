@@ -813,7 +813,7 @@
     {/if}
     {#if editing && onsavefile && oncanceledit}
       <button class="btn btn-sm btn-primary" disabled={editBusy || !editorRef} onclick={(e: MouseEvent) => { e.stopPropagation(); if (editorRef) onsavefile(filePath, editorRef.getContent()) }} title="Save changes (Ctrl+S)">{editBusy ? 'Saving…' : 'Save'}</button>
-      <button class="btn btn-sm" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); oncanceledit(filePath) }} title="Cancel editing (Esc)">Cancel</button>
+      <button class="btn btn-sm" disabled={editBusy} onclick={(e: MouseEvent) => { e.stopPropagation(); if (editorRef) editorRef.requestCancel(); else oncanceledit(filePath) }} title="Cancel editing (Esc)">Cancel</button>
     {/if}
     {#if isConflict}
       <!-- Gate on fileStats.conflict (backend truth), not findConflicts:

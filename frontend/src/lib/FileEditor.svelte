@@ -5,6 +5,7 @@
   import { defaultKeymap, indentWithTab } from '@codemirror/commands'
   import { foldGutter, foldEffect, unfoldAll, bracketMatching, indentUnit } from '@codemirror/language'
   import { detectIndent, getCmLanguage, cmTheme, cmHighlight } from './cm-shared'
+  import { registerUnsaved } from './unsaved'
 
   interface Props {
     content: string
@@ -18,6 +19,16 @@
 
   let containerEl: HTMLDivElement | undefined = $state(undefined)
   let view: EditorView | undefined
+  let initialDoc: EditorState['doc'] | undefined
+
+  const isDirty = () => !!view && !!initialDoc && !view.state.doc.eq(initialDoc)
+  const unsaved = registerUnsaved({ label: () => filePath, lostOn: 'selection', dirty: isDirty })
+
+  /** Cancel, asking first when there is something to lose. */
+  export function requestCancel(): void {
+    if (isDirty() && !confirm(`Discard unsaved changes to ${filePath}?`)) return
+    oncancel()
+  }
 
   function computeFoldRanges(doc: EditorState['doc'], ranges: Props['changedRanges']): { from: number; to: number }[] {
     if (ranges.length === 0) return []
@@ -95,13 +106,15 @@
         // `view` is guaranteed non-null when the keymap fires because it's set
         // immediately after EditorView construction, before any user interaction.
         { key: 'Mod-s', run: () => { if (view) onsave(view.state.doc.toString()); return true } },
-        { key: 'Escape', run: () => { oncancel(); return true } },
+        { key: 'Escape', run: () => { requestCancel(); return true } },
       ]),
       cmTheme,
       langCompartment.of([]),
+      EditorView.updateListener.of(u => { if (u.docChanged) unsaved.touch() }),
     ]
 
     const state = EditorState.create({ doc: content, extensions })
+    initialDoc = state.doc
     const editorView = new EditorView({ state, parent: containerEl })
 
     const foldRanges = computeFoldRanges(state.doc, changedRanges)
