@@ -250,7 +250,7 @@ export interface CreatePREligibility {
 
 /** Can we offer "Create PR" for this branch? Needs a local ref that has been
  *  pushed and has no open PR yet. Callers must ALSO check that a GitHub repo
- *  resolved (empty repo string from /api/github-repo hides the affordance). */
+ *  resolved (empty `github_repo` from /api/remotes hides the affordance). */
 export function canCreatePR(e: CreatePREligibility): boolean {
   return e.hasLocalRef && e.onRemote && !e.hasOpenPR
 }

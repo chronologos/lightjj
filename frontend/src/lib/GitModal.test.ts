@@ -59,7 +59,7 @@ describe('GitModal', () => {
   describe('buildOps via rendered output', () => {
     it('no bookmarks, single remote → general push ops + flagless fetch (respects git.fetch)', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
@@ -75,7 +75,7 @@ describe('GitModal', () => {
       mockBookmarks.mockResolvedValue([
         localBm('feat'),
       ])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
@@ -85,7 +85,7 @@ describe('GitModal', () => {
     it('currentBookmarks → those push ops sort first, hotkey 1 fires it', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([localBm('aaa'), localBm('bbb'), localBm('ccc')])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps({ currentBookmarks: ['bbb'], onexecute }) })
 
       const cmds = await waitForCmds(container)
@@ -104,7 +104,7 @@ describe('GitModal', () => {
 
     it('multiple currentBookmarks → api order preserved within here-group', async () => {
       mockBookmarks.mockResolvedValue([localBm('aaa'), localBm('bbb'), localBm('ccc')])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps({ currentBookmarks: ['ccc', 'aaa'] }) })
 
       const cmds = await waitForCmds(container)
@@ -121,7 +121,7 @@ describe('GitModal', () => {
       mockBookmarks.mockResolvedValue([
         makeBookmark({ name: 'feat', local: undefined }),
       ])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
@@ -130,7 +130,7 @@ describe('GitModal', () => {
 
     it('with changeId → shows --change push op', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps({ currentChangeId: 'abcdefghijklmnop' }) })
 
       const cmds = await waitForCmds(container)
@@ -141,7 +141,7 @@ describe('GitModal', () => {
 
     it('without changeId → no --change push op', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps({ currentChangeId: null }) })
 
       const cmds = await waitForCmds(container)
@@ -152,7 +152,7 @@ describe('GitModal', () => {
       // Fork workflow: git.fetch=["upstream","origin"]. `f` (flagless) honors
       // it. Explicit entry covers "just this one" (pill selector scopes it).
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin', 'upstream'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin', 'upstream'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
@@ -163,7 +163,7 @@ describe('GitModal', () => {
 
     it('single remote → flagless fetch only (no explicit, no all-remotes)', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
@@ -173,7 +173,7 @@ describe('GitModal', () => {
 
     it('common ops sort above per-bookmark pushes, scoped/rare ops below', async () => {
       mockBookmarks.mockResolvedValue([localBm('feat'), localBm('other')])
-      mockRemotes.mockResolvedValue(['origin', 'upstream'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin', 'upstream'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps({ currentChangeId: 'abcdefghijklmnop' }) })
 
       const cmds = await waitForCmds(container)
@@ -193,7 +193,7 @@ describe('GitModal', () => {
 
     it('first remote used as default, not hardcoded origin', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['github'])
+      mockRemotes.mockResolvedValue({ remotes: ['github'], github_repo: '' })
       const { container } = render(GitModal, { props: defaultProps() })
 
       const cmds = await waitForCmds(container)
@@ -205,7 +205,7 @@ describe('GitModal', () => {
   describe('rendering states', () => {
     it('open=false → not rendered', () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue([])
+      mockRemotes.mockResolvedValue({ remotes: [], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps({ open: false }) })
       expect(container.querySelector('.modal')).not.toBeInTheDocument()
@@ -235,7 +235,7 @@ describe('GitModal', () => {
 
     it('ops rendered with push/fetch CSS classes', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps() })
 
@@ -250,7 +250,7 @@ describe('GitModal', () => {
   describe('keyboard navigation', () => {
     it('ArrowDown navigates down', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps() })
 
@@ -267,7 +267,7 @@ describe('GitModal', () => {
 
     it('ArrowUp navigates up', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps() })
 
@@ -287,7 +287,7 @@ describe('GitModal', () => {
     it('Enter executes selected op (index 0 = Fetch)', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
 
@@ -306,7 +306,7 @@ describe('GitModal', () => {
     it('hotkey fires op directly', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([localBm('feat')])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
       await waitFor(() => expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0))
@@ -320,7 +320,7 @@ describe('GitModal', () => {
     it('scope hotkeys (a/d/f) fire matching ops', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
       await waitFor(() => expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0))
@@ -333,7 +333,7 @@ describe('GitModal', () => {
     it('modifier keys bypass hotkey dispatch', async () => {
       const onexecute = vi.fn()
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps({ onexecute }) })
       await waitFor(() => expect(container.querySelectorAll('.git-item').length).toBeGreaterThan(0))
@@ -345,7 +345,7 @@ describe('GitModal', () => {
 
     it('Escape closes', async () => {
       mockBookmarks.mockResolvedValue([])
-      mockRemotes.mockResolvedValue(['origin'])
+      mockRemotes.mockResolvedValue({ remotes: ['origin'], github_repo: '' })
 
       const { container } = render(GitModal, { props: defaultProps() })
 

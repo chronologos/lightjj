@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { api, bookmarkPushFlags, type Bookmark } from './api'
+  import { api, bookmarkPushFlags, type Bookmark, type RemotesResponse } from './api'
   import { createLoader } from './loader.svelte'
   import { fuzzyMatch } from './fuzzy'
   import { groupByWithIndex } from './group-by'
@@ -46,10 +46,10 @@
   let previousFocus: HTMLElement | null = null
   const data = createLoader(
     () => Promise.all([api.bookmarks({ local: true }), api.remotes()]),
-    [[], []] as [Bookmark[], string[]],
+    [[], { remotes: [], github_repo: '' }] as [Bookmark[], RemotesResponse],
   )
   let bookmarks = $derived(data.value[0])
-  let remotes = $derived(data.value[1])
+  let remotes = $derived(data.value[1].remotes)
   let selectedRemote = $derived(remoteOverride ?? remotes[0] ?? 'origin')
 
   function buildOps(bms: Bookmark[], remote: string, allRemotes: string[], changeId: string | null, here: ReadonlySet<string>): GitOp[] {

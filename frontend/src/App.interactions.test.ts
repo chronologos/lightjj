@@ -1296,3 +1296,20 @@ describe('App jj version floor', () => {
     expect(qs('.message-text')?.textContent?.trim() ?? null).toBe(want)
   })
 })
+
+describe('App Create PR affordance', () => {
+  const badge = { name: 'feat', remote: 'origin' }
+  it.each([['a/b', true], ['', false]])('github_repo=%j → offered: %s', async (githubRepo, offered) => {
+    const [wc, ...rest] = defaultFixtures().revisions
+    setFixtures({ githubRepo, revisions: [{ ...wc, bookmarks: [{ name: 'feat' }], remote_bookmarks: [badge] } as LogEntry, ...rest] })
+    await mountApp()
+    await new Promise(r => setTimeout(r, 30))
+    await fireEvent.keyDown(document.body, { key: 'k', metaKey: true })
+    await waitFor(() => qs('.palette') !== null)
+    const input = qs('.palette-input') as HTMLInputElement
+    input.value = 'feat'
+    await fireEvent.input(input)
+    const labels = [...document.querySelectorAll('.palette-label')].map(l => l.textContent)
+    expect(labels.some(l => l?.includes('Create PR for feat'))).toBe(offered)
+  })
+})

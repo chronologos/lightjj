@@ -159,7 +159,7 @@ func ParseRemoteListOutput(output string, defaultRemote string) []string {
 // ParseRemoteURLs returns remote name → URL. Accepts both `jj git remote list`
 // ("name url") and `git remote -v` ("name\turl (fetch)") — Fields() splits on
 // any whitespace, the trailing "(fetch)"/"(push)" is just ignored. Used by
-// resolveGHRepo; the git form is a fallback for repos with refspecs jj can't
+// ghRepo; the git form is a fallback for repos with refspecs jj can't
 // parse (negative globs like ^refs/heads/ci/*).
 func ParseRemoteURLs(output string) map[string]string {
 	m := map[string]string{}

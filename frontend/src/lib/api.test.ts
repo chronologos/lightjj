@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, prefetchFilesBatch, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
+import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -43,7 +43,7 @@ describe('tab routing', () => {
     await api.diff('sha256abc')
     expect(_testInternals.cache.has('diff:sha256abc')).toBe(true)
 
-    mockFetch.mockResolvedValue(mockResponse(['origin']))
+    mockFetch.mockResolvedValue(mockResponse({ remotes: ['origin'], github_repo: '' }))
     await api.remotes()
 
     setActiveTab('1')
@@ -51,9 +51,9 @@ describe('tab routing', () => {
     // commit_id cache survives — SHA-256 is globally unique across repos
     expect(_testInternals.cache.has('diff:sha256abc')).toBe(true)
     // per-repo memo cleared
-    mockFetch.mockResolvedValue(mockResponse(['upstream']))
+    mockFetch.mockResolvedValue(mockResponse({ remotes: ['upstream'], github_repo: '' }))
     const r = await api.remotes()
-    expect(r).toEqual(['upstream']) // refetched, not the tab-0 memo
+    expect(r.remotes).toEqual(['upstream']) // refetched, not the tab-0 memo
     expect(mockFetch).toHaveBeenLastCalledWith('/tab/1/api/remotes', expect.anything())
   })
 
@@ -234,42 +234,17 @@ describe('response cache', () => {
     expect(_testInternals.cache.has('diff:revNew')).toBe(true)
   })
 
-  it('re-storing an existing key at capacity bumps it (no spurious eviction)', async () => {
-    // Regression: Map.set() on an existing key does NOT move it in insertion
-    // order. Without delete-first in storeInCache, the old pre-check
-    // `if (size >= MAX)` would evict rev0 even when the key being stored
-    // (diff:target) is already present — no net growth, wrong entry killed.
-    //
-    // Happens in practice when api.revision() seeds diff:X while diff:X is
-    // already cached but files:X / desc:X aren't (partial cache state).
-    const MAX = MAX_CACHE_SIZE
-    mockFetch.mockImplementation(() => Promise.resolve(mockResponse({ diff: '+x' }, 'op1')))
-
-    // Fill to MAX - 2 (leave room for files: + desc: seeds)
-    for (let i = 0; i < MAX - 2; i++) {
-      await api.diff(`rev${i}`)
-    }
-    // diff:target is already in cache; files:target and desc:target are not.
-    // isCached('target') → false → api.revision() will fetch and seed all three.
-    const target = `rev${MAX - 3}`
-    expect(_testInternals.cache.has(`diff:${target}`)).toBe(true)
-    expect(_testInternals.cache.size).toBe(MAX - 2)
-
-    mockFetch.mockResolvedValueOnce(mockResponse({
-      diff: '+x', files: [], description: 'msg',
-    }, 'op1'))
-    await api.revision(target)
-
-    // Now at MAX (added files:target + desc:target). diff:target was re-stored.
-    // With delete-first: diff:target was bumped to newest, no eviction.
-    // rev0 (oldest) must still be present — net growth was only +2, within cap.
-    expect(_testInternals.cache.size).toBe(MAX)
-    expect(_testInternals.cache.has('diff:rev0')).toBe(true)
-    // diff:target should now be at the END (bumped), verified by adding one
-    // more entry and checking it's NOT evicted:
-    await api.diff('overflow')
-    expect(_testInternals.cache.has(`diff:${target}`)).toBe(true) // bumped, survives
-    expect(_testInternals.cache.has('diff:rev0')).toBe(false)     // oldest, evicted
+  it('re-storing an existing key bumps it', async () => {
+    // Map.set() does NOT reorder an existing key, so storeInCache deletes first.
+    // Happens when a prefetch and a navigation fetch the same diff: both miss,
+    // both store.
+    const res: Array<() => void> = []
+    mockFetch.mockImplementation(() => new Promise(r => res.push(() => r(mockResponse({ diff: '+x' }, 'op1')))))
+    const [a1, a2, b] = [api.diff('a'), api.diff('a'), api.diff('b')]
+    res[0](); await a1
+    res[2](); await b
+    res[1](); await a2
+    expect([..._testInternals.cache.keys()]).toEqual(['diff:b', 'diff:a'])
   })
 
   it('bumps accessed entries to end of eviction order (LRU)', async () => {
@@ -390,7 +365,7 @@ describe('onStale', () => {
 
   it('op-id change drops the aliases/remotes session memos so the next call refetches', async () => {
     // Memoize remotes under op1.
-    mockFetch.mockResolvedValueOnce(mockResponse(['origin'], 'op1'))
+    mockFetch.mockResolvedValueOnce(mockResponse({ remotes: ['origin'], github_repo: '' }, 'op1'))
     await api.remotes()
     await api.remotes() // memo hit
     expect(mockFetch).toHaveBeenCalledTimes(1)
@@ -400,13 +375,13 @@ describe('onStale', () => {
     await api.log()
 
     // Memo was dropped → refetch picks up the externally-added remote.
-    mockFetch.mockResolvedValueOnce(mockResponse(['origin', 'upstream'], 'op2'))
+    mockFetch.mockResolvedValueOnce(mockResponse({ remotes: ['origin', 'upstream'], github_repo: 'a/b' }, 'op2'))
     const r = await api.remotes()
-    expect(r).toEqual(['origin', 'upstream'])
+    expect(r.remotes).toEqual(['origin', 'upstream'])
     expect(mockFetch).toHaveBeenCalledTimes(3)
   })
 
-  it('op-id change does NOT drop the info memo (feature gates must not flap)', async () => {
+  it('op-id change does NOT drop the info memo ', async () => {
     mockFetch.mockResolvedValueOnce(mockResponse({ repo_path: '/r', ssh_mode: false }, 'op1'))
     await api.info()
 
@@ -687,11 +662,14 @@ describe('timeout', () => {
 })
 
 describe('prefetchRevision', () => {
-  it('fires single batch fetch for uncached revision', () => {
-    mockFetch.mockResolvedValue(mockResponse({ diff: '', files: [], description: '' }, 'op1'))
+  it('warms all three keys; navigation then hits the cache', async () => {
+    mockFetch.mockImplementation((url: string) => Promise.resolve(mockResponse(
+      url.includes('/api/diff') ? { diff: 'd' } : { files: [], description: 'msg' }, 'op1')))
     prefetchRevision('abc')
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    expect(mockFetch.mock.calls[0][0]).toContain('/api/revision?revision=abc')
+    await new Promise(r => setTimeout(r, 0))
+    expect(mockFetch.mock.calls.map(c => (c[0] as string).replace(/.*\/api/, '/api'))).toEqual([
+      '/api/diff?revision=abc', '/api/revision-meta?revision=abc&immutable=1'])
+    expect(getCached('abc')).toEqual({ diff: 'd', files: [], description: 'msg' })
   })
 
   it('skips fetch when already cached', () => {
@@ -707,148 +685,16 @@ describe('prefetchRevision', () => {
     // Should not throw
     prefetchRevision('abc')
     await new Promise(r => setTimeout(r, 0)) // let rejections settle
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('api.revision (batch endpoint)', () => {
-  it('seeds all three cache keys from one fetch', async () => {
-    mockFetch.mockResolvedValue(mockResponse({
-      diff: 'diff output',
-      files: [{ type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 }],
-      description: 'msg',
-    }, 'op1'))
-
-    await api.revision('xyz')
-
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    // Individual cache keys are now populated with shapes matching the
-    // individual endpoints' responses. No op-id suffix.
-    expect(_testInternals.cache.get('diff:xyz')).toEqual({ diff: 'diff output' })
-    expect(_testInternals.cache.get('files:xyz')).toEqual([
-      { type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 },
-    ])
-    expect(_testInternals.cache.get('desc:xyz')).toEqual({ description: 'msg' })
-  })
-
-  it('skips fetch when all three keys are already cached', async () => {
-    _testInternals.cache.set('diff:xyz', { diff: 'cached' })
-    _testInternals.cache.set('files:xyz', [])
-    _testInternals.cache.set('desc:xyz', { description: 'cached' })
-
-    await api.revision('xyz')
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  it('seeded keys are hit by subsequent individual api calls', async () => {
-    mockFetch.mockResolvedValue(mockResponse({
-      diff: 'batch diff', files: [], description: 'batch desc',
-    }, 'op1'))
-
-    await api.revision('seed')
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-
-    // These should be cache hits — no additional fetches.
-    const d = await api.diff('seed')
-    const f = await api.files('seed')
-    const desc = await api.description('seed')
-
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    expect(d).toEqual({ diff: 'batch diff' })
-    expect(f).toEqual([])
-    expect(desc).toEqual({ description: 'batch desc' })
-  })
-
-  it('seeds cache even when op-id advances during fetch — commit_id is immutable', async () => {
-    _testInternals.lastOpId = 'op1'
-    // Response carries a newer op-id → trackOpId bumps lastOpId mid-flight.
-    // Under the old model this would skip caching. Now: commit_id content-
-    // addresses the data, so the fetch result is valid regardless of what
-    // op-ids advanced while it was in flight.
-    mockFetch.mockResolvedValue(mockResponse({
-      diff: 'still valid', files: [], description: 'still valid',
-    }, 'op2'))
-
-    await api.revision('concurrent')
-
-    expect(_testInternals.cache.get('diff:concurrent')).toEqual({ diff: 'still valid' })
-  })
-})
-
-describe('prefetchFilesBatch', () => {
-  it('seeds files: cache keys for non-conflicted revisions', async () => {
-    mockFetch.mockResolvedValue(mockResponse({
-      'abc': { conflict: false, files: [{ type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 }] },
-      'def': { conflict: false, files: [] },
-    }, 'op1'))
-
-    await prefetchFilesBatch(['abc', 'def'])
-
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    expect(mockFetch.mock.calls[0][0]).toContain('/api/files-batch?revisions=abc%2Cdef')
-    expect(_testInternals.cache.has('files:abc')).toBe(true)
-    expect(_testInternals.cache.has('files:def')).toBe(true)
-  })
-
-  it('skips seeding conflicted revisions — they need full /api/files', async () => {
-    mockFetch.mockResolvedValue(mockResponse({
-      'clean': { conflict: false, files: [] },
-      'conflicted': { conflict: true, files: [{ type: 'M', path: 'x', additions: 0, deletions: 0, conflict: false, conflict_sides: 0 }] },
-    }, 'op1'))
-
-    await prefetchFilesBatch(['clean', 'conflicted'])
-
-    expect(_testInternals.cache.has('files:clean')).toBe(true)
-    expect(_testInternals.cache.has('files:conflicted')).toBe(false)
-  })
-
-  it('filters to uncached — empty fetch if all cached', async () => {
-    _testInternals.cache.set('files:abc', [])
-    _testInternals.cache.set('files:def', [])
-
-    await prefetchFilesBatch(['abc', 'def'])
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  it('only sends uncached ids', async () => {
-    _testInternals.cache.set('files:abc', [])
-    mockFetch.mockResolvedValue(mockResponse({ 'def': { conflict: false, files: [] } }, 'op1'))
-
-    await prefetchFilesBatch(['abc', 'def'])
-
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    // Only 'def' in the request
-    expect(mockFetch.mock.calls[0][0]).toContain('revisions=def')
-    expect(mockFetch.mock.calls[0][0]).not.toContain('abc')
-  })
-
-  it('swallows fetch errors silently', async () => {
-    mockFetch.mockRejectedValue(new Error('network'))
-    await prefetchFilesBatch(['abc']) // should not throw
-    expect(_testInternals.cache.has('files:abc')).toBe(false)
-  })
-
-  it('seeded files: key is hit by subsequent api.files()', async () => {
-    const filesData = [{ type: 'M', path: 'a.go', additions: 1, deletions: 0, conflict: false, conflict_sides: 0 }]
-    mockFetch.mockResolvedValue(mockResponse({
-      'seeded': { conflict: false, files: filesData },
-    }, 'op1'))
-
-    await prefetchFilesBatch(['seeded'])
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-
-    const result = await api.files('seeded')
-    expect(mockFetch).toHaveBeenCalledTimes(1) // cache hit
-    expect(result).toEqual(filesData)
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })
 
 describe('session-cached endpoints', () => {
   it('caches remotes() — second call does not fetch', async () => {
-    mockFetch.mockResolvedValue(mockResponse(['origin', 'upstream']))
+    mockFetch.mockResolvedValue(mockResponse({ remotes: ['origin', 'upstream'], github_repo: '' }))
     const r1 = await api.remotes()
     const r2 = await api.remotes()
-    expect(r1).toEqual(['origin', 'upstream'])
+    expect(r1.remotes).toEqual(['origin', 'upstream'])
     expect(r2).toBe(r1) // same promise resolution
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
@@ -856,9 +702,9 @@ describe('session-cached endpoints', () => {
   it('retries remotes() after failure', async () => {
     mockFetch.mockRejectedValueOnce(new Error('fail'))
     await expect(api.remotes()).rejects.toThrow('fail')
-    mockFetch.mockResolvedValueOnce(mockResponse(['origin']))
+    mockFetch.mockResolvedValueOnce(mockResponse({ remotes: ['origin'], github_repo: '' }))
     const r = await api.remotes()
-    expect(r).toEqual(['origin'])
+    expect(r.remotes).toEqual(['origin'])
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })

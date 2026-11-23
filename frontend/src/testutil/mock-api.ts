@@ -22,6 +22,7 @@ export interface Fixtures {
   pullRequests: PullRequest[]
   bookmarks: Bookmark[]
   remotes: string[]
+  githubRepo: string
   /** Unified diff text keyed by commit_id (single) or `connected(...)` revset (multi). */
   diffs: Record<string, string>
   /** FileChange[] keyed by commit_id. */
@@ -98,6 +99,7 @@ export function defaultFixtures(): Fixtures {
     pullRequests: [],
     bookmarks: [],
     remotes: ['origin'],
+    githubRepo: '',
     diffs: { kwc: '', kmid: '', ktrunk: '' },
     files: { kwc: [], kmid: [mkFileChange()], ktrunk: [] },
     descriptions: { kwc: '', kmid: 'feature work', ktrunk: 'main' },
@@ -187,7 +189,7 @@ export const mockApi = new Proxy({} as Record<string, (...args: unknown[]) => Pr
         case 'aliases': return Promise.resolve(_fixtures.aliases)
         case 'pullRequests': return Promise.resolve(_fixtures.pullRequests)
         case 'bookmarks': return Promise.resolve(_fixtures.bookmarks)
-        case 'remotes': return Promise.resolve(_fixtures.remotes)
+        case 'remotes': return Promise.resolve({ remotes: _fixtures.remotes, github_repo: _fixtures.githubRepo })
         case 'revision': return Promise.resolve()
         case 'diff': return Promise.resolve({ diff: _fixtures.diffs[a0!] ?? '' })
         case 'files': return Promise.resolve(_fixtures.files[a0!] ?? [])
@@ -242,7 +244,6 @@ export const netStubs = {
   clearAllCaches: () => {},
   getCached: () => undefined,
   prefetchRevision: noopAsync,
-  prefetchFilesBatch: noopAsync,
   fetchRevisionMeta: noopAsync,
   agentBaseURL: () => 'http://test/tab/0',
   // Tab-level helpers (AppShell uses these; App doesn't, but importActual

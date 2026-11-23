@@ -306,7 +306,6 @@ export function onSSEState(callback: (connected: boolean) => void): () => void {
 function clearSessionMemos(): void {
   _remotes = undefined
   _aliases = undefined
-  _githubRepo = undefined
   _info = undefined
 }
 
@@ -419,7 +418,6 @@ function notifyOpId(opId: string) {
   // can't change for a running server.
   _remotes = undefined
   _aliases = undefined
-  _githubRepo = undefined
 
   if (staleCallbacks.size > 0 && !refreshQueued) {
     refreshQueued = true
@@ -709,7 +707,7 @@ async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
 }
 
 // storeInCache is the single cache-write path. Used by cachedRequest() and by
-// api.revision() to seed individual cache keys from a batch response. No
+// fetchRevisionMeta() to seed individual cache keys from one response. No
 // concurrency guard needed — commit_id is immutable by construction, so a
 // value fetched for commit_id X is valid regardless of what op-id advances
 // happened during the fetch.
@@ -741,32 +739,11 @@ export function getCached(commitId: string): { diff: string; files: FileChange[]
   return { diff: d.diff, files: f, description: desc.description }
 }
 
-/** Boolean check — direct Map.has() lookups. Used by prefetchRevision and
- *  api.revision to skip fetches. NOT getCached() — that does 3 LRU bumps
+/** Boolean check — direct Map.has() lookups. Used by prefetchRevision to skip
+ *  fetches. NOT getCached() — that does 3 LRU bumps
  *  (delete+reinsert) which is waste when the caller only wants a boolean. */
 export function isCached(commitId: string): boolean {
   return cache.has(`diff:${commitId}`) && cache.has(`files:${commitId}`) && cache.has(`desc:${commitId}`)
-}
-
-interface RevisionResponse {
-  diff: string
-  files: FileChange[]
-  description: string
-}
-
-// fetchRevision hits the batch endpoint and seeds the three individual cache
-// keys (diff:X, files:X, desc:X) so subsequent api.diff()/files()/description()
-// calls are microtask-fast cache hits. The shapes written to each key exactly
-// match what the individual endpoints return — the cache doesn't care which
-// wire protocol populated it.
-async function fetchRevision(commitId: string): Promise<RevisionResponse> {
-  // immutable=1: commit_id is a content hash, response is valid forever.
-  // Browser disk cache survives page reload; our in-memory cache doesn't.
-  const result = await request<RevisionResponse>(`/api/revision?revision=${encodeURIComponent(commitId)}&immutable=1`)
-  storeInCache(`diff:${commitId}`, { diff: result.diff })
-  storeInCache(`files:${commitId}`, result.files)
-  storeInCache(`desc:${commitId}`, { description: result.description })
-  return result
 }
 
 /** Meta-only endpoint (files + description, NO diff) — seeds two cache keys.
@@ -782,58 +759,27 @@ export async function fetchRevisionMeta(commitId: string): Promise<void> {
 }
 
 /** Warm the cache for a revision's diff/files/description without applying
- *  results to UI state. Fire-and-forget. Used during nav debounce to pre-load
- *  adjacent revisions so sequential j/k is instant. */
+ *  results to UI state. Fire-and-forget: errors are invisible, the real
+ *  navigation will retry. */
 export function prefetchRevision(commitId: string): void {
   if (isCached(commitId)) return
-  // Batch endpoint: one HTTP round-trip instead of three. Result seeds all
-  // three cache keys. Errors swallowed: prefetch failures are invisible,
-  // the real navigation will retry.
-  fetchRevision(commitId).catch(() => {})
-}
-
-interface FilesBatchEntry {
-  conflict: boolean
-  files: FileChange[]
-}
-
-/** Pre-load file lists (status + path + line counts) for multiple commit_ids
- *  in one backend call (single jj subprocess for N revisions). Seeds the
- *  `files:X` cache key for each non-conflicted revision so the file-list
- *  sidebar shows instantly during j/k navigation.
- *
- *  Conflicted commits are skipped — they need conflict_side_count detail that
- *  the batch template doesn't provide. Those fall back to /api/files on actual
- *  navigation.
- *
- *  Fire-and-forget; errors swallowed. Call after loadLog() with a window of
- *  ~10 revisions around the selected index. */
-export async function prefetchFilesBatch(commitIds: string[]): Promise<void> {
-  const uncached = commitIds.filter(id => !cache.has(`files:${id}`))
-  if (uncached.length === 0) return
-  try {
-    const result = await request<Record<string, FilesBatchEntry>>(
-      `/api/files-batch?revisions=${encodeURIComponent(uncached.join(','))}`,
-    )
-    for (const [commitId, entry] of Object.entries(result)) {
-      // Conflicted commits need side-count detail the batch call doesn't
-      // provide. Skip seeding so actual navigation triggers /api/files.
-      if (entry.conflict) continue
-      storeInCache(`files:${commitId}`, entry.files)
-    }
-  } catch { /* prefetch failure is invisible — real nav retries via /api/files */ }
+  api.diff(commitId).catch(() => {})
+  fetchRevisionMeta(commitId).catch(() => {})
 }
 
 // Session-stable data — remotes/aliases don't change mid-session unless the
 // user edits jj config externally. Cleared by clearAllCaches() (hard refresh),
 // setActiveTab() (different repo), and notifyOpId() on op-id change (an
 // external operation may follow a config/remote edit — see notifyOpId).
-let _remotes: Promise<string[]> | undefined
+let _remotes: Promise<RemotesResponse> | undefined
 let _aliases: Promise<Alias[]> | undefined
-// Resolved "owner/repo" (empty string = no GitHub remote). Derived server-side
-// from the same remote list as _remotes, so it's dropped on the same triggers.
-let _githubRepo: Promise<string> | undefined
 let _info: Promise<InfoResponse> | undefined
+
+export interface RemotesResponse {
+  remotes: string[]
+  /** "owner/repo" of the GitHub remote; '' = none (hides every Create-PR affordance). */
+  github_repo: string
+}
 
 export interface InfoResponse {
   hostname: string
@@ -1131,19 +1077,6 @@ export const api = {
     return request<Bookmark[]>(`/api/bookmarks?${params}`)
   },
 
-  /** Batch fetch diff + files + description in one round-trip, seeding
-   *  individual cache keys. After this resolves, api.diff()/files()/description()
-   *  for the same commit_id are cache hits. Prefer this for primary navigation;
-   *  use the individual methods for one-off needs (e.g., DivergencePanel's
-   *  standalone files() call, DiffPanel's context-expanded diff).
-   *
-   *  Pass commit_id, not change_id — commit_id is content-addressed, so the
-   *  cache is self-invalidating across rewrites. */
-  revision: async (commitId: string): Promise<void> => {
-    if (isCached(commitId)) return
-    await fetchRevision(commitId)
-  },
-
   diff: (revision: string, file?: string, context?: number) => {
     const params = new URLSearchParams({ revision })
     if (file) params.set('file', file)
@@ -1213,7 +1146,7 @@ export const api = {
   mergeResolve: (revision: string, path: string, content: string) =>
     post<MutationResult>('/api/merge-resolve', { revision, path, content }),
 
-  remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
+  remotes: () => _remotes ??= request<RemotesResponse>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
 
   info: () => _info ??= request<InfoResponse>('/api/info')
     .catch(e => { _info = undefined; throw e }),
@@ -1415,14 +1348,6 @@ export const api = {
     streamPost('/api/git/fetch', { flags }, onLine),
 
   pullRequests: () => request<PullRequest[]>('/api/pull-requests'),
-
-  // Resolved "owner/repo" for building the GitHub PR-compare URL client-side.
-  // Empty string when the repo has no recognizable GitHub remote → callers
-  // hide the Create-PR affordances. Session-memoized like remotes() (it's
-  // derived from the same remote list); dropped on op-id change / tab switch.
-  githubRepo: () => _githubRepo ??= request<{ repo: string }>('/api/github-repo')
-    .then(r => r.repo)
-    .catch(e => { _githubRepo = undefined; throw e }),
 
   aliases: () => _aliases ??= request<Alias[]>('/api/aliases').catch(e => { _aliases = undefined; throw e }),
 

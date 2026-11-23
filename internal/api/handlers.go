@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"mime"
 	"net/http"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/chronologos/lightjj/internal/jj"
@@ -179,27 +179,6 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"diff": string(output)})
 }
 
-// asyncResult holds the output of a background goroutine.
-// Channels carrying these values are buffered (cap 1) — the goroutine writes
-// and exits immediately. If the handler returns early without reading, the
-// channel is GC'd with its buffered value; no drain required.
-type asyncResult struct {
-	output []byte
-	err    error
-}
-
-// runAsync starts a jj command in a goroutine and returns a buffered channel
-// that will receive exactly one result. Safe to abandon — the goroutine exits
-// after its single write regardless of whether anyone reads.
-func (s *Server) runAsync(ctx context.Context, args []string) <-chan asyncResult {
-	ch := make(chan asyncResult, 1)
-	go func() {
-		out, err := s.Runner.Run(ctx, args)
-		ch <- asyncResult{out, err}
-	}()
-	return ch
-}
-
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {
@@ -238,52 +217,6 @@ func (s *Server) handleStaleImmutable(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, jj.GroupStaleImmutable(entries))
 }
 
-// revisionResponse is the batch payload for diff + files + description.
-// Matches the shape of the three individual endpoints' combined output so the
-// frontend can seed individual cache keys from a single fetch.
-type revisionResponse struct {
-	Diff        string          `json:"diff"`
-	Files       []jj.FileChange `json:"files"`
-	Description string          `json:"description"`
-}
-
-// handleRevision batches diff + files + description into a single response.
-// Two underlying jj commands: Diff (async) and RevisionMeta (description +
-// FilesTemplate merged via \x1C — both were `jj log -r X -T ...` differing
-// only in template). Over SSH this saves one ~440ms ssh exec per uncached nav.
-func (s *Server) handleRevision(w http.ResponseWriter, r *http.Request) {
-	revision := r.URL.Query().Get("revision")
-	if revision == "" {
-		s.writeError(w, http.StatusBadRequest, "revision is required")
-		return
-	}
-
-	ctx := r.Context()
-	diffCh := s.runAsync(ctx, jj.Diff(revision, "", "never", "--tool", ":git"))
-
-	// Meta runs on the request goroutine — gives an early hard-error signal
-	// if the revision doesn't exist, before we bother joining on the diff.
-	metaOutput, err := s.Runner.Run(ctx, jj.RevisionMeta(revision))
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	desc, files := jj.ParseRevisionMeta(string(metaOutput))
-
-	dr := <-diffCh
-	if dr.err != nil {
-		s.writeError(w, http.StatusInternalServerError, dr.err.Error())
-		return
-	}
-
-	maybeCacheForever(w, r)
-	s.writeJSON(w, r, http.StatusOK, revisionResponse{
-		Diff:        string(dr.output),
-		Files:       files,
-		Description: desc,
-	})
-}
-
 type revisionMetaResponse struct {
 	Files       []jj.FileChange `json:"files"`
 	Description string          `json:"description"`
@@ -292,8 +225,7 @@ type revisionMetaResponse struct {
 // handleRevisionMeta returns files + description WITHOUT the diff. One jj call
 // (RevisionMeta), ~20ms local. For progressive rendering: frontend fires this
 // plus /api/diff in parallel; meta resolves first → header + file list render
-// with a spinner in the diff area; diff fills in later. /api/revision (the
-// all-three batch) stays for prefetch where progressive rendering doesn't apply.
+// with a spinner in the diff area; diff fills in later.
 func (s *Server) handleRevisionMeta(w http.ResponseWriter, r *http.Request) {
 	revision := r.URL.Query().Get("revision")
 	if revision == "" {
@@ -308,44 +240,6 @@ func (s *Server) handleRevisionMeta(w http.ResponseWriter, r *http.Request) {
 	desc, files := jj.ParseRevisionMeta(string(output))
 	maybeCacheForever(w, r)
 	s.writeJSON(w, r, http.StatusOK, revisionMetaResponse{Files: files, Description: desc})
-}
-
-// handleFilesBatch returns file stats for multiple commits in a single jj
-// subprocess call. Used by the frontend to pre-load the file-list sidebar for
-// a window of revisions around the current selection.
-//
-// Query: ?revisions=abc,def,ghi (comma-separated short commit_ids)
-// Response: map[commitId]{conflict: bool, files: FileChange[]}
-//
-// Conflicted commits return files WITHOUT side-count detail; the client should
-// fall back to /api/files for those. This keeps the batch call at one
-// template iteration (DiffStatEntry doesn't expose .target().conflict_side_count()).
-func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
-	revStr := r.URL.Query().Get("revisions")
-	if revStr == "" {
-		s.writeError(w, http.StatusBadRequest, "revisions is required")
-		return
-	}
-	// Filter empty strings — trailing/double commas produce invalid revsets.
-	// The frontend never sends them, but direct API calls might.
-	commitIds := slices.DeleteFunc(strings.Split(revStr, ","), func(s string) bool { return s == "" })
-	if len(commitIds) == 0 {
-		s.writeError(w, http.StatusBadRequest, "revisions is required")
-		return
-	}
-	if len(commitIds) > 50 {
-		s.writeError(w, http.StatusBadRequest, "too many revisions (max 50)")
-		return
-	}
-
-	args := jj.FilesBatch(commitIds)
-	output, err := s.Runner.Run(r.Context(), args)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	result := jj.ParseFilesBatch(string(output))
-	s.writeJSON(w, r, http.StatusOK, result)
 }
 
 // handleConflicts returns every conflicted commit in revset with its
@@ -435,14 +329,21 @@ func (s *Server) remoteListOutput(ctx context.Context) ([]byte, error) {
 	return nil, fmt.Errorf("jj failed (%w); git fallback also failed: %v", jjErr, err)
 }
 
+type remotesResponse struct {
+	Remotes    []string `json:"remotes"`
+	GitHubRepo string   `json:"github_repo"` // "owner/repo"; "" = no GitHub remote
+}
+
 func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
 	output, err := s.remoteListOutput(r.Context())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	remotes := jj.ParseRemoteListOutput(string(output), s.DefaultRemote)
-	s.writeJSON(w, r, http.StatusOK, remotes)
+	s.writeJSON(w, r, http.StatusOK, remotesResponse{
+		Remotes:    jj.ParseRemoteListOutput(string(output), s.DefaultRemote),
+		GitHubRepo: s.ghRepo(output),
+	})
 }
 
 func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
@@ -558,8 +459,10 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 //
 // History: v2 unified the success envelopes — file-write/open-file/navigate
 // ({ok:true}) and unlock-repo ({status:"ok"}) now return the standard
-// MutationResult shape ({output:"", warnings?}).
-const apiVersion = 2
+// MutationResult shape ({output:"", warnings?}). v3: /api/remotes returns
+// {remotes, github_repo}; /api/info lost `features`; removed /api/revision,
+// /api/files-batch and /api/github-repo.
+const apiVersion = 3
 
 type capabilitiesResponse struct {
 	APIVersion int      `json:"api_version"`
@@ -1805,7 +1708,7 @@ type PullRequest struct {
 
 // ghPRListArgs builds the gh invocation for listing open PRs. --repo lets gh
 // skip git-dir discovery, so this works from secondary workspaces (no .git/)
-// and any cwd. repo is "owner/name" — STATIC server value from resolveGHRepo,
+// and any cwd. repo is "owner/name" — server value from ghRepo,
 // never request-derived (flows to a remote shell via SSHRunner.wrapRaw).
 //
 // Two shapes, both issued per fetch (see handlePullRequests): mine=true is
@@ -1928,56 +1831,33 @@ func githubRepoFromURL(url string) string {
 	return rest
 }
 
-// resolveGHRepo derives "owner/repo" for PR-badge queries. Lazy-init via
-// mutex+bool — the `jj git remote list` call happens once per Server lifetime
-// (on the first PR-badge fetch), unless it fails transiently.
+// ghRepo picks "owner/repo" for PR queries and compare URLs out of a remote
+// listing; "" = no GitHub remote.
 //
 // Remote priority: upstream > DefaultRemote > any GitHub remote. Fork
 // workflows put PRs in upstream (origin=fork, upstream=canonical); the gh
 // CLI's headRefName matching works across forks as long as --repo points at
 // the canonical repo.
-//
-// Uses its own timeout (not the request ctx): the remote URL is server-lifetime
-// state. A cancelled first request would otherwise permanently cache "".
-func (s *Server) resolveGHRepo() string {
-	s.ghRepoMu.Lock()
-	defer s.ghRepoMu.Unlock()
-	if s.ghRepoResolved {
-		return s.ghRepo
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := s.remoteListOutput(ctx)
-	if err != nil {
-		log.Printf("resolveGHRepo: %v", err)
-		return "" // transient or no git — next call retries (ghRepoResolved still false)
-	}
-	urls := jj.ParseRemoteURLs(string(out))
-
-	tryRemote := func(name string) bool {
+func (s *Server) ghRepo(remoteList []byte) string {
+	urls := jj.ParseRemoteURLs(string(remoteList))
+	names := append([]string{"upstream", s.DefaultRemote}, slices.Sorted(maps.Keys(urls))...)
+	for _, name := range names {
 		if repo := githubRepoFromURL(urls[name]); repo != "" {
-			s.ghRepo = repo
-			return true
-		}
-		return false
-	}
-	if !tryRemote("upstream") && !tryRemote(s.DefaultRemote) {
-		for _, url := range urls { // any-GitHub fallback — non-deterministic but rare
-			if repo := githubRepoFromURL(url); repo != "" {
-				s.ghRepo = repo
-				break
-			}
+			return repo
 		}
 	}
-	s.ghRepoResolved = true // cache result (even if "" = not GitHub)
-	return s.ghRepo
+	return ""
 }
 
 func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 	empty := []PullRequest{}
 
-	repo := s.resolveGHRepo()
-	if repo == "" {
+	remoteList, err := s.remoteListOutput(r.Context())
+	if err != nil {
+		log.Printf("pull-requests: %v", err)
+	}
+	repo := s.ghRepo(remoteList)
+	if err != nil || repo == "" {
 		// No GitHub remote → no PR badges. Silent — non-GitHub repos and
 		// remotes-without-a-default are normal, not an error worth logging.
 		s.writeJSON(w, r, http.StatusOK, empty)
@@ -2006,15 +1886,6 @@ func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 		log.Printf("pull-requests: gh (all-authors leg) failed, showing own PRs only: %v", othersErr)
 	}
 	s.writeJSON(w, r, http.StatusOK, mergePRLists(mine, others))
-}
-
-// handleGitHubRepo returns the resolved "owner/repo" for the current remote,
-// used client-side to build the PR-compare URL for "Create PR". Reuses the
-// same resolveGHRepo() lazy cache as the PR-badge fetch. Non-GitHub repos
-// (or repos with no recognizable GitHub remote) get an empty repo string —
-// the frontend hides the Create-PR affordances rather than erroring.
-func (s *Server) handleGitHubRepo(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"repo": s.resolveGHRepo()})
 }
 
 // --- File write handler ---

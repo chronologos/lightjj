@@ -31,7 +31,7 @@ happened" is the only signal that they might have changed.
 |---|---|---|---|---|---|---|
 | 1 | `cache` (response) | api.ts module | `diff:${cid}` · `files:${cid}` · `desc:${cid}` · `diff:${id}:${file}:ctx${n}` · `range:${from}\x1F${to}\x1F${sortedFiles}` | commit_id | `MAX_CACHE_SIZE` | self-invalidating |
 | 2 | `_remotes`/`_aliases`/`_info` | api.ts module | promise memo | repo identity | single-slot | `clearSessionMemos()` on tab-switch / hard-refresh; `_remotes`/`_aliases` (NOT `_info`) also dropped on op-id change |
-| 3 | Browser HTTP disk cache | browser | `/api/revision?...&immutable=1` URL | commit_id | browser-managed | `Cache-Control: immutable` — never |
+| 3 | Browser HTTP disk cache | browser | `/api/revision-meta?...&immutable=1` URL | commit_id | browser-managed | `Cache-Control: immutable` — never |
 | 4 | `derivedCache` | diff-cache.ts | `diffTargetKey(t)` = commit_id OR `connected(a\|b\|c)` | commit_id-embedding | `DERIVED_CACHE_SIZE` | self-invalidating · `clearDiffCaches()` on hard-refresh |
 | 5 | `parsedDiffCache` | diff-cache.ts | raw diff string | content | `DERIVED_CACHE_SIZE` | self-invalidating (same content → same parse) · `clearDiffCaches()` |
 | 6 | `collapseStateCache` | diff-cache.ts | **change_id** | change_id | `COLLAPSE_CACHE_SIZE` | none — preferences intentionally survive rewrites · `clearDiffCaches()` |
@@ -56,20 +56,15 @@ callers**:
 
 | Prefix | Populated by |
 |---|---|
-| `diff:${cid}` | `api.diff()`, `fetchRevision()` batch |
-| `files:${cid}` | `api.files()`, `fetchRevision()`, `prefetchFilesBatch()` |
-| `desc:${cid}` | `api.description()`, `fetchRevision()` |
+| `diff:${cid}` | `api.diff()` |
+| `files:${cid}` | `api.files()`, `fetchRevisionMeta()` |
+| `desc:${cid}` | `api.description()`, `fetchRevisionMeta()` |
 | `range:${from}\x1F${to}\x1F...` | `api.diffRange()` — uses `\x1F` delimiter since paths can contain `:`; file list sorted via `[...files].sort()` so caller argument order doesn't matter |
 
-**Batch-vs-individual shape coherence.** `fetchRevision()` must seed each key
-with a shape byte-identical to what the individual endpoint returns. If
-`/api/files` adds a field but `/api/revision`'s `files` array doesn't, cache
-consumers get different shapes depending on which path populated the slot.
-Tested: `'seeded keys are hit by subsequent individual api calls'`.
-
-**Conflicted-commit skip.** `prefetchFilesBatch()` skips conflicted commits —
-the batch template lacks `conflict_sides`. Tested: `'skips seeding conflicted
-revisions'`.
+**Shape coherence.** `fetchRevisionMeta()` must seed each key with the shape the
+individual endpoint returns. If `/api/files` adds a field but
+`/api/revision-meta`'s `files` array doesn't, consumers get different shapes
+depending on which path populated the slot.
 
 **LRU mechanics.** `storeInCache` does delete-then-set so rewrites bump
 recency (`Map.set` on an existing key does not reorder).
@@ -92,22 +87,20 @@ and `_aliases` whenever the op-id changes: a CLI `jj config set` or
 operation does, and at that point "session-stable" is no longer a safe
 assumption. Bounded staleness instead of forever-staleness; the next consumer
 (GitModal open, App's throttled mirror refresh) refetches. `_info` is NOT
-dropped — repo identity / SSH mode can't change for a running server, and
-clearing it would flap the jj feature gates that `resolvedInfo()` feeds
-synchronously. Tested (`api.test.ts`: "op-id change drops the aliases/remotes
+dropped — repo identity / SSH mode can't change for a running server. Tested (`api.test.ts`: "op-id change drops the aliases/remotes
 session memos", "does NOT drop the info memo").
 
 ### 3. Browser HTTP cache
 
-Frontend sends `?immutable=1` on `/api/revision` requests (only it knows the
+Frontend sends `?immutable=1` on `/api/revision-meta` requests (only it knows the
 `revision` param is a commit_id). Backend sets `Cache-Control: max-age=31536000,
 immutable`. Two backend-side invariants (both tested in `handlers_test.go`):
 
 - **Immutable responses omit `X-JJ-Op-Id`** (`writeJSON` suppresses when
   `Cache-Control` already set). Otherwise a year-old op-id in disk cache
   ping-pongs `lastOpId` on reload.
-- **Degraded responses skip the immutable header** (`handleRevision` only
-  calls `maybeCacheForever` when all parts succeeded). Otherwise
+- **Degraded responses skip the immutable header** (`handleRevisionMeta` only
+  calls `maybeCacheForever` on success). Otherwise
   `description: ""` caches for a year.
 
 ### 4. `derivedCache` (highlights + word-diffs)

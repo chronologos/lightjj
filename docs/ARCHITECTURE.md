@@ -61,7 +61,6 @@ flowchart TD
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/log` | Graph log for a revset (with limit) |
-| GET | `/api/revision` | Batched diff + files + description for one revision |
 | GET | `/api/revision-meta` | Files + description without diff (progressive rendering) |
 | GET | `/api/description` | Commit description text |
 | GET | `/api/divergence` | Divergent commits + descendants dataset (classified client-side) |
@@ -74,7 +73,6 @@ flowchart TD
 | GET | `/api/diff` | Unified diff for a revision or revset |
 | GET | `/api/diff-range` | Diff between two commits (`--from`/`--to`) |
 | GET | `/api/files` | File list + stats + conflict status (one `FilesTemplate` call) |
-| GET | `/api/files-batch` | Files for multiple revisions in one call (prefetch) |
 | GET | `/api/file-show` | File content at a revision (conflict view, inline editor) |
 | GET | `/api/file-raw` | Raw bytes with Content-Type (markdown images; CSP-hardened) |
 | GET | `/api/file-history` | Log scoped to commits touching one file |
@@ -122,7 +120,7 @@ flowchart TD
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/remotes` | Git remotes list |
+| GET | `/api/remotes` | Git remotes + the GitHub `owner/repo` (empty if none) for PR-compare URLs |
 | POST | `/api/git/push` | `jj git push` (streamed; flag-whitelisted) |
 | POST | `/api/git/fetch` | `jj git fetch` (streamed; flag-whitelisted) |
 
@@ -202,7 +200,6 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 | GET | `/api/aliases` | User-configured jj aliases |
 | POST | `/api/alias` | Run a configured alias (validated against config; streamed output) |
 | GET | `/api/pull-requests` | Open PR info per bookmark via `gh` (own `@me` set ∪ recent same-repo PRs; `mine` flag) |
-| GET | `/api/github-repo` | Resolved `owner/repo` for building PR-compare URLs (empty if not GitHub) |
 | GET | `/api/symbol` | rg-backed symbol definition lookup |
 
 **Agent & automation**

@@ -76,7 +76,6 @@ func TestBuilders_AcceptedByInstalledJJ(t *testing.T) {
 		"ConfigGet":              {ConfigGet("ui.color")},
 		"FileShow":               {FileShow("@", file, true)},
 		"ResolveApply":           {ResolveApply("@", os.DevNull, file)},
-		"FilesBatch":             {FilesBatch([]string{"@"})},
 		"Resolve":                {Resolve("@", file, ":ours")},
 		"FileLog":                {FileLog(file, 5, false), FileLog(file, 5, true)},
 		"IndexChangedPaths":      {IndexChangedPaths()},

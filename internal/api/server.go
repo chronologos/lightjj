@@ -39,18 +39,9 @@ type Server struct {
 
 	// repoStore is the resolved .jj/repo directory (follows the secondary-
 	// workspace pointer file). sync.Once is fine here — os.Stat/ReadFile on a
-	// local path doesn't transiently fail the way SSH does (cf. ghRepoMu).
+	// local path doesn't transiently fail the way SSH does.
 	repoStore     string
 	repoStoreOnce sync.Once
-
-	// ghRepo is "owner/name" derived from DefaultRemote's URL. Lazy-resolved
-	// on first handlePullRequests; "" is a valid cached answer (not GitHub).
-	// ghRepoMu+ghRepoResolved (not sync.Once) so a transient failure
-	// (10s timeout on slow SSH startup) retries instead of permanently
-	// disabling PR badges for the server lifetime.
-	ghRepo         string
-	ghRepoResolved bool
-	ghRepoMu       sync.Mutex
 
 	// wsName is this Server's own jj workspace name ("default", "feature-x").
 	// Resolved asynchronously (resolveWsNameAsync) so GET /tabs stays in-memory
@@ -75,7 +66,7 @@ type Server struct {
 
 	// jjVersion is the `jj --version` output (e.g. "jj 0.39.0"). Lazy-resolved
 	// on first handleInfo. Mutex+bool (not sync.Once) so a transient failure
-	// retries — same pattern as ghRepo.
+	// retries instead of caching "" forever.
 	jjVersion         string
 	jjVersionResolved bool
 	jjVersionMu       sync.Mutex
@@ -216,9 +207,7 @@ func (s *Server) routes() {
 	reg("GET /api/diff", s.handleDiff)
 	reg("GET /api/files", s.handleFiles)
 	reg("GET /api/description", s.handleGetDescription)
-	reg("GET /api/revision", s.handleRevision)
 	reg("GET /api/revision-meta", s.handleRevisionMeta)
-	reg("GET /api/files-batch", s.handleFilesBatch)
 	reg("GET /api/conflicts", s.handleConflicts)
 	reg("GET /api/file-history", s.handleFileHistory)
 	reg("POST /api/index-paths", s.handleIndexPaths)
@@ -282,7 +271,6 @@ func (s *Server) routes() {
 	reg("POST /api/alias", s.handleRunAlias)
 
 	reg("GET /api/pull-requests", s.handlePullRequests)
-	reg("GET /api/github-repo", s.handleGitHubRepo)
 	reg("GET /api/symbol", s.handleSymbol)
 
 	reg("GET /api/config", handleConfigGet)

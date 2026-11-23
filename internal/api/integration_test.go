@@ -443,9 +443,10 @@ func TestIntegrationRemotes(t *testing.T) {
 	// A freshly initialized colocated repo has no remotes.
 	srv := NewServer(r, "")
 	w := apiGet(t, srv, "/api/remotes")
-	var remotes []string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &remotes))
-	assert.Empty(t, remotes, "fresh repo should have no remotes")
+	var resp remotesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Empty(t, resp.Remotes, "fresh repo should have no remotes")
+	assert.Empty(t, resp.GitHubRepo)
 }
 
 // ---------------------------------------------------------------------------

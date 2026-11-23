@@ -69,7 +69,7 @@
   // state_referenced_locally warning; we DO want the mount-time snapshot.
   const init = untrack(() => initialState)
 
-  import { api, effectiveId, prLabel, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload, type TabInfo, type Expect } from './lib/api'
+  import { api, effectiveId, prLabel, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload, type TabInfo, type Expect } from './lib/api'
   import { groupTabs } from './lib/tab-groups'
   import { changeLink, findRevisionIndexByRef, isRevisionIdLike, locatorRevset } from './lib/url-intent'
   import { canCreatePR, bookmarkCreatePREligibility, prCompareUrl } from './lib/bookmark-sync'
@@ -1140,16 +1140,11 @@
   let configuredLogRevset: string = $state('')
   // Full remote list — session-memoized in api.ts. Used by BookmarksPanel/Modal
   // for multi-remote track/untrack submenus.
-  const remotes = createLoader(() => api.remotes(), [] as string[], undefined, { keepValueOnError: true })
-  let allRemotes = $derived(remotes.value)
-
-  // Resolved "owner/repo" for the current GitHub remote ('' when the repo has
-  // no recognizable GitHub remote). Empty value hides every "Create PR"
-  // affordance. Session-stable but derived server-side from the remote list, so
-  // it rides the same slow-mirror op-sync as remotes() (api.ts drops its memo on
-  // op-id change — a `git remote add` followed by any op re-resolves it).
-  const githubRepoLoader = createLoader(() => api.githubRepo(), '', undefined, { keepValueOnError: true })
-  let githubRepo = $derived(githubRepoLoader.value)
+  const remotes = createLoader(() => api.remotes(), { remotes: [] as string[], github_repo: '' }, undefined, { keepValueOnError: true })
+  let allRemotes = $derived(remotes.value.remotes)
+  // '' when the repo has no recognizable GitHub remote: hides every "Create PR"
+  // affordance.
+  let githubRepo = $derived(remotes.value.github_repo)
 
   // Open the GitHub compare page for a pushed bookmark in a new tab. Client-side
   // window.open (NOT a `gh`/xdg-open shell-out) so it opens on the user's
@@ -1357,7 +1352,6 @@
   const prsSync = opSync({ run: () => prs.load(), throttleMs: SLOW_MIRROR_MS })
   const aliasesSync = opSync({ run: () => aliasesLoader.load(), throttleMs: SLOW_MIRROR_MS })
   const remotesSync = opSync({ run: () => remotes.load(), throttleMs: SLOW_MIRROR_MS })
-  const githubRepoSync = opSync({ run: () => githubRepoLoader.load(), throttleMs: SLOW_MIRROR_MS })
   // startFresh: the scan never runs at mount or tab-switch — only in reaction
   // to operations that happen while the app is open.
   const staleImmSync = opSync({ run: () => staleImm.load(), throttleMs: SLOW_MIRROR_MS, startFresh: true })
@@ -1473,20 +1467,7 @@
       void evolog.load(effectiveId(revisions[selectedIndex].commit))
     }
 
-    // Pre-load file lists for a window of ~10 revisions around the selection.
-    // One jj subprocess for N revs; seeds files:X cache so the file sidebar
-    // shows instantly during j/k. Fire-and-forget; main diff load isn't gated.
-    prefetchFilesWindow()
     return true
-  }
-
-  const FILES_PRELOAD_RADIUS = 5 // revisions on each side of selectedIndex
-  function prefetchFilesWindow() {
-    if (selectedIndex < 0) return
-    const start = Math.max(0, selectedIndex - FILES_PRELOAD_RADIUS)
-    const end = Math.min(revisions.length, selectedIndex + FILES_PRELOAD_RADIUS + 1)
-    const ids = revisions.slice(start, end).map(r => r.commit.commit_id)
-    prefetchFilesBatch(ids)
   }
 
   // Move cursor without loading diff/files — used in squash mode where
@@ -1557,16 +1538,10 @@
     // Opportunistic prefetch: warm the cache for the next revision in the
     // navigation direction. Only when CURRENT is cached — during rapid uncached
     // j/k, prefetches for skipped-past revisions waste bandwidth and contend
-    // with the main load. With the batch endpoint (1 req/rev) the 6-connection
-    // limit is no longer reachable, but the contention argument still holds.
+    // with the main load.
     if (moved && hit) {
       const next = revisions[index + direction]
       if (next) prefetchRevision(next.commit.commit_id)
-      // Also re-center the files preload window. prefetchFilesBatch filters
-      // to uncached internally, so repeated calls are cheap — most will be
-      // all-cached no-ops; at window edges it fires one HTTP call for the
-      // newly-visible revisions.
-      prefetchFilesWindow()
     }
     return true
   }
@@ -3503,7 +3478,6 @@
   void aliasesSync.refresh()
   void prsSync.refresh()
   void remotesSync.refresh()
-  void githubRepoSync.refresh()
 
   // --- Tab-switch state preservation ---
   // AppShell calls getState() before the {#key} remount destroys this instance.
