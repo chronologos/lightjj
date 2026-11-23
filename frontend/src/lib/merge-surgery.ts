@@ -221,18 +221,21 @@ export function shiftBlock<B extends LineRange>(block: B, delta: number): B {
  *  THE INVARIANT (literally true, oracle-checked in MergePanel.test.ts): a
  *  shared line whose content chars were never deleted or typed into is never
  *  inside any block's range — whatever happened to the newlines around it.
- *  So a group with outsiders is NEVER the block's if any outsider with
- *  content is fully intact — even a plain JOIN (Backspace at the block's
+ *  So a group with outsiders is NEVER the block's if any SHARED outsider is
+ *  alive. Not just "fully intact": lines are all we see, and a line joined by
+ *  an EARLIER edit may hold an untouched shared line beside block remains, so
+ *  damage to it proves nothing. (Another BLOCK's line holds no shared text, by
+ *  this same invariant; it vetoes only while intact, so one edit across two
+ *  blocks leaves its text owned by one of them, not by nobody.) Even a plain
+ *  JOIN (Backspace at the block's
  *  column 0, Delete at the end of the line above, Delete at the block's end)
  *  drops ownership: the block goes zero-line beside the merged line, and a
  *  re-take inserts beside it (visible duplicate the user can delete) rather
  *  than overwriting the neighbour — join-then-Enter otherwise re-split the
  *  text into its original shape with the shared line silently annexed.
- *  Otherwise the group is the block's iff some block line in it is alive
- *  (block content merged with an outsider the user themself damaged — the
- *  honest 'mixed' case); else NOT if any outsider is alive (block content
- *  gone → hands off); else (nothing alive: destroyed lines and blanks) iff
- *  the block had a blank line in it — "A/A/<blank block>", delete the middle
+ *  Otherwise the group is the block's iff some block line in it is alive; else
+ *  NOT if any outsider is alive; else (nothing alive: destroyed lines and blanks)
+ *  iff the block had a blank line in it — "A/A/<blank block>", delete the middle
  *  "A\n": the block keeps its blank; "<blank>/CCC-block", delete "\nCCC":
  *  the shared blank stays shared. Blank outsiders carry no content a take
  *  could destroy, so they never veto.
@@ -266,6 +269,8 @@ export function remapBlock<B extends LineRange>(
   changes: ChangeDesc,
   oldDoc: Text,
   newDoc: Text,
+  /** Is old line `ln`, outside this block, shared — i.e. no other block's? */
+  isShared: (ln: number) => boolean = () => true,
 ): B {
   const L = oldDoc.lines
   const empty = block.from >= block.to
@@ -313,14 +318,19 @@ export function remapBlock<B extends LineRange>(
   }
 
   const owns = (a: number, b: number) => {
-    let hasOut = false, blockAlive = false, outAlive = false, outIntact = false, blockBlank = false
+    let hasOut = false, blockAlive = false, outAlive = false, outKept = false, blockBlank = false
     for (let ln = a; ln <= b; ln++) {
       const l = oldDoc.line(ln)
       if (ln >= from && ln < to) { blockAlive ||= alive(ln); blockBlank ||= l.length === 0 }
-      else { hasOut = true; outAlive ||= alive(ln); outIntact ||= l.length > 0 && covered(l.from, l.to) === 0 }
+      else {
+        hasOut = true
+        if (!alive(ln)) continue
+        outAlive = true
+        outKept ||= isShared(ln) || covered(l.from, l.to) === 0
+      }
     }
     if (!hasOut) return true      // block lines only: the block's, whatever was typed
-    if (outIntact) return false   // an untouched shared line is NEVER ownable — even after a join
+    if (outKept) return false     // surviving shared text is NEVER ownable — even after a join
     return blockAlive || (!outAlive && blockBlank)
   }
   let ownFirst = 0, ownLast = 0

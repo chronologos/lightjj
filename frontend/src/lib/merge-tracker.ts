@@ -82,7 +82,8 @@ export function blockTracker(initial: readonly CenterBlock[]) {
         // is clamped + tagged mixed). See merge-surgery.ts + tests. A
         // restoreAll below (undo/redo) overrides all of it.
         result = normalizeBlocks(
-          blocks.map(b => remapBlock(b, tr.changes, tr.startState.doc, tr.newDoc)),
+          blocks.map(b => remapBlock(b, tr.changes, tr.startState.doc, tr.newDoc,
+            ln => !blocks.some(o => o !== b && ln >= o.from && ln < o.to))),
           tr.newDoc.lines)
       }
       for (const e of tr.effects) {

@@ -518,8 +518,11 @@ describe('remapBlock — hand-edits map through CM6 changes and re-round to whol
     // "A\nCCC\nD" delete the \n at 1 → "ACCC\nD". "A" is untouched shared
     // content ⇒ never ownable ⇒ the block owns nothing; marker before "D".
     expect(remap('A\nCCC\nD', T(2, 3), 1, 2, '')).toEqual(T(2, 2))
-    // …whereas joining with a line the user ALSO damaged is an honest mixed line.
-    expect(remap('AA\nCCC\nD', T(2, 3), 1, 3, '')).toEqual(T(1, 2))   // "AA"→"A" + join
+    // …and the same when the user ALSO damaged it: what's left of it may be another
+    // line's untouched text, joined there by an earlier edit.
+    expect(remap('AA\nCCC\nD', T(2, 3), 1, 3, '')).toEqual(T(2, 2))   // "AA"→"A" + join
+    // A neighbour deleted entirely leaves nothing to protect: still the block's.
+    expect(remap('A\nCCC\nD', T(2, 3), 0, 2, '')).toEqual(T(1, 2))
   })
 
   it('user deletes exactly the block\'s text: block still owns the now-blank line', () => {
