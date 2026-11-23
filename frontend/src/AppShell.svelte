@@ -5,7 +5,7 @@
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import ContextMenu, { type ContextMenuItem } from './lib/ContextMenu.svelte'
   import {
-    setActiveTab, listTabs, openTab, closeTab, onStaleWC,
+    setActiveTab, listTabs, openTab, closeTab, onTabsChanged,
     workspacesForTab, workspaceAddForTab, workspaceUpdateStaleForTab, updateStaleWorkspaceForTab,
     type TabInfo, type WorkspacesResponse,
   } from './lib/api'
@@ -61,12 +61,9 @@
   }
   refetchTabs()
 
-  // Per-tab stale/wsName come from GET /tabs (each tab's Watcher.Stale()).
-  // The active tab's SSE is the only stale-edge signal AppShell hears — a
-  // background tab going stale (e.g. rebase in A stales workspace B) doesn't
-  // fire it, so B's dot appears on next switch/open rather than instantly.
-  // A manager-level tabs-changed SSE would close that gap; tracked in BACKLOG.
-  $effect(() => onStaleWC(() => { refetchTabs() }))
+  // Per-tab stale/wsName come from GET /tabs. The active tab's stream says when the
+  // list may have changed, for background tabs too.
+  $effect(() => onTabsChanged(refetchTabs))
 
   // ── Per-repo workspace info (the `◇N` tab icon + workspace menu) ──────────
   // Each tab is a full Server at /tab/{id}/, so workspacesForTab(id) fetches ANY

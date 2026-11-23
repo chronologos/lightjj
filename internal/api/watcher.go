@@ -40,6 +40,14 @@ type Watcher struct {
 	// lock can be taken without nesting.
 	onSub, onUnsub func()
 
+	// tabs is the manager this watcher's tab belongs to (nil: standalone server).
+	// Atomic because the loops run before TabManager mounts the tab.
+	tabs atomic.Pointer[TabManager]
+
+	// opSeen: an operation landed since the last probe. What lets snapshotLoop check
+	// a background tab exactly when another workspace may have made it stale.
+	opSeen atomic.Bool
+
 	// Last-observed health, written by the probe loops and by handlers that have
 	// proof (setStale / setPollFail). pollErr "" = healthy; stale working copies are
 	// not a poll failure.
@@ -72,6 +80,8 @@ type watchState struct {
 	OpId      string `json:"op_id"`
 	Stale     bool   `json:"stale"`
 	PollError string `json:"poll_error"`
+	// TabsRev changes when anything in GET /tabs may have (see TabManager.bumpTabs).
+	TabsRev int64 `json:"tabs_rev,omitempty"`
 }
 
 type subscriber struct {
@@ -225,12 +235,13 @@ func newWatcher(srv *Server) *Watcher {
 func (w *Watcher) setStale(v bool) {
 	if w.stale.Swap(v) != v {
 		w.notify()
+		w.tabs.Load().bumpTabs() // the dot is on every client's tab bar, whichever tab it shows
 	}
 }
 
 // Stale is the lock-free read of the last-observed working-copy staleness.
-// TabManager.handleList surfaces it on every tab so background-tab stale dots
-// reflect that tab's snapshotLoop state without a per-tab SSE subscription.
+// TabManager.handleList surfaces it on every tab; background tabs are kept current
+// by snapshotLoop's background probe (local) and by the handlers that fix a sibling.
 func (w *Watcher) Stale() bool { return w.stale.Load() }
 
 // setPollFail records persistent poll failure (err = last error text for the UI) or
@@ -253,7 +264,7 @@ func (w *Watcher) pollError() string {
 }
 
 func (w *Watcher) state() watchState {
-	return watchState{OpId: w.srv.getOpId(), Stale: w.stale.Load(), PollError: w.pollError()}
+	return watchState{OpId: w.srv.getOpId(), Stale: w.stale.Load(), PollError: w.pollError(), TabsRev: w.tabs.Load().tabsRevision()}
 }
 
 // NewWatcher constructs a watcher for the given server. Returns nil if the
@@ -323,6 +334,7 @@ func (w *Watcher) watchLoop() {
 	var timer *time.Timer
 	fire := func() {
 		w.srv.refreshOpId()
+		w.opSeen.Store(true)
 		w.notify()
 	}
 
@@ -433,14 +445,24 @@ func (w *Watcher) sshPollLoop(interval time.Duration) {
 	}
 }
 
+// backgroundProbeTicks spaces a background tab's probes (30s at the default interval).
+const backgroundProbeTicks = 6
+
 // snapshotLoop periodically asks jj to snapshot the working copy. This catches
 // raw file edits (editor saves, agent writes) that haven't been observed by jj
 // yet. The snapshot itself mutates op_heads, which triggers watchLoop → SSE.
 // Result classification (stale-WC routing, failure counting) is shared with
 // sshPollLoop via probeTracker.
+//
+// A background tab (a browser is connected, but showing another tab) is probed only
+// when its stale dot may be wrong: after an operation, and while it is stale
+// (`update-stale` need not create an operation). An idle background tab costs nothing,
+// and a busy repo with many workspace tabs costs each at most one probe per
+// backgroundProbeTicks.
 func (w *Watcher) snapshotLoop(interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	sinceBackground := backgroundProbeTicks // the first one needn't wait
 	probe := &probeTracker{w: w, label: "snapshot", hint: "repo may be locked, "}
 	for {
 		select {
@@ -450,8 +472,13 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 			// If no clients are connected, skip — snapshotting is only useful
 			// if someone's watching.
 			if !w.hasSubscribers() {
-				continue
+				sinceBackground++
+				if sinceBackground < backgroundProbeTicks || !(w.opSeen.Load() || w.Stale()) || !w.tabs.Load().hasClients() {
+					continue
+				}
+				sinceBackground = 0
 			}
+			w.opSeen.Store(false) // before the probe: an op landing during it counts again
 			// `jj util snapshot` is cheap when nothing changed (~15ms) and
 			// advances op_heads only if the WC actually differs. Transient
 			// errors (repo lock) are expected; persistent failure is worth
@@ -460,6 +487,7 @@ func (w *Watcher) snapshotLoop(interval time.Duration) {
 			ran, err := w.srv.trySnapshot(ctx)
 			cancel()
 			if !ran {
+				w.opSeen.Store(true)
 				continue
 			}
 			switch {

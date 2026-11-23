@@ -330,6 +330,39 @@ func TestTabManager_TabRefsAndOnTabsChange(t *testing.T) {
 	assert.Len(t, seen, 2)
 }
 
+func TestTabManager_SiblingRecovery(t *testing.T) {
+	tm := NewTabManager(nil, nil)
+	mount := func(path string) *Server {
+		srv := &Server{Runner: testutil.NewMockRunner(t), Mux: http.NewServeMux()}
+		srv.Watcher = newWatcher(srv)
+		tm.AddTab(srv, path)
+		return srv
+	}
+	a, b := mount("/a"), mount("/b")
+	a.Watcher.setStale(true)
+	b.Watcher.setStale(true)
+	rev := tm.tabsRevision()
+	a.TabRecovered("/b")
+	assert.False(t, b.Watcher.Stale())
+	assert.True(t, a.Watcher.Stale())
+	assert.Greater(t, tm.tabsRevision(), rev)
+	a.TabRecovered("/not-open")
+}
+
+// Another window's tab bar follows opens and closes too.
+func TestTabManager_OpenAndCloseBumpRevision(t *testing.T) {
+	newTab := func(string) *Server { return NewServer(testutil.NewMockRunner(t), "") }
+	tm := NewTabManager(newTab, func(p string) (string, error) { return p, nil })
+	tm.AddTab(newTab(""), "/start")
+	for _, req := range []*http.Request{jsonPost("/tabs", []byte(`{"path":"/x"}`)), httptest.NewRequest("DELETE", "/tabs/1", nil)} {
+		rev := tm.tabsRevision()
+		w := httptest.NewRecorder()
+		tm.Mux.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Greater(t, tm.tabsRevision(), rev)
+	}
+}
+
 func TestTabFindByPath(t *testing.T) {
 	tm := NewTabManager(nil, nil)
 	runner := testutil.NewMockRunner(t)

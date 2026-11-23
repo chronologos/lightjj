@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -106,6 +107,52 @@ type TabManager struct {
 	idleTimer    *time.Timer
 	totalSubs    int
 	shutdownOnce sync.Once
+
+	// tabsRev numbers the state of GET /tabs. It rides on every tab's SSE `state`
+	// event, so a client learns about tabs it has no stream for. Seeded with the start
+	// time: a restarted server's revisions differ from the old one's.
+	tabsRev atomic.Int64
+}
+
+// bumpTabs tells every connected client that GET /tabs may have changed. Nil-safe
+// (watcher without a manager). Must not be called under m.mu.
+func (m *TabManager) bumpTabs() {
+	if m == nil {
+		return
+	}
+	m.tabsRev.Add(1)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, t := range m.tabs {
+		if t.srv != nil && t.srv.Watcher != nil {
+			t.srv.Watcher.notify()
+		}
+	}
+}
+
+func (m *TabManager) tabsRevision() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.tabsRev.Load()
+}
+
+// hasClients reports whether any browser is connected, whichever tab it shows.
+func (m *TabManager) hasClients() bool {
+	if m == nil {
+		return false
+	}
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	return m.totalSubs > 0
+}
+
+// tabRecovered clears the stale flag of the open tab viewing the workspace at path,
+// which another tab just brought up to date.
+func (m *TabManager) tabRecovered(path string) {
+	if t := m.FindByPath(path); t != nil && t.srv != nil {
+		t.srv.clearStale()
+	}
 }
 
 func NewTabManager(newTab TabFactory, resolve TabResolve) *TabManager {
@@ -116,6 +163,7 @@ func NewTabManager(newTab TabFactory, resolve TabResolve) *TabManager {
 		resolve:    resolve,
 		ShutdownCh: make(chan struct{}),
 	}
+	m.tabsRev.Store(time.Now().UnixMilli())
 	m.Mux.HandleFunc("GET /tabs", m.handleList)
 	m.Mux.HandleFunc("POST /tabs", m.handleCreate)
 	m.Mux.HandleFunc("DELETE /tabs/{id}", m.handleClose)
@@ -156,13 +204,15 @@ func (m *TabManager) addLocked(srv *Server, path string) *Tab {
 		handler:  http.StripPrefix("/tab/"+id, srv.Mux),
 	}
 	m.tabs[id] = t
-	// Kick off workspace-name resolution in the background so handleList stays
-	// in-memory (a hung tab runner would otherwise wedge the whole list).
-	srv.resolveWsNameAsync()
 	// Every mounted Server can see all open tab roots — feeds the workspace-
 	// forget cross-tab guard. Assignment only (no call) under m.mu; the
 	// method takes RLock at request time.
 	srv.OpenTabRoots = m.OpenTabRoots
+	srv.TabRecovered = m.tabRecovered
+	srv.onWsName = m.bumpTabs
+	// Kick off workspace-name resolution in the background so handleList stays
+	// in-memory (a hung tab runner would otherwise wedge the whole list).
+	srv.resolveWsNameAsync()
 	// Wire this tab's SSE subscriber count into the cross-tab total. Nil-safe:
 	// --no-watch or NewWatcher failure means no SSE → this tab contributes
 	// nothing to idle detection (can't detect "browser closed" without SSE).
@@ -172,6 +222,7 @@ func (m *TabManager) addLocked(srv *Server, path string) *Tab {
 	if srv.Watcher != nil {
 		srv.Watcher.onSub = m.incSub
 		srv.Watcher.onUnsub = m.decSub
+		srv.Watcher.tabs.Store(m)
 	}
 	return t
 }
@@ -350,6 +401,7 @@ func (m *TabManager) handleCreate(w http.ResponseWriter, r *http.Request) {
 // then notify the out-of-package listener (session file). Both call sites
 // invoke it AFTER writing their HTTP response and outside m.mu.
 func (m *TabManager) tabsChanged(t *Tab, persist func(PersistedTab) error) {
+	m.bumpTabs()
 	m.persistTab(t, persist)
 	if m.OnTabsChange != nil {
 		m.OnTabsChange()

@@ -60,6 +60,11 @@ type Server struct {
 	// cross-tab guards (forgetOpenTabGuard) are skipped.
 	OpenTabRoots func() []string
 
+	// TabRecovered and onWsName are injected the same way: the workspace at path is no
+	// longer stale / this server's workspace name changed. Nil-safe.
+	TabRecovered func(path string)
+	onWsName     func()
+
 	// apiRoutes is the list of patterns registered via routes()'s reg closure.
 	// Feeds GET /api/capabilities so agents can negotiate instead of 404-probing.
 	apiRoutes []string
@@ -169,8 +174,12 @@ func (s *Server) resolveWsNameAsync() {
 			return
 		}
 		s.wsNameMu.Lock()
+		changed := s.wsName != name
 		s.wsName = name
 		s.wsNameMu.Unlock()
+		if changed && s.onWsName != nil {
+			s.onWsName()
+		}
 	}()
 }
 

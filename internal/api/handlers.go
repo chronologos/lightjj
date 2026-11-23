@@ -1202,7 +1202,9 @@ func (s *Server) workspaceNameMutation(build func(name string) jj.CommandArgs, g
 				return
 			}
 		}
-		s.runMutation(w, r, build(req.Name))
+		if s.runMutation(w, r, build(req.Name)) {
+			s.resolveWsNameAsync() // a rename changes this tab's label
+		}
 	}
 }
 
@@ -1309,6 +1311,9 @@ func (s *Server) handleWorkspaceUpdateStaleOther(w http.ResponseWriter, r *http.
 	// the current tab's log reflects the other workspace's @ move promptly
 	// (RunRaw bypasses runMutation's built-in refreshOpId).
 	s.refreshOpId()
+	if s.TabRecovered != nil {
+		s.TabRecovered(path)
+	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }
 

@@ -227,6 +227,16 @@ function notifyPollFail(err: string | null) {
   for (const cb of pollFailCallbacks) cb(err)
 }
 
+// GET /tabs revision. Module-level, not per connection: every tab's stream carries the
+// same number, so switching tabs is not a change.
+const tabsChangedCallbacks = new Set<() => void>()
+let lastTabsRev: number | undefined
+function notifyTabsRev(rev: number | undefined) {
+  if (rev === undefined || rev === lastTabsRev) return
+  lastTabsRev = rev
+  for (const cb of tabsChangedCallbacks) cb()
+}
+
 // SSE liveness subscribers. Edge-only (mirrors watcher.go setStale) so the
 // `op` event firing every few seconds doesn't churn document.title writes.
 const sseStateCallbacks = new Set<(connected: boolean) => void>()
@@ -274,6 +284,13 @@ export function onNavigate(callback: (p: NavigatePayload) => void): () => void {
 export function onStaleWC(callback: (stale: boolean) => void): () => void {
   staleWCCallbacks.add(callback)
   return () => { staleWCCallbacks.delete(callback) }
+}
+
+/** GET /tabs may have changed: a tab opened, closed, renamed, went stale or
+ *  recovered — including tabs this window has no stream for. */
+export function onTabsChanged(callback: () => void): () => void {
+  tabsChangedCallbacks.add(callback)
+  return () => { tabsChangedCallbacks.delete(callback) }
 }
 
 /**
@@ -475,7 +492,7 @@ export function wireAutoRefresh(): () => void {
     }
     // Always the whole state (watcher.go watchState): sent on connect and whenever
     // any of it changes. Subscribers hear only about the parts that differ.
-    let last: { op_id: string; stale: boolean; poll_error: string } | null = null
+    let last: { op_id: string; stale: boolean; poll_error: string; tabs_rev?: number } | null = null
     es.addEventListener('state', (ev) => {
       mark()
       let s: NonNullable<typeof last>
@@ -483,6 +500,7 @@ export function wireAutoRefresh(): () => void {
       notifyOpId(s.op_id)
       if (s.stale !== last?.stale) notifyStaleWC(s.stale)
       if (s.poll_error !== last?.poll_error) notifyPollFail(s.poll_error || null)
+      notifyTabsRev(s.tabs_rev)
       last = s
     })
     es.addEventListener('nav', (ev) => {

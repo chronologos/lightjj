@@ -238,6 +238,7 @@ export const netStubs = {
   wireAutoRefresh: () => () => {},
   onStale: (cb: (opId: string) => void) => { _staleCb = cb; return () => { _staleCb = null } },
   onStaleWC: noopSub,
+  onTabsChanged: noopSub,
   onPollFail: noopSub,
   onSSEState: noopSub,
   onNavigate: (cb: (p: NavigatePayload) => void) => { _navCb = cb; return () => { _navCb = null } },

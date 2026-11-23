@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { api, isCached, getCached, onStale, onStaleWC, onPollFail, wireAutoRefresh, multiRevset, computeConnectedCommitIds, prefetchRevision, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
+import { api, isCached, getCached, onStale, onStaleWC, onPollFail, onTabsChanged, wireAutoRefresh, multiRevset, computeConnectedCommitIds, prefetchRevision, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -983,6 +983,21 @@ describe('event stream', () => {
     expect([stale, poll]).toEqual([[false, true], [null, 'locked']])
     FakeES.last.emit('state', st({ op_id: 'op2' }))
     expect([stale, poll]).toEqual([[false, true, false], [null, 'locked', null]])
+  })
+
+  it('a tab-list revision is reported when it changes, not on every connection', async () => {
+    const changed = vi.fn()
+    unsub.push(onTabsChanged(changed))
+    FakeES.last.emit('state', st({ tabs_rev: 7 }))
+    FakeES.last.emit('state', st({ tabs_rev: 7, op_id: 'op2' }))
+    expect(changed).toHaveBeenCalledTimes(1)
+    stop()
+    stop = wireAutoRefresh() // another tab's stream: same manager, same number
+    FakeES.last.emit('state', st({ tabs_rev: 7 }))
+    expect(changed).toHaveBeenCalledTimes(1)
+    FakeES.last.emit('state', st({ tabs_rev: 8 }))
+    FakeES.last.emit('state', st()) // older server
+    expect(changed).toHaveBeenCalledTimes(2)
   })
 
   it('a reconnect reports everything again, so nothing missed while away sticks', async () => {

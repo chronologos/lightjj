@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chronologos/lightjj/internal/jj"
+	jjrunner "github.com/chronologos/lightjj/internal/runner"
 	"github.com/chronologos/lightjj/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -727,6 +728,66 @@ func TestSnapshotLoop_StaleInterludeDoesNotLeavePollFailedStuck(t *testing.T) {
 	}
 	assert.Eventually(t, func() bool { return w.state().PollError == "" && !w.state().Stale }, time.Second, time.Millisecond, "pollFailed must not remain stuck after stale interlude")
 	close(w.stop)
+	<-done
+}
+
+// verdictRunner answers every snapshot with the current verdict.
+type verdictRunner struct {
+	jjrunner.CommandRunner
+	n     atomic.Int32
+	stale atomic.Bool
+}
+
+func (c *verdictRunner) Run(context.Context, []string) ([]byte, error) {
+	c.n.Add(1)
+	if c.stale.Load() {
+		return nil, errors.New("Error: The working copy is stale (not updated since operation abc).")
+	}
+	return nil, nil
+}
+
+// The tab nobody is looking at: probed after an operation and while stale, never
+// otherwise — and the client hears about it through the tab it IS looking at.
+func TestSnapshotLoop_BackgroundTab(t *testing.T) {
+	tm := NewTabManager(nil, nil)
+	mount := func(r jjrunner.CommandRunner, path string) *Watcher {
+		srv := &Server{Runner: r}
+		srv.Watcher = newWatcher(srv)
+		tm.AddTab(srv, path)
+		return srv.Watcher
+	}
+	bg := &verdictRunner{}
+	active, back := mount(&verdictRunner{}, "/a"), mount(bg, "/b")
+	done := make(chan struct{})
+	go func() { back.snapshotLoop(3 * time.Millisecond); close(done) }()
+	idle := func(why string) {
+		t.Helper()
+		time.Sleep(50 * time.Millisecond) // let a probe already in flight finish
+		n := bg.n.Load()
+		time.Sleep(100 * time.Millisecond)
+		assert.Equal(t, n, bg.n.Load(), why)
+	}
+
+	back.opSeen.Store(true)
+	idle("no browser at all")
+	assert.Zero(t, bg.n.Load())
+
+	sub, unsub := active.subscribe()
+	defer unsub()
+	assert.Eventually(t, func() bool { return bg.n.Load() > 0 }, time.Second, time.Millisecond, "an operation landed while it was in the background")
+	idle("nothing new happened")
+	before := active.state().TabsRev
+
+	bg.stale.Store(true)
+	idle("staleness can only follow an operation")
+	back.opSeen.Store(true) // another workspace rewrote its commit
+	assert.Eventually(t, back.Stale, time.Second, time.Millisecond)
+	assert.Greater(t, next(t, active, sub).TabsRev, before, "told through the active tab's stream")
+
+	bg.stale.Store(false) // `jj workspace update-stale` in a terminal: no operation
+	assert.Eventually(t, func() bool { return !back.Stale() }, time.Second, time.Millisecond)
+	idle("recovered")
+	close(back.stop)
 	<-done
 }
 
