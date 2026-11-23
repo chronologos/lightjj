@@ -7,9 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,30 +141,6 @@ func handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(std)
-}
-
-// isLocalOrigin checks whether an Origin header value points at a loopback
-// host — the baseline of HostPolicy.AllowsOrigin (hostgate.go), which handlers
-// reach through originAllowed(r) so --allowed-host applies to Origin too.
-// Defense-in-depth against a malicious page POSTing editorArgs (then
-// social-engineering the user into right-click → Open). HostPolicy.Middleware
-// already validates Host, but browsers set Host=localhost on cross-origin
-// fetch() so that gate doesn't block CORS writes. Non-browser clients (curl)
-// typically omit Origin → permitted.
-func isLocalOrigin(origin string) bool {
-	u, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	h := u.Hostname()
-	if h == "localhost" {
-		return true
-	}
-	// net.ParseIP handles both 127.0.0.1 and ::1 (and the full 127/8 block).
-	if ip := net.ParseIP(h); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
 }
 
 func handleConfigSet(w http.ResponseWriter, r *http.Request) {

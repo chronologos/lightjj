@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chronologos/lightjj/testutil"
@@ -274,6 +275,7 @@ func TestHandleConfigSet_CrossOriginRejected(t *testing.T) {
 
 	// Same-origin accepted
 	req = jsonPost("/api/config", []byte(`{"theme":"light"}`))
+	req.Host = "localhost:3000"
 	req.Header.Set("Origin", "http://localhost:3000")
 	w = httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -284,19 +286,6 @@ func TestHandleConfigSet_CrossOriginRejected(t *testing.T) {
 	w = httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestIsLocalOrigin(t *testing.T) {
-	assert.True(t, isLocalOrigin("http://localhost:3000"))
-	assert.True(t, isLocalOrigin("http://127.0.0.1:8080"))
-	assert.True(t, isLocalOrigin("http://[::1]:3000"))
-	assert.False(t, isLocalOrigin("https://evil.example.com"))
-	assert.False(t, isLocalOrigin("http://10.0.0.1"))
-	assert.False(t, isLocalOrigin("not a url"))
-	// Origin-spoof shapes — url.Parse.Hostname() extracts the real host.
-	assert.False(t, isLocalOrigin("http://localhost.evil.com"))
-	assert.False(t, isLocalOrigin("http://localhost@evil.com"))
-	assert.False(t, isLocalOrigin("null")) // iframe sandbox, file://
 }
 
 // Persisted-tab and recent-action storage tests live in state_test.go —
@@ -402,6 +391,26 @@ func TestHandleConfigSetRaw_CrossOriginRejected(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// text/plain needs no preflight, so a page on any other local port could otherwise
+// plant editorArgs.
+func TestHandleConfigSetRaw_OtherLoopbackPortRejected(t *testing.T) {
+	path := withConfigDir(t)
+	srv := NewServer(testutil.NewMockRunner(t), t.TempDir())
+	post := func(origin string) int {
+		req := httptest.NewRequest("POST", "/api/config/raw", strings.NewReader(`{"editorArgs":["/bin/sh"]}`))
+		req.Host = "localhost:3000"
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Content-Type", "text/plain")
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, req)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusForbidden, post("http://localhost:8888"))
+	assert.Equal(t, http.StatusForbidden, post("http://127.0.0.1:3000"), "another name is another origin")
+	assert.NoFileExists(t, path)
+	assert.Equal(t, http.StatusOK, post("http://localhost:3000"))
 }
 
 func TestHandleConfigSetRaw_RejectsNonTextPlain(t *testing.T) {

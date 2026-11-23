@@ -122,19 +122,21 @@ func (p *HostPolicy) AllowsHost(hostHeader string) bool {
 	return p.allowsExtra(host)
 }
 
-// AllowsOrigin reports whether a browser Origin header value is acceptable:
-// loopback (isLocalOrigin) or an allow-listed hostname. Port and scheme are
-// not compared — the proxy's public port is whatever it is. url.Parse's
-// Hostname() defeats userinfo spoofs (`http://allowed@evil.com` → evil.com).
-func (p *HostPolicy) AllowsOrigin(origin string) bool {
-	if isLocalOrigin(origin) {
-		return true
-	}
+// AllowsOrigin reports whether a browser Origin may write to a server addressed as
+// `host` (the request's Host header): the same origin, or an allow-listed hostname.
+// "Loopback" is not enough — every dev server, notebook and cloned repo's preview
+// page on this machine is loopback too. For an allow-listed name, port and scheme
+// are not compared: the proxy's public port is whatever it is. url.Parse's
+// Host/Hostname() defeat userinfo spoofs (`http://allowed@evil.com` → evil.com) and
+// are empty for "null" and other opaque origins.
+func (p *HostPolicy) AllowsOrigin(origin, host string) bool {
 	u, err := url.Parse(origin)
-	if err != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return false
 	}
-	return p.allowsExtra(u.Hostname())
+	// The Host gate ran already in production; repeating it keeps handlers reached
+	// without Middleware strict, since the client chooses both headers.
+	return strings.EqualFold(u.Host, host) && p.AllowsHost(host) || p.allowsExtra(u.Hostname())
 }
 
 type hostPolicyKey struct{}
@@ -163,13 +165,15 @@ func (p *HostPolicy) Middleware(next http.Handler) http.Handler {
 
 // originAllowed is the cross-origin write gate for handlers reachable by a
 // browser form/fetch. Missing Origin (curl, `lightjj api`, tests) → allowed;
-// the Host gate already ran. Without Middleware in the chain the context has
-// no policy → loopback only.
+// the Host gate already ran. Routes that only accept application/json don't need
+// it (a cross-origin page can't send that without a preflight, which is never
+// granted); TestWriteRoutes_RejectSafelistedContentTypes keeps that true. Without
+// Middleware in the chain the context has no policy → loopback only.
 func originAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
 	}
 	p, _ := r.Context().Value(hostPolicyKey{}).(*HostPolicy)
-	return p.AllowsOrigin(origin)
+	return p.AllowsOrigin(origin, r.Host)
 }

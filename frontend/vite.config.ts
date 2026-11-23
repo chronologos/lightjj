@@ -5,6 +5,10 @@ import { svelteTesting } from '@testing-library/svelte/vite'
 
 const appVersion = readFileSync('../version.txt', 'utf-8').trim()
 
+// Host must stay the browser's: the backend accepts config writes only when Origin
+// matches it. (The string shorthand implies changeOrigin: true.)
+const backend = { target: 'http://localhost:3000', changeOrigin: false }
+
 export default defineConfig({
   plugins: [svelte(), svelteTesting()],
   define: {
@@ -13,9 +17,9 @@ export default defineConfig({
   server: {
     // Proxy API calls to the Go backend during development
     proxy: {
-      '/api': 'http://localhost:3000',
-      '/tab': 'http://localhost:3000',
-      '/tabs': 'http://localhost:3000',
+      '/api': backend,
+      '/tab': backend,
+      '/tabs': backend,
     },
   },
   build: {

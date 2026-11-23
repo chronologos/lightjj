@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/chronologos/lightjj/testutil"
@@ -99,27 +101,79 @@ func TestHostPolicy_AllowsOrigin(t *testing.T) {
 	var nilPolicy *HostPolicy
 
 	for _, tc := range []struct {
-		origin      string
-		def, listed bool
+		origin, host string
+		def, listed  bool
 	}{
-		{"http://localhost:3000", true, true},
-		{"http://127.0.0.1:8080", true, true},
-		{"http://[::1]:3000", true, true},
-		{"https://allowed.example", false, true},
-		{"https://ALLOWED.example:8443", false, true},
-		{"http://allowed.example.", false, true},
-		{"https://evil.example.com", false, false},
-		{"https://allowed.example.evil.com", false, false},
-		{"https://evilallowed.example", false, false},
-		{"https://allowed.example@evil.com", false, false},
-		{"null", false, false},
-		{"not a url", false, false},
+		{"http://localhost:3000", "localhost:3000", true, true},
+		{"http://LOCALHOST:3000", "localhost:3000", true, true},
+		{"http://[::1]:3000", "[::1]:3000", true, true},
+		// Another local port, name or scheme-less origin is another site.
+		{"http://localhost:8888", "localhost:3000", false, false},
+		{"http://127.0.0.1:3000", "localhost:3000", false, false},
+		{"http://localhost", "localhost:3000", false, false},
+		{"file://localhost:3000", "localhost:3000", false, false},
+		// Same as Host, but Host itself isn't one of ours.
+		{"https://evil.example.com", "evil.example.com", false, false},
+		// Allow-listed name: the proxy's public port and scheme are its own business.
+		{"https://allowed.example", "localhost:3000", false, true},
+		{"https://ALLOWED.example:8443", "localhost:3000", false, true},
+		{"http://allowed.example.", "allowed.example", false, true},
+		{"https://evil.example.com", "localhost:3000", false, false},
+		{"https://allowed.example.evil.com", "localhost:3000", false, false},
+		{"https://evilallowed.example", "localhost:3000", false, false},
+		{"https://allowed.example@evil.com", "localhost:3000", false, false},
+		{"http://localhost:3000@evil.com", "localhost:3000", false, false},
+		{"null", "localhost:3000", false, false},
+		{"not a url", "localhost:3000", false, false},
 	} {
-		t.Run(tc.origin, func(t *testing.T) {
-			assert.Equal(t, tc.def, nilPolicy.AllowsOrigin(tc.origin), "nil policy")
-			assert.Equal(t, tc.listed, allow.AllowsOrigin(tc.origin), "allow-listed policy")
+		t.Run(tc.origin+" → "+tc.host, func(t *testing.T) {
+			assert.Equal(t, tc.def, nilPolicy.AllowsOrigin(tc.origin, tc.host), "nil policy")
+			assert.Equal(t, tc.listed, allow.AllowsOrigin(tc.origin, tc.host), "allow-listed policy")
 		})
 	}
+}
+
+// A cross-origin page can POST these content types (or none) without a preflight.
+// Every write route must refuse them before doing anything: that, not an Origin
+// check, is what protects the JSON routes. MockRunner fails on any command.
+func TestWriteRoutes_RejectSafelistedContentTypes(t *testing.T) {
+	withConfigDir(t)
+	// Fully set up, so no "unavailable in this mode" answer masks a missing check.
+	srv := NewServer(testutil.NewMockRunner(t), t.TempDir())
+	srv.SelfBinary = "/bin/false"
+	srv.Watcher = newWatcher(srv)
+	unexpected := errors.New("reached the handler body")
+	tm := NewTabManager(
+		func(string) *Server { t.Error(unexpected); return nil },
+		func(string) (string, error) { t.Error(unexpected); return "", unexpected })
+	tried := 0
+	for _, route := range append([]string{"POST /tabs"}, srv.apiRoutes...) {
+		method, path, _ := strings.Cut(route, " ")
+		if method == http.MethodGet {
+			continue
+		}
+		if method != http.MethodPost {
+			assert.Contains(t, []string{http.MethodDelete, http.MethodPut, http.MethodPatch}, method, "preflighted methods only")
+			continue
+		}
+		mux := srv.Mux
+		if path == "/tabs" {
+			mux = tm.Mux
+		}
+		for _, ct := range []string{"text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", ""} {
+			req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+			req.Host = "localhost:3000"
+			req.Header.Set("Origin", "http://localhost:8888")
+			if ct != "" {
+				req.Header.Set("Content-Type", ct)
+			}
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			assert.Contains(t, []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnsupportedMediaType}, w.Code, "%s with %q", route, ct)
+			tried++
+		}
+	}
+	assert.Greater(t, tried, 100, "routes were actually probed")
 }
 
 // End-to-end through the middleware: Host gate + Origin gate on a real

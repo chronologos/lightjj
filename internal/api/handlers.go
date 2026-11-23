@@ -284,6 +284,10 @@ func (s *Server) handleFileHistory(w http.ResponseWriter, r *http.Request) {
 // commits, 10+min build) the frontend recommends running the CLI directly
 // where jj's TTY-gated progress bar works.
 func (s *Server) handleIndexPaths(w http.ResponseWriter, r *http.Request) {
+	if err := decodeBody(w, r, &struct{}{}); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s.streamMutation(w, r, jj.IndexChangedPaths())
 }
 
