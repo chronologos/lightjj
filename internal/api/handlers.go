@@ -1090,7 +1090,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	// either cleared it or errored). Same reasoning as handleWorkspaceUpdateStale
 	// below — without this, CLI-fixed staleness + tab-focus snapshot leaves
 	// server stale=true until the next snapshotLoop tick (≤5s), and an SSE
-	// reconnect in that window shows a false stale-wc.
+	// reconnect in that window shows a false stale warning.
 	s.clearStale()
 }
 
@@ -1254,7 +1254,7 @@ func (s *Server) handleWorkspaceUpdateStale(w http.ResponseWriter, r *http.Reque
 	if !s.runMutation(w, r, jj.WorkspaceUpdateStale()) {
 		return
 	}
-	// Clear + broadcast immediately so OTHER SSE clients (2nd browser window)
+	// Clear immediately so OTHER SSE clients (2nd browser window)
 	// unstick. The clicking tab is covered by the frontend's `after` callback.
 	s.clearStale()
 }
@@ -1306,9 +1306,7 @@ func (s *Server) handleWorkspaceUpdateStaleOther(w http.ResponseWriter, r *http.
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"output": ""})
 }
 
-// clearStale is the handler-side stale reset. setStale serializes the
-// Swap+broadcast so this can't race a concurrent snapshotLoop set (which would
-// emit sentinels out-of-order with no self-heal).
+// clearStale is the handler-side stale reset.
 func (s *Server) clearStale() {
 	if s.Watcher != nil {
 		s.Watcher.setStale(false)

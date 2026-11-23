@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, isCached, getCached, onStale, multiRevset, computeConnectedCommitIds, prefetchRevision, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { api, isCached, getCached, onStale, onStaleWC, onPollFail, wireAutoRefresh, multiRevset, computeConnectedCommitIds, prefetchRevision, setActiveTab, listTabs, MAX_CACHE_SIZE, _testInternals, effectiveId, guardEffectiveIdCollisions, type LogEntry } from './api'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -947,5 +947,60 @@ describe('machine-state endpoints (state.json)', () => {
     expect(url).toBe('/tab/0/api/state/recent-actions')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual({ ns: { key: 42 } })
+  })
+})
+
+describe('event stream', () => {
+  class FakeES extends EventTarget {
+    static CLOSED = 2
+    static last: FakeES
+    readyState = 1
+    constructor(public url: string) { super(); FakeES.last = this }
+    close() { this.readyState = 2 }
+    emit(type: string, data: unknown) { this.dispatchEvent(new MessageEvent(type, { data: typeof data === 'string' ? data : JSON.stringify(data) })) }
+  }
+  const st = (over: object = {}) => ({ op_id: 'op1', stale: false, poll_error: '', ...over })
+  let stop: () => void
+  const ops: string[] = [], stale: boolean[] = [], poll: (string | null)[] = []
+  let unsub: (() => void)[]
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeES)
+    ops.length = stale.length = poll.length = 0
+    unsub = [onStale(o => ops.push(o)), onStaleWC(s => stale.push(s)), onPollFail(e => poll.push(e))]
+    stop = wireAutoRefresh()
+  })
+  afterEach(() => { stop(); unsub.forEach(f => f()); vi.unstubAllGlobals(); vi.stubGlobal('fetch', mockFetch) })
+
+  it('first state reports everything; later ones only what changed', async () => {
+    FakeES.last.emit('state', st())
+    expect([stale, poll]).toEqual([[false], [null]])
+    FakeES.last.emit('state', st({ op_id: 'op2' }))
+    await Promise.resolve()
+    expect(ops).toEqual(['op2'])
+    expect([stale, poll]).toEqual([[false], [null]]) // an op is not a health change
+    FakeES.last.emit('state', st({ op_id: 'op2', stale: true, poll_error: 'locked' }))
+    FakeES.last.emit('state', st({ op_id: 'op2', stale: true, poll_error: 'locked' }))
+    expect([stale, poll]).toEqual([[false, true], [null, 'locked']])
+    FakeES.last.emit('state', st({ op_id: 'op2' }))
+    expect([stale, poll]).toEqual([[false, true, false], [null, 'locked', null]])
+  })
+
+  it('a reconnect reports everything again, so nothing missed while away sticks', async () => {
+    vi.useFakeTimers()
+    try {
+      FakeES.last.emit('state', st({ stale: true }))
+      const first = FakeES.last
+      first.close()
+      first.dispatchEvent(new Event('error'))
+      await vi.advanceTimersByTimeAsync(1100)
+      expect(FakeES.last).not.toBe(first)
+      FakeES.last.emit('state', st())
+      expect(stale).toEqual([true, false])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('malformed state is ignored', () => {
+    FakeES.last.emit('state', '{nope')
+    expect([stale, poll]).toEqual([[], []])
   })
 })

@@ -52,7 +52,7 @@ internal/
   api/                     — HTTP handlers
     server.go              — Route registration (route lines ARE the pure-mutation handlers), runMutation, op-id cache (getOpId/setOpId/casOpId), helpers
     handlers.go            — Endpoint implementations, generic mutation[Req] factory, flag validation
-    watcher.go             — Op-id watcher: fsnotify + SSE push (local), sshPollLoop (SSH), typed sseEvent broadcasts, shared probeTracker, stale-WC detection
+    watcher.go             — Op-id watcher: fsnotify + SSE `state` (level, not edges) / `nav` (local), sshPollLoop (SSH), shared probeTracker, stale-WC detection
     tabs.go                — TabManager: per-tab Server + Watcher mounted at /tab/{id}/
     config.go              — Server-side JSONC config (hujson); mergeAndWriteConfig single write path for human-edited keys
     config_jsonc.go        — hujson helpers: standardizeJSONC, unmarshalJSONC, patchConfigKeys, removeConfigKeys

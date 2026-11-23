@@ -626,7 +626,7 @@ func (s *Server) setOpId(opId string) {
 // its observation). Returns the cache's current value either way, plus whether
 // the swap happened. The SSH poll loop uses this so a poll result captured
 // BEFORE a concurrent runMutation's refresh can't regress the cache — on
-// mismatch the loop broadcasts the (fresher) current value instead.
+// mismatch the (fresher) current value stands.
 func (s *Server) casOpId(prev, next string) (current string, swapped bool) {
 	s.cachedMu.Lock()
 	defer s.cachedMu.Unlock()

@@ -1916,8 +1916,7 @@
     runMutation(() => api.undo(), 'Undo successful')
 
   // One-click stale-WC recovery. `after` clears optimistically — server also
-  // clears its flag, but the fresh-wc SSE event only fires on the NEXT
-  // snapshot (up to 5s later); without this the success toast auto-clears
+  // clears its flag, but its state event is a round trip away; without this the success toast auto-clears
   // at 3s and the stale warning flashes back for ~2s.
   const handleUpdateStale = () =>
     runMutation(
@@ -2009,11 +2008,11 @@
 
   // Persistent auto-refresh failure — poll loop hit ≥ 5 consecutive errors.
   // Ranked ABOVE staleWC: when polling itself is broken, stale-WC detection
-  // is also impaired (no snapshot → no transition → no fresh-wc either way),
-  // so pollfail is the more truthful condition to surface.
+  // is also impaired (no snapshot → no transition either way),
+  // so the poll failure is the more truthful condition to surface.
   // Remediation button gated on error text matching index.lock (the common
   // "colocated git left a lockfile after crashed process" case); otherwise
-  // offer "Retry snapshot" — success clears pollfail via server recovery,
+  // offer "Retry snapshot" — success clears it via server recovery,
   // failure surfaces the real error through runMutation's toast. Both
   // branches MUST set `action`: MessageBar renders ✕ dismiss when absent,
   // but dismissMessage→setMessage(null) is a no-op while displayMessage

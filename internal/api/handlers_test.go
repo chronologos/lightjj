@@ -808,9 +808,9 @@ func TestHandleUnlockRepo(t *testing.T) {
 
 	srv := newTestServer(runner)
 	srv.Watcher = newWatcher(srv)
-	// Seed a failure state — handler must clear it + broadcast pollok.
+	// Seed a failure state — handler must clear it.
 	srv.Watcher.setPollFail("stale index.lock blocking poll")
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	req := jsonPost("/api/unlock-repo", []byte("{}"))
@@ -818,14 +818,7 @@ func TestHandleUnlockRepo(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	failed, _ := srv.Watcher.pollStatus()
-	assert.False(t, failed, "poll-fail flag should be cleared")
-	select {
-	case got := <-ch:
-		assert.Equal(t, evPollOk, got)
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("expected pollok broadcast after unlock")
-	}
+	assert.Empty(t, next(t, srv.Watcher, sub).PollError, "cleared, and subscribers told")
 }
 
 func TestHandleUnlockRepo_RunnerError(t *testing.T) {
@@ -844,15 +837,14 @@ func TestHandleUnlockRepo_RunnerError(t *testing.T) {
 	srv.Mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
-	failed, _ := srv.Watcher.pollStatus()
-	assert.True(t, failed, "poll-fail flag must stay set when rm fails")
+	assert.NotEmpty(t, srv.Watcher.pollError(), "poll-fail state must stay set when rm fails")
 }
 
 // handleSnapshot and handleWorkspaceUpdateStale are the two handler-side
-// snapshot-success paths. Both must clear stale + broadcast fresh-wc via
+// snapshot-success paths. Both must clear stale via
 // setStale(false) — otherwise a CLI-fixed staleness + tab-focus snapshot
 // leaves server stale=true until snapshotLoop's next tick (≤5s), and an SSE
-// reconnect in that window shows a false stale-wc warning. handleSnapshot
+// reconnect in that window shows a false stale warning. handleSnapshot
 // previously didn't clear (handleWorkspaceUpdateStale did) — sibling asymmetry.
 func TestHandler_ClearsStale(t *testing.T) {
 	for _, tc := range []struct {
@@ -871,7 +863,7 @@ func TestHandler_ClearsStale(t *testing.T) {
 			srv := newTestServer(runner)
 			srv.Watcher = newWatcher(srv)
 			srv.Watcher.stale.Store(true)
-			ch, unsub := srv.Watcher.subscribe()
+			sub, unsub := srv.Watcher.subscribe()
 			defer unsub()
 
 			req := jsonPost(tc.path, []byte("{}"))
@@ -880,15 +872,7 @@ func TestHandler_ClearsStale(t *testing.T) {
 
 			assert.Equal(t, http.StatusOK, w.Code)
 			assert.False(t, srv.Watcher.stale.Load(), "stale flag should be cleared")
-			// Must broadcast — Store(false) alone would consume the Swap edge
-			// and leave other SSE clients stuck (snapshotLoop's next
-			// Swap(false) returns false → no fresh-wc).
-			select {
-			case got := <-ch:
-				assert.Equal(t, evFreshWC, got)
-			default:
-				t.Fatal("expected fresh-wc broadcast")
-			}
+			assert.Len(t, sub.dirty, 1, "subscribers told")
 		})
 		t.Run(tc.name+"/failure keeps it stale", func(t *testing.T) {
 			runner := testutil.NewMockRunner(t)
@@ -898,7 +882,7 @@ func TestHandler_ClearsStale(t *testing.T) {
 			srv := newTestServer(runner)
 			srv.Watcher = newWatcher(srv)
 			srv.Watcher.stale.Store(true)
-			ch, unsub := srv.Watcher.subscribe()
+			sub, unsub := srv.Watcher.subscribe()
 			defer unsub()
 
 			w := httptest.NewRecorder()
@@ -906,7 +890,7 @@ func TestHandler_ClearsStale(t *testing.T) {
 
 			assert.Equal(t, http.StatusInternalServerError, w.Code)
 			assert.True(t, srv.Watcher.stale.Load())
-			assert.Empty(t, ch, "no fresh-wc broadcast")
+			assert.Empty(t, sub.dirty)
 		})
 	}
 }
@@ -3600,7 +3584,7 @@ func TestUnifiedSuccessEnvelope(t *testing.T) {
 		runner := testutil.NewMockRunner(t)
 		defer runner.Verify()
 		srv := newTestServer(runner)
-		srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+		srv.Watcher = newWatcher(srv)
 		_, unsub := srv.Watcher.subscribe() // a viewing browser — else 409
 		defer unsub()
 
@@ -3775,9 +3759,9 @@ func TestHandleNavigate(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	w := httptest.NewRecorder()
@@ -3785,10 +3769,9 @@ func TestHandleNavigate(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	select {
-	case msg := <-ch:
-		require.Equal(t, evNameNav, msg.name)
+	case msg := <-sub.nav:
 		var p navigateRequest
-		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NoError(t, json.Unmarshal(msg, &p))
 		assert.Equal(t, "abc", p.ChangeID)
 		assert.Equal(t, "src/a.go", p.FilePath)
 		assert.Equal(t, 42, p.Line)
@@ -3801,9 +3784,9 @@ func TestHandleNavigateWithRevsetAndChange(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	w := httptest.NewRecorder()
@@ -3811,10 +3794,9 @@ func TestHandleNavigateWithRevsetAndChange(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	select {
-	case msg := <-ch:
-		require.Equal(t, evNameNav, msg.name)
+	case msg := <-sub.nav:
 		var p navigateRequest
-		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NoError(t, json.Unmarshal(msg, &p))
 		assert.Equal(t, "abc", p.ChangeID)
 		assert.Equal(t, "src/a.go", p.FilePath)
 		assert.Equal(t, 42, p.Line)
@@ -3832,7 +3814,7 @@ func TestHandleNavigate_NoSubscriber409(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, jsonPost("/api/navigate", []byte(`{"change_id":"abc"}`)))
@@ -3852,9 +3834,9 @@ func TestHandleNavigate_ReMarshalsSSEInjection(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	// Body with embedded newlines that would break SSE framing if echoed raw.
@@ -3863,17 +3845,17 @@ func TestHandleNavigate_ReMarshalsSSEInjection(t *testing.T) {
 		[]byte("{\"change_id\":\"x\\n\\nevent: stale-wc\\ndata: {}\"}")))
 	require.Equal(t, http.StatusOK, w.Code)
 
-	msg := <-ch
+	msg := <-sub.nav
 	// json.Marshal escapes newlines inside string values, so the broadcast
 	// payload contains no raw LF that would terminate the SSE data field.
-	assert.NotContains(t, msg.data, "\n")
+	assert.NotContains(t, string(msg), "\n")
 }
 
 func TestHandleNavigate_BadRequest(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
 	for _, tc := range []struct{ name, body string }{
 		{"empty", `{}`},
@@ -3891,9 +3873,9 @@ func TestHandleNavigateRevsetOnly(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	w := httptest.NewRecorder()
@@ -3901,10 +3883,9 @@ func TestHandleNavigateRevsetOnly(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	select {
-	case msg := <-ch:
-		require.Equal(t, evNameNav, msg.name)
+	case msg := <-sub.nav:
 		var p navigateRequest
-		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NoError(t, json.Unmarshal(msg, &p))
 		require.NotNil(t, p.Revset)
 		assert.Equal(t, "@", *p.Revset)
 		assert.Empty(t, p.ChangeID)
@@ -3929,9 +3910,9 @@ func TestHandleNavigateCommentID(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	w := httptest.NewRecorder()
@@ -3939,10 +3920,9 @@ func TestHandleNavigateCommentID(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	select {
-	case msg := <-ch:
-		require.Equal(t, evNameNav, msg.name)
+	case msg := <-sub.nav:
 		var p navigateRequest
-		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NoError(t, json.Unmarshal(msg, &p))
 		assert.Equal(t, "c-42", p.CommentID)
 		assert.Empty(t, p.ChangeID)
 		assert.Empty(t, p.FilePath)
@@ -4074,7 +4054,7 @@ func TestHandleNavigateFieldTooLong(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
 	long := strings.Repeat("a", 257)
 	longPath := strings.Repeat("a", 4097)
@@ -4096,7 +4076,7 @@ func TestHandleNavigateRevsetAtCap(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
 	w := httptest.NewRecorder()
 	body := `{"revset":"` + strings.Repeat("a", maxNavigateRevsetLen) + `"}`
@@ -4111,9 +4091,9 @@ func TestHandleNavigateEmptyRevsetClears(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
 	defer runner.Verify()
 	srv := newTestServer(runner)
-	srv.Watcher = &Watcher{subs: make(map[chan sseEvent]struct{}), srv: srv}
+	srv.Watcher = newWatcher(srv)
 
-	ch, unsub := srv.Watcher.subscribe()
+	sub, unsub := srv.Watcher.subscribe()
 	defer unsub()
 
 	w := httptest.NewRecorder()
@@ -4121,11 +4101,10 @@ func TestHandleNavigateEmptyRevsetClears(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	select {
-	case msg := <-ch:
-		require.Equal(t, evNameNav, msg.name)
-		assert.Contains(t, msg.data, `"revset":""`)
+	case msg := <-sub.nav:
+		assert.Contains(t, string(msg), `"revset":""`)
 		var p navigateRequest
-		require.NoError(t, json.Unmarshal([]byte(msg.data), &p))
+		require.NoError(t, json.Unmarshal(msg, &p))
 		require.NotNil(t, p.Revset)
 		assert.Equal(t, "", *p.Revset)
 	case <-time.After(100 * time.Millisecond):

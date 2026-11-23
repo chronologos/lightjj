@@ -17,7 +17,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// Watcher observes .jj/repo/op_heads/heads/ and broadcasts op-id changes to
+// Watcher observes .jj/repo/op_heads/heads/ and reports op-id changes to
 // connected SSE clients. jj atomically swaps the filename (hash-as-name) on
 // every operation commit, so a single CREATE event = one complete operation.
 // A periodic snapshot loop catches raw filesystem edits that jj hasn't seen yet.
@@ -27,7 +27,7 @@ type Watcher struct {
 	fsWatcher *fsnotify.Watcher
 
 	subsMu sync.Mutex
-	subs   map[chan sseEvent]struct{} // each channel receives typed SSE events
+	subs   map[*subscriber]struct{}
 
 	// Debounce: op_heads swap is atomic, but some operations (rebase across
 	// many commits) can fire several in quick succession. Coalesce to one SSE.
@@ -40,23 +40,12 @@ type Watcher struct {
 	// lock can be taken without nesting.
 	onSub, onUnsub func()
 
-	// Tracks whether a background loop last saw a stale-working-copy error.
-	// Mutated ONLY via setStale() (staleMu-serialized edge+broadcast); read
-	// atomically (handleEvents connect-time emit). staleMu makes the
-	// Swap+broadcast atomic so a handler's setStale(false) can't race a loop's
-	// setStale(true) and send sentinels out-of-order (client would be stuck on
-	// stale=true with no self-heal — the Swap edge fires once).
+	// Last-observed health, written by the probe loops and by handlers that have
+	// proof (setStale / setPollFail). pollErr "" = healthy; stale working copies are
+	// not a poll failure.
 	stale   atomic.Bool
-	staleMu sync.Mutex
-
-	// Tracks whether poll/snapshot loops are persistently failing (≥ threshold
-	// consecutive errors that are not stale-WC — stale routes through setStale).
-	// Same edge-triggered broadcast discipline as setStale; pollErr carries the
-	// last error text for the UI. Single mutex (cold path — fires once per
-	// transition; handleEvents reads on connect).
-	pollMu     sync.Mutex
-	pollFailed bool
-	pollErr    string
+	pollMu  sync.Mutex
+	pollErr string
 
 	// snapshotPaused suppresses background snapshots while a foreground jj
 	// mutation is running. The race: `jj git push` releases the WC lock between
@@ -75,68 +64,19 @@ type Watcher struct {
 	stopOnce sync.Once
 }
 
-// sseEvent is one typed message on the watcher's broadcast channel. It maps
-// 1:1 onto the SSE wire format the frontend's api.ts listens for:
-//
-//	event: <name>\ndata: <data>\n\n
-//
-// Only the internal representation is typed — the wire bytes (event names,
-// payload shapes) are a contract with api.ts and must not change.
-type sseEvent struct {
-	name string // SSE event name: one of the evName* constants
-	data string // payload: server-marshaled JSON; "{}" for sentinels
-
-	// droppable marks events a slow subscriber can afford to lose: op-ids
-	// (the client coalesces consecutive refreshes into one reload) and nav
-	// hints (best-effort steering, not state). State sentinels (stale-wc /
-	// fresh-wc, pollfail/pollok) are NOT droppable — they're edge-triggered
-	// and never re-sent, so broadcast() evicts the oldest queued event to
-	// make room for them rather than dropping them.
-	droppable bool
+// watchState is everything a client needs to know, as a LEVEL: the stream's
+// `state` event always carries all of it, read at the moment of writing. There are
+// no edges to lose, reorder or replay — a slow or reconnecting client just gets the
+// current state. Contract with api.ts.
+type watchState struct {
+	OpId      string `json:"op_id"`
+	Stale     bool   `json:"stale"`
+	PollError string `json:"poll_error"`
 }
 
-// SSE event names — the `event:` field on the wire. Contract with api.ts's
-// addEventListener calls; renaming any of these breaks the frontend.
-const (
-	evNameOp       = "op"
-	evNameStaleWC  = "stale-wc"
-	evNameFreshWC  = "fresh-wc"
-	evNameNav      = "nav"
-	evNamePollFail = "pollfail"
-	evNamePollOk   = "pollok"
-)
-
-// Sentinel events — no payload, broadcast on state edges (setStale/setPollFail
-// fire them exactly once per transition). Package vars (not constructors) so
-// tests can compare received channel values directly.
-var (
-	evStaleWC = sseEvent{name: evNameStaleWC, data: "{}"}
-	evFreshWC = sseEvent{name: evNameFreshWC, data: "{}"}
-	evPollOk  = sseEvent{name: evNamePollOk, data: "{}"}
-)
-
-// opEvent builds an op-id change event. An empty op-id yields the zero event,
-// which broadcast() ignores — preserves "never broadcast an empty op-id".
-func opEvent(opId string) sseEvent {
-	if opId == "" {
-		return sseEvent{}
-	}
-	js, _ := json.Marshal(map[string]string{"op_id": opId})
-	return sseEvent{name: evNameOp, data: string(js), droppable: true}
-}
-
-// pollFailEvent carries the last poll error text for the UI. Not droppable —
-// it's the failing edge of an edge-triggered pair (recovery broadcasts evPollOk).
-func pollFailEvent(errText string) sseEvent {
-	js, _ := json.Marshal(map[string]string{"error": errText})
-	return sseEvent{name: evNamePollFail, data: string(js)}
-}
-
-// navEvent wraps a navigation steering payload (server-marshaled JSON, no
-// embedded newlines — see handleNavigate). Droppable: navigation is
-// best-effort steering, not state, so there's no edge to lose (unlike evStaleWC).
-func navEvent(payload []byte) sseEvent {
-	return sseEvent{name: evNameNav, data: string(payload), droppable: true}
+type subscriber struct {
+	dirty chan struct{} // cap 1: state changed since it was last written
+	nav   chan []byte   // agent steering; best-effort, dropped when full
 }
 
 // Snapshot-pause counters, one per canonical repo path: a mutation running in
@@ -242,7 +182,7 @@ type probeTracker struct {
 // ok records a healthy probe. clearStale=false when the probe variant cannot
 // vouch for WC freshness — sshPollLoop while paused uses CurrentOpId, which
 // has --ignore-working-copy, so its success says nothing about staleness and
-// must not broadcast a false evFreshWC.
+// must not report a false recovery.
 func (p *probeTracker) ok(clearStale bool) {
 	if clearStale {
 		p.w.setStale(false)
@@ -251,8 +191,8 @@ func (p *probeTracker) ok(clearStale bool) {
 	p.failures = 0
 }
 
-// staleWC records a stale-working-copy result (see isStaleWCError). setStale
-// broadcasts once on the edge; the caller's retry loop keeps running so a
+// staleWC records a stale-working-copy result (see isStaleWCError). The caller's
+// retry loop keeps running so a
 // CLI-side `jj workspace update-stale` is noticed and clears it.
 func (p *probeTracker) staleWC() {
 	p.w.setStale(true)
@@ -274,28 +214,17 @@ func (p *probeTracker) fail(err error) {
 func newWatcher(srv *Server) *Watcher {
 	return &Watcher{
 		srv:            srv,
-		subs:           make(map[chan sseEvent]struct{}),
+		subs:           make(map[*subscriber]struct{}),
 		debounce:       150 * time.Millisecond,
 		snapshotPaused: pauseCounterFor(pauseKey(srv)),
 		stop:           make(chan struct{}),
 	}
 }
 
-// setStale updates the stale flag and broadcasts the sentinel IFF the value
-// changed. staleMu serializes the Swap+broadcast pair so two callers can't
-// interleave and emit sentinels out-of-order (handleWorkspaceUpdateStale
-// clearing + snapshotLoop setting in between would leave the client stuck on
-// stale=true; Swap edges don't re-fire so there's no self-heal).
+// setStale updates the stale flag and tells subscribers when it changed.
 func (w *Watcher) setStale(v bool) {
-	w.staleMu.Lock()
-	defer w.staleMu.Unlock()
-	if w.stale.Swap(v) == v {
-		return
-	}
-	if v {
-		w.broadcast(evStaleWC)
-	} else {
-		w.broadcast(evFreshWC)
+	if w.stale.Swap(v) != v {
+		w.notify()
 	}
 }
 
@@ -304,39 +233,27 @@ func (w *Watcher) setStale(v bool) {
 // reflect that tab's snapshotLoop state without a per-tab SSE subscription.
 func (w *Watcher) Stale() bool { return w.stale.Load() }
 
-// setPollFail records persistent poll failure / recovery. Same edge-triggered
-// broadcast discipline as setStale. err == "" means "healthy"; non-empty means
-// "failing, here's the last error text for the UI". Updates pollErr on every
-// call while failed (error detail can change between ticks) but only broadcasts
-// on true↔false transitions — the client doesn't need to re-render on each tick.
-// The broadcast event carries the error text as of the edge; later refinements
-// while still failed update pollErr (served to new connections by handleEvents'
-// connect-time emit) without re-broadcasting.
+// setPollFail records persistent poll failure (err = last error text for the UI) or
+// recovery (""). Subscribers are told on the transition; a later change of text while
+// still failing goes out with whatever is written next.
 func (w *Watcher) setPollFail(err string) {
 	w.pollMu.Lock()
-	defer w.pollMu.Unlock()
-	failed := err != ""
-	if w.pollFailed == failed {
-		if failed {
-			w.pollErr = err
-		}
-		return
-	}
-	w.pollFailed = failed
+	changed := (w.pollErr == "") != (err == "")
 	w.pollErr = err
-	if failed {
-		w.broadcast(pollFailEvent(err))
-	} else {
-		w.broadcast(evPollOk)
+	w.pollMu.Unlock()
+	if changed {
+		w.notify()
 	}
 }
 
-// pollStatus returns the current failure state + last error text. Used by
-// handleEvents on connect (new client needs current state).
-func (w *Watcher) pollStatus() (failed bool, err string) {
+func (w *Watcher) pollError() string {
 	w.pollMu.Lock()
 	defer w.pollMu.Unlock()
-	return w.pollFailed, w.pollErr
+	return w.pollErr
+}
+
+func (w *Watcher) state() watchState {
+	return watchState{OpId: w.srv.getOpId(), Stale: w.stale.Load(), PollError: w.pollError()}
 }
 
 // NewWatcher constructs a watcher for the given server. Returns nil if the
@@ -401,14 +318,12 @@ func (w *Watcher) Close() {
 	})
 }
 
-// watchLoop consumes fsnotify events and broadcasts debounced op-id changes.
+// watchLoop consumes fsnotify events and reports debounced op-id changes.
 func (w *Watcher) watchLoop() {
 	var timer *time.Timer
 	fire := func() {
-		// refreshOpId returns the fresh value — using it directly eliminates
-		// a TOCTOU window where a concurrent refreshOpId (from runMutation or
-		// snapshotLoop) could interleave between our write and a separate read.
-		w.broadcast(opEvent(w.srv.refreshOpId()))
+		w.srv.refreshOpId()
+		w.notify()
 	}
 
 	for {
@@ -440,7 +355,7 @@ func (w *Watcher) watchLoop() {
 	}
 }
 
-// sshPollLoop polls the remote op-id on a ticker and broadcasts on change.
+// sshPollLoop polls the remote op-id on a ticker and reports changes.
 // Gated on hasSubscribers() — no browser tabs = no SSH traffic. Error
 // tolerance mirrors snapshotLoop via the shared probeTracker: transient
 // failures (repo lock, SSH blip) are expected; persistent failure surfaces
@@ -455,13 +370,13 @@ func (w *Watcher) watchLoop() {
 func (w *Watcher) sshPollLoop(interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
-	// lastBroadcast: what WE last sent to subscribers. Independent of the
+	// lastReported: what WE last reported to subscribers. Independent of the
 	// op-id cache — a runMutation advancing the cache between ticks doesn't
-	// change what WE broadcast last. Comparing against this (not the cache)
+	// change what WE reported last. Comparing against this (not the cache)
 	// is what lets the next poll detect the between-tick mutation and
-	// broadcast it to OTHER tabs (the mutating tab got the X-JJ-Op-Id
+	// report it to OTHER tabs (the mutating tab got the X-JJ-Op-Id
 	// header; non-mutating tabs rely on SSE).
-	lastBroadcast := ""
+	lastReported := ""
 	probe := &probeTracker{w: w, label: "op-id poll"}
 	for {
 		select {
@@ -477,7 +392,7 @@ func (w *Watcher) sshPollLoop(interval time.Duration) {
 			// CurrentOpId success says nothing about WC freshness, so the
 			// stale-clear on success (probe.ok's clearStale arg) is gated on
 			// !paused — otherwise a 21s push with a stale WC would falsely
-			// broadcast evFreshWC.
+			// report recovery.
 			paused := w.snapshotPaused.Load() > 0
 			pollCmd := jj.PollOpId()
 			if paused {
@@ -486,7 +401,7 @@ func (w *Watcher) sshPollLoop(interval time.Duration) {
 			// preCached: the SHARED op-id cache value, for the DURING-call CAS
 			// below. If a concurrent runMutation advances the cache while our
 			// SSH call is in flight, the poll result is stale and the CAS
-			// prevents regression. DISTINCT from lastBroadcast (the
+			// prevents regression. DISTINCT from lastReported (the
 			// between-tick case) — collapsing these was the bug_017 regression.
 			preCached := w.srv.getOpId()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -504,16 +419,16 @@ func (w *Watcher) sshPollLoop(interval time.Duration) {
 			}
 			probe.ok(!paused)
 			opId := strings.TrimSpace(string(out))
-			if opId == "" || opId == lastBroadcast {
+			if opId == "" || opId == lastReported {
 				continue
 			}
 			// CAS: advance the cache only if nobody else did mid-poll. If a
-			// concurrent runMutation won (swap refused), broadcast THEIR value
+			// concurrent runMutation won (swap refused), THEIR value stands
 			// so non-mutating clients still refresh — it's fresher than our
 			// poll's pre-mutation snapshot.
 			cur, _ := w.srv.casOpId(preCached, opId)
-			w.broadcast(opEvent(cur))
-			lastBroadcast = cur
+			w.notify()
+			lastReported = cur
 		}
 	}
 }
@@ -565,23 +480,19 @@ func (w *Watcher) hasSubscribers() bool {
 	return len(w.subs) > 0
 }
 
-// subscribe registers a channel to receive event broadcasts. Call the returned
+// subscribe registers for state changes and navigation. Call the returned
 // unsubscribe func when the client disconnects.
-func (w *Watcher) subscribe() (ch chan sseEvent, unsubscribe func()) {
-	// Buffer 6 absorbs a burst of droppable op-id events between client reads.
-	// The size is headroom, not a correctness invariant: non-droppable
-	// sentinel events evict the oldest queued event when the buffer is full
-	// (see broadcast), so they can never be lost to sizing arithmetic.
-	ch = make(chan sseEvent, 6)
+func (w *Watcher) subscribe() (sub *subscriber, unsubscribe func()) {
+	sub = &subscriber{dirty: make(chan struct{}, 1), nav: make(chan []byte, 4)}
 	w.subsMu.Lock()
-	w.subs[ch] = struct{}{}
+	w.subs[sub] = struct{}{}
 	w.subsMu.Unlock()
 	if w.onSub != nil {
 		w.onSub()
 	}
-	return ch, func() {
+	return sub, func() {
 		w.subsMu.Lock()
-		delete(w.subs, ch)
+		delete(w.subs, sub)
 		w.subsMu.Unlock()
 		if w.onUnsub != nil {
 			w.onUnsub()
@@ -589,62 +500,42 @@ func (w *Watcher) subscribe() (ch chan sseEvent, unsubscribe func()) {
 	}
 }
 
-// Navigate broadcasts a one-shot navigation payload to connected SSE clients.
+// Navigate sends a one-shot navigation payload to connected SSE clients.
 // payload is a server-marshaled JSON blob (handleNavigate validates and
-// re-marshals so untrusted input can't smuggle SSE framing). Dropped if no
-// subscribers or all buffers full — navigation is best-effort steering, not
-// state, so there's no edge to lose (unlike evStaleWC). Returns false when
+// re-marshals so untrusted input can't smuggle SSE framing). Best-effort steering,
+// not state: dropped if a client's buffer is full. Returns false when
 // no browser is subscribed to THIS tab's stream: the browser holds an
 // EventSource only for the active tab, so a navigate aimed at a background
 // tab would otherwise 200 and silently vanish — handleNavigate turns false
 // into a 409 the agent can act on.
 func (w *Watcher) Navigate(payload []byte) bool {
-	if !w.hasSubscribers() {
-		return false
-	}
-	w.broadcast(navEvent(payload))
-	return true
-}
-
-// broadcast fans an event out to all subscribers without blocking. A slow
-// subscriber's full buffer drops droppable events (it catches up on the next
-// one). Non-droppable sentinel edges instead evict the oldest queued event to
-// make room: sentinels carry absolute state (stale/fresh, failed/ok) and are
-// never re-sent, so the newest one must arrive — and whatever gets evicted is
-// either a droppable event or an older (superseded) sentinel.
-func (w *Watcher) broadcast(ev sseEvent) {
-	if ev.name == "" {
-		return
-	}
 	w.subsMu.Lock()
 	defer w.subsMu.Unlock()
-	for ch := range w.subs {
+	for sub := range w.subs {
 		select {
-		case ch <- ev:
-			continue
+		case sub.nav <- payload:
 		default:
 		}
-		if ev.droppable {
-			continue
-		}
-		// Evict one queued event, then send. broadcast holds subsMu so no
-		// other sender can refill the freed slot; the subscriber draining
-		// concurrently only makes more room. Both selects keep defaults so
-		// this can never block while holding subsMu.
+	}
+	return len(w.subs) > 0
+}
+
+// notify marks every subscriber's state out of date. Never blocks: a subscriber
+// already marked reads the latest state when it gets there.
+func (w *Watcher) notify() {
+	w.subsMu.Lock()
+	defer w.subsMu.Unlock()
+	for sub := range w.subs {
 		select {
-		case <-ch:
-		default:
-		}
-		select {
-		case ch <- ev:
+		case sub.dirty <- struct{}{}:
 		default:
 		}
 	}
 }
 
 // handleEvents is the SSE endpoint. It holds the connection open and streams
-// `event: <name>\ndata: <payload>\n\n` frames — op-id changes, stale-WC and
-// poll-failure sentinels, navigation hints. A keepalive comment is sent every
+// `event: <name>\ndata: <payload>\n\n` frames: `state` (watchState) and `nav`
+// (navigation hints). A keepalive comment is sent every
 // 25s to prevent proxy idle timeouts.
 func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 	flusher, ok := rw.(http.Flusher)
@@ -671,7 +562,7 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 	rw.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch, unsubscribe := w.subscribe()
+	sub, unsubscribe := w.subscribe() // before the first read: no change can fall between
 	defer unsubscribe()
 
 	write := func(payload string) error {
@@ -682,61 +573,22 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return nil
 	}
-	// writeEvent is the single chokepoint that turns a typed sseEvent into
-	// wire bytes — connect-time emits and channel dispatch both go through it,
-	// so the format can't drift between the two paths.
-	writeEvent := func(ev sseEvent) error {
-		return write("event: " + ev.name + "\ndata: " + ev.data + "\n\n")
+	writeEvent := func(name string, data []byte) error {
+		return write("event: " + name + "\ndata: " + string(data) + "\n\n")
+	}
+	writeState := func() error {
+		js, _ := json.Marshal(w.state())
+		return writeEvent("state", js)
 	}
 
-	// Send current op-id immediately on connect. Handles reconnect gaps: if
-	// the client's SSE dropped during a repo change, the reconnect syncs state
-	// without waiting for the next fsnotify event. Client's notifyOpId dedup
-	// makes this a no-op on the common case (op-id unchanged since last call).
-	//
-	// Refresh if the cached op-id is empty — otherwise a read-only session (no
-	// mutations, nothing to advance the cache) never gets event:op → frontend's
-	// everSawEvent stays false → first SSE drop permanently kills auto-refresh.
+	// On connect, so a client that missed anything while away is immediately right.
+	// Refresh an empty op-id first: a read-only session has nothing else to fill it.
 	// Local refresh is <1ms (filesystem read); SSH is ~440ms once per connect.
-	cur := w.srv.getOpId()
-	if cur == "" {
-		cur = w.srv.refreshOpId()
+	if w.srv.getOpId() == "" {
+		w.srv.refreshOpId()
 	}
-	if cur != "" {
-		if err := writeEvent(opEvent(cur)); err != nil {
-			return
-		}
-	}
-	// Emit current stale state unconditionally on connect. Both branches matter:
-	//   - stale=true: browser reload during staleness would otherwise lose the
-	//     warning until the next snapshot tick (up to 5s)
-	//   - stale=false: client whose SSE dropped during staleness and reconnected
-	//     after CLI recovery never saw the fresh-wc broadcast (sent while
-	//     disconnected) → workspaceStale stuck true forever. Swap edges don't
-	//     re-fire, and visibilitychange only fires on tab switch, not WiFi blips.
-	{
-		ev := evFreshWC
-		if w.stale.Load() {
-			ev = evStaleWC
-		}
-		if err := writeEvent(ev); err != nil {
-			return
-		}
-	}
-	// Poll-failure state — same reconnect-resync reasoning as stale-wc: BOTH
-	// branches are load-bearing. If polling recovered while the client was
-	// disconnected, the pollok broadcast was sent to zero subscribers; the
-	// reconnect must re-emit pollok so the client's pollFailError clears.
-	// Without the else branch, pollFailError stays stuck until browser reload
-	// or a new server-side failure→recovery cycle.
-	if failed, pollErr := w.pollStatus(); failed {
-		if err := writeEvent(pollFailEvent(pollErr)); err != nil {
-			return
-		}
-	} else {
-		if err := writeEvent(evPollOk); err != nil {
-			return
-		}
+	if err := writeState(); err != nil {
+		return
 	}
 
 	keepalive := time.NewTicker(25 * time.Second)
@@ -751,8 +603,12 @@ func (w *Watcher) handleEvents(rw http.ResponseWriter, r *http.Request) {
 			// lives until the client disconnects or a keepalive write fails.
 			// Pre-tabs this was process-exit-only; now it's a runtime path.
 			return
-		case ev := <-ch:
-			if err := writeEvent(ev); err != nil {
+		case <-sub.dirty:
+			if err := writeState(); err != nil {
+				return
+			}
+		case payload := <-sub.nav:
+			if err := writeEvent("nav", payload); err != nil {
 				return
 			}
 		case <-keepalive.C:

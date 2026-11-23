@@ -217,7 +217,7 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/events` | SSE stream: op-id changes, warnings, navigation hints |
+| GET | `/api/events` | SSE stream: `state` (op-id, stale working copy, poll error) and `nav` hints |
 
 ## Layer Responsibilities
 

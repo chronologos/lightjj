@@ -176,9 +176,8 @@ let lastOpId: string | null = null
 const staleCallbacks = new Set<(opId: string) => void>()
 let refreshQueued = false
 
-// Stale-working-copy subscribers. Server's snapshotLoop pushes `stale-wc` /
-// `fresh-wc` SSE events on transition edges (local mode); the visibilitychange
-// snapshot error path covers SSH mode. Callback arg = true (stale) | false
+// Stale-working-copy subscribers: the stream's state event, plus the
+// visibilitychange snapshot's own outcome. Callback arg = true (stale) | false
 // (fresh). App wires this to a persistent warning MessageBar with an
 // "Update stale" action → POST /api/workspace/update-stale.
 const staleWCCallbacks = new Set<(stale: boolean) => void>()
@@ -218,13 +217,10 @@ export interface FocusState {
  *  api.saveRecentActions and recent-actions.svelte.ts. */
 export type RecentActionsState = Record<string, Record<string, number>>
 
-// Poll-failure subscribers. Server's watcher broadcasts `pollfail` with an
-// error payload after ≥ pollFailThreshold consecutive poll/snapshot errors
-// that aren't stale-WC, and `pollok` when polling recovers. Works in both
-// local mode (snapshotLoop) and SSH mode (sshPollLoop). callback arg = error
-// text when failing, null when recovered. App wires to a persistent warning
-// MessageBar, with a "Delete git lockfile" action when the error text
-// mentions index.lock (the common remediation).
+// Poll-failure subscribers: the error text while polling/snapshotting keeps failing
+// (≥ pollFailThreshold consecutive errors that aren't stale-WC), null when healthy.
+// App wires to a persistent warning MessageBar, with a "Delete git lockfile" action
+// when the text mentions index.lock (the common remediation).
 const pollFailCallbacks = new Set<(err: string | null) => void>()
 function notifyPollFail(err: string | null) {
   for (const cb of pollFailCallbacks) cb(err)
@@ -451,9 +447,8 @@ function trackOpId(res: Response) {
 // but the snapshot response's X-JJ-Op-Id header still carries refresh.
 // Returns a cleanup fn that tears down both.
 //
-// SSE reconnects on backend restart using the same everSawEvent heuristic as
-// watcher.go's sshWatchLoop: handleEvents sends the current op-id immediately
-// on connect, so if we NEVER got one → watcher is absent (--no-watch or 204).
+// SSE reconnects on backend restart using an everSawEvent heuristic: handleEvents
+// sends the current state immediately on connect, so if we NEVER got one → watcher is absent (--no-watch or 204).
 // CLOSED-after-events → transient (backend restart), reconnect with backoff.
 export function wireAutoRefresh(): () => void {
   let es: EventSource | null = null
@@ -470,45 +465,30 @@ export function wireAutoRefresh(): () => void {
 
     es.addEventListener('open', () => { backoff = 1000 })
 
-    // handleEvents sends BOTH op (if cachedOp non-empty after refresh) and
-    // one of stale-wc/fresh-wc unconditionally on connect. Any of these
-    // proves the watcher is alive — handleEventsDisabled returns 204, so
-    // events never arrive there. Previously only `op` marked everSawEvent;
-    // that broke when cachedOp was empty (read-only session, SSH first-poll
-    // window) — first SSE drop permanently killed auto-refresh.
+    // Any event proves the watcher is alive — handleEventsDisabled returns 204.
     const mark = () => {
       everSawEvent = true
       sawEventThisConn = true
       closesWithoutEvent = 0
       notifySSEState(true)
     }
-    es.addEventListener('op', (ev) => {
+    // Always the whole state (watcher.go watchState): sent on connect and whenever
+    // any of it changes. Subscribers hear only about the parts that differ.
+    let last: { op_id: string; stale: boolean; poll_error: string } | null = null
+    es.addEventListener('state', (ev) => {
       mark()
-      try {
-        const { op_id } = JSON.parse(ev.data) as { op_id: string }
-        notifyOpId(op_id)
-      } catch { /* malformed event — ignore */ }
+      let s: NonNullable<typeof last>
+      try { s = JSON.parse(ev.data) } catch { return /* malformed event — ignore */ }
+      notifyOpId(s.op_id)
+      if (s.stale !== last?.stale) notifyStaleWC(s.stale)
+      if (s.poll_error !== last?.poll_error) notifyPollFail(s.poll_error || null)
+      last = s
     })
-    // Server pushes these on snapshot-loop stale-detection transition edges
-    // AND unconditionally on connect (watcher.go:handleEvents).
-    es.addEventListener('stale-wc', () => { mark(); notifyStaleWC(true) })
-    es.addEventListener('fresh-wc', () => { mark(); notifyStaleWC(false) })
     es.addEventListener('nav', (ev) => {
       mark()
       try { notifyNavigate(JSON.parse(ev.data) as NavigatePayload) }
       catch { /* malformed — ignore */ }
     })
-    // pollfail carries an error string; pollok clears. Server emits pollfail
-    // both on transition AND unconditionally on connect if currently failed,
-    // so reconnect always syncs state.
-    es.addEventListener('pollfail', (ev) => {
-      mark()
-      try {
-        const { error } = JSON.parse(ev.data) as { error: string }
-        notifyPollFail(error || 'auto-refresh failing')
-      } catch { notifyPollFail('auto-refresh failing') }
-    })
-    es.addEventListener('pollok', () => { mark(); notifyPollFail(null) })
 
     // Network drop → readyState CONNECTING (browser retries automatically).
     // Non-200 response (including 204 from handleEventsDisabled — spec is
@@ -522,7 +502,7 @@ export function wireAutoRefresh(): () => void {
       es.close()
       es = null
       if (!sawEventThisConn) closesWithoutEvent++
-      // handleEvents sends op-id immediately on connect. Never seeing one means
+      // handleEvents sends the state immediately on connect. Never seeing it means
       // the watcher isn't wired. `everSawEvent` covers first-connect; the counter
       // covers backend-restarted-with-watcher-disabled (3 consecutive 204s).
       if (!everSawEvent || closesWithoutEvent >= 3) {
