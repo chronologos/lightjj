@@ -1,6 +1,6 @@
 <script lang="ts">
   import { newSideAddedLines, type DiffFile, type DiffHunk, type DiffLine } from './diff-parser'
-  import { toSplitView, type SplitLine } from './split-view'
+  import { showsSplit, toSplitView, type SplitLine } from './split-view'
   import type { WordSpan } from './word-diff'
   import { api, FILE_LEVEL, FILE_TYPE_LABELS, IMAGE_RE, type FileChange, type DiffSide } from './api'
   import { anchorText, isReviewedReview, SEVERITY_RANK, type PlacedReview, type Resolution } from './review'
@@ -33,8 +33,10 @@
     splitView: boolean
     highlightedLines: Map<string, string>
     wordDiffs: Map<string, Map<number, WordSpan[]>>
-    ontoggle: (path: string) => void
-    /** gapIdx: which gap to reveal (original-diff index via gapMap). -1 = all. */
+    /** undefined = a read-only host that never collapses: the header is not a button. */
+    ontoggle?: (path: string) => void
+    /** gapIdx: which gap to reveal (original-diff index via gapMap). -1 = all.
+     *  undefined = this host can't expand: no expand controls. */
     onexpand?: (path: string, gapIdx: number) => void
     onmerge?: (file: string) => void
     /** One-click whole-file resolve to ours/theirs (no 3-pane editor). Gated to
@@ -91,14 +93,15 @@
     annotationCount?: number
     docCommentCount?: number
     /** Tri-state visibility + per-thread overrides. undefined = bubbles only
-     *  (multi-rev mode, split view) — inline rows gated on this. */
+     *  (multi-rev mode, a file shown split) — inline rows gated on this. */
     vis?: CommentVisibility
     /** CommentCard intent callbacks — DiffPanel wires these to the store. */
     onreviewresolve?: (id: string, r: Resolution) => void
     onreviewdelete?: (id: string) => void
     /** Inline create/edit composer (AnnotationBubble inline) rendered below
-     *  `draftLine`. DiffPanel passes both only when annBubble.open and the
-     *  filePath matches; undefined = popup fallback (split/multi). */
+     *  `draftLine`. DiffPanel passes both only when annBubble.open, the filePath
+     *  matches and this view can show that line (canHostInline); undefined =
+     *  popup fallback. */
     composer?: import('svelte').Snippet
     draftLine?: { lineNum: number; side: DiffSide } | null
     /** Click handler for the annotation gutter badge / Alt+click quick-add.
@@ -330,7 +333,7 @@
   // setting — this window's, another window's, review mode — can unmount it.
   // Otherwise conflicted files force unified: split makes no sense when all lines
   // are additions.
-  let effectiveSplit = $derived(editing || (splitView && !isConflict))
+  let effectiveSplit = $derived(showsSplit({ splitView, editing, conflict: isConflict }))
 
   // Split-grid selection latch (issue #41). Pair-order DOM interleaves the
   // two sides, so a native drag-select would sweep both; mousedown records
@@ -400,7 +403,7 @@
     if (isMarker) return ''
     if (innerType === 'remove') return '-'
     if (innerType === 'add') return '+'
-    if (inConflict) return '' // no prefix for conflict content lines
+    if (inConflict) return ' ' // no prefix for conflict content lines — but its column (review bubble, alignment)
     return content[0] // +/-/space
   }
 
@@ -521,9 +524,9 @@
       { separator: true },
     ]
     if (!isExpanded && onexpand) {
-      items.push({ label: 'Expand full context', action: () => onexpand?.(filePath, -1) })
+      items.push({ label: 'Expand full context', action: () => onexpand(filePath, -1) })
     }
-    items.push({ label: isCollapsed ? 'Expand' : 'Collapse', action: () => ontoggle(filePath) })
+    if (ontoggle) items.push({ label: isCollapsed ? 'Expand' : 'Collapse', action: () => ontoggle(filePath) })
     if (ondiscard) {
       items.push(
         { separator: true },
@@ -707,18 +710,20 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="diff-file" data-file-path={filePath} bind:this={fileEl} style:contain-intrinsic-size={intrinsicSize} class:hunk-reviewing={!!hunkReview} class:file-reviewed={reviewed} onpointermove={symbolHover ? handleSymbolMove : undefined} onpointerleave={symbolHover ? () => symbolHover.leave() : undefined}>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (role and tabindex come and go together) -->
   <div
     class="diff-file-header"
+    class:static={!ontoggle}
     onclick={(e: MouseEvent) => {
       if (e.altKey && onannotationclick) { e.stopPropagation(); onannotationclick(FILE_LEVEL, '', e); return }
-      ontoggle(filePath)
+      ontoggle?.(filePath)
     }}
     oncontextmenu={handleFileHeaderContextMenu}
-    role="button"
-    tabindex="0"
-    aria-expanded={!isCollapsed}
-    aria-label="{isCollapsed ? 'Expand' : 'Collapse'} {filePath}"
-    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ontoggle(filePath) }}}
+    role={ontoggle ? 'button' : undefined}
+    tabindex={ontoggle ? 0 : undefined}
+    aria-expanded={ontoggle ? !isCollapsed : undefined}
+    aria-label={ontoggle ? `${isCollapsed ? 'Expand' : 'Collapse'} ${filePath}` : undefined}
+    onkeydown={(e: KeyboardEvent) => { if (ontoggle && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); ontoggle(filePath) }}}
   >
     {#if reviewFileState}
       <!-- Tri-state glyph replaces collapse chevron in review mode. Click
@@ -732,7 +737,7 @@
         title="{reviewFileState === 'all' ? 'All accepted' : reviewFileState === 'none' ? 'All rejected' : 'Partially accepted'} — click to toggle all"
         aria-label="Toggle all hunks in {filePath}"
       >{REVIEW_GLYPH[reviewFileState]}</button>
-    {:else}
+    {:else if ontoggle}
       <span class="collapse-icon" class:is-collapsed={isCollapsed} aria-hidden="true"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1L6 4L2 7z"/></svg></span>
     {/if}
     {#if fileStats}
@@ -898,8 +903,8 @@
       {/if}
     {:else if effectiveSplit}
       <!-- Split (side-by-side) view -->
-      {#if !isExpanded && hasHiddenContext}
-        <button class="expand-btn" onclick={() => onexpand?.(filePath, -1)} aria-label="Show full context for {filePath}">
+      {#if onexpand && !isExpanded && hasHiddenContext}
+        <button class="expand-btn" onclick={() => onexpand(filePath, -1)} aria-label="Show full context for {filePath}">
           <span class="expand-dots" aria-hidden="true">···</span>
           <span class="expand-label">full context</span>
         </button>
@@ -986,17 +991,17 @@
         {@const hunkAccepted = hunkReview ? hunkReview.selected.has(hunkKey(filePath, hunkIdx)) : true}
         {@const hunkIsCursor = hunkReview?.cursor?.path === filePath && hunkReview.cursor.idx === hunkIdx}
         {#if !isExpanded}
-          {#if hunkIdx === 0 && hunk.newStart > 1}
-            <button class="expand-btn" onclick={() => onexpand?.(filePath, origGap(0))} aria-label="Show {hunk.newStart - 1} hidden lines above">
+          {#if onexpand && hunkIdx === 0 && hunk.newStart > 1}
+            <button class="expand-btn" onclick={() => onexpand(filePath, origGap(0))} aria-label="Show {hunk.newStart - 1} hidden lines above">
               <span class="expand-dots" aria-hidden="true">···</span>
               <span class="expand-label">{hunk.newStart - 1} lines</span>
             </button>
           {/if}
-          {#if hunkIdx > 0}
+          {#if onexpand && hunkIdx > 0}
             {@const prev = file.hunks[hunkIdx - 1]}
             {@const gap = hunk.newStart - (prev.newStart + prev.newCount)}
             {#if gap > 0}
-              <button class="expand-btn" onclick={() => onexpand?.(filePath, origGap(hunkIdx))} aria-label="Show {gap} hidden lines">
+              <button class="expand-btn" onclick={() => onexpand(filePath, origGap(hunkIdx))} aria-label="Show {gap} hidden lines">
                 <span class="expand-dots" aria-hidden="true">···</span>
                 <span class="expand-label">{gap} lines</span>
               </button>
@@ -1056,23 +1061,24 @@
               </div>
             {:else}
               {@render diffLine(line, hlKey, spans, [ln.old, ln.new], hunkIdx, lineIdx)}
-              {@const lineAnns = reviewsAt(ln.old, ln.new)}
-              {#if lineAnns.length > 0}{@render inlineReviews(lineAnns)}{/if}
-              {#if composer && draftLine && (draftLine.side === 'new' ? draftLine.lineNum === ln.new : draftLine.lineNum === ln.old)}
-                <div class="inline-review-row">{@render composer()}</div>
-              {/if}
+            {/if}
+            <!-- Conflict lines too. What renders here must match canHostInline (DiffPanel). -->
+            {@const lineAnns = reviewsAt(ln.old, ln.new)}
+            {#if lineAnns.length > 0}{@render inlineReviews(lineAnns)}{/if}
+            {#if composer && draftLine && (draftLine.side === 'new' ? draftLine.lineNum === ln.new : draftLine.lineNum === ln.old)}
+              <div class="inline-review-row">{@render composer()}</div>
             {/if}
           {/each}
         </div>
       {/each}
-      {#if !isExpanded && file.hunks.length > 0}
+      {#if onexpand && !isExpanded && file.hunks.length > 0}
         <!-- Trailing expand — unconditional (gated only on !isExpanded).
              Diff headers don't carry total file line count, so we can't
              prove trailing context exists. A hunk at the top of a file
              (newStart=1) has hidden trailing lines but hasHiddenContext
              misses it. Showing the button when there IS no trailing context
              is harmless — expanded view just shows the same hunk. -->
-        <button class="expand-btn" onclick={() => onexpand?.(filePath, origGap(file.hunks.length))} aria-label="Show full file context">
+        <button class="expand-btn" onclick={() => onexpand(filePath, origGap(file.hunks.length))} aria-label="Show full file context">
           <span class="expand-dots" aria-hidden="true">···</span>
           <span class="expand-label">rest of file</span>
         </button>
@@ -1142,6 +1148,11 @@
 
   .diff-file-header:hover {
     background: var(--bg-diff-header-hover);
+  }
+
+  .diff-file-header.static {
+    cursor: default;
+    background: var(--mantle);
   }
 
   .collapse-icon {
@@ -1800,7 +1811,6 @@
   /* Content lines: strong left rail in side color */
   .conflict-line :global(.diff-line) {
     border-left: 4px solid var(--conflict-side-color, transparent);
-    padding-left: 12px;
   }
 
   /* Marker line content (the actual jj markers) — collapsed to zero height.

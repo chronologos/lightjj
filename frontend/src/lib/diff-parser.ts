@@ -197,6 +197,17 @@ export function hunkIndexForLine(hunks: readonly DiffHunk[], line: number, side:
   return -1
 }
 
+/** New-side number of the hunk's first changed line; for a removal, of the line after
+ *  it (which is where the change shows). */
+export function firstChangedLine(h: DiffHunk): number {
+  let n = h.newStart
+  for (const l of h.lines) {
+    if (l.type !== 'context') return n
+    n++
+  }
+  return h.newStart
+}
+
 // New-side line numbers that are additions. Same hunk-walk as lineContentAt
 // (annotations.svelte.ts): count from newStart, advance on add/context, skip
 // remove. Used by markdown preview's diff gutter — preview renders the NEW

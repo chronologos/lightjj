@@ -13,6 +13,12 @@ export interface SplitLine {
   right: SplitSide | null
 }
 
+/** Whether a file's body is shown side by side. The one definition: DiffFileView
+ *  renders by it, DiffPanel decides by it where comments can appear. */
+export function showsSplit(f: { splitView: boolean; editing: boolean; conflict: boolean }): boolean {
+  return f.editing || (f.splitView && !f.conflict)
+}
+
 export function toSplitView(hunks: DiffHunk[]): SplitLine[] {
   const result: SplitLine[] = []
   for (let hunkIdx = 0; hunkIdx < hunks.length; hunkIdx++) {

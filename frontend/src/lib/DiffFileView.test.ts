@@ -58,6 +58,24 @@ describe('DiffFileView', () => {
     expect(container.querySelectorAll('.tok-keyword')).toHaveLength(2)
   })
 
+  describe('read-only host', () => {
+    const file: DiffFile = { header: '', filePath: 'ro.go', isBinary: false, hunks: [
+      { header: '@@ -5 +5 @@', oldStart: 5, newStart: 5, newCount: 1, lines: [{ type: 'context', content: ' a' }] },
+      { header: '@@ -20 +20 @@', oldStart: 20, newStart: 20, newCount: 1, lines: [{ type: 'add', content: '+b' }] },
+    ] }
+    it.each([false, true])('offers no expand control it cannot honour (split=%s)', (splitView) => {
+      const { container } = render(DiffFileView, { props: defaultProps({ file, splitView, onexpand: undefined }) })
+      expect(container.querySelectorAll('.diff-hunk-header').length).toBe(2) // still shows where the hunks are
+      expect(container.querySelectorAll('.expand-btn')).toHaveLength(0)
+    })
+    it('has no button for a header that does nothing', () => {
+      const { container } = render(DiffFileView, { props: defaultProps({ file, ontoggle: undefined }) })
+      const header = container.querySelector('.diff-file-header')!
+      expect([header.getAttribute('role'), header.getAttribute('tabindex'), header.getAttribute('aria-expanded')]).toEqual([null, null, null])
+      expect(container.querySelector('.collapse-icon')).toBeNull()
+    })
+  })
+
   describe('conflict indicator', () => {
     it('shows conflict count when file has conflict', () => {
       const file = makeFile('conflict.go', [

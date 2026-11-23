@@ -529,8 +529,6 @@
                   splitView={false}
                   highlightedLines={new Map()}
                   wordDiffs={new Map()}
-                  ontoggle={() => {}}
-                  onexpand={() => {}}
                 />
               {/each}
             </div>

@@ -102,7 +102,6 @@
               {splitView}
               highlightedLines={EMPTY_HL}
               wordDiffs={EMPTY_WD}
-              ontoggle={() => {}}
             />
           {/each}
         {/if}

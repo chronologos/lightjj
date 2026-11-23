@@ -3,7 +3,8 @@
   import type { Snippet } from 'svelte'
   import { SvelteSet, SvelteMap } from 'svelte/reactivity'
   import { api, diffTargetKey, FILE_TYPE_LABELS, type FileChange, type DiffTarget, type DiffSide } from './api'
-  import { parseDiffContent, hunkIndexForLine, type DiffFile, type DiffLine } from './diff-parser'
+  import { parseDiffContent, firstChangedLine, hunkIndexForLine, type DiffFile, type DiffLine } from './diff-parser'
+  import { showsSplit } from './split-view'
   import { expandGaps, type ExpandedDiff } from './context-expand'
   import type { WordSpan } from './word-diff'
   import {
@@ -370,21 +371,40 @@
   // matches stepFile. (Sits above the annotation section because scrollToHunk
   // is shared: annotation jumps land on the hunk containing the comment.)
 
-  /** Expand + scroll. Queries the FIRST `[data-hunk]` match — header when
-   *  rendered (`!isExpanded`), else `.diff-lines`; both carry the attr so
-   *  expanded-unified still has a target. Split-expanded has neither
-   *  (no per-hunk wrapper) — degrades to scrollToFile. */
+  /** Expand + scroll. `hunkIdx` is an index into the DIFF's hunks. Queries the FIRST
+   *  `[data-hunk]` match (the header). Once context is revealed the rendered hunks are
+   *  merged and renumbered, so there the target is the row of the hunk's first line —
+   *  in either layout. */
   function scrollToHunk(path: string, hunkIdx: number) {
     vis.bumpScrollGen()
     revealFile(path)
     requestAnimationFrame(() => {
       const fileEl = document.querySelector(`[data-file-path="${CSS.escape(path)}"]`)
-      const target = fileEl?.querySelector(`[data-hunk="${hunkIdx}"]`) ?? fileEl
       // Instant — [/]/{/}  are spammed like j/k; browser-native 'smooth' is
       // fixed ~500ms regardless of distance, which queues badly under repeat.
-      target?.scrollIntoView({ block: 'start' })
+      if (expandedByPath.has(path)) {
+        const hunk = parsedDiff.find(f => f.filePath === path)?.hunks[hunkIdx]
+        const line = hunk ? firstChangedLine(hunk) : 0
+        // line - 1: a removal at the end of the file has no line after it.
+        const row = fileEl && (rowForNewLine(fileEl, line) ?? rowForNewLine(fileEl, line - 1))
+        // Centred: the sticky file header would cover a row at the top.
+        if (row) row.scrollIntoView({ block: 'center' })
+        else fileEl?.scrollIntoView({ block: 'start' })
+      } else {
+        (fileEl?.querySelector(`[data-hunk="${hunkIdx}"]`) ?? fileEl)?.scrollIntoView({ block: 'start' })
+      }
       activeFilePath = path
     })
+  }
+
+  /** The rendered row of a new-side line: unified and split rows both end their gutter
+   *  with the new-side number (split's old cells are skipped). */
+  function rowForNewLine(fileEl: Element, line: number): Element | undefined {
+    const want = String(line)
+    for (const row of fileEl.querySelectorAll('.diff-line:not(.split-left)')) {
+      const nums = row.querySelectorAll(':scope > .line-num')
+      if (nums[nums.length - 1]?.textContent === want) return row
+    }
   }
 
   let parsedDiff = $derived(parseDiffCached(diffContent))
@@ -446,13 +466,33 @@
     // fresh $derived object on every nav, so reading it at SAVE time would
     // attach the annotation to whatever revision is now displayed.
     lineContext: { filePath: string; lineNum: number; side: DiffSide; lineContent: string; changeId: string; createdAtCommitId: string } | null
+    draft?: { comment: string; severity: AnnotationSeverity }
   }
   let annBubble = $state<AnnotationBubbleState>({
     open: false, x: 0, y: 0, editing: null, lineContext: null,
   })
-  // Inline composer (full-width row below the line) wherever inline CommentCards
-  // render; popup fallback for split/multi where there's no inline mount point.
-  const useInlineComposer = $derived(diffTarget?.kind === 'single' && !splitView)
+  function fileShowsSplit(path: string): boolean {
+    return showsSplit({
+      splitView: hunkReview ? false : splitView,
+      editing: fileActions.editingFiles.has(path),
+      conflict: fileStatsMap.get(path)?.conflict ?? false,
+    })
+  }
+  /** Whether the file's view has a row for this line to put a composer under. A
+   *  collapsed file still counts: its composer is hidden with it, not moved. */
+  function canHostInline(path: string, line: number, side: DiffSide): boolean {
+    if (fileShowsSplit(path)) return false
+    if (line === FILE_LEVEL) return true
+    if (fileActions.previewContents.has(path)) return false
+    const file = expandedByPath.get(path)?.file ?? renderFiles.find(f => f.filePath === path)
+    return !!file && hunkIndexForLine(file.hunks, line, side) >= 0
+  }
+  // Inline composer (full-width row below the line) wherever the view can show it;
+  // popup fallback (split, rendered preview, line no longer in the diff).
+  const composerInline = $derived.by(() => {
+    const lc = annBubble.open ? annBubble.lineContext : null
+    return !!lc && diffTarget?.kind === 'single' && canHostInline(lc.filePath, lc.lineNum, lc.side)
+  })
 
   // Load + re-anchor whenever the displayed revision changes (single-rev only).
   // Agent iteration = same change_id, new commit_id. After loadLog() runs
@@ -619,8 +659,8 @@
     // resolving/deleting (or adding) an annotation between presses shifts
     // every positional index. Without re-anchoring, resolve A at idx 0 →
     // [B,C] → idx 0 now aliases B → `}` lands on C, B silently skipped.
-    // (Same shape exists for hunkNavIdx + context-expand merges; lower
-    // probability, deferred — `[`/`]` rarely interleave with gap clicks.)
+    // (hunkNavIdx needs none of this: it indexes the diff's own hunks, which
+    // context expansion doesn't renumber.)
     if (annNavId !== null && annNavIdx >= 0) {
       const found = navAnnotations.findIndex(r => r.id === annNavId)
       if (found >= 0) {
@@ -1963,9 +2003,9 @@
             annotationsForFile={diffTarget?.kind === 'single' ? annotations.forFile : undefined}
             annotationCount={annCountByPath.get(filePath) ?? 0}
             docCommentCount={docCommentCounts.get(filePath) ?? 0}
-            vis={useInlineComposer ? vis : undefined}
-            composer={useInlineComposer && annBubble.open && annBubble.lineContext?.filePath === filePath ? annotationComposer : undefined}
-            draftLine={useInlineComposer && annBubble.open && annBubble.lineContext?.filePath === filePath ? { lineNum: annBubble.lineContext.lineNum, side: annBubble.lineContext.side } : null}
+            vis={diffTarget?.kind === 'single' && !fileShowsSplit(filePath) ? vis : undefined}
+            composer={composerInline && annBubble.lineContext?.filePath === filePath ? annotationComposer : undefined}
+            draftLine={composerInline && annBubble.lineContext?.filePath === filePath ? { lineNum: annBubble.lineContext.lineNum, side: annBubble.lineContext.side } : null}
             onreviewresolve={(id, res) => annotations.resolveAs(id, res)}
             onreviewdelete={(id) => annotations.remove(id)}
             onannotationclick={diffTarget?.kind === 'single' ? (ln, content, e, ed, side) => handleAnnotationClick(filePath, ln, content, e, ed, side) : undefined}
@@ -2013,6 +2053,7 @@
   <AnnotationBubble
     inline
     bind:open={annBubble.open}
+    bind:draft={annBubble.draft}
     editing={annBubble.editing}
     lineContext={annBubble.lineContext ?? undefined}
     onsave={saveAnnotation}
@@ -2022,9 +2063,10 @@
   />
 {/snippet}
 
-{#if !useInlineComposer}
+{#if !composerInline}
   <AnnotationBubble
     bind:open={annBubble.open}
+    bind:draft={annBubble.draft}
     x={annBubble.x}
     y={annBubble.y}
     editing={annBubble.editing}

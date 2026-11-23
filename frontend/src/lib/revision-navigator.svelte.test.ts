@@ -51,6 +51,32 @@ beforeEach(() => {
 })
 afterEach(() => vi.useRealTimers())
 
+describe('onSettled', () => {
+  it('reports a single revision once it is all there, loaded or cached — never a superseded, failed or multi load', async () => {
+    const { diff, meta } = manual()
+    const settled: string[] = []
+    const nav = createRevisionNavigator({ onError: vi.fn(), onSettled: id => settled.push(id) })
+    void nav.loadDiffAndFiles(mkCommit('A'))
+    diff.A.ok()
+    await flush()
+    expect(settled).toEqual([]) // files still to come
+    meta.A.ok()
+    await flush()
+    expect(settled).toEqual(['A'])
+
+    void nav.loadDiffAndFiles(mkCommit('B'))
+    void nav.loadDiffAndFiles(mkCommit('C'))
+    diff.B.ok(); meta.B.ok(); diff.C.fail(); meta.C.ok()
+    await flush()
+    void nav.loadMulti(multi('A', 'B'))
+    await flush()
+    expect(settled).toEqual(['A'])
+
+    nav.applyCacheHit(mkCommit('D'), { diff: 'd', files: [], description: '' })
+    expect(settled).toEqual(['A', 'D'])
+  })
+})
+
 describe('progressive load', () => {
   it('target and spinner are synchronous; content, files and description land with their own target', async () => {
     const { diff, meta } = manual()

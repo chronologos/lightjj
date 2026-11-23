@@ -234,17 +234,27 @@ describe('response cache', () => {
     expect(_testInternals.cache.has('diff:revNew')).toBe(true)
   })
 
-  it('re-storing an existing key bumps it', async () => {
-    // Map.set() does NOT reorder an existing key, so storeInCache deletes first.
-    // Happens when a prefetch and a navigation fetch the same diff: both miss,
-    // both store.
+  it('a second request for what is already being fetched joins it', async () => {
+    // Navigating onto a revision that is being prefetched.
     const res: Array<() => void> = []
     mockFetch.mockImplementation(() => new Promise(r => res.push(() => r(mockResponse({ diff: '+x' }, 'op1')))))
     const [a1, a2, b] = [api.diff('a'), api.diff('a'), api.diff('b')]
-    res[0](); await a1
-    res[2](); await b
-    res[1](); await a2
-    expect([..._testInternals.cache.keys()]).toEqual(['diff:b', 'diff:a'])
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    res.forEach(r => r())
+    expect(await a2).toBe(await a1)
+    await b
+    expect([..._testInternals.cache.keys()]).toEqual(['diff:a', 'diff:b'])
+  })
+
+  it('a failed request is not joined afterwards, nor one for another tab', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('down'))
+    await expect(api.diff('a')).rejects.toThrow('down')
+    mockFetch.mockImplementation(() => new Promise(() => {}))
+    void api.diff('a')
+    setActiveTab('7')
+    void api.diff('a')
+    expect(mockFetch.mock.calls.map(c => c[0])).toEqual(['/tab/0/api/diff?revision=a', '/tab/0/api/diff?revision=a', '/tab/7/api/diff?revision=a'])
+    setActiveTab('0')
   })
 
   it('bumps accessed entries to end of eviction order (LRU)', async () => {

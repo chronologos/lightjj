@@ -700,9 +700,23 @@ async function cachedRequest<T>(cacheId: string, url: string): Promise<T> {
     cache.set(cacheId, v)
     return v
   }
-  const result = await request<T>(url)
-  storeInCache(cacheId, result)
-  return result
+  return inFlight(url, async () => {
+    const result = await request<T>(url)
+    storeInCache(cacheId, result)
+    return result
+  })
+}
+
+// Cacheable requests under way, by full URL: navigating onto a revision that is being
+// prefetched joins that request instead of starting a second one.
+const pending = new Map<string, Promise<unknown>>()
+function inFlight<T>(url: string, start: () => Promise<T>): Promise<T> {
+  const key = tabScoped(url)
+  const running = pending.get(key)
+  if (running) return running as Promise<T>
+  const p = start().finally(() => pending.delete(key))
+  pending.set(key, p)
+  return p
 }
 
 // storeInCache is the single cache-write path. Used by cachedRequest() and by
@@ -750,11 +764,12 @@ export function isCached(commitId: string): boolean {
  *  parallel; meta resolves ~20ms → header + file list render; diff fills in. */
 export async function fetchRevisionMeta(commitId: string): Promise<void> {
   if (cache.has(`files:${commitId}`) && cache.has(`desc:${commitId}`)) return
-  const result = await request<{ files: FileChange[]; description: string }>(
-    `/api/revision-meta?revision=${encodeURIComponent(commitId)}&immutable=1`
-  )
-  storeInCache(`files:${commitId}`, result.files)
-  storeInCache(`desc:${commitId}`, { description: result.description })
+  const url = `/api/revision-meta?revision=${encodeURIComponent(commitId)}&immutable=1`
+  return inFlight(url, async () => {
+    const result = await request<{ files: FileChange[]; description: string }>(url)
+    storeInCache(`files:${commitId}`, result.files)
+    storeInCache(`desc:${commitId}`, { description: result.description })
+  })
 }
 
 /** Warm the cache for a revision's diff/files/description without applying

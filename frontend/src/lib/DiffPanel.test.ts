@@ -969,6 +969,97 @@ describe('DiffPanel', () => {
     })
   })
 
+  describe('stepHunk with context revealed', () => {
+    // Three one-line changes at lines 10, 30 and 50 of a 60-line file.
+    const changed = [10, 30, 50]
+    const hunk = (n: number) => `@@ -${n - 1},3 +${n - 1},3 @@\n l${n - 1}\n-old${n}\n+new${n}\n l${n + 1}\n`
+    const head = 'diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n'
+    const diff = head + changed.map(hunk).join('')
+    const full = head + '@@ -1,60 +1,60 @@\n' + Array.from({ length: 60 }, (_, i) => i + 1)
+      .map(n => changed.includes(n) ? `-old${n}\n+new${n}\n` : ` l${n}\n`).join('')
+    const raf = () => new Promise(r => requestAnimationFrame(() => r(undefined)))
+
+    it.each([false, true])('every press lands on the next change (split=%s)', async (splitView) => {
+      const targets: string[] = []
+      Element.prototype.scrollIntoView = vi.fn(function (this: Element) { targets.push(this.textContent ?? '') })
+      ;(api.diff as Mock).mockResolvedValue({ diff: full })
+      const { container, component } = render(DiffPanel, { props: props({ splitView, diffContent: diff, changedFiles: [mkFile('x.go')] }) })
+      await settle()
+      if (splitView) {
+        await fireEvent.click(container.querySelector('.expand-btn')!) // full context
+      } else {
+        await fireEvent.click(container.querySelectorAll('.expand-btn')[1]) // between changes 1 and 2
+      }
+      await settle()
+      for (let i = 0; i < 4; i++) { component.stepHunk(1); await raf() }
+      component.stepHunk(-1); await raf()
+      expect(targets.map(t => /new(\d+)/.exec(t)?.[1])).toEqual(['10', '30', '50', '50', '30'])
+      expect(targets.every(t => !t.includes('l2'))).toBe(true) // a row, not the merged hunk
+    })
+  })
+
+  describe('comment composer', () => {
+    const popup = () => document.querySelector('.annotation-bubble:not(.inline)')
+    const inline = () => document.querySelector('.annotation-bubble.inline')
+    const lineWith = (c: HTMLElement, text: string) => [...c.querySelectorAll('.diff-line')].find(l => l.textContent?.includes(text))!
+    const open = async (el: Element) => { await fireEvent.click(el, { altKey: true }); await settle() }
+    const bodyDiff = 'diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -0,0 +1,3 @@\n+# Title\n+\n+para text\n'
+    const mdProps = (o = {}) => props({ diffContent: bodyDiff, changedFiles: [mkFile('README.md')], ...o })
+
+    it('opens under a line of the unified diff', async () => {
+      const { container } = render(DiffPanel, { props: mdProps() })
+      await settle()
+      await open(lineWith(container, 'para text'))
+      expect(inline()).not.toBeNull()
+      expect(popup()).toBeNull()
+    })
+
+    it('opens on a rendered markdown preview', async () => {
+      mockFileShow.mockResolvedValue({ content: '# Title\n\npara text\n' })
+      const { container } = render(DiffPanel, { props: mdProps() })
+      await settle()
+      await fireEvent.click(previewBtn(container)!)
+      await vi.waitFor(() => expect(container.querySelector('[data-src-line="3"]')).not.toBeNull())
+      await open(container.querySelector('[data-src-line="3"]')!)
+      expect(popup()).not.toBeNull()
+      expect(popup()!.textContent).toContain('README.md:3')
+    })
+
+    // Conflicted files are shown unified whatever the setting.
+    it.each([false, true])('opens on a conflict line (split=%s)', async (splitView) => {
+      const diffContent = 'diff --git a/c.go b/c.go\n--- a/c.go\n+++ b/c.go\n@@ -0,0 +1,6 @@\n+<<<<<<< conflict 1 of 1\n+%%%%%%% diff from: base\n++mine\n++++++++ side 2\n+theirs\n+>>>>>>> conflict 1 of 1 ends\n'
+      const { container } = render(DiffPanel, { props: props({ splitView, diffContent, changedFiles: [mkFile('c.go', { conflict: true, conflict_sides: 2 })] }) })
+      await settle()
+      await open(container.querySelector('.conflict-line.conflict-snap-line .diff-line')!)
+      expect(inline()?.textContent).toContain('c.go:5')
+      expect(popup()).toBeNull()
+    })
+
+    it('pops up in a side-by-side diff', async () => {
+      const { container } = render(DiffPanel, { props: mdProps({ splitView: true }) })
+      await settle()
+      await open(lineWith(container, 'para text'))
+      expect(popup()).not.toBeNull()
+      expect(inline()).toBeNull()
+    })
+
+    it('keeps the text when the line stops being hostable', async () => {
+      mockFileShow.mockResolvedValue({ content: '# Title\n\npara text\n' })
+      const { container } = render(DiffPanel, { props: mdProps() })
+      await settle()
+      await open(lineWith(container, 'para text'))
+      await fireEvent.input(inline()!.querySelector('textarea')!, { target: { value: 'half a thought' } })
+      await fireEvent.click(previewBtn(container)!)
+      await settle()
+      expect((popup()!.querySelector('textarea') as HTMLTextAreaElement).value).toBe('half a thought')
+      // Closed and reopened elsewhere, it starts empty.
+      await fireEvent.keyDown(popup()!, { key: 'Escape' })
+      await vi.waitFor(() => expect(container.querySelector('[data-src-line="1"]')).not.toBeNull())
+      await open(container.querySelector('[data-src-line="1"]')!)
+      expect((popup()!.querySelector('textarea') as HTMLTextAreaElement).value).toBe('')
+    })
+  })
+
   describe('markdown preview persistence — file-actions.svelte.ts previewGen barrier', () => {
     const mdProps = (commitId: string, changeId: string) => props({
       diffTarget: target(commitId, changeId),

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { FILE_LEVEL, type Annotation, type AnnotationSeverity, type DiffSide } from './api'
 
   interface Props {
@@ -13,13 +13,16 @@
     editing: Annotation | null
     /** Prefilled line context (for create-new). */
     lineContext?: { filePath: string; lineNum: number; side?: DiffSide; lineContent: string }
+    /** Text so far. Bound by a host that may move the composer between inline and
+     *  popup while it is open (two instances), so the move doesn't lose it. */
+    draft?: { comment: string; severity: AnnotationSeverity }
     onsave: (comment: string, severity: AnnotationSeverity) => void
     onresolve?: () => void
     ondelete?: () => void
     onclose: () => void
   }
 
-  let { open = $bindable(false), inline = false, x = 0, y = 0, editing, lineContext, onsave, onresolve, ondelete, onclose }: Props = $props()
+  let { open = $bindable(false), inline = false, x = 0, y = 0, editing, lineContext, draft = $bindable(), onsave, onresolve, ondelete, onclose }: Props = $props()
 
   let comment = $state('')
   let severity = $state<AnnotationSeverity>('suggestion')
@@ -42,10 +45,11 @@
   )
 
   $effect(() => {
-    if (!open) return
+    if (!open) { draft = undefined; return }
     // Populate from editing or reset for create
-    comment = editing?.comment ?? ''
-    severity = editing?.severity ?? 'suggestion'
+    const d = untrack(() => draft)
+    comment = d?.comment ?? editing?.comment ?? ''
+    severity = d?.severity ?? editing?.severity ?? 'suggestion'
     adjustedX = x
     adjustedY = y
     tick().then(() => {
@@ -62,6 +66,8 @@
       if (inline) bubbleEl?.scrollIntoView({ block: 'nearest' })
     })
   })
+
+  $effect(() => { if (open) draft = { comment, severity } })
 
   function handleSubmit() {
     const trimmed = comment.trim()

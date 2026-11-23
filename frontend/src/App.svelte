@@ -222,7 +222,7 @@
   // names for backward-compatible reads throughout the component + templates.
   const log = createLoader((revset?: string) => api.log(revset), [] as LogEntry[], showError)
   // The displayed diff/files/description live in revision-navigator.svelte.ts.
-  const nav = createRevisionNavigator({ onError: showError })
+  const nav = createRevisionNavigator({ onError: showError, onSettled: prefetchNeighbour })
   // True while loadLog left the diff on a revision that is no longer in the graph
   // because its editors hold unsaved text; released when the last one closes.
   let heldByEdits = false
@@ -1472,6 +1472,7 @@
   }
 
   let prevSelectedIndex = -1
+  let navDirection: 1 | -1 = 1
 
   /** May the diff move on to revision `id`? Asks when open editors would be lost. */
   function mayLeaveDiff(id: string | undefined): boolean {
@@ -1488,7 +1489,7 @@
     const id = effectiveId(entry.commit)
     if (!mayLeaveDiff(id)) return false
     const moved = index !== prevSelectedIndex
-    const direction = index > prevSelectedIndex ? 1 : -1
+    if (moved) navDirection = index > prevSelectedIndex ? 1 : -1
     prevSelectedIndex = index
     selectedId = id
     // An untouched editor closes on navigation; a dirty draft is kept (hidden).
@@ -1529,15 +1530,19 @@
       }, 50)
     }
 
-    // Opportunistic prefetch: warm the cache for the next revision in the
-    // navigation direction. Only when CURRENT is cached — during rapid uncached
-    // j/k, prefetches for skipped-past revisions waste bandwidth and contend
-    // with the main load.
-    if (moved && hit) {
-      const next = revisions[index + direction]
-      if (next) prefetchRevision(next.commit.commit_id)
-    }
+    // Held j/k over cached revisions never settles: stay ahead of it here.
+    if (moved && hit) prefetchNeighbour(entry.commit.commit_id)
     return true
+  }
+
+  // Opportunistic prefetch: warm the cache for the next revision in the navigation
+  // direction, once the CURRENT one is there (`commitId` = what settled) — during
+  // rapid uncached j/k, prefetches for skipped-past revisions waste bandwidth and
+  // contend with the main load.
+  function prefetchNeighbour(commitId: string): void {
+    if (hasChecked() || revisions[selectedIndex]?.commit.commit_id !== commitId) return
+    const next = revisions[selectedIndex + navDirection]
+    if (next) prefetchRevision(next.commit.commit_id)
   }
 
   function selectByChangeId(changeId: string): boolean {

@@ -85,6 +85,8 @@ export interface RevisionNavigator {
 
 export function createRevisionNavigator(opts: {
   onError: (e: unknown) => void
+  /** A single revision's content and metadata are on screen — the moment to prefetch. */
+  onSettled?: (commitId: string) => void
 }): RevisionNavigator {
   let target = $state.raw<DiffTarget | undefined>(undefined)
   // The target object whose diff load failed (identity: each load has its own).
@@ -154,6 +156,7 @@ export function createRevisionNavigator(opts: {
     // Not applied and still the displayed target = it failed (a newer load would
     // have replaced `target`).
     if (!applied && target === t) failed = t
+    if (applied && target === t && t.kind === 'single') opts.onSettled?.(t.commitId)
   }
 
   function applyCacheHit(commit: Commit, hit: CacheHit): void {
@@ -162,6 +165,7 @@ export function createRevisionNavigator(opts: {
     target = t
     diff.set(new Content(t, hit.diff))
     meta.set(new Meta(t, hit.files, hit.description))
+    opts.onSettled?.(t.commitId)
   }
 
   return {
