@@ -113,6 +113,7 @@ describe('DiffPanel', () => {
       const btn = editBtn(container)
       expect(btn).toBeDefined()
       await fireEvent.click(btn!)
+      await settle() // content is read first
       expect(mockEdit).toHaveBeenCalledWith('ch-A')
 
       // User navigates to B while edit is pending.
@@ -123,11 +124,10 @@ describe('DiffPanel', () => {
       await settle()
 
       // A's api.edit resolves; the post-await guard compares live diffTarget.changeId
-      // ('ch-B') against captured revId ('ch-A') → bails BEFORE fileShow.
+      // ('ch-B') against captured revId ('ch-A') → bails.
       resolveEdit()
       await settle()
 
-      expect(mockFileShow).not.toHaveBeenCalled()
       expect(saveBtn(container)).toBeNull() // editor never opened
     })
 

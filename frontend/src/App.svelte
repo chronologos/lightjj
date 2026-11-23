@@ -78,6 +78,7 @@
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
   import { withRenameSources } from './lib/diff-parser'
   import { apiErrorCode } from './lib/api-error'
+  import { notUtf8Message } from './lib/eol'
   import { createUnsaved, provideUnsaved } from './lib/unsaved'
   import { hunkKey, fileSelectionState, planHunkSpec, resolvePlan, normalizeFileType } from './lib/hunk-apply'
   import type { PaletteCommand } from './lib/CommandPalette.svelte'
@@ -2795,7 +2796,13 @@
         await Promise.all(plan.partials
           .filter(p => !p.leftIsEmpty)
           .map(p => api.fileShow(parentId, p.path)
-            .then(r => lefts.set(p.path, r.content))))
+            .then(r => {
+              if (r.lossy) throw new Error(notUtf8Message(p.path))
+              lefts.set(p.path, r.content)
+            })))
+        // The accepted lines come from the diff text, which has the same problem.
+        const bad = plan.partials.find(p => p.accepted.some(h => h.lines.some(l => l.content.includes('\uFFFD'))))
+        if (bad) throw new Error(notUtf8Message(bad.path))
 
         const spec = resolvePlan(plan, lefts)
         // `jj split -m X` sets the FIRST (selected=accepted) commit's

@@ -1192,7 +1192,7 @@ export const api = {
   fileShow: (revision: string, path: string, snapshot = false) => {
     const params = new URLSearchParams({ revision, path })
     if (snapshot) params.set('snapshot', '1')
-    return cachedRequest<{ content: string }>(
+    return cachedRequest<{ content: string; /** Not valid UTF-8: never write it back. */ lossy?: boolean }>(
       `fileshow:${revision}:${path}:${snapshot ? 's' : ''}`,
       `/api/file-show?${params}`,
     )

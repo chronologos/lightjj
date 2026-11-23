@@ -6,6 +6,7 @@
 
 import { api as sharedApi, type ConflictEntry } from './api'
 import { bindTab } from './tab-scope'
+import { notUtf8Message } from './eol'
 import { reconstructSides, type MergeSides } from './conflict-extract'
 import { resolveConflictFile } from './conflict-resolve'
 
@@ -121,12 +122,16 @@ export function createMergeController(deps: MergeControllerDeps): MergeControlle
     sides = null
     busy = true
     try {
-      const { content } = await api.fileShow(item.commitId, item.path, true)
+      const { content, lossy } = await api.fileShow(item.commitId, item.path, true)
       if (g !== gen) return
+      if (lossy) {
+        deps.onWarning(notUtf8Message(item.path))
+        return
+      }
       const reconstructed = reconstructSides(content)
       sides = reconstructed
       if (!reconstructed) {
-        deps.onWarning(`${item.path}: unsupported conflict format (N-way or git-style)`)
+        deps.onWarning(`${item.path}: unsupported conflict format (N-way, git-style, or mixed line endings)`)
       }
     } catch (e) {
       if (g !== gen) return

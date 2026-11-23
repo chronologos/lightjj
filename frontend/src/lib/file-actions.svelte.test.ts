@@ -74,20 +74,29 @@ beforeEach(() => {
 })
 
 describe('startEdit — post-await identity guards', () => {
-  it('navigation during api.edit await → bails BEFORE fileShow, editor never opens', async () => {
+  it('navigation during api.edit await → editor never opens', async () => {
     const d = deferred<{ output: string }>()
     mockApi.edit.mockReturnValueOnce(d.p)
     const fa = createFileActions(deps)
 
     const p = fa.startEdit('a.go')
+    await flush() // content read first; suspended in edit
     expect(mockApi.edit).toHaveBeenCalledWith('ch-A')
 
     liveTarget = target('co-B', 'ch-B') // j/k nav while edit pending
     d.resolve({ output: '' })
     await p
 
-    expect(mockApi.fileShow).not.toHaveBeenCalled()
     expect(fa.editingFiles.has('a.go')).toBe(false)
+  })
+
+  it('a file that is not valid UTF-8 is refused before @ moves', async () => {
+    mockApi.fileShow.mockResolvedValueOnce({ content: 'caf\uFFFD', lossy: true } as never)
+    const fa = createFileActions(deps)
+    await fa.startEdit('a.go')
+    expect(mockApi.edit).not.toHaveBeenCalled()
+    expect(fa.editingFiles.has('a.go')).toBe(false)
+    expect(fa.editError).toContain('not valid UTF-8')
   })
 
   it('navigation during fileShow await → stale content NOT written', async () => {
@@ -125,11 +134,10 @@ describe('startEdit — post-await identity guards', () => {
     expect(fa.editingFiles.has('a.go')).toBe(true)
   })
 
-  it('blocked mutation lock (resolves undefined) → bail, no fileShow', async () => {
+  it('blocked mutation lock (resolves undefined) → bail, editor never opens', async () => {
     lock = async () => undefined // withMutation: blocked
     const fa = createFileActions(deps)
     await fa.startEdit('a.go')
-    expect(mockApi.fileShow).not.toHaveBeenCalled()
     expect(fa.editingFiles.has('a.go')).toBe(false)
   })
 

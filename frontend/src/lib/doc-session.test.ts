@@ -209,6 +209,32 @@ describe('createDocSession', () => {
     expect(s2.normalizationDiff).toBe('- star bullet\n')
   })
 
+  it('a CRLF file is written back as CRLF, and an unedited one is not "normalized"', async () => {
+    mockApi.__setContent('# H\r\n\r\npara\r\n')
+    const s = createDocSession('a.md', () => 'cid')
+    await s.import_()
+    expect(s.normalizationDiff).toBeNull()
+    applyEdit(s, tr => tr.insertText('X', 1, 1))
+    await s.commitBack()
+    expect(vi.mocked(api.fileWrite).mock.lastCall![1]).toBe('# XH\r\n\r\npara\r\n')
+  })
+
+  it('mixed line endings surface as a normalization before anything is written', async () => {
+    mockApi.__setContent('# H\r\n\npara\n')
+    const s = createDocSession('a.md', () => 'cid')
+    await s.import_()
+    expect(s.normalizationDiff).toBe('# H\n\npara\n')
+  })
+
+  it('a file that is not valid UTF-8 is refused', async () => {
+    vi.mocked(api.fileShow).mockResolvedValueOnce({ content: '# caf\uFFFD\n', lossy: true })
+    const s = createDocSession('a.md', () => 'cid')
+    await s.import_()
+    expect(s.error).toContain('not valid UTF-8')
+    expect(await s.commitBack()).toBe('noop')
+    expect(api.fileWrite).not.toHaveBeenCalled()
+  })
+
   it('commitBack: noop when not dirty', async () => {
     mockApi.__setContent('# H\n')
     const s = createDocSession('a.md', () => 'cid')

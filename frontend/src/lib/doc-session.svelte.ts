@@ -22,6 +22,7 @@ import { fromDocComment, type PlacedReview } from './review'
 import { apiErrorCode } from './api-error'
 import { api as sharedApi, type DocComment, type FileWriteGuard } from './api'
 import { bindTab } from './tab-scope'
+import { detectEol, notUtf8Message, withEol } from './eol'
 
 /** Session-local placement for one comment id (not persisted). */
 type Placement = { from?: number; to?: number; orphaned: boolean }
@@ -100,6 +101,7 @@ export function createDocSession(
   let placement = $state<Map<string, Placement>>(new Map())
   // Commit the buffer was last equal to — the write precondition.
   let baseCommitId = $state('')
+  let eol: '\n' | '\r\n' = '\n'
   let version = $state(0)
   let committedVersion = $state(0)
   let saving = $state(false)
@@ -126,7 +128,8 @@ export function createDocSession(
   const importLoader = createLoader(async () => {
     const commitId = getWorkingCopyCommitId()
     if (!commitId) throw new Error('working copy unavailable')
-    const { content } = await api.fileShow(commitId, filePath)
+    const { content, lossy } = await api.fileShow(commitId, filePath)
+    if (lossy) throw new Error(notUtf8Message(filePath))
     const doc = parseMarkdown(content)
     const tm = buildTextMap(doc)
     const wire = await api.docComments.list(filePath)
@@ -148,7 +151,10 @@ export function createDocSession(
     baseCommitId = commitId
     version = 0
     committedVersion = 0
-    const rt = serializeMarkdown(doc)
+    // Mixed endings can't be kept; the normalization notice says what will change.
+    const detected = detectEol(content)
+    eol = detected === 'mixed' ? '\n' : detected
+    const rt = serialize()
     normalizationDiff = rt === content ? null : rt
   }
 
@@ -204,7 +210,7 @@ export function createDocSession(
   }
 
   function serialize(): string {
-    return doc ? serializeMarkdown(doc) : ''
+    return doc ? withEol(serializeMarkdown(doc), eol) : ''
   }
 
   async function writeAndAdvance(md: string, atVersion: number, guard?: FileWriteGuard): Promise<void> {

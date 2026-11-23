@@ -22,7 +22,7 @@ import { initialTrackPos } from './merge-surgery'
 // and keeps existing assertions valid.
 function sides(ours: string, theirs: string, base = ''): MergeSides {
   return {
-    ours, theirs, base, oursLabel: 'Ours', theirsLabel: 'Theirs',
+    eol: '\n', ours, theirs, base, oursLabel: 'Ours', theirsLabel: 'Theirs',
     blocks: diffBlocks(ours.split('\n'), theirs.split('\n')),
   }
 }
@@ -534,6 +534,13 @@ describe('MergePanel — toolbar', () => {
       await new Promise(r => setTimeout(r, 0))
       expect(u.any('selection')).toBe(true)
     })
+  })
+
+  it('Save restores CRLF', async () => {
+    const onsave = vi.fn()
+    const { container } = render(MergePanel, { props: { ...props({ onsave }), sides: { ...sides('A\nOURS\n', 'A\nTHEIRS\n'), eol: '\r\n' as const } } })
+    await fireEvent.click(container.querySelector('.btn-success')!)
+    expect(onsave).toHaveBeenCalledWith('A\r\nTHEIRS\r\n')
   })
 
   it('Save does NOT fire when busy', async () => {

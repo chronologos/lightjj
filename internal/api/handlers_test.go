@@ -2819,6 +2819,21 @@ func TestHandleFileShow(t *testing.T) {
 	assert.Equal(t, "file content here", resp["content"])
 }
 
+// JSON turns invalid UTF-8 into U+FFFD; the flag is what keeps editors from
+// writing that back over the original bytes.
+func TestHandleFileShow_LossyFlag(t *testing.T) {
+	for content, lossy := range map[string]bool{"caf\xe9": true, "café": false, "has \uFFFD itself": false} {
+		runner := testutil.NewMockRunner(t)
+		runner.Expect(jj.FileShow("abc", "f", false)).SetOutput([]byte(content))
+		w := httptest.NewRecorder()
+		newTestServer(runner).Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/file-show?revision=abc&path=f", nil))
+		var resp struct{ Lossy bool }
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, lossy, resp.Lossy, "%q", content)
+		runner.Verify()
+	}
+}
+
 func TestHandleFileShow_SnapshotParam(t *testing.T) {
 	// ?snapshot=1 → snapshotMarkers=true. merge-controller is the only caller;
 	// hunk-review and DiffPanel callers must NOT pass it.

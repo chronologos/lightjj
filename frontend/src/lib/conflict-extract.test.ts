@@ -321,10 +321,10 @@ describe('reconstructSides', () => {
       'theirs\r',
       '>>>>>>>\r',
       'footer\r',
-    ].join('\n')  // CRLF = \r on each line + \n join
+    ].join('\n') + '\n' // CRLF = \r on each line + \n
 
     const r = reconstructSides(raw)!
-    // Trailing \r → \n means the file HAD a terminating line break → preserved.
+    expect(r.eol).toBe('\r\n')
     expect(r.ours).toBe('shared\nours\nfooter\n')
     expect(r.theirs).toBe('shared\ntheirs\nfooter\n')
     expect(r.ours.includes('\r')).toBe(false)
@@ -335,16 +335,11 @@ describe('reconstructSides', () => {
     expect(r.ours.split('\n')[0]).toBe(r.theirs.split('\n')[0])
   })
 
-  it('normalizes lone CR — TrimRight(\\n) on CRLF-terminated file leaves trailing \\r', () => {
-    // Backend's Run() does bytes.TrimRight(out, "\n") — CRLF file ends with
-    // a lone \r after the strip. Pre-fix, that \r survived split('\n') on
-    // the last line and CM6 normalized it to \n (phantom line) while
-    // theirsLines.length stayed the same → block position mismatch.
-    const raw = 'line1\nline2\r'  // lone CR at end
-    const r = reconstructSides(raw)!
-    // Trailing lone \r → \n → split gives trailing '' — preserved through join
-    expect(r.ours).toBe('line1\nline2\n')
-    expect(r.ours.includes('\r')).toBe(false)
+  it('mixed line endings → null (raw editor), never normalised', () => {
+    const body = '<<<<<<< c\n+++++++ a\nours\n+++++++ b\ntheirs\n>>>>>>> end\n'
+    expect(reconstructSides(body)).not.toBeNull()
+    expect(reconstructSides('crlf\r\n' + body)).toBeNull()
+    expect(reconstructSides('lone\rcr\n' + body)).toBeNull()
   })
 
   it('diff-prefixed dash content does NOT match M_BASE (mode gate)', () => {

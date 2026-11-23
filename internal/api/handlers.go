@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chronologos/lightjj/internal/jj"
 	"github.com/chronologos/lightjj/internal/parser"
@@ -468,7 +469,13 @@ func (s *Server) handleFileShow(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, map[string]string{"content": string(output)})
+	resp := map[string]any{"content": string(output)}
+	if !utf8.Valid(output) {
+		// JSON replaces invalid bytes with U+FFFD. Fine to look at; writing it back
+		// would destroy them, so every editor refuses.
+		resp["lossy"] = true
+	}
+	s.writeJSON(w, r, http.StatusOK, resp)
 }
 
 // commitIdRe matches 12+ lowercase hex: Commit.commit_id / parent_ids are jj's

@@ -27,6 +27,7 @@ import { SvelteSet } from 'svelte/reactivity'
 import { apiErrorCode } from './api-error'
 import { api as sharedApi, IMAGE_RE, type DiffTarget } from './api'
 import { bindTab } from './tab-scope'
+import { notUtf8Message, withEol } from './eol'
 import { reconstructSides, type MergeSides } from './conflict-extract'
 import { resolveConflictFile } from './conflict-resolve'
 
@@ -267,6 +268,20 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     editBusy.add(path)
     editError = ''
     try {
+      // Read by commit_id, NOT changeId/revId (issue #16). api.fileShow caches
+      // by the id it's given; change_id survives rewrites, so a save (fileWrite
+      // → snapshot → new commit_id, same change_id) would leave a change_id-keyed
+      // entry serving the PRE-save content to the next Edit click. commit_id is
+      // content-addressed — the cache stays provably valid, and the editor opens
+      // with exactly what the displayed diff (also commit_id-keyed) shows.
+      // Mutations (api.edit below) and identity guards keep change_id.
+      const resp = await api.fileShow(commitId, path)
+      if (!stillOn(revId)) return undefined
+      // Before moving @: a file we can't write back is no reason to touch it.
+      if (resp.lossy) {
+        editError = notUtf8Message(path)
+        return undefined
+      }
       if (moveWorkingCopy && !isWorkingCopy) {
         // api.edit is a jj mutation — goes through App's mutation lock to
         // prevent races with keyboard-triggered mutations (e.g. 'u' undo).
@@ -277,15 +292,6 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
         if (result === undefined && lock) return undefined
       }
       // Post-await identity guard — j/k navigation is possible during await.
-      if (!stillOn(revId)) return undefined
-      // Read by commit_id, NOT changeId/revId (issue #16). api.fileShow caches
-      // by the id it's given; change_id survives rewrites, so a save (fileWrite
-      // → snapshot → new commit_id, same change_id) would leave a change_id-keyed
-      // entry serving the PRE-save content to the next Edit click. commit_id is
-      // content-addressed — the cache stays provably valid, and the editor opens
-      // with exactly what the displayed diff (also commit_id-keyed) shows.
-      // Mutations (api.edit above) and identity guards keep change_id.
-      const resp = await api.fileShow(commitId, path)
       if (!stillOn(revId)) return undefined
       return resp.content
     } catch (e) {
@@ -478,7 +484,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
         + `Quick-resolve can't delete files; delete the file in the working copy to take that side.`
       return
     }
-    if (!await writeResolution(path, chosen, 'Resolve')) return
+    if (!await writeResolution(path, withEol(chosen, sides.eol), 'Resolve')) return
     await deps.getOnFileSaved()?.()
   }
 

@@ -6,6 +6,7 @@
   import { foldGutter, foldEffect, unfoldAll, bracketMatching, indentUnit } from '@codemirror/language'
   import { detectIndent, getCmLanguage, cmTheme, cmHighlight } from './cm-shared'
   import { registerUnsaved } from './unsaved'
+  import { detectEol, withEol } from './eol'
 
   interface Props {
     content: string
@@ -20,6 +21,17 @@
   let containerEl: HTMLDivElement | undefined = $state(undefined)
   let view: EditorView | undefined
   let initialDoc: EditorState['doc'] | undefined
+  // Fixed at mount, like the document itself.
+  // svelte-ignore state_referenced_locally
+  const eol = detectEol(content)
+
+  /** The buffer as it must be written: same line endings the file came with. */
+  function text(): string | undefined {
+    if (!view) return undefined
+    // 'mixed' splits on '\n' only (lineSeparator below), so any '\r' is still in the
+    // document and comes back exactly where it was.
+    return eol === 'mixed' ? view.state.sliceDoc() : withEol(view.state.doc.toString(), eol)
+  }
 
   const isDirty = () => !!view && !!initialDoc && !view.state.doc.eq(initialDoc)
   const unsaved = registerUnsaved({ label: () => filePath, lostOn: 'selection', dirty: isDirty })
@@ -105,10 +117,11 @@
         // Use a closure that reads `view` at call time, not at creation time.
         // `view` is guaranteed non-null when the keymap fires because it's set
         // immediately after EditorView construction, before any user interaction.
-        { key: 'Mod-s', run: () => { if (view) onsave(view.state.doc.toString()); return true } },
+        { key: 'Mod-s', run: () => { const t = text(); if (t !== undefined) onsave(t); return true } },
         { key: 'Escape', run: () => { requestCancel(); return true } },
       ]),
       cmTheme,
+      eol === 'mixed' ? EditorState.lineSeparator.of('\n') : [],
       langCompartment.of([]),
       EditorView.updateListener.of(u => { if (u.docChanged) unsaved.touch() }),
     ]
@@ -132,7 +145,7 @@
   })
 
   export function getContent(): string {
-    return view?.state.doc.toString() ?? content
+    return text() ?? content
   }
 
   export function unfoldAllRegions(): void {

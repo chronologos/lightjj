@@ -58,6 +58,7 @@
   import { initialTrackPos } from './merge-surgery'
   import type { MergeSides } from './conflict-extract'
   import { registerUnsaved } from './unsaved'
+  import { withEol } from './eol'
 
   interface Props {
     sides: MergeSides
@@ -365,7 +366,7 @@
     if (!centerView || busy) return
     const doc = centerView.state.doc
     // Only what was written is clean — keystrokes during the save aren't.
-    if (await onsave(doc.toString()) && centerView?.state.doc.eq(doc)) dirty = false
+    if (await onsave(withEol(doc.toString(), sides.eol)) && centerView?.state.doc.eq(doc)) dirty = false
   }
 
   function tryCancel() {

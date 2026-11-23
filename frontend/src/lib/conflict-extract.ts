@@ -13,6 +13,7 @@
 
 import { createConflictScanner, extractSideLabel } from './conflict-markers'
 import type { ChangeBlock } from './merge-diff'
+import { detectEol } from './eol'
 
 /** Commit refs parsed from a conflict-marker label. Present when jj emits
  *  `changeId commitId "description"` format; absent for the generic
@@ -20,6 +21,9 @@ import type { ChangeBlock } from './merge-diff'
 export interface SideRef { changeId: string; commitId: string }
 
 export interface MergeSides {
+  /** The file's line ending. base/ours/theirs are '\n'-separated; whatever writes
+   *  a resolution back restores this (withEol). */
+  eol: '\n' | '\r\n'
   base: string
   ours: string
   theirs: string
@@ -60,6 +64,11 @@ type Mode = 'out' | 'diff' | 'snap' | 'base'
 /** Returns null if markers unparseable, >2 sides, or no jj-native markers found
  *  in a file that DOES contain conflict-looking `<<<<<<<` (likely git-style). */
 export function reconstructSides(raw: string): MergeSides | null {
+  // No single ending reproduces a mixed file (e.g. one side converted to LF) →
+  // raw FileEditor, which preserves it byte for byte. jj writes its markers with the
+  // file's own ending, so a uniform CRLF file stays uniform.
+  const eol = detectEol(raw)
+  if (eol === 'mixed') return null
   // Normalize CRLF/CR → LF BEFORE split. Without this, any \r in content
   // (CRLF files, or a lone \r left by the backend's TrimRight on a CRLF-
   // terminated file) leaves \r on line tails after split('\n'). Then:
@@ -69,7 +78,7 @@ export function reconstructSides(raw: string): MergeSides | null {
   //     with oursLines/theirsLines → takeBlock slices the wrong range
   // Observed on remote merge: → copied only the tail block because every
   // preceding "common" line differed by a trailing \r.
-  const lines = raw.replace(/\r\n?/g, '\n').split('\n')
+  const lines = raw.replace(/\r\n/g, '\n').split('\n')
   const base: string[] = []
   const ours: string[] = []
   const theirs: string[] = []
@@ -213,6 +222,7 @@ export function reconstructSides(raw: string): MergeSides | null {
   }
 
   return {
+    eol,
     base: base.join('\n'),
     ours: ours.join('\n'),
     theirs: theirs.join('\n'),
