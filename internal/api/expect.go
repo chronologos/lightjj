@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/chronologos/lightjj/internal/jj"
 )
@@ -86,27 +87,27 @@ func (s *Server) checkFileWrite(ctx context.Context, w http.ResponseWriter, req 
 	if req.ExpectChangeId == "" && req.BaseCommitId == "" {
 		return true
 	}
-	// Also the safety net for the write itself: whatever is on disk now becomes
-	// recoverable from the evolog before it is replaced.
-	if _, err := s.Runner.Run(ctx, jj.DebugSnapshot()); err != nil {
+	// Snapshots too — also the safety net for the write itself: whatever is on disk now
+	// becomes recoverable from the evolog before it is replaced.
+	out, err := s.Runner.Run(ctx, jj.SnapshotIdentity("@"))
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return false
 	}
-	if req.ExpectChangeId != "" {
-		out, err := s.Runner.Run(ctx, jj.Identity("@"))
-		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
-			return false
-		}
-		if id, ok := jj.ParseIdentity(string(out)); !ok || id.ChangeId != req.ExpectChangeId {
-			s.refreshOpId()
-			s.writeConflict(w, codeWCMoved, fmt.Sprintf("the working copy is no longer at %s", shortID(req.ExpectChangeId)))
-			return false
-		}
+	id, ok := jj.ParseIdentity(string(out))
+	if req.ExpectChangeId != "" && (!ok || id.ChangeId != req.ExpectChangeId) {
+		s.refreshOpId()
+		s.writeConflict(w, codeWCMoved, fmt.Sprintf("the working copy is no longer at %s", shortID(req.ExpectChangeId)))
+		return false
 	}
-	if req.BaseCommitId != "" {
-		cur, curErr := s.Runner.ReadBytes(ctx, jj.FileShow("@", path, false))
-		base, baseErr := s.Runner.ReadBytes(ctx, jj.FileShow(req.BaseCommitId, path, false))
+	// Same commit = same content. Otherwise something else changed: was it this file?
+	if req.BaseCommitId != "" && !(ok && id.CommitId == req.BaseCommitId) {
+		var cur, base []byte
+		var curErr, baseErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { cur, curErr = s.Runner.ReadBytes(ctx, jj.FileShow("@", path, false)) })
+		wg.Go(func() { base, baseErr = s.Runner.ReadBytes(ctx, jj.FileShow(req.BaseCommitId, path, false)) })
+		wg.Wait()
 		// Missing on both sides = a new file, which is not a conflict.
 		if (curErr == nil) != (baseErr == nil) || !bytes.Equal(cur, base) {
 			s.refreshOpId()

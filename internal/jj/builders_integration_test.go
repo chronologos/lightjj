@@ -93,6 +93,7 @@ func TestBuilders_AcceptedByInstalledJJ(t *testing.T) {
 		"FileList":               {FileList("@")},
 		"ResolveCommitId":        {ResolveCommitId("@")},
 		"Identity":               {Identity("@")},
+		"SnapshotIdentity":       {SnapshotIdentity("@")},
 	}
 
 	for _, name := range builderNames(t) {

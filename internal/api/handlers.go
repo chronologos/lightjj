@@ -1982,10 +1982,10 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 	// is the primary contract; a failed snapshot just means the UI lags.
 	resp := map[string]string{"output": ""}
 	// Not trySnapshot: the returned commit_id must include this write.
-	_, _ = s.Runner.Run(ctx, jj.DebugSnapshot())
-	s.refreshOpId()
 	// The commit this write produced = the base for the client's next one.
-	if out, err := s.Runner.Run(ctx, jj.Identity("@")); err == nil {
+	out, err := s.Runner.Run(ctx, jj.SnapshotIdentity("@"))
+	s.refreshOpId()
+	if err == nil {
 		if id, ok := jj.ParseIdentity(string(out)); ok {
 			resp["commit_id"] = id.CommitId
 		}

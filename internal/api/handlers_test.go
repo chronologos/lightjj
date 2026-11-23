@@ -3421,6 +3421,63 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
+// replyRunner answers Run calls from a script, in order, and records them. (MockRunner
+// matches a repeated command to its first expectation, so it can't count.)
+type replyRunner struct {
+	*testutil.MockRunner
+	replies []runReply
+	ran     [][]string
+}
+
+type runReply struct {
+	out string
+	err error
+}
+
+func (r *replyRunner) Run(_ context.Context, args []string) ([]byte, error) {
+	r.ran = append(r.ran, args)
+	if len(r.replies) < len(r.ran) {
+		return nil, errors.New("off script")
+	}
+	reply := r.replies[len(r.ran)-1]
+	return []byte(reply.out), reply.err
+}
+
+// Every jj command is a network round trip over SSH.
+func TestHandleFileWrite_RoundTrips(t *testing.T) {
+	ident := func(commit string) runReply {
+		return runReply{out: `{"commit_id":"` + commit + `","change_id":"z1","hidden":false}`}
+	}
+	post := func(t *testing.T, r *replyRunner) map[string]string {
+		r.WriteDir = t.TempDir()
+		body, _ := json.Marshal(fileWriteRequest{Path: "f.txt", Content: "mine", ExpectChangeId: "z1", BaseCommitId: "c1"})
+		w := httptest.NewRecorder()
+		NewServer(r, "").Mux.ServeHTTP(w, jsonPost("/api/file-write", body))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, [][]string{jj.SnapshotIdentity("@"), jj.SnapshotIdentity("@"), jj.CurrentOpId()}, r.ran)
+		var resp map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		return resp
+	}
+	op := runReply{out: "op2"}
+
+	t.Run("nothing happened since: no content comparison", func(t *testing.T) {
+		r := &replyRunner{MockRunner: testutil.NewMockRunner(t), replies: []runReply{ident("c1"), ident("c2"), op}}
+		assert.Equal(t, "c2", post(t, r)["commit_id"]) // MockRunner fails on any ReadBytes
+	})
+	t.Run("another file changed: compares, then writes", func(t *testing.T) {
+		r := &replyRunner{MockRunner: testutil.NewMockRunner(t), replies: []runReply{ident("c9"), ident("c10"), op}}
+		r.Expect(jj.FileShow("@", "f.txt", false)).SetOutput([]byte("same"))
+		r.Expect(jj.FileShow("c1", "f.txt", false)).SetOutput([]byte("same"))
+		defer r.Verify()
+		assert.Equal(t, "c10", post(t, r)["commit_id"])
+	})
+	t.Run("snapshot failed after the write: no base to hand out", func(t *testing.T) {
+		r := &replyRunner{MockRunner: testutil.NewMockRunner(t), replies: []runReply{ident("c1"), {err: errors.New("locked")}, op}}
+		assert.NotContains(t, post(t, r), "commit_id")
+	})
+}
+
 // TestHandleFileWrite covers handler-layer concerns: lexical validation +
 // delegation to Runner.WriteFile. Symlink-escape is a runner-layer concern —
 // tested in internal/runner/local_test.go (TestLocalRunner_WriteFile_*).
@@ -3432,8 +3489,7 @@ func TestHandleFileWrite(t *testing.T) {
 		runner := testutil.NewMockRunner(t)
 		runner.WriteDir = dir
 		// Snapshot fires after successful write so the X-JJ-Op-Id header is fresh.
-		runner.Allow(jj.DebugSnapshot()).SetOutput([]byte(""))
-		runner.Allow(jj.Identity("@")).SetOutput([]byte(`{"commit_id":"c1","change_id":"z1","hidden":false}`))
+		runner.Allow(jj.SnapshotIdentity("@")).SetOutput([]byte(`{"commit_id":"c1","change_id":"z1","hidden":false}`))
 		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
 		return NewServer(runner, dir)
 	}
@@ -3583,8 +3639,7 @@ func TestUnifiedSuccessEnvelope(t *testing.T) {
 		dir := t.TempDir()
 		runner := testutil.NewMockRunner(t)
 		runner.WriteDir = dir
-		runner.Allow(jj.DebugSnapshot()).SetOutput([]byte(""))
-		runner.Allow(jj.Identity("@")).SetOutput([]byte(`{"commit_id":"c1","change_id":"z1","hidden":false}`))
+		runner.Allow(jj.SnapshotIdentity("@")).SetOutput([]byte(`{"commit_id":"c1","change_id":"z1","hidden":false}`))
 		runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
 		srv := NewServer(runner, dir)
 

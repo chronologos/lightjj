@@ -15,8 +15,14 @@ type RevIdentity struct {
 
 // Identity resolves one revision. --ignore-working-copy: callers snapshot first.
 func Identity(revision string) CommandArgs {
+	return append(SnapshotIdentity(revision), "--ignore-working-copy")
+}
+
+// SnapshotIdentity snapshots the working copy, then resolves one revision: two things
+// for one round trip.
+func SnapshotIdentity(revision string) CommandArgs {
 	tmpl := `'{"commit_id":' ++ json(commit_id.short()) ++ ',"change_id":' ++ json(change_id.short()) ++ ',"hidden":' ++ json(self.hidden()) ++ "}\n"`
-	return []string{"log", "-r", revision, "--no-graph", "--color", "never", "--ignore-working-copy", "-T", tmpl}
+	return []string{"log", "-r", revision, "--no-graph", "--color", "never", "-T", tmpl}
 }
 
 // ParseIdentity parses Identity output. false unless it is exactly one revision.
