@@ -198,7 +198,7 @@ Tab routes are host-level (registered by `TabManager` in `tabs.go`, not in `rout
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/info` | Hostname, repo path, mode, default remote, jj version, feature booleans (`features` map — backend-resolved jj capability gates) |
+| GET | `/api/info` | Hostname, repo path, mode, default remote, jj version + whether it is below the supported floor (`jj_too_old`, `min_jj_version`) |
 | GET | `/api/aliases` | User-configured jj aliases |
 | POST | `/api/alias` | Run a configured alias (validated against config; streamed output) |
 | GET | `/api/pull-requests` | Open PR info per bookmark via `gh` (own `@me` set ∪ recent same-repo PRs; `mine` flag) |

@@ -109,7 +109,7 @@ SSH proxy mode adds ~400ms per command (reduce to ~20ms with ControlMaster). Aut
 
 ## Requirements
 
-- **jj >= 0.39**
+- **jj >= 0.40**
 - **Go 1.25+** — only if building from source (older toolchains auto-fetch it via GOTOOLCHAIN)
 - **gh** (optional) — for PR badges; must be authed wherever the repo lives
 

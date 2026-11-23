@@ -596,33 +596,10 @@ func TestRestore_MultipleFiles(t *testing.T) {
 	assert.Equal(t, []string{"restore", "-c", "abc", `root-file:"a.go"`, `root-file:"b/c.go"`}, got)
 }
 
-func TestParseOpLog(t *testing.T) {
-	output := "abc123\x1fdescription one\x1f2026-01-01 00:00\x1ftrue\ndef456\x1fdescription two\x1f2026-01-01 00:01\x1ffalse\n"
-	entries := ParseOpLog(output)
-	assert.Len(t, entries, 2)
-	assert.Equal(t, "abc123", entries[0].ID)
-	assert.Equal(t, "description one", entries[0].Description)
-	assert.True(t, entries[0].IsCurrent)
-	assert.Equal(t, "def456", entries[1].ID)
-	assert.False(t, entries[1].IsCurrent)
-}
+// ── OpLog / ParseOpLog — the json()-template exemplar ──────────────
 
-func TestParseOpLog_Empty(t *testing.T) {
-	entries := ParseOpLog("")
-	assert.Len(t, entries, 0)
-	assert.NotNil(t, entries)
-}
-
-func TestParseOpLog_Malformed(t *testing.T) {
-	// Lines with < 4 fields should be skipped
-	entries := ParseOpLog("only\x1ftwo\x1ffields\n")
-	assert.Empty(t, entries)
-}
-
-// ── OpLogJSON / ParseOpLogJSON — the json()-template exemplar ──────────────
-
-func TestOpLogJSON(t *testing.T) {
-	args := OpLogJSON(50)
+func TestOpLog(t *testing.T) {
+	args := OpLog(50)
 	assert.Equal(t, "op", args[0])
 	assert.Equal(t, "log", args[1])
 	assert.Contains(t, args, "--limit")
@@ -645,19 +622,19 @@ func TestOpLogJSON(t *testing.T) {
 	assert.NotContains(t, tmpl, "json(self)")
 }
 
-func TestOpLogJSON_NoLimit(t *testing.T) {
-	args := OpLogJSON(0)
+func TestOpLog_NoLimit(t *testing.T) {
+	args := OpLog(0)
 	assert.NotContains(t, args, "--limit")
 }
 
-func TestParseOpLogJSON(t *testing.T) {
+func TestParseOpLog(t *testing.T) {
 	// As jj emits it: one JSON object per line. The second record's description
 	// carries the exact payload class that breaks positional parsers — embedded
 	// quote, newline, and a \x1F unit separator — all JSON-escaped by json() so
 	// the record still occupies a single line.
 	output := `{"id":"abc123","description":"describe commit xyz","time":"2026-05-30 10:00:00.000 -07:00","current":true}` + "\n" +
 		`{"id":"def456","description":"weird \"quoted\" desc with\nnewline and \u001f separator","time":"2026-05-30 09:00:00.000 -07:00","current":false}` + "\n"
-	entries := ParseOpLogJSON(output)
+	entries := ParseOpLog(output)
 	assert.Len(t, entries, 2)
 	assert.Equal(t, "abc123", entries[0].ID)
 	assert.Equal(t, "describe commit xyz", entries[0].Description)
@@ -667,27 +644,20 @@ func TestParseOpLogJSON(t *testing.T) {
 	assert.False(t, entries[1].IsCurrent)
 }
 
-func TestParseOpLogJSON_Empty(t *testing.T) {
-	entries := ParseOpLogJSON("")
+func TestParseOpLog_Empty(t *testing.T) {
+	entries := ParseOpLog("")
 	assert.Empty(t, entries)
 	assert.NotNil(t, entries) // empty slice, not nil — JSON serializes as []
 }
 
-func TestParseOpLogJSON_SkipsMalformedLines(t *testing.T) {
+func TestParseOpLog_SkipsMalformedLines(t *testing.T) {
 	output := `{"id":"good","description":"d","time":"t","current":false}` + "\n" +
 		"this is not json\n" +
 		`{"id":"also-good","description":"d2","time":"t2","current":true}` + "\n"
-	entries := ParseOpLogJSON(output)
+	entries := ParseOpLog(output)
 	assert.Len(t, entries, 2)
 	assert.Equal(t, "good", entries[0].ID)
 	assert.Equal(t, "also-good", entries[1].ID)
-}
-
-func TestJSONTemplatesGate(t *testing.T) {
-	// json() landed in jj 0.31.0; the gate must let 0.31+ through and block 0.30.
-	assert.True(t, Semver{0, 31}.AtLeast(JSONTemplates))
-	assert.True(t, Semver{0, 40}.AtLeast(JSONTemplates))
-	assert.False(t, Semver{0, 30}.AtLeast(JSONTemplates))
 }
 
 func TestDiffRange(t *testing.T) {
@@ -743,24 +713,31 @@ func TestParseEvolog_Malformed(t *testing.T) {
 }
 
 func TestWorkspaceList(t *testing.T) {
-	for _, withRoot := range []bool{false, true} {
-		got := WorkspaceList(withRoot)
-		assert.Equal(t, "workspace", got[0])
-		assert.Equal(t, "list", got[1])
-		assert.Contains(t, got, "--ignore-working-copy")
-		assert.Contains(t, got, "-T")
-		joined := strings.Join(got, " ")
-		assert.Contains(t, joined, "name")
-		assert.Contains(t, joined, "target.change_id()")
-		assert.Contains(t, joined, "target.commit_id()")
-		assert.Contains(t, joined, "target.current_working_copy()")
-		assert.Contains(t, joined, `\x1F`)
-		assert.Equal(t, withRoot, strings.Contains(joined, "self.root()"))
+	joined := strings.Join(WorkspaceList(), " ")
+	assert.True(t, strings.HasPrefix(joined, "workspace list "))
+	for _, want := range []string{"--ignore-working-copy", "-T", "name", "target.change_id()", "target.commit_id()", "target.current_working_copy()", `\x1F`, "self.root()"} {
+		assert.Contains(t, joined, want)
+	}
+}
+
+// Verified against jj 0.40/0.43 (error text) and 0.47 (empty).
+func TestParseWorkspaceList_UnknownPath(t *testing.T) {
+	for _, root := range []string{"", "<Error: Workspace has no recorded path: b>", "<Error: Failed to resolve workspace root: b: /x/../b: No such file or directory (os error 2)>"} {
+		ws := ParseWorkspaceList("b\x1Fabc\x1Fdef\x1Ffalse\x1F" + root + "\na\x1Fabc\x1Fdef\x1Ftrue\x1F/repo\n")
+		assert.Len(t, ws, 2)
+		assert.Empty(t, ws[0].Path)
+		assert.Equal(t, "/repo", ws[1].Path)
+	}
+}
+
+func TestTooOld(t *testing.T) {
+	for v, want := range map[string]bool{"jj 0.39.0": true, "jj 0.40.0": false, "jj 0.47.1-abc": false, "jj 1.0.0": false, "jj-dev": false, "": false} {
+		assert.Equal(t, want, TooOld(v), v)
 	}
 }
 
 func TestParseWorkspaceList(t *testing.T) {
-	output := "base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\n"
+	output := "base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\x1F/b2\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\x1F/d\n"
 	ws := ParseWorkspaceList(output)
 	assert.Len(t, ws, 2)
 	assert.Equal(t, "base2", ws[0].Name)
@@ -776,7 +753,7 @@ func TestParseWorkspaceList(t *testing.T) {
 func TestParseWorkspaceList_NameWithColon(t *testing.T) {
 	// Workspace names containing ": " broke the old human-output parser.
 	// Template output is \x1F-delimited so colons are safe.
-	output := "weird: name\x1Fabc\x1Fdef\x1Ffalse\n"
+	output := "weird: name\x1Fabc\x1Fdef\x1Ffalse\x1F/w\n"
 	ws := ParseWorkspaceList(output)
 	assert.Len(t, ws, 1)
 	assert.Equal(t, "weird: name", ws[0].Name)

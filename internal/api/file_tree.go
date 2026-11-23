@@ -330,28 +330,15 @@ func (s *Server) fileTreeFor(ctx context.Context, revision string) (*fileTree, s
 		}
 		commitId = ids[0]
 	}
-	rev := commitId
-	if s.jjSupports(ctx, jj.CommitIdRevsetFn) {
-		rev = jj.CommitIdRevset(commitId)
-	}
-	useJSON := s.jjSupports(ctx, jj.JSONTemplates)
+	rev := jj.CommitIdRevset(commitId)
 	tree, err := s.fileTrees.get(ctx, commitId, func(lctx context.Context) (*fileTree, error) {
 		// ReadBytes: stdout only, byte-exact (paths may end in spaces; Run
 		// would also fold a stderr warning into the output on empty stdout).
-		var files []jj.TreeFile
-		if useJSON {
-			out, err := s.Runner.ReadBytes(lctx, jj.FileListJSON(rev))
-			if err != nil {
-				return nil, err
-			}
-			files = jj.ParseFileListJSON(string(out))
-		} else {
-			out, err := s.Runner.ReadBytes(lctx, jj.FileList(rev))
-			if err != nil {
-				return nil, err
-			}
-			files = jj.ParseFileList(string(out))
+		out, err := s.Runner.ReadBytes(lctx, jj.FileList(rev))
+		if err != nil {
+			return nil, err
 		}
+		files := jj.ParseFileList(string(out))
 		truncated := len(files) > fileTreeMaxFiles
 		if truncated {
 			files = slices.Clip(files[:fileTreeMaxFiles])

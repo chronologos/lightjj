@@ -25,22 +25,8 @@ import (
 // newTestServer creates a Server with the op-id command pre-allowed on the mock.
 func newTestServer(runner *testutil.MockRunner) *Server {
 	runner.Allow(jj.CurrentOpId()).SetOutput([]byte("abc123"))
-	// jj.Version() is auto-resolved by jjSupports() on the first gated handler.
-	// Allow (not Expect) so tests that don't hit a gate aren't forced to match.
-	// 0.39.0 keeps existing tests on the pre-gate fallback paths; tests
-	// exercising a ≥0.40 gate set srv.jjVer directly via withJJ().
-	runner.Allow(jj.Version()).SetOutput([]byte("jj 0.39.0"))
+	runner.Allow(jj.Version()).SetOutput([]byte("jj 0.40.0"))
 	return NewServer(runner, "")
-}
-
-// withJJ sets the resolved jj version on a test server so jjSupports() reads
-// it without a runner round-trip. Prefer this over re-stubbing jj.Version()
-// per test — Allow() in newTestServer already returns 0.39.0 by default.
-func withJJ(s *Server, v jj.Semver) *Server {
-	s.jjVersionMu.Lock()
-	s.jjVer, s.jjVerOK, s.jjVersionResolved = v, true, true
-	s.jjVersionMu.Unlock()
-	return s
 }
 
 // jsonPost creates a POST request with Content-Type: application/json.
@@ -693,13 +679,13 @@ func TestHandleWorkspaceForget_OpenTabConflict(t *testing.T) {
 	// that tab (its Server points at an untracked dir; every request 500s and
 	// the broken tab is restored on every launch) → 409, mutation never runs.
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
 		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F/home/u/repo-feat\n" +
 			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
 	// No Expect for jj.WorkspaceForget — MockRunner fails the test if it runs.
 	defer runner.Verify()
 
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv := newTestServer(runner)
 	srv.OpenTabRoots = func() []string { return []string{"/home/u/repo", "/home/u/repo-feat"} }
 
 	w := httptest.NewRecorder()
@@ -712,13 +698,13 @@ func TestHandleWorkspaceUpdateStaleOther(t *testing.T) {
 	// Resolves the named sibling's path from the workspace list, then runs
 	// update-stale scoped to it via RunRaw (jj -R <path>).
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
 		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F/home/u/repo-feat\n" +
 			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
 	runner.Expect(append([]string{"jj"}, jj.WorkspaceUpdateStaleAt("/home/u/repo-feat")...)).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv := newTestServer(runner)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/update-stale-other", []byte(`{"name":"feat"}`)))
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -734,14 +720,13 @@ func TestHandleWorkspaceUpdateStaleOther_MissingName(t *testing.T) {
 }
 
 func TestHandleWorkspaceUpdateStaleOther_UnknownPath(t *testing.T) {
-	// Workspace exists in the list but has no resolvable path (predates jj's
-	// workspace_store index) → 422, update-stale never runs.
+	// Workspace exists in the list but jj doesn't know its path → 422, update-stale never runs.
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
-		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F\n" + // empty path field
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F<Error: Workspace has no recorded path: feat>\n" +
 			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
 	defer runner.Verify() // no WorkspaceUpdateStaleAt
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv := newTestServer(runner)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, jsonPost("/api/workspace/update-stale-other", []byte(`{"name":"feat"}`)))
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
@@ -750,13 +735,13 @@ func TestHandleWorkspaceUpdateStaleOther_UnknownPath(t *testing.T) {
 func TestHandleWorkspaceForget_NonTabWorkspace(t *testing.T) {
 	// Workspace exists but no open tab is viewing it → forget proceeds.
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
 		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F/home/u/repo-feat\n" +
 			"default\x1Fzz\x1Fww\x1Ftrue\x1F/home/u/repo\n"))
 	runner.Expect(jj.WorkspaceForget("feat")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv := newTestServer(runner)
 	srv.OpenTabRoots = func() []string { return []string{"/home/u/repo"} }
 
 	w := httptest.NewRecorder()
@@ -765,15 +750,13 @@ func TestHandleWorkspaceForget_NonTabWorkspace(t *testing.T) {
 }
 
 func TestHandleWorkspaceForget_UnknownPathAllowed(t *testing.T) {
-	// Older jj (no self.root() template) + workspace missing from the
-	// additive-only store → path unknown → can't guard → forget proceeds.
+	// jj doesn't know the workspace's path → can't guard → forget proceeds.
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(false)).SetOutput([]byte(
-		"feat\x1Fxx\x1Fyy\x1Ffalse\ndefault\x1Fzz\x1Fww\x1Ftrue\n"))
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
+		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F<Error: Workspace has no recorded path: feat>\ndefault\x1Fzz\x1Fww\x1Ftrue\x1F\n"))
 	runner.Expect(jj.WorkspaceForget("feat")).SetOutput([]byte(""))
 	defer runner.Verify()
 
-	// newTestServer = jj 0.39 → withRoot=false; RepoDir "" → no store read.
 	srv := newTestServer(runner)
 	srv.OpenTabRoots = func() []string { return []string{"/home/u/repo-feat"} }
 
@@ -790,11 +773,11 @@ func TestHandleWorkspaceForget_TabRootNormalization(t *testing.T) {
 	require.NoError(t, err)
 
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
 		"feat\x1Fxx\x1Fyy\x1Ffalse\x1F" + wsDir + "\n"))
 	defer runner.Verify()
 
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv := newTestServer(runner)
 	// Tab root uses the symlink-resolved spelling; workspace path the raw one.
 	srv.OpenTabRoots = func() []string { return []string{resolved + string(filepath.Separator)} }
 
@@ -1527,7 +1510,7 @@ func TestHandleGetDescription_MissingRevision(t *testing.T) {
 
 func TestHandleInfo(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.Version()).SetOutput([]byte("jj 0.39.0\n"))
+	runner.Expect(jj.Version()).SetOutput([]byte("jj 0.40.0\n"))
 	runner.Expect(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte("true\n"))
 	defer runner.Verify()
 
@@ -1547,64 +1530,11 @@ func TestHandleInfo(t *testing.T) {
 	assert.Equal(t, false, got["ssh_mode"])          // newTestServer: no SSHHost. Old RepoDir=="" conflation reported tests as SSH.
 	assert.Equal(t, "origin", got["default_remote"]) // NewServer's baseline
 	assert.Equal(t, "", got["log_revset"])           // unset by newTestServer
-	assert.Equal(t, "jj 0.39.0", got["jj_version"])
+	assert.Equal(t, "jj 0.40.0", got["jj_version"])
 	assert.Equal(t, true, got["watchman_snapshot_trigger"])
 
-	// features: backend-resolved gate booleans. jj 0.39 → indexChangedPaths
-	// (≥0.30) true, workspaceRootTmpl (≥0.40) false. The frontend reads these
-	// instead of keeping its own version table.
-	features, ok := got["features"].(map[string]any)
-	require.True(t, ok, "features map missing from /api/info response")
-	assert.Equal(t, true, features["indexChangedPaths"])
-	assert.Equal(t, false, features["workspaceRootTmpl"])
-}
-
-// TestHandleInfo_Features verifies every named gate in jj.FeatureGates is
-// resolved into the /api/info features map, and that gates flip to true when
-// the detected jj version crosses their minimum.
-func TestHandleInfo_Features(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	runner.Allow(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte("false\n"))
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
-
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/info", nil))
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var got struct {
-		Features map[string]bool `json:"features"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	for name := range jj.FeatureGates {
-		supported, present := got.Features[name]
-		assert.True(t, present, "gate %q missing from features map", name)
-		assert.True(t, supported, "jj 0.40 should support gate %q", name)
-	}
-}
-
-// TestHandleInfo_FeaturesUnknownVersionPessimistic locks the polarity contract:
-// an unparseable jj version reports FALSE for every gate (the backend's
-// pessimistic stance). The frontend's optimistic window only applies before
-// the info response arrives — once it has, these booleans are authoritative.
-func TestHandleInfo_FeaturesUnknownVersionPessimistic(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	runner.Allow(jj.Version()).SetOutput([]byte("not-a-version"))
-	runner.Allow(jj.ConfigGet("fsmonitor.watchman.register-snapshot-trigger")).SetOutput([]byte("false\n"))
-	srv := NewServer(runner, "")
-
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/info", nil))
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var got struct {
-		Features map[string]bool `json:"features"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	for name := range jj.FeatureGates {
-		supported, present := got.Features[name]
-		assert.True(t, present, "gate %q missing from features map", name)
-		assert.False(t, supported, "unknown jj version must report gate %q as unsupported", name)
-	}
+	assert.Equal(t, false, got["jj_too_old"])
+	assert.Equal(t, "0.40", got["min_jj_version"])
 }
 
 func TestHandleRemotes(t *testing.T) {
@@ -1695,7 +1625,8 @@ func TestRefreshOpId_DivergentHeadsFallback(t *testing.T) {
 
 func TestHandleOpLog(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	opLogOutput := "abc123\x1Fdescription one\x1F2026-01-01 00:00\x1Ftrue\ndef456\x1Fdescription two\x1F2026-01-01 00:01\x1Ffalse\n"
+	opLogOutput := `{"id":"abc123","description":"description one","time":"2026-01-01 00:00","current":true}` + "\n" +
+		`{"id":"def456","description":"description two","time":"2026-01-01 00:01","current":false}` + "\n"
 	runner.Expect(jj.OpLog(50)).SetOutput([]byte(opLogOutput))
 	defer runner.Verify()
 
@@ -2263,10 +2194,10 @@ func TestHandleOpShow_InvalidId(t *testing.T) {
 
 func TestHandleWorkspaces(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(false)).SetOutput([]byte("base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\n"))
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte("base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\x1F/home/u/repo-b2\ndefault\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\x1F/home/u/repo\n"))
 	defer runner.Verify()
 
-	srv := newTestServer(runner) // newTestServer's Allow(Version)=0.39 → withRoot=false
+	srv := newTestServer(runner)
 	req := httptest.NewRequest("GET", "/api/workspaces", nil)
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, req)
@@ -2278,43 +2209,22 @@ func TestHandleWorkspaces(t *testing.T) {
 	assert.Equal(t, "base2", resp.Workspaces[0].Name)
 	assert.Equal(t, "skpssuxl", resp.Workspaces[0].ChangeId)
 	assert.Equal(t, "default", resp.Workspaces[1].Name)
-	// Single candidate → template-derived (SSH mode's only signal).
-	assert.Equal(t, "default", resp.Current)
-}
-
-func TestHandleWorkspaces_WithRootTemplate(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	// jj ≥ 0.40: template includes self.root() as 5th field; protobuf
-	// reader is NOT called (no Allow for it — Verify would fail if it ran).
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
-		"base2\x1Fskpssuxl\x1Fa14ce848\x1Ffalse\x1F/home/u/repo-b2\n" +
-			"default\x1Fqqqqpqpq\x1Fbbbbbbbb\x1Ftrue\x1F/home/u/repo\n"))
-	defer runner.Verify()
-
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
-	req := httptest.NewRequest("GET", "/api/workspaces", nil)
-	w := httptest.NewRecorder()
-	srv.Mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp workspacesResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Workspaces, 2)
 	assert.Equal(t, "/home/u/repo-b2", resp.Workspaces[0].Path)
 	assert.Equal(t, "/home/u/repo", resp.Workspaces[1].Path)
+	// Single candidate → template-derived (SSH mode's only signal).
 	assert.Equal(t, "default", resp.Current)
 }
 
 func TestHandleWorkspaces_SSHTiebreak(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	// Collision: BOTH workspaces report Current=true (same @). jj ≥ 0.40
-	// template paths + RepoPath (SSH-mode signal) break the tie.
-	runner.Expect(jj.WorkspaceList(true)).SetOutput([]byte(
+	// Collision: BOTH workspaces report Current=true (same @). Template
+	// paths + RepoPath (SSH-mode signal) break the tie.
+	runner.Expect(jj.WorkspaceList()).SetOutput([]byte(
 		"base2\x1Fxx\x1Fyy\x1Ftrue\x1F/home/u/repo-b2\n" +
 			"default\x1Fxx\x1Fyy\x1Ftrue\x1F/home/u/repo\n"))
 	defer runner.Verify()
 
-	srv := withJJ(newTestServer(runner), jj.Semver{0, 40})
+	srv := newTestServer(runner)
 	srv.RepoPath = "/home/u/repo-b2" // SSH mode: RepoDir empty, RepoPath set
 	req := httptest.NewRequest("GET", "/api/workspaces", nil)
 	w := httptest.NewRecorder()
@@ -2323,29 +2233,6 @@ func TestHandleWorkspaces_SSHTiebreak(t *testing.T) {
 	var resp workspacesResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "base2", resp.Current) // path-matched, not last-in-loop
-}
-
-func TestJJSupports(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	defer runner.Verify()
-	srv := newTestServer(runner) // Allow(Version)="jj 0.39.0"
-
-	assert.True(t, srv.jjSupports(t.Context(), jj.Semver{0, 30}))
-	assert.True(t, srv.jjSupports(t.Context(), jj.Semver{0, 39}))
-	assert.False(t, srv.jjSupports(t.Context(), jj.Semver{0, 40}))
-	// Second call hits the resolved cache (Allow tolerates 0-or-1 calls but
-	// jjVersionResolved guards re-run regardless).
-	assert.False(t, srv.jjSupports(t.Context(), jj.Semver{1, 0}))
-}
-
-func TestJJSupports_Unparseable(t *testing.T) {
-	runner := testutil.NewMockRunner(t)
-	defer runner.Verify()
-	srv := NewServer(runner, "")
-	// Force resolved-but-unparseable (bypass newTestServer's 0.39 default).
-	srv.jjVersion, srv.jjVerOK, srv.jjVersionResolved = "jj-dev", false, true
-	// Unknown version → pessimistic (false) so gated handlers use fallback.
-	assert.False(t, srv.jjSupports(t.Context(), jj.Semver{0, 1}))
 }
 
 func TestPickCurrentWorkspace(t *testing.T) {
@@ -2385,78 +2272,9 @@ func TestPickCurrentWorkspace(t *testing.T) {
 	}
 }
 
-// wsStoreEntry builds a protobuf workspace_store record (jj's on-disk format).
-// Strings <128 bytes → single-byte varints → trivial hand-encoding. See
-// jj/workspace_store.go for the schema.
-func wsStoreEntry(name, path string) []byte {
-	inner := append(
-		append([]byte{0x0a, byte(len(name))}, name...),    // field 1: name
-		append([]byte{0x12, byte(len(path))}, path...)..., // field 2: path
-	)
-	return append([]byte{0x0a, byte(len(inner))}, inner...) // outer field 1: entry
-}
-
-func TestReadWorkspaceStore_RelativePaths(t *testing.T) {
-	// jj 0.39 writes paths relative to .jj/repo/. The default workspace at
-	// the repo root is "../../" (two levels up from .jj/repo/). A secondary
-	// workspace at ../sibling is "../../../sibling". Pre-0.39 wrote absolute.
-	// readWorkspaceStore must resolve both so TabResolve's IsAbs check passes.
-	repoDir := t.TempDir()
-	storeDir := filepath.Join(repoDir, ".jj", "repo", "workspace_store")
-	require.NoError(t, os.MkdirAll(storeDir, 0o755))
-
-	var store []byte
-	store = append(store, wsStoreEntry("default", "../../")...)          // jj 0.39 relative
-	store = append(store, wsStoreEntry("legacy", "/abs/legacy/path")...) // pre-0.39 absolute
-	require.NoError(t, os.WriteFile(filepath.Join(storeDir, "index"), store, 0o644))
-
-	srv := &Server{RepoDir: repoDir}
-	got, err := srv.readWorkspaceStore(context.Background())
-	require.NoError(t, err)
-
-	// ../../ from {repoDir}/.jj/repo/ → {repoDir}. filepath.Join cleans the dots.
-	assert.Equal(t, repoDir, got["default"])
-	// Absolute passes through (Clean'd — idempotent here).
-	assert.Equal(t, "/abs/legacy/path", got["legacy"])
-	// Both are now IsAbs — TabResolve won't reject.
-	assert.True(t, filepath.IsAbs(got["default"]))
-	assert.True(t, filepath.IsAbs(got["legacy"]))
-}
-
-func TestReadWorkspaceStore_SSH(t *testing.T) {
-	// SSH mode: no RepoDir, RepoPath set → RunRaw cat. path.* (POSIX)
-	// for join/clean regardless of host OS.
-	runner := testutil.NewMockRunner(t)
-	var store []byte
-	store = append(store, wsStoreEntry("default", "../../")...)      // relative → resolved
-	store = append(store, wsStoreEntry("other", "/remote/other")...) // absolute → passthrough
-	runner.Expect([]string{"cat", "/remote/repo/.jj/repo/workspace_store/index"}).SetOutput(store)
-	defer runner.Verify()
-
-	srv := &Server{Runner: runner, RepoPath: "/remote/repo"}
-	got, err := srv.readWorkspaceStore(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, "/remote/repo", got["default"]) // path.Join cleans ../../
-	assert.Equal(t, "/remote/other", got["other"])
-}
-
-func TestReadWorkspaceStore_SSH_CatFails(t *testing.T) {
-	// cat failure (ENOTDIR pointer file, no such file, etc) → nil map,
-	// no error. Caller treats nil as "no paths available".
-	runner := testutil.NewMockRunner(t)
-	runner.Expect([]string{"cat", "/remote/repo/.jj/repo/workspace_store/index"}).SetError(errors.New("cat: not a directory"))
-	defer runner.Verify()
-
-	srv := &Server{Runner: runner, RepoPath: "/remote/repo"}
-	got, err := srv.readWorkspaceStore(context.Background())
-	assert.NoError(t, err)
-	assert.Nil(t, got)
-}
-
 func TestHandleWorkspaces_RunnerError(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	runner.Expect(jj.WorkspaceList(false)).SetError(errors.New("workspace list failed"))
+	runner.Expect(jj.WorkspaceList()).SetError(errors.New("workspace list failed"))
 	defer runner.Verify()
 
 	srv := newTestServer(runner)
@@ -2933,7 +2751,7 @@ func TestHandleFileRaw_SVG_CSPNeutersScript(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Security-Policy"), "default-src 'none'")
 }
 
-// ≥0.31: a hex (content-addressed) revision is resolved via commit_id(…) so a
+// A hex (content-addressed) revision is resolved via commit_id(…) so a
 // tag/bookmark named like a hex prefix can't shadow it and get its MOVABLE
 // bytes pinned under the immutable cache. Non-hex revisions pass through bare.
 func TestHandleFileRaw_HexPinnedToCommitId(t *testing.T) {
@@ -2941,7 +2759,7 @@ func TestHandleFileRaw_HexPinnedToCommitId(t *testing.T) {
 	runner.Expect(jj.FileShow("commit_id(a1b2c3d4e5f6)", "x.png", false)).SetOutput([]byte("png"))
 	runner.Expect(jj.FileShow("main", "x.png", false)).SetOutput([]byte("png"))
 	defer runner.Verify()
-	srv := withJJ(newTestServer(runner), jj.CommitIdRevsetFn)
+	srv := newTestServer(runner)
 
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/file-raw?revision=a1b2c3d4e5f6&path=x.png", nil))
@@ -2954,9 +2772,8 @@ func TestHandleFileRaw_HexPinnedToCommitId(t *testing.T) {
 	assert.Empty(t, w.Header().Get("Cache-Control"))
 }
 
-// <0.31 fallback (newTestServer defaults below the gate? no — 0.39; force old).
 func TestHandleFileRaw_CacheControl(t *testing.T) {
-	srv := withJJ(newTestServer(testutil.NewMockRunner(t)), jj.Semver{0, 30})
+	srv := newTestServer(testutil.NewMockRunner(t))
 	for _, tt := range []struct {
 		name, rev string
 		cached    bool
@@ -2973,7 +2790,11 @@ func TestHandleFileRaw_CacheControl(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := testutil.NewMockRunner(t)
-			runner.Expect(jj.FileShow(tt.rev, "x.png", false)).SetOutput([]byte("png"))
+			rev := tt.rev
+			if tt.cached {
+				rev = jj.CommitIdRevset(rev)
+			}
+			runner.Expect(jj.FileShow(rev, "x.png", false)).SetOutput([]byte("png"))
 			srv.Runner = runner
 			req := httptest.NewRequest("GET", "/api/file-raw?revision="+url.QueryEscape(tt.rev)+"&path=x.png", nil)
 			w := httptest.NewRecorder()
@@ -4113,7 +3934,7 @@ func TestHandleCapabilities(t *testing.T) {
 	var got capabilitiesResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, apiVersion, got.APIVersion)
-	assert.Equal(t, "jj 0.39.0", got.JJVersion) // from newTestServer's Allow
+	assert.Equal(t, "jj 0.40.0", got.JJVersion) // from newTestServer's Allow
 	assert.Contains(t, got.Actions, "/api/navigate")
 	assert.Contains(t, got.Actions, "/api/doc-comments")
 	assert.Contains(t, got.Actions, "/api/capabilities")

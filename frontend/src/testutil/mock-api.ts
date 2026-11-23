@@ -74,7 +74,7 @@ export function mkInfo(over: Partial<InfoResponse> = {}): InfoResponse {
     ssh_mode: false,
     default_remote: 'origin',
     log_revset: '',
-    jj_version: 'jj 0.39.0',
+    jj_version: 'jj 0.40.0',
     watchman_snapshot_trigger: false,
     ...over,
   }

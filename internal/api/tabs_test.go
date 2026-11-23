@@ -19,10 +19,9 @@ import (
 )
 
 // allowTabEnrichment permits the lazy per-tab lookups handleList triggers
-// (jj version gate + workspace list). Output resolves wsName to "default".
+// (workspace list). Output resolves wsName to "default".
 func allowTabEnrichment(r *testutil.MockRunner) {
-	r.Allow(jj.Version()).SetOutput([]byte("jj 0.39.0"))
-	r.Allow(jj.WorkspaceList(false)).SetOutput([]byte("default\x1Fabc\x1Fdef\x1Ftrue\n"))
+	r.Allow(jj.WorkspaceList()).SetOutput([]byte("default\x1Fabc\x1Fdef\x1Ftrue\x1F/test/repo\n"))
 }
 
 // newTestTab returns a TabManager with one tab mounting a mock-backed Server.

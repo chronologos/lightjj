@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -75,12 +74,9 @@ type Server struct {
 	apiRoutes []string
 
 	// jjVersion is the `jj --version` output (e.g. "jj 0.39.0"). Lazy-resolved
-	// on first handleInfo / jjSupports. Mutex+bool (not sync.Once) so a
-	// transient failure retries — same pattern as ghRepo. jjVer is the parsed
-	// form; jjVerOK=false means parse failed (jjSupports treats as "unknown").
+	// on first handleInfo. Mutex+bool (not sync.Once) so a transient failure
+	// retries — same pattern as ghRepo.
 	jjVersion         string
-	jjVer             jj.Semver
-	jjVerOK           bool
 	jjVersionResolved bool
 	jjVersionMu       sync.Mutex
 
@@ -96,7 +92,7 @@ type Server struct {
 }
 
 // hasLocalFS reports whether this Server can read the repo filesystem directly
-// (op_heads/, workspace_store/). True in local mode; false in SSH mode (repo
+// (op_heads/). True in local mode; false in SSH mode (repo
 // lives on the remote) and tests (no repo at all).
 func (s *Server) hasLocalFS() bool { return s.RepoDir != "" }
 
@@ -109,8 +105,7 @@ func (s *Server) isSSHMode() bool { return s.SSHHost != "" }
 // PRIMARY workspace this is just RepoDir/.jj/repo (a directory). In a
 // SECONDARY workspace, .jj/repo is a one-line text FILE containing a relative
 // path back to the primary's store (e.g. "../../lightjj/.jj/repo"). fsnotify
-// on op_heads/ and the readWorkspaceStore index read both need the resolved
-// directory; without this, opening a workspace as a tab fails watcher startup
+// on op_heads/ needs the resolved directory; without this, opening a workspace as a tab fails watcher startup
 // → handleEventsDisabled 204 → frontend shows "disconnected". Memoized: the
 // pointer never changes for a workspace's lifetime.
 func (s *Server) repoStorePath() string {
@@ -652,67 +647,6 @@ func (s *Server) casOpId(prev, next string) (current string, swapped bool) {
 	}
 	s.cachedOp = next
 	return next, true
-}
-
-// readWorkspaceStore reads and parses the workspace store index file.
-// Returns nil map if the file can't be read (SSH cat failure, missing index,
-// etc.) — callers treat nil as "no paths". Local secondary workspaces work
-// now that repoStorePath() follows the .jj/repo pointer file.
-//
-// LIMITATION: the index is ADDITIVE-ONLY. Workspaces created before the user's
-// jj version started writing it (or before the index feature existed) won't be
-// there — jj doesn't backfill. Observed: a repo with 5 workspaces had only 3
-// in the index. jj ≥ 0.40 has WorkspaceRef.root() (see jj.WorkspaceRootTmpl)
-// which makes this whole reader the <0.40 fallback; missing entries on that
-// path → disabled dropdown row with tooltip.
-//
-// jj 0.39+ writes RELATIVE paths (anchored at .jj/repo/ — the shared store
-// all workspaces point back to). Pre-0.39 wrote absolute. We resolve here,
-// not in the parser, because resolution needs the repo path (fs knowledge the
-// pure parser shouldn't have). Callers need absolute for TabResolve's IsAbs.
-func (s *Server) readWorkspaceStore(ctx context.Context) (map[string]string, error) {
-	if s.hasLocalFS() {
-		// Local: direct fs read. filepath.* for host OS semantics (Windows
-		// absolute paths in pre-0.39 stores wouldn't survive path.IsAbs).
-		repoStore := s.repoStorePath()
-		data, err := os.ReadFile(filepath.Join(repoStore, "workspace_store", "index"))
-		if err != nil {
-			return nil, fmt.Errorf("reading workspace store: %w", err)
-		}
-		return resolveWSPaths(data, repoStore, filepath.IsAbs, filepath.Clean, filepath.Join)
-	}
-	if s.RepoPath != "" {
-		// SSH: cat via RunRaw (runs on remote host). path.* for POSIX —
-		// remote is Linux regardless of local OS. Fails with ENOTDIR on
-		// secondary workspaces (.jj/repo is a pointer file) → nil map,
-		// same as pre-enrichment behavior.
-		repoStore := path.Join(s.RepoPath, ".jj", "repo")
-		data, err := s.Runner.RunRaw(ctx, []string{"cat", path.Join(repoStore, "workspace_store", "index")})
-		if err != nil {
-			return nil, nil
-		}
-		return resolveWSPaths(data, repoStore, path.IsAbs, path.Clean, path.Join)
-	}
-	return nil, nil
-}
-
-// resolveWSPaths is the parse + relative-path-resolution shared by local and
-// SSH modes. Each takes its own isAbs/clean/join so local mode can use
-// filepath.* (Windows-aware) and SSH can use path.* (POSIX remote).
-func resolveWSPaths(data []byte, repoStore string, isAbs func(string) bool, clean func(string) string, join func(...string) string) (map[string]string, error) {
-	raw, err := jj.ParseWorkspaceStorePaths(data)
-	if err != nil {
-		return nil, err
-	}
-	resolved := make(map[string]string, len(raw))
-	for name, p := range raw {
-		if isAbs(p) {
-			resolved[name] = clean(p)
-		} else {
-			resolved[name] = join(repoStore, p)
-		}
-	}
-	return resolved, nil
 }
 
 func decodeBodyLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) error {

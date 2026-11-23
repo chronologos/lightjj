@@ -1,65 +1,27 @@
 package jj
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 )
 
-// Semver is a parsed jj version (major, minor). Patch is dropped — feature
-// gates only care about minor releases (jj's feature cadence). Named Semver
-// not Version because Version() is the `jj --version` command builder.
+// Semver is a parsed jj version (major, minor). Patch is dropped — jj ships
+// features in minor releases. Named Semver not Version because Version() is the
+// `jj --version` command builder.
 type Semver [2]int
 
-// Feature gates. Each names the FIRST jj release that supports the capability.
-// Backend handlers call s.jjSupports(ctx, jj.WorkspaceRootTmpl) to pick between
-// a new codepath and a proven fallback. Keep this list small — only add an
-// entry when the backend branches on it OR the frontend gates a UI affordance
-// on it (see FeatureGates below).
-var (
-	// WorkspaceRootTmpl: WorkspaceRef.root() template method. Lets the
-	// workspace-list template emit absolute paths directly, replacing the
-	// hand-rolled protobuf parser of .jj/repo/workspace_store/index (which
-	// is additive-only — pre-existing workspaces have no entry).
-	WorkspaceRootTmpl = Semver{0, 40}
+// MinVersion is the oldest supported jj. Builders may use anything it has without
+// a fallback; CI runs the integration tests against it. To use something newer,
+// raise it.
+var MinVersion = Semver{0, 40}
 
-	// ChangedPathIndex: `jj debug index-changed-paths` (changed-path index
-	// that makes files() revsets fast; the IndexChangedPaths command builder
-	// in commands.go invokes it). The backend exposes it unconditionally via
-	// POST /api/index-paths; the frontend gates the "load full history"
-	// affordance on it.
-	ChangedPathIndex = Semver{0, 30}
-
-	// CommitIdRevsetFn: the `commit_id(prefix)` / `change_id(prefix)` revset
-	// functions, which resolve a hex prefix AS a commit id regardless of a
-	// same-named tag/bookmark (jj resolves bare symbols tag → bookmark → id).
-	// handleFileRaw wraps content-addressed revisions in it so the immutable
-	// cache can't be pointed at a movable ref's bytes. Backend-only gate.
-	CommitIdRevsetFn = Semver{0, 31}
-
-	// JSONTemplates: the json(value) template function (jj 0.31.0 changelog:
-	// "Templates now support json(x) function to serialize values in JSON
-	// format"). Handlers that wire a *JSON builder/parser pair branch on
-	// s.jjSupports(ctx, jj.JSONTemplates) and keep the delimiter/plain builder
-	// as the older-jj fallback. First adopter: handleFileTree (FileListJSON →
-	// FileList). OpLogJSON is the reference builder. Backend-only gate.
-	JSONTemplates = Semver{0, 31}
-)
+func (v Semver) String() string { return fmt.Sprintf("%d.%d", v[0], v[1]) }
 
 // CommitIdRevset pins `hex` to commit-id resolution — `commit_id(hex)` — so a
-// tag or bookmark that happens to be named like a hex prefix can't shadow it.
-// Callers gate on CommitIdRevsetFn and pass the bare symbol on older jj.
+// tag or bookmark that happens to be named like a hex prefix can't shadow it
+// (jj resolves bare symbols tag → bookmark → id).
 func CommitIdRevset(hex string) string { return "commit_id(" + hex + ")" }
-
-// FeatureGates is the wire-facing gate registry: GET /api/info resolves every
-// entry through Server.jjSupports (PESSIMISTIC — unknown version reports
-// false) and ships the booleans as the "features" map. The frontend reads
-// those booleans instead of keeping its own version table, so this map is the
-// single authority on minimum versions. Keys are a wire contract with
-// frontend jjSupports(name) — don't rename them.
-var FeatureGates = map[string]Semver{
-	"workspaceRootTmpl": WorkspaceRootTmpl,
-	"indexChangedPaths": ChangedPathIndex,
-}
 
 var versionRe = regexp.MustCompile(`(\d+)\.(\d+)`)
 
@@ -79,4 +41,11 @@ func ParseSemver(s string) (Semver, bool) {
 // AtLeast reports whether v >= min.
 func (v Semver) AtLeast(min Semver) bool {
 	return v[0] > min[0] || (v[0] == min[0] && v[1] >= min[1])
+}
+
+// TooOld reports whether `jj --version` output names an unsupported version.
+// Unparseable output (a dev build) is given the benefit of the doubt.
+func TooOld(version string) bool {
+	v, ok := ParseSemver(version)
+	return ok && !v.AtLeast(MinVersion)
 }

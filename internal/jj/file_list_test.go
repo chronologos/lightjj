@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFileListJSON(t *testing.T) {
-	args := FileListJSON("commit_id(abc123def456)")
+func TestFileList(t *testing.T) {
+	args := FileList("commit_id(abc123def456)")
 	assert.Equal(t, []string{"file", "list", "-r", "commit_id(abc123def456)", "--ignore-working-copy", "--color", "never", "-T"}, args[:8])
 	tmpl := args[8]
 	// Named fields, each json()-wrapped; repo-relative `path`, never the
@@ -19,18 +19,12 @@ func TestFileListJSON(t *testing.T) {
 	assert.NotContains(t, tmpl, "json(self)")
 }
 
-func TestFileList(t *testing.T) {
-	assert.Equal(t,
-		[]string{"file", "list", "-r", "abc", "--ignore-working-copy", "--color", "never", "-T", `path ++ "\n"`},
-		FileList("abc"))
-}
-
 func TestResolveCommitId(t *testing.T) {
 	args := ResolveCommitId("@")
 	assert.Equal(t, []string{"log", "-r", "@", "--no-graph", "--ignore-working-copy", "--color", "never", "-T", `commit_id ++ "\n"`}, args)
 }
 
-func TestParseFileListJSON(t *testing.T) {
+func TestParseFileList(t *testing.T) {
 	// As jj 0.45 emits it. Odd-but-legal names: spaces, unicode, embedded
 	// quote, leading dash, a NEWLINE (only the JSON path can frame it), and
 	// a trailing space.
@@ -43,7 +37,7 @@ func TestParseFileListJSON(t *testing.T) {
 		`{"path":"trailing ","type":"symlink","executable":false}` + "\n" +
 		`{"path":"vendor/sub","type":"git-submodule","executable":false}` + "\n" +
 		`{"path":"c.txt","type":"conflict","executable":false}` + "\n"
-	files := ParseFileListJSON(out)
+	files := ParseFileList(out)
 	assert.Equal(t, []TreeFile{
 		{Path: "README.md", Type: "file"},
 		{Path: "bin/run.sh", Type: "file", Executable: true},
@@ -57,23 +51,10 @@ func TestParseFileListJSON(t *testing.T) {
 	}, files)
 }
 
-func TestParseFileListJSON_EmptyAndGarbage(t *testing.T) {
-	assert.NotNil(t, ParseFileListJSON(""))
-	assert.Empty(t, ParseFileListJSON(""))
-	// Garbage / path-less lines skipped; missing type defaults to "file".
-	files := ParseFileListJSON("not json\n{}\n{\"path\":\"a\"}\n")
-	assert.Equal(t, []TreeFile{{Path: "a", Type: "file"}}, files)
-}
-
-func TestParseFileList(t *testing.T) {
+func TestParseFileList_EmptyAndGarbage(t *testing.T) {
 	assert.NotNil(t, ParseFileList(""))
 	assert.Empty(t, ParseFileList(""))
-	files := ParseFileList("a.go\n dir/lead space\n-rf\nnaïve 文件\ntrail \n")
-	assert.Equal(t, []TreeFile{
-		{Path: "a.go", Type: "file"},
-		{Path: " dir/lead space", Type: "file"}, // verbatim — no TrimSpace
-		{Path: "-rf", Type: "file"},
-		{Path: "naïve 文件", Type: "file"},
-		{Path: "trail ", Type: "file"},
-	}, files)
+	// Garbage / path-less lines skipped; missing type defaults to "file".
+	files := ParseFileList("not json\n{}\n{\"path\":\"a\"}\n")
+	assert.Equal(t, []TreeFile{{Path: "a", Type: "file"}}, files)
 }

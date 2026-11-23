@@ -28,7 +28,7 @@ vi.stubGlobal('fetch', async () => new Response(null, { status: 204 }))
 import App from './App.svelte'
 import {
   resetMockApi, calls, triggerNavigate, triggerStale,
-  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, setMutationError, setApiDelay, mkFileChange,
+  setFixtures, defaultFixtures, mkRevision, setLogHandler, setEvologHandler, setMutationError, setApiDelay, mkInfo, mkFileChange,
 } from './testutil/mock-api'
 import type { LogEntry } from './lib/api'
 import { waitFor } from './testutil/wait-for'
@@ -1285,5 +1285,14 @@ describe('App revset input', () => {
     await waitFor(() => logArgs().length === 2)
     await sleep(30)
     expect(document.activeElement).toBe(ta)
+  })
+})
+
+describe('App jj version floor', () => {
+  it.each([[true, 'jj 0.39.0 is not supported — lightjj needs jj 0.40 or newer'], [false, null]])('jj_too_old=%s', async (old, want) => {
+    setFixtures({ info: mkInfo({ jj_version: 'jj 0.39.0', jj_too_old: old, min_jj_version: '0.40' }) })
+    await mountApp()
+    await new Promise(r => setTimeout(r, 30))
+    expect(qs('.message-text')?.textContent?.trim() ?? null).toBe(want)
   })
 })

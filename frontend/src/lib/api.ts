@@ -308,7 +308,6 @@ function clearSessionMemos(): void {
   _aliases = undefined
   _githubRepo = undefined
   _info = undefined
-  _infoValue = undefined
 }
 
 /** Hard refresh: clear the cache. Use for explicit user-triggered refresh. */
@@ -417,8 +416,7 @@ function notifyOpId(opId: string) {
   // `jj config set` (aliases) or `git remote add` (remotes) followed by any
   // operation invalidates that assumption; bounded staleness beats forever-
   // staleness. _info is deliberately NOT cleared — repo identity / SSH mode
-  // can't change for a running server, and clearing it would flap the jj
-  // feature gates that resolvedInfo() feeds synchronously.
+  // can't change for a running server.
   _remotes = undefined
   _aliases = undefined
   _githubRepo = undefined
@@ -836,9 +834,6 @@ let _aliases: Promise<Alias[]> | undefined
 // from the same remote list as _remotes, so it's dropped on the same triggers.
 let _githubRepo: Promise<string> | undefined
 let _info: Promise<InfoResponse> | undefined
-// Resolved value of _info for synchronous reads (jj-features reads the backend
-// feature map in the same tick App calls setDetectedJJVersion).
-let _infoValue: InfoResponse | undefined
 
 export interface InfoResponse {
   hostname: string
@@ -847,27 +842,9 @@ export interface InfoResponse {
   default_remote: string
   log_revset: string  // user's revsets.log config; empty = jj's built-in default
   jj_version: string  // `jj --version` output, e.g. "jj 0.39.0"; empty on failure
-  /** Backend-resolved jj feature gates (jj.FeatureGates → jjSupports booleans).
-   *  Pessimistic: unknown jj version reports false for every gate. Optional so
-   *  mocks/older backends without the field stay type-compatible — consumers
-   *  treat absence as "unknown" (optimistic, see jj-features.svelte.ts). */
-  features?: Record<string, boolean>
+  jj_too_old?: boolean  // older than min_jj_version; false when unparseable (dev build)
+  min_jj_version?: string
   watchman_snapshot_trigger: boolean  // jj config fsmonitor.watchman.register-snapshot-trigger
-}
-
-/** Synchronously read the already-resolved /api/info response. Undefined until
- *  the first api.info() resolves (and after tab switch / hard refresh clears
- *  the memo). Lets jj-features.svelte.ts pull the backend feature map without
- *  an await — App calls setDetectedJJVersion right after awaiting api.info(). */
-export function resolvedInfo(): InfoResponse | undefined {
-  return _infoValue
-}
-
-/** Parse `jj 0.39.0` → [0, 39, 0]. Returns null on unparseable.
- *  Feature-gating against the result lives in jj-features.svelte.ts. */
-export function parseJJVersion(s: string): number[] | null {
-  const m = s.match(/(\d+)\.(\d+)(?:\.(\d+))?/)
-  return m ? [parseInt(m[1]), parseInt(m[2]), parseInt(m[3] ?? '0')] : null
 }
 
 export interface FileChange {
@@ -1239,7 +1216,6 @@ export const api = {
   remotes: () => _remotes ??= request<string[]>('/api/remotes').catch(e => { _remotes = undefined; throw e }),
 
   info: () => _info ??= request<InfoResponse>('/api/info')
-    .then(i => { _infoValue = i; return i })
     .catch(e => { _info = undefined; throw e }),
 
   // Workspaces is session-stable (changes only if user adds a workspace).

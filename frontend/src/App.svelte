@@ -72,7 +72,6 @@
   import { api, effectiveId, prLabel, multiRevset, computeConnectedCommitIds, getCached, prefetchRevision, prefetchFilesBatch, onStale, onStaleWC, onPollFail, onSSEState, onNavigate, wireAutoRefresh, clearAllCaches, bookmarkPushFlags, agentBaseURL, type LogEntry, type FileChange, type OpEntry, type EvologEntry, type Workspace, type Alias, type PullRequest, type DiffTarget, type Bookmark, type MutationResult, type StaleImmutableGroup, type NavigatePayload, type TabInfo, type Expect } from './lib/api'
   import { groupTabs } from './lib/tab-groups'
   import { changeLink, findRevisionIndexByRef, isRevisionIdLike, locatorRevset } from './lib/url-intent'
-  import { setDetectedJJVersion, missingJJFeatures } from './lib/jj-features.svelte'
   import { canCreatePR, bookmarkCreatePREligibility, prCompareUrl } from './lib/bookmark-sync'
   import MessageBar, { errorMessage, type Message } from './lib/MessageBar.svelte'
   import { clearDiffCaches, parseDiffCached } from './lib/diff-cache'
@@ -1109,18 +1108,16 @@
   // --- API actions ---
   async function loadInfo() {
     try {
-      const { hostname, repo_path, ssh_mode, default_remote, log_revset, jj_version, watchman_snapshot_trigger } = await api.info()
+      const { hostname, repo_path, ssh_mode, default_remote, log_revset, jj_version, jj_too_old, min_jj_version, watchman_snapshot_trigger } = await api.info()
       pageTitle = formatTitle(hostname, repo_path)
       sshMode = ssh_mode
       onSshMode?.(ssh_mode) // session-wide; AppShell gates its Add-workspace item
       defaultRemote = default_remote
       repoPath = repo_path
       configuredLogRevset = log_revset
-      setDetectedJJVersion(jj_version)
-      const missing = missingJJFeatures()
-      if (missing.length > 0) {
+      if (jj_too_old) {
         setMessage({ kind: 'warning',
-          text: `jj ${jj_version.replace(/^jj\s*/, '')} — missing: ${missing.join(', ')}` })
+          text: `${jj_version} is not supported — lightjj needs jj ${min_jj_version} or newer` })
       } else if (watchman_snapshot_trigger) {
         // lightjj's snapshot loop already covers on-save visibility AND pauses
         // for UI-triggered mutations. The watchman trigger does neither — it

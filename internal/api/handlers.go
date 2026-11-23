@@ -513,7 +513,7 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 	// a same-named tag/bookmark instead — so pin resolution with commit_id().
 	immutable := commitIdRe.MatchString(revision)
 	rev := revision
-	if immutable && s.jjSupports(r.Context(), jj.CommitIdRevsetFn) {
+	if immutable {
 		rev = jj.CommitIdRevset(revision)
 	}
 	output, err := s.Runner.ReadBytes(r.Context(), jj.FileShow(rev, filepath.ToSlash(cleaned), false))
@@ -539,23 +539,16 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	// features resolves every named gate (jj.FeatureGates) to a boolean via
-	// jjSupports — pessimistic, so an unknown jj version reports false for
-	// everything. The frontend reads these booleans instead of keeping its own
-	// version table (jj-features.svelte.ts); the backend is the single
-	// authority on minimum versions.
-	features := make(map[string]bool, len(jj.FeatureGates))
-	for name, min := range jj.FeatureGates {
-		features[name] = s.jjSupports(r.Context(), min)
-	}
+	version := s.resolveJJVersion(r.Context())
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"hostname":                  s.Hostname,
 		"repo_path":                 s.RepoPath,
 		"ssh_mode":                  s.isSSHMode(),
 		"default_remote":            s.DefaultRemote,
 		"log_revset":                s.ConfiguredLogRevset,
-		"jj_version":                s.resolveJJVersion(r.Context()),
-		"features":                  features,
+		"jj_version":                version,
+		"jj_too_old":                jj.TooOld(version),
+		"min_jj_version":            jj.MinVersion.String(),
 		"watchman_snapshot_trigger": s.jjConfigBool(r.Context(), "fsmonitor.watchman.register-snapshot-trigger"),
 	})
 }
@@ -669,7 +662,7 @@ func (s *Server) jjConfigBool(ctx context.Context, key string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
-// resolveJJVersion runs `jj --version` once and caches both raw + parsed.
+// resolveJJVersion runs `jj --version` once and caches it.
 // Mutex+bool (not sync.Once) so a transient failure (SSH slow-start) retries
 // on next call instead of caching "" forever.
 func (s *Server) resolveJJVersion(ctx context.Context) string {
@@ -683,22 +676,8 @@ func (s *Server) resolveJJVersion(ctx context.Context) string {
 		return "" // don't set resolved — retry next time
 	}
 	s.jjVersion = strings.TrimSpace(string(out))
-	s.jjVer, s.jjVerOK = jj.ParseSemver(s.jjVersion)
 	s.jjVersionResolved = true
 	return s.jjVersion
-}
-
-// jjSupports reports whether the detected jj version is at least min.
-// Auto-resolves on first call. Unknown version (run failure or unparseable)
-// returns FALSE — backend gates pick between a new codepath and a proven
-// fallback, so pessimism avoids a 500 from an unsupported template/flag.
-// (Contrast frontend jjSupports in jj-features.svelte.ts: optimistic, since
-// a wrong guess there surfaces as a user-visible error toast, not a crash.)
-func (s *Server) jjSupports(ctx context.Context, min jj.Semver) bool {
-	s.resolveJJVersion(ctx)
-	s.jjVersionMu.Lock()
-	defer s.jjVersionMu.Unlock()
-	return s.jjVerOK && s.jjVer.AtLeast(min)
 }
 
 type workspacesResponse struct {
@@ -717,11 +696,9 @@ type workspaceWithPath struct {
 // us. One candidate → trust it. Multiple → the collision case: break the
 // tie by path-matching ourRoot against pathMap. Local mode: ourRoot is
 // RepoDir (canonical via ResolveWorkspaceRoot). SSH mode: ourRoot is
-// RepoPath — works when user typed a canonical path AND jj ≥ 0.40 (template
-// emits self.root() so pathMap is complete; <0.40 protobuf store is
-// additive-only). The elimination fallback covers the additive-only gap:
-// if exactly one candidate is missing from pathMap and no other candidate's
-// path matches us, the missing one is the primary (predates the index).
+// RepoPath — works when user typed a canonical path. Elimination covers a
+// workspace whose path jj never recorded: if exactly one candidate has no path
+// and no other candidate's path matches us, that one is us.
 func pickCurrentWorkspace(candidates []string, pathMap map[string]string, ourRoot string) string {
 	if len(candidates) == 1 {
 		return candidates[0]
@@ -750,27 +727,19 @@ func pickCurrentWorkspace(candidates []string, pathMap map[string]string, ourRoo
 	return ""
 }
 
-// workspacePathMap returns the parsed workspace list plus a name→absolute-root
-// map. jj ≥ 0.40: paths come from the WorkspaceList template (self.root() —
-// authoritative + complete). Older jj: protobuf workspace store fallback
-// (additive-only; entries may be missing → empty path). Shared by
-// handleWorkspaces (Path enrichment + current-workspace tiebreak) and
-// forgetOpenTabGuard (cross-tab conflict check).
+// workspacePathMap returns the workspace list plus a name→absolute-root map
+// (empty when jj doesn't know the path). Shared by handleWorkspaces (Path
+// enrichment + current-workspace tiebreak) and forgetOpenTabGuard (cross-tab
+// conflict check).
 func (s *Server) workspacePathMap(ctx context.Context) ([]jj.Workspace, map[string]string, error) {
-	withRoot := s.jjSupports(ctx, jj.WorkspaceRootTmpl)
-	output, err := s.Runner.Run(ctx, jj.WorkspaceList(withRoot))
+	output, err := s.Runner.Run(ctx, jj.WorkspaceList())
 	if err != nil {
 		return nil, nil, err
 	}
 	workspaces := jj.ParseWorkspaceList(string(output))
-	var pathMap map[string]string
-	if withRoot {
-		pathMap = make(map[string]string, len(workspaces))
-		for _, ws := range workspaces {
-			pathMap[ws.Name] = ws.Path
-		}
-	} else {
-		pathMap, _ = s.readWorkspaceStore(ctx)
+	pathMap := make(map[string]string, len(workspaces))
+	for _, ws := range workspaces {
+		pathMap[ws.Name] = ws.Path
 	}
 	return workspaces, pathMap, nil
 }
@@ -1334,9 +1303,9 @@ func (s *Server) workspaceNameMutation(build func(name string) jj.CommandArgs, g
 // broken tab on every launch. 409 tells the user to close the tab first.
 //
 // Path resolution reuses workspacePathMap (the same enrichment handleWorkspaces
-// does). When the target's path can't be resolved (older jj + additive-only
-// store gap, or list failure), the forget is ALLOWED — we can't guard what we
-// can't see, and blocking on unknown would make forget unusable on older jj;
+// does). When the target's path can't be resolved (jj never
+// recorded it, or list failure), the forget is ALLOWED — we can't guard what we
+// can't see, and blocking would make such a workspace unforgettable;
 // jj itself surfaces real errors (e.g. nonexistent name).
 func (s *Server) forgetOpenTabGuard(ctx context.Context, name string) (int, string) {
 	if s.OpenTabRoots == nil {
@@ -1416,10 +1385,9 @@ func (s *Server) handleWorkspaceUpdateStaleOther(w http.ResponseWriter, r *http.
 	}
 	path := pathMap[req.Name]
 	if path == "" {
-		// Same gate as "Open in new tab": a workspace predating jj's
-		// workspace_store index has no resolvable path (additive-only, no
-		// backfill). Not a 400 — the request is well-formed; we just can't act.
-		s.writeError(w, http.StatusUnprocessableEntity, "workspace path unknown (predates jj's workspace_store index)")
+		// Same gate as "Open in new tab": jj doesn't know this workspace's path
+		// (created before jj recorded them, or the directory is gone). Not a 400 — the request is well-formed; we just can't act.
+		s.writeError(w, http.StatusUnprocessableEntity, "workspace path unknown to jj")
 		return
 	}
 	ctx, cancel := mutationContext(r)

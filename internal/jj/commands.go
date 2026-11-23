@@ -501,16 +501,6 @@ func DebugSnapshot() CommandArgs {
 	return []string{"util", "snapshot"}
 }
 
-func OpLog(limit int) CommandArgs {
-	args := []string{"op", "log", "--no-graph", "--color", "never", "--ignore-working-copy"}
-	if limit > 0 {
-		args = append(args, "--limit", strconv.Itoa(limit))
-	}
-	tmpl := `self.id().short() ++ "\x1F" ++ self.description() ++ "\x1F" ++ self.time().start() ++ "\x1F" ++ if(self.current_operation(), "true", "false") ++ "\n"`
-	args = append(args, "-T", tmpl)
-	return args
-}
-
 type OpEntry struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
@@ -518,28 +508,7 @@ type OpEntry struct {
 	IsCurrent   bool   `json:"is_current"`
 }
 
-func ParseOpLog(output string) []OpEntry {
-	entries := []OpEntry{}
-	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\x1f", 4)
-		if len(parts) < 4 {
-			continue
-		}
-		entries = append(entries, OpEntry{
-			ID:          parts[0],
-			Description: parts[1],
-			Time:        parts[2],
-			IsCurrent:   parts[3] == "true",
-		})
-	}
-	return entries
-}
-
-// OpLogJSON is the json()-template counterpart of OpLog — the reference
-// migration for the "new jj output parsing uses json() templates" rule
+// OpLog is the reference for the "new jj output parsing uses json() templates" rule
 // (CLAUDE.md, Go conventions). One JSON object per line with a schema WE
 // define in the template:
 //
@@ -549,15 +518,12 @@ func ParseOpLog(output string) []OpEntry {
 // schema jj's internal type happens to serialize to, which can change between
 // releases. Composing named fields keeps the wire schema under our control.
 //
-// Why this beats the \x1F-positional template in OpLog: json() escapes
+// Why this beats a \x1F-positional template: json() escapes
 // embedded newlines/quotes/control characters, so no delimiter hierarchy, no
 // SplitN position counting, and free-text fields can never shift columns.
 // Booleans use the proven if(...) form ("true"/"false" are valid bare JSON
 // values); json() is only relied on for what it must do — escape strings.
-//
-// Requires jj >= JSONTemplates. Callers gate via jjSupports and fall back to
-// OpLog/ParseOpLog on older jj (json() there is a template parse error).
-func OpLogJSON(limit int) CommandArgs {
+func OpLog(limit int) CommandArgs {
 	args := []string{"op", "log", "--no-graph", "--color", "never", "--ignore-working-copy"}
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
@@ -567,11 +533,9 @@ func OpLogJSON(limit int) CommandArgs {
 	return args
 }
 
-// ParseOpLogJSON parses OpLogJSON output (one JSON object per line) into the
-// same OpEntry slice ParseOpLog produces, so a gated handler can swap parsers
-// without changing its response shape. Unparseable lines are skipped (same
+// ParseOpLog parses OpLog output (one JSON object per line). Unparseable lines are skipped (same
 // tolerance as the positional parsers). Returns an empty slice, never nil.
-func ParseOpLogJSON(output string) []OpEntry {
+func ParseOpLog(output string) []OpEntry {
 	entries := []OpEntry{}
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -899,16 +863,8 @@ func WorkspaceUpdateStaleAt(path string) CommandArgs {
 // against RepoDir. Path-matching was the ORIGINAL approach but broke in SSH
 // mode where --remote path isn't canonical; the hybrid keeps ws.Current as
 // primary signal (works in SSH) and only path-matches on collision.
-//
-// withRoot appends self.root() (jj ≥ 0.40) so paths come from jj directly
-// instead of the protobuf workspace_store parser. The fallback stays for
-// older jj — handleWorkspaces picks via s.jjSupports(WorkspaceRootTmpl).
-func WorkspaceList(withRoot bool) CommandArgs {
-	tmpl := `name ++ "\x1F" ++ target.change_id().short() ++ "\x1F" ++ target.commit_id().short() ++ "\x1F" ++ stringify(target.current_working_copy())`
-	if withRoot {
-		tmpl += ` ++ "\x1F" ++ self.root()`
-	}
-	tmpl += ` ++ "\n"`
+func WorkspaceList() CommandArgs {
+	tmpl := `name ++ "\x1F" ++ target.change_id().short() ++ "\x1F" ++ target.commit_id().short() ++ "\x1F" ++ stringify(target.current_working_copy()) ++ "\x1F" ++ self.root() ++ "\n"`
 	return []string{"workspace", "list", "--color", "never", "--ignore-working-copy", "-T", tmpl}
 }
 
@@ -918,25 +874,26 @@ type Workspace struct {
 	ChangeId string `json:"change_id"`
 	CommitId string `json:"commit_id"`
 	Current  bool   `json:"current"`
-	// Path is absolute root from self.root() (jj ≥ 0.40, withRoot=true).
-	// Empty on older jj — handleWorkspaces backfills from workspace_store.
+	// Path is the absolute root, or empty when jj doesn't know it: workspaces
+	// created before jj recorded paths were never backfilled.
 	Path string `json:"path,omitempty"`
 }
 
 // ParseWorkspaceList parses WorkspaceList template output.
-// Each line: name\x1Fchange_id\x1Fcommit_id\x1Fcurrent[\x1Fpath]
-// 5th field present only when withRoot=true.
+// Each line: name\x1Fchange_id\x1Fcommit_id\x1Fcurrent\x1Fpath
 func ParseWorkspaceList(output string) []Workspace {
 	workspaces := []Workspace{}
 	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		parts := strings.SplitN(line, "\x1F", 5)
-		if len(parts) < 4 {
+		if len(parts) < 5 {
 			continue
 		}
 		ws := Workspace{
 			Name: parts[0], ChangeId: parts[1], CommitId: parts[2], Current: parts[3] == "true",
 		}
-		if len(parts) == 5 {
+		// jj < 0.47 renders an unknown root INTO the output: "<Error: Workspace has
+		// no recorded path: x>" (also when the directory is gone). Newer jj: empty.
+		if !strings.HasPrefix(parts[4], "<Error:") {
 			ws.Path = parts[4]
 		}
 		workspaces = append(workspaces, ws)

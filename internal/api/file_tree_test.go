@@ -60,7 +60,7 @@ var treeListing = strings.Join([]string{
 
 func newTreeServer(t *testing.T) (*Server, *countingRunner) {
 	m := testutil.NewMockRunner(t)
-	srv := newTestServer(m) // jj 0.39 → JSON + commit_id() paths
+	srv := newTestServer(m)
 	cr := &countingRunner{MockRunner: m}
 	srv.Runner = cr
 	return srv, cr
@@ -104,7 +104,7 @@ func TestFileTree_Validation(t *testing.T) {
 
 func TestFileTree_RootJSONPath(t *testing.T) {
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 	defer cr.Verify()
 
 	resp := decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}))
@@ -125,7 +125,7 @@ func TestFileTree_RootJSONPath(t *testing.T) {
 
 func TestFileTree_SubdirAnd404(t *testing.T) {
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 
 	resp := decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}, "dir": {"internal/"}}))
 	assert.Equal(t, "internal", resp.Dir)
@@ -144,22 +144,9 @@ func TestFileTree_SubdirAnd404(t *testing.T) {
 	assert.Equal(t, 1, cr.count())
 }
 
-func TestFileTree_FallbackPreJSON(t *testing.T) {
-	srv, cr := newTreeServer(t)
-	withJJ(srv, jj.Semver{0, 30}) // below JSONTemplates AND CommitIdRevsetFn
-	cr.Expect(jj.FileList(treeCommit)).SetOutput([]byte("a/b.go\nlink\n"))
-	defer cr.Verify()
-
-	resp := decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}))
-	assert.Equal(t, []treeChild{
-		{Name: "a", Path: "a", Type: "dir", Files: 1},
-		{Name: "link", Path: "link", Type: "file"}, // type unknowable on the fallback
-	}, resp.Entries)
-}
-
 func TestFileTree_CacheHitDoesNotRerun(t *testing.T) {
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 	for range 3 {
 		decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}))
 	}
@@ -171,7 +158,7 @@ func TestFileTree_CacheHitDoesNotRerun(t *testing.T) {
 func TestFileTree_ConcurrentRequestsShareOneRun(t *testing.T) {
 	srv, cr := newTreeServer(t)
 	cr.gate = make(chan struct{})
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 
 	var wg sync.WaitGroup
 	codes := make([]int, 4)
@@ -194,7 +181,7 @@ func TestFileTree_ConcurrentRequestsShareOneRun(t *testing.T) {
 
 func TestFileTree_ErrorNotCached(t *testing.T) {
 	srv, cr := newTreeServer(t)
-	e := cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetError(errors.New("boom"))
+	e := cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetError(errors.New("boom"))
 	assert.Equal(t, http.StatusInternalServerError, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}).Code)
 	e.SetError(nil).SetOutput([]byte(treeListing))
 	decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}))
@@ -205,7 +192,7 @@ func TestFileTree_SymbolicRevisionResolvesFirst(t *testing.T) {
 	srv, cr := newTreeServer(t)
 	full := "abc123def4567890abc123def4567890abc123de"
 	cr.Expect(jj.ResolveCommitId("@")).SetOutput([]byte(full))
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(full))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(full))).SetOutput([]byte(treeListing))
 	defer cr.Verify()
 	resp := decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {"@"}}))
 	assert.Equal(t, full, resp.CommitId)
@@ -217,7 +204,7 @@ func TestFileTree_SymbolicRevisionResolvesFirst(t *testing.T) {
 
 func TestFileTree_EmptyRevision(t *testing.T) {
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(""))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(""))
 	w := getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}})
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"entries":[]`) // [] not null
@@ -229,7 +216,7 @@ func TestFileTree_TruncationCap(t *testing.T) {
 	t.Cleanup(func() { fileTreeMaxFiles = old })
 
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 	resp := decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}))
 	assert.True(t, resp.Truncated)
 	assert.Equal(t, 3, resp.TotalFiles) // first 3 in jj's (sorted) order
@@ -246,7 +233,7 @@ func TestFileTree_DirEntryCap(t *testing.T) {
 	t.Cleanup(func() { fileTreeMaxDirEntries = old })
 
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 	resp := decodeTree(t, getTree(srv, "/api/file-tree", url.Values{"revision": {treeCommit}}))
 	assert.Len(t, resp.Entries, 2)
 	assert.Equal(t, 4, resp.Omitted)
@@ -254,7 +241,7 @@ func TestFileTree_DirEntryCap(t *testing.T) {
 
 func TestFileTreeSearch(t *testing.T) {
 	srv, cr := newTreeServer(t)
-	cr.Expect(jj.FileListJSON(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
+	cr.Expect(jj.FileList(jj.CommitIdRevset(treeCommit))).SetOutput([]byte(treeListing))
 	w := getTree(srv, "/api/file-tree/search", url.Values{"revision": {treeCommit}, "q": {"s"}, "limit": {"2"}})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var resp fileTreeSearchResponse
