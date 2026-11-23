@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"maps"
 	"mime"
@@ -1322,18 +1324,22 @@ func (s *Server) clearStale() {
 // against a colocated backend and a git/jj process was killed mid-operation.
 //
 // Path is hardcoded (.git/index.lock under the repo root) — no user input, no
-// traversal surface. `rm -f` is idempotent: missing file = 0 exit. Works in
-// both local mode (LocalRunner.RunRaw runs with cwd = RepoDir) and SSH mode
-// (SSHRunner.RunRaw does `cd <RepoPath> && ...`).
-//
-// If the native jj backend is in use (no .git), rm -f is a silent no-op — we
-// don't try to distinguish because the surface is harmless either way.
+// traversal surface. Local mode removes it directly (no `rm` on Windows) from the
+// PRIMARY workspace's root: that is where a colocated .git lives, whichever
+// workspace this tab shows. SSH mode runs `rm -f` in RepoPath. A missing file —
+// already gone, or a native backend with no .git — is success.
 func (s *Server) handleUnlockRepo(w http.ResponseWriter, r *http.Request) {
 	if err := decodeBody(w, r, &struct{}{}); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.Runner.RunRaw(r.Context(), []string{"rm", "-f", ".git/index.lock"}); err != nil {
+	var err error
+	if s.hasLocalFS() {
+		err = os.Remove(filepath.Join(s.repoRoot(), ".git", "index.lock"))
+	} else {
+		_, err = s.Runner.RunRaw(r.Context(), []string{"rm", "-f", ".git/index.lock"})
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1610,7 +1616,7 @@ type mergeResolveRequest struct {
 // handleSplitHunks. Frontend keeps api.fileWrite for @ (SSH-compatible,
 // handles empty content natively); this is the non-@ branch only.
 func (s *Server) handleMergeResolve(w http.ResponseWriter, r *http.Request) {
-	if !s.hasLocalFS() {
+	if !s.hasLocalFS() || s.SelfBinary == "" {
 		s.writeError(w, http.StatusNotImplemented, "merge-resolve requires local mode")
 		return
 	}
@@ -1644,7 +1650,7 @@ func (s *Server) handleMergeResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Close()
-	s.runMutation(w, r, jj.ResolveApply(req.Revision, resultPath, req.Path))
+	s.runMutation(w, r, jj.ResolveApply(req.Revision, s.SelfBinary, resultPath, req.Path))
 }
 
 func (s *Server) handleAliases(w http.ResponseWriter, r *http.Request) {

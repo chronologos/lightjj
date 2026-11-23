@@ -65,6 +65,19 @@ describe('DestinationInput', () => {
     expect(onsubmit).toHaveBeenCalledWith('wlykovwr')
   })
 
+  it('a bookmark name is quoted even when typed in full; anything else is a revset', async () => {
+    mockBookmarks.mockResolvedValue([makeBookmark('x|y')])
+    for (const [typed, want] of [['x|y', '"x|y"'], ['x | y', 'x | y'], ['x|', 'x|']]) {
+      const onsubmit = vi.fn()
+      const { container, unmount } = render(DestinationInput, { props: defaultProps({ onsubmit }) })
+      await waitFor(() => expect(suggestions(container).length).toBe(1))
+      await fireEvent.input(input(container), { target: { value: typed } })
+      await fireEvent.keyDown(input(container), { key: 'Enter' })
+      expect(onsubmit).toHaveBeenCalledWith(want)
+      unmount()
+    }
+  })
+
   it('picking closes the modal (closeOnPick) — unlike BookmarkInput, which App closes', async () => {
     const onsubmit = vi.fn()
     mockBookmarks.mockResolvedValue([])
@@ -103,7 +116,7 @@ describe('DestinationInput', () => {
     expect(suggestions(container)[0].classList.contains('active')).toBe(true)
 
     await fireEvent.keyDown(input(container), { key: 'Enter' })
-    expect(onsubmit).toHaveBeenCalledWith('feature')
+    expect(onsubmit).toHaveBeenCalledWith('"feature"') // quoted: a name is never revset syntax
   })
 
   it('mouse hover is a separate dim highlight and never changes what Enter submits', async () => {

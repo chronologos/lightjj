@@ -65,6 +65,7 @@ func main() {
 	defaultRemote := flag.String("default-remote", "", "Remote name to prefer (overrides jj config git.push; defaults to origin)")
 	autoShutdown := flag.Duration("auto-shutdown", 0, "Shut down after this `duration` with no browser tabs connected (0 to disable)")
 	applyHunks := flag.String("apply-hunks", "", "Internal: diff-editor re-entry. Args: <spec.json> $left $right")
+	copyFile := flag.String("copy-file", "", "Internal: merge-tool re-entry. Args: <src> $output")
 	var allowedHosts hostList
 	flag.Var(&allowedHosts, "allowed-host", "Extra `hostname` to accept in Host/Origin, e.g. when behind a reverse proxy (repeatable or comma-separated; exact match, no wildcards). lightjj has no auth — anyone who can reach it via this host can run jj commands")
 	flag.Parse()
@@ -87,6 +88,19 @@ func main() {
 		}
 		if err := applyHunkSpec(*applyHunks, args[0], args[1]); err != nil {
 			fmt.Fprintf(os.Stderr, "apply-hunks: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Merge-tool re-entry (jj.ResolveApply): lightjj --copy-file=<src> $output
+	if *copyFile != "" {
+		if flag.NArg() != 1 {
+			fmt.Fprintf(os.Stderr, "copy-file: expected $output, got %d args\n", flag.NArg())
+			os.Exit(1)
+		}
+		if err := copyOver(*copyFile, flag.Arg(0)); err != nil {
+			fmt.Fprintf(os.Stderr, "copy-file: %v\n", err)
 			os.Exit(1)
 		}
 		return

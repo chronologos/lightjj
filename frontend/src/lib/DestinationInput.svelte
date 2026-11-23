@@ -2,12 +2,14 @@
   import type { Bookmark } from './api'
   import { fuzzyMatch } from './fuzzy'
   import BookmarkPicker from './BookmarkPicker.svelte'
+  import { revsetQuote } from './remote-visibility'
 
   // Transient destination picker for inline rebase/squash modes — opened with
   // `/` when the j/k cursor can't reach the target (off-revset bookmark like
   // a freshly-synced upstream main). Input accepts a bookmark name OR a raw
   // change_id/revset; bookmarks get autocompleted, anything else passes
-  // straight through to jj (which validates the revset).
+  // straight through to jj (which validates the revset). A bookmark name is
+  // quoted: unquoted, `x|y` would be a revset of two other revisions.
   //
   // Deliberately NOT BookmarkInput: that component's semantics are inverted
   // ("move bookmark X to HERE" — cursor is the data, input is the name).
@@ -44,7 +46,7 @@
   hint="Enter to {verb.split(' ')[0].toLowerCase()} · Esc to cancel · ↑↓ select"
   {rank}
   closeOnPick
-  onpick={onsubmit}
+  onpick={(name, isBookmark) => onsubmit(isBookmark ? revsetQuote(name) : name)}
 >
   {#snippet row(bm: Bookmark)}
     {bm.name}

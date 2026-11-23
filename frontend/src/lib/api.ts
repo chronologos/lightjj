@@ -1,5 +1,6 @@
 import { ApiError } from './api-error'
 import { getActiveBase, setActiveBase, requestBase } from './tab-scope'
+import { revsetQuote } from './remote-visibility'
 
 // API client for lightjj backend
 
@@ -891,14 +892,15 @@ export type RemoteVisibility = Record<string, RemoteVisibilityEntry>
 export type RemoteVisibilityByRepo = Record<string, RemoteVisibility>
 
 /** Single source of truth for per-bookmark push flags. exact: because
- *  `jj git push -b` glob-matches by default; shared by handleBookmarkOp
+ *  `jj git push -b` glob-matches by default, quoted because the pattern is an
+ *  expression (`exact:x|y` is exact:x or y); shared by handleBookmarkOp
  *  (sync-label / push-delete) and GitModal so the two paths can't drift —
  *  v1.22.0 added exact: to one site only and the asymmetry survived a
- *  release. Backend command builders apply the same prefix independently
+ *  release. Backend command builders apply the same form independently
  *  (commands.go exactName) for the non-push bookmark ops. Standalone export
  *  (not on `api`) because it's pure — tests mock `api`, not this. */
 export function bookmarkPushFlags(name: string, remote: string): string[] {
-  return ['--bookmark', `exact:${name}`, '--remote', remote]
+  return ['--bookmark', `exact:${revsetQuote(name)}`, '--remote', remote]
 }
 
 /** Returns the best unique identifier for a commit.

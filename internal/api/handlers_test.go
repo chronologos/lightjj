@@ -821,6 +821,27 @@ func TestHandleUnlockRepo(t *testing.T) {
 	assert.Empty(t, next(t, srv.Watcher, sub).PollError, "cleared, and subscribers told")
 }
 
+// Locally no `rm` is needed, and the lock is the primary workspace's even when the
+// tab shows a secondary one.
+func TestHandleUnlockRepo_LocalSecondaryWorkspace(t *testing.T) {
+	root := t.TempDir()
+	primary, secondary := filepath.Join(root, "main"), filepath.Join(root, "ws")
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, ".jj", "repo"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(secondary, ".jj"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(secondary, ".jj", "repo"), []byte("../../main/.jj/repo"), 0o644))
+	lock := filepath.Join(primary, ".git", "index.lock")
+	require.NoError(t, os.WriteFile(lock, nil, 0o644))
+
+	srv := NewServer(testutil.NewMockRunner(t), secondary) // fails on any command
+	for range 2 {                                          // second time: already gone
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, jsonPost("/api/unlock-repo", []byte("{}")))
+		assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.NoFileExists(t, lock)
+	}
+}
+
 func TestHandleUnlockRepo_RunnerError(t *testing.T) {
 	// If rm fails (e.g. permission denied on SSH remote), surface as 500 —
 	// don't falsely clear the poll-fail state.
@@ -2267,6 +2288,7 @@ func TestHandleSplitHunks_Validation(t *testing.T) {
 
 	srv := newTestServer(runner)
 	srv.RepoDir = "/some/repo"
+	srv.SelfBinary = "/opt/lightjj"
 	srv.SelfBinary = "/bin/true" // exists, won't be exec'd (validation fails first)
 
 	cases := []struct {
@@ -2361,6 +2383,7 @@ func TestHandleMergeResolve_Validation(t *testing.T) {
 	defer runner.Verify()
 	srv := newTestServer(runner)
 	srv.RepoDir = "/some/repo"
+	srv.SelfBinary = "/opt/lightjj"
 	for name, body := range map[string]string{
 		"missing revision": `{"path":"f.go","content":"x"}`,
 		"missing path":     `{"revision":"abc","content":"x"}`,
@@ -2382,6 +2405,7 @@ func TestHandleMergeResolve_HappyPath(t *testing.T) {
 
 	srv := newTestServer(runner)
 	srv.RepoDir = "/some/repo"
+	srv.SelfBinary = "/opt/lightjj"
 	body, _ := json.Marshal(mergeResolveRequest{
 		Revision: "abc", Path: "src/main.go", Content: "RESOLVED\n",
 	})
@@ -2395,6 +2419,8 @@ func TestHandleMergeResolve_HappyPath(t *testing.T) {
 	assert.Equal(t, "--tool", args[7])
 	assert.Equal(t, "ljjcp", args[8])
 	assert.Equal(t, `root-file:"src/main.go"`, args[10])
+	assert.Equal(t, `merge-tools.ljjcp.program="/opt/lightjj"`, args[4])
+	assert.Contains(t, args[6], "--copy-file=")
 	assert.Contains(t, args[6], "lightjj-resolve-")
 	assert.Contains(t, args[6], `,"$output"]`)
 }
@@ -2409,6 +2435,7 @@ func TestHandleMergeResolve_EmptyContentNormalised(t *testing.T) {
 
 	srv := newTestServer(runner)
 	srv.RepoDir = "/some/repo"
+	srv.SelfBinary = "/opt/lightjj"
 	body, _ := json.Marshal(mergeResolveRequest{Revision: "abc", Path: "f.go", Content: ""})
 	w := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(w, jsonPost("/api/merge-resolve", body))

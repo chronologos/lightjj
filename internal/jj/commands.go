@@ -242,19 +242,27 @@ func RestoreFromTo(from, to string) CommandArgs {
 	return []string{"restore", "--from", from, "--to", to}
 }
 
-// exactName wraps a bookmark name with the exact: string-pattern prefix.
-// jj's bookmark move/advance/delete/forget/track/untrack and git push -b
-// treat NAMES as GLOB patterns by default (`jj bookmark delete --help`:
-// "the specified pattern matches bookmark names with glob syntax"). A
-// bookmark literally named `feat-*` — which jj accepts; only git-export
-// warns — would otherwise match every feat- bookmark. `bookmark set` is
-// excluded: it creates by literal name, no pattern semantics.
+// exactName is the string pattern matching exactly one bookmark name.
+//
+// jj's bookmark move/advance/delete/forget/track/untrack and git push -b treat
+// NAMES as pattern EXPRESSIONS: globs by default (`feat-*` would match every feat-
+// bookmark), with operators — `exact:x|y` means exact:x or y, so deleting a bookmark
+// called `x|y` deleted `x` and `y`. Both the prefix and the quotes are needed.
+// Mirrored by bookmarkPushFlags in the frontend.
 func exactName(name string) string {
-	return "exact:" + name
+	return "exact:" + QuoteSymbol(name)
 }
 
+// QuoteSymbol makes a revset string literal, so a name is never parsed as revset or
+// pattern syntax. Mirrors revsetQuote in the frontend.
+func QuoteSymbol(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
+// BookmarkSet: `bookmark set` creates by literal name (no globs), but still parses
+// the argument as a symbol, so it is quoted too.
 func BookmarkSet(revision string, name string) CommandArgs {
-	return []string{"bookmark", "set", "-r", revision, name}
+	return []string{"bookmark", "set", "-r", revision, QuoteSymbol(name)}
 }
 
 // BookmarkSetToRemote snaps a (typically conflicted) local bookmark to its
@@ -263,12 +271,10 @@ func BookmarkSet(revision string, name string) CommandArgs {
 // remote": a conflicted bookmark has multiple targets that aren't in any
 // ancestry relation, and even non-conflicted overrides may move backwards.
 //
-// jj's revset syntax is `<name>@<remote>` UNQUOTED — the @ is the at-operator,
-// not part of a string literal. Bookmark names allow letters/digits/-/_/. so
-// no escaping needed here (jj's bookmark-name parser would have rejected the
-// name at create time if it contained whitespace or special chars).
+// Name and remote are quoted separately: the @ between them must stay an operator,
+// and an unquoted name like `x|y` is a union of two other revisions.
 func BookmarkSetToRemote(name string, remote string) CommandArgs {
-	return []string{"bookmark", "set", "-r", name + "@" + remote, name, "--allow-backwards"}
+	return []string{"bookmark", "set", "-r", QuoteSymbol(name) + "@" + QuoteSymbol(remote), QuoteSymbol(name), "--allow-backwards"}
 }
 
 func BookmarkMove(revision string, bookmark string, extraFlags ...string) CommandArgs {
@@ -583,20 +589,20 @@ func FileShow(revision string, path string, snapshotMarkers bool) CommandArgs {
 }
 
 // ResolveApply commits a resolved file at any mutable revision via
-// `jj resolve --tool`, where the "tool" is `cp <resultPath> $output`. jj
-// materializes $base/$left/$right/$output as temp files, runs cp, and on
-// exit 0 commits whatever's in $output. Inline --config (no temp TOML) so
-// the only filesystem dependency is resultPath itself.
+// `jj resolve --tool`, where the "tool" is lightjj itself copying resultPath over
+// $output (`--copy-file`, cmd/lightjj/copy_file.go) — not `cp`, which Windows lacks.
+// jj materializes $base/$left/$right/$output as temp files, runs the tool, and on
+// exit 0 commits whatever's in $output. Inline --config (no temp TOML) so the only
+// filesystem dependency is resultPath itself. %q is TOML-basic-string compatible
+// for paths.
 //
-// Local-only — resultPath must be readable by the jj subprocess. SSH mode
-// should 501 at the handler (matching handleSplitHunks). POSIX-only (`cp`) —
-// release.yml ships darwin/linux only; if Windows lands, swap to a self-binary
-// helper mode like writeHunkToolConfig's pattern.
-func ResolveApply(rev, resultPath, repoRelPath string) CommandArgs {
+// Local-only — both paths must be readable by the jj subprocess. SSH mode
+// should 501 at the handler (matching handleSplitHunks).
+func ResolveApply(rev, selfBinary, resultPath, repoRelPath string) CommandArgs {
 	return []string{
 		"resolve", "-r", rev,
-		"--config", `merge-tools.ljjcp.program="cp"`,
-		"--config", fmt.Sprintf(`merge-tools.ljjcp.merge-args=[%q,"$output"]`, resultPath),
+		"--config", fmt.Sprintf(`merge-tools.ljjcp.program=%q`, selfBinary),
+		"--config", fmt.Sprintf(`merge-tools.ljjcp.merge-args=[%q,"$output"]`, "--copy-file="+resultPath),
 		"--tool", "ljjcp",
 		"--", EscapeFileName(repoRelPath),
 	}

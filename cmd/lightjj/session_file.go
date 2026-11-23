@@ -248,7 +248,7 @@ func sweepStaleSessions(dir string) {
 //
 // No-op on Windows: os.Getuid()==-1, fileStat.Mode() synthesizes 0777 (so the
 // 0o077 check is a wall not a gate), and Signal(0) is unsupported (sweep would
-// delete live siblings). release.yml ships darwin/linux only.
+// delete live siblings). So `lightjj api`/`sessions` discovery doesn't work there.
 func writeSessionFile(info sessionInfo) string {
 	if runtime.GOOS == "windows" {
 		return ""

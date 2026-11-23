@@ -76,20 +76,21 @@ func TestFileShow_EscapesPath(t *testing.T) {
 }
 
 func TestResolveApply(t *testing.T) {
-	got := ResolveApply("abc", "/tmp/result.txt", "src/main.go")
+	got := ResolveApply("abc", "/opt/lightjj", "/tmp/result.txt", "src/main.go")
 	assert.Equal(t, []string{
 		"resolve", "-r", "abc",
-		"--config", `merge-tools.ljjcp.program="cp"`,
-		"--config", `merge-tools.ljjcp.merge-args=["/tmp/result.txt","$output"]`,
+		"--config", `merge-tools.ljjcp.program="/opt/lightjj"`,
+		"--config", `merge-tools.ljjcp.merge-args=["--copy-file=/tmp/result.txt","$output"]`,
 		"--tool", "ljjcp",
 		"--", `root-file:"src/main.go"`,
 	}, got)
 }
 
-func TestResolveApply_QuotesResultPath(t *testing.T) {
+func TestResolveApply_QuotesPaths(t *testing.T) {
 	// %q escapes embedded quotes/backslashes — TOML basic-string compatible.
-	got := ResolveApply("abc", `/tmp/a"b.txt`, "f.go")
-	assert.Contains(t, got, `merge-tools.ljjcp.merge-args=["/tmp/a\"b.txt","$output"]`)
+	got := ResolveApply("abc", `C:\lj\lightjj.exe`, `/tmp/a"b.txt`, "f.go")
+	assert.Contains(t, got, `merge-tools.ljjcp.program="C:\\lj\\lightjj.exe"`)
+	assert.Contains(t, got, `merge-tools.ljjcp.merge-args=["--copy-file=/tmp/a\"b.txt","$output"]`)
 }
 
 func TestNew(t *testing.T) {
@@ -161,30 +162,28 @@ func TestSquash_Message(t *testing.T) {
 
 func TestBookmarkSet(t *testing.T) {
 	got := BookmarkSet("abc", "main")
-	assert.Equal(t, []string{"bookmark", "set", "-r", "abc", "main"}, got)
+	assert.Equal(t, []string{"bookmark", "set", "-r", "abc", `"main"`}, got)
 }
 
 func TestBookmarkSetToRemote(t *testing.T) {
-	got := BookmarkSetToRemote("master", "origin")
-	assert.Equal(t, []string{"bookmark", "set", "-r", "master@origin", "master", "--allow-backwards"}, got)
-}
-
-func TestBookmarkSetToRemote_DotInName(t *testing.T) {
-	// jj allows dots in bookmark names (e.g. release/v1.21.1) — verify the
-	// builder doesn't try to quote/escape (revset @ operator must stay
-	// unquoted, and the name itself is safe per jj's bookmark-name grammar).
-	got := BookmarkSetToRemote("release/v1.21.1", "origin")
-	assert.Equal(t, []string{"bookmark", "set", "-r", "release/v1.21.1@origin", "release/v1.21.1", "--allow-backwards"}, got)
+	for name, rev := range map[string]string{
+		"master":          `"master"@"origin"`,
+		"release/v1.21.1": `"release/v1.21.1"@"origin"`,
+		"x|y":             `"x|y"@"origin"`,
+		`a"b\c`:           `"a\"b\\c"@"origin"`,
+	} {
+		assert.Equal(t, []string{"bookmark", "set", "-r", rev, QuoteSymbol(name), "--allow-backwards"}, BookmarkSetToRemote(name, "origin"))
+	}
 }
 
 func TestBookmarkTrack(t *testing.T) {
 	got := BookmarkTrack("main", "origin")
-	assert.Equal(t, []string{"bookmark", "track", "exact:main", "--remote", "origin"}, got)
+	assert.Equal(t, []string{"bookmark", "track", `exact:"main"`, "--remote", "origin"}, got)
 }
 
 func TestBookmarkTrack_NoRemote(t *testing.T) {
 	got := BookmarkTrack("main", "")
-	assert.Equal(t, []string{"bookmark", "track", "exact:main"}, got)
+	assert.Equal(t, []string{"bookmark", "track", `exact:"main"`}, got)
 }
 
 func TestGitPush(t *testing.T) {
@@ -479,22 +478,22 @@ func TestParseFilesTemplate(t *testing.T) {
 
 func TestBookmarkMove(t *testing.T) {
 	got := BookmarkMove("abc", "feature")
-	assert.Equal(t, []string{"bookmark", "move", "exact:feature", "--to", "abc"}, got)
+	assert.Equal(t, []string{"bookmark", "move", `exact:"feature"`, "--to", "abc"}, got)
 }
 
 func TestBookmarkAdvance(t *testing.T) {
 	got := BookmarkAdvance("abc", "feature")
-	assert.Equal(t, []string{"bookmark", "advance", "exact:feature", "--to", "abc"}, got)
+	assert.Equal(t, []string{"bookmark", "advance", `exact:"feature"`, "--to", "abc"}, got)
 }
 
 func TestBookmarkForget(t *testing.T) {
 	got := BookmarkForget("feature")
-	assert.Equal(t, []string{"bookmark", "forget", "exact:feature"}, got)
+	assert.Equal(t, []string{"bookmark", "forget", `exact:"feature"`}, got)
 }
 
 func TestBookmarkDelete(t *testing.T) {
 	got := BookmarkDelete("feature")
-	assert.Equal(t, []string{"bookmark", "delete", "exact:feature"}, got)
+	assert.Equal(t, []string{"bookmark", "delete", `exact:"feature"`}, got)
 }
 
 // Locks the glob-guard: a bookmark named `feat-*` (jj accepts; git-export
@@ -502,17 +501,17 @@ func TestBookmarkDelete(t *testing.T) {
 // safe — without it, `jj bookmark delete feat-*` deletes every feat- bookmark.
 func TestBookmarkDelete_GlobCharName(t *testing.T) {
 	got := BookmarkDelete("feat-*")
-	assert.Equal(t, []string{"bookmark", "delete", "exact:feat-*"}, got)
+	assert.Equal(t, []string{"bookmark", "delete", `exact:"feat-*"`}, got)
 }
 
 func TestBookmarkUntrack(t *testing.T) {
 	got := BookmarkUntrack("main", "origin")
-	assert.Equal(t, []string{"bookmark", "untrack", "exact:main", "--remote", "origin"}, got)
+	assert.Equal(t, []string{"bookmark", "untrack", `exact:"main"`, "--remote", "origin"}, got)
 }
 
 func TestBookmarkUntrack_NoRemote(t *testing.T) {
 	got := BookmarkUntrack("main", "")
-	assert.Equal(t, []string{"bookmark", "untrack", "exact:main"}, got)
+	assert.Equal(t, []string{"bookmark", "untrack", `exact:"main"`}, got)
 }
 
 func TestCommitWorkingCopy(t *testing.T) {

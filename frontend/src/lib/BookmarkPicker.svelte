@@ -26,8 +26,9 @@
     /** Filter + sort + cap the suggestion list for the current input value. */
     rank: (bookmarks: Bookmark[], value: string) => Bookmark[]
     /** Resolved pick: the highlighted suggestion's name, or the trimmed raw
-     *  input (DestinationInput's change_id/revset pass-through). */
-    onpick: (name: string) => void
+     *  input. `isBookmark` says the text is exactly a known bookmark's name, not a
+     *  change_id or revset. */
+    onpick: (name: string, isBookmark: boolean) => void
     /** Close (and restore focus) before onpick fires. Default false —
      *  BookmarkInput stays open until App's mutation closes it. */
     closeOnPick?: boolean
@@ -91,7 +92,7 @@
     const name = filtered[cursor.index]?.name ?? value.trim()
     if (!name) return
     if (closeOnPick) close()
-    onpick(name)
+    onpick(name, bookmarks.some(b => b.name === name))
   }
 
   function handleKeydown(e: KeyboardEvent) {
