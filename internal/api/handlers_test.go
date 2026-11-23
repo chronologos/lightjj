@@ -2929,7 +2929,7 @@ func TestHandleEdit_RunnerError(t *testing.T) {
 
 func TestHandleAliases(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	aliasOutput := "aliases.sync = ['git', 'fetch', '-b', 'glob:alice/*']\naliases.evolve = ['rebase', '--skip-emptied']\n"
+	aliasOutput := `{"key":"aliases.sync","value":["git","fetch","-b","glob:alice/*"]}` + "\n" + `{"key":"aliases.evolve","value":["rebase","--skip-emptied"]}` + "\n"
 	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
 	defer runner.Verify()
 
@@ -2966,7 +2966,7 @@ func TestHandleRunAlias(t *testing.T) {
 	// Aliases stream like git push/fetch (they can wrap slow network ops):
 	// NDJSON `{"line":...}` frames terminated by `{"done":true,...}`.
 	runner := testutil.NewMockRunner(t)
-	aliasOutput := "aliases.sync = ['git', 'fetch']\n"
+	aliasOutput := `{"key":"aliases.sync","value":["git","fetch"]}` + "\n"
 	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
 	runner.Expect([]string{"sync"}).SetOutput([]byte("fetching from origin\nfetched from origin\n"))
 	defer runner.Verify()
@@ -3001,7 +3001,7 @@ func TestHandleRunAlias_RunnerError(t *testing.T) {
 	// Failure mid-stream: headers already flushed, so status stays 200 and the
 	// streamed text becomes the error on the terminal frame.
 	runner := testutil.NewMockRunner(t)
-	aliasOutput := "aliases.sync = ['git', 'fetch']\n"
+	aliasOutput := `{"key":"aliases.sync","value":["git","fetch"]}` + "\n"
 	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
 	runner.Expect([]string{"sync"}).
 		SetOutput([]byte("Error: no remote configured\n")).
@@ -3024,7 +3024,7 @@ func TestHandleRunAlias_RunnerError(t *testing.T) {
 
 func TestHandleRunAlias_InvalidName(t *testing.T) {
 	runner := testutil.NewMockRunner(t)
-	aliasOutput := "aliases.sync = ['git', 'fetch']\n"
+	aliasOutput := `{"key":"aliases.sync","value":["git","fetch"]}` + "\n"
 	runner.Expect(jj.ConfigListAliases()).SetOutput([]byte(aliasOutput))
 	defer runner.Verify()
 
